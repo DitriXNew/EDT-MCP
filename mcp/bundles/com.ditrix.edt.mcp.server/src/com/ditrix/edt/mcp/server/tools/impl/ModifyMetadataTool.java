@@ -1656,6 +1656,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty("dataSets", result.dataSets); //$NON-NLS-1$
         applied.addProperty("fields", result.fields); //$NON-NLS-1$
         applied.addProperty("parameters", result.parameters); //$NON-NLS-1$
+        applied.addProperty("calculatedFields", result.calculatedFields); //$NON-NLS-1$
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -1663,7 +1664,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted)
             .put(McpKeys.MESSAGE, "Modified DCS of report " + normFqn + " (dataSources: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.dataSources + ", dataSets: " + result.dataSets + ", fields: " + result.fields //$NON-NLS-1$ //$NON-NLS-2$
-                + ", parameters: " + result.parameters + ")") //$NON-NLS-1$ //$NON-NLS-2$
+                + ", parameters: " + result.parameters + ", calculatedFields: " //$NON-NLS-1$ //$NON-NLS-2$
+                + result.calculatedFields + ")") //$NON-NLS-1$
             .toJson();
     }
 

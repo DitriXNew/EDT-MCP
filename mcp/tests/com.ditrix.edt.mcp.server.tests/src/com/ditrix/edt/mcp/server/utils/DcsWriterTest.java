@@ -16,6 +16,7 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterUse;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
@@ -35,8 +36,9 @@ import com.google.gson.JsonParser;
  * write onto an in-memory {@link DataCompositionSchema} built with {@code DcsFactory.eINSTANCE} - a query
  * data set lands with its query text / auto-created data source / auto-fill flag, explicit fields land with
  * their data path / source field / title / role, schema parameters land with a typed value type (built via
- * an injected {@link TypeResolver}) / title / use, find-or-create is idempotent, and a bad enum / malformed
- * shape is rejected before anything is written.
+ * an injected {@link TypeResolver}) / title / use, a calculated field lands with its expression / title and
+ * is UPDATED (not duplicated) when re-applied with the same {@code dataPath}, find-or-create is idempotent,
+ * and a bad enum / malformed shape is rejected before anything is written.
  */
 public class DcsWriterTest
 {
@@ -198,6 +200,83 @@ public class DcsWriterTest
         assertEquals("Period", param.getTitle().getLocalValue().getContent().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ==================== calculated fields ====================
+
+    @Test
+    public void testCalculatedFieldLandsWithExpressionAndTitle()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result r = DcsWriter.apply(schema, json("{\"calculatedFields\":[{\"dataPath\":\"Margin\"," //$NON-NLS-1$
+            + "\"expression\":\"Revenue - Cost\",\"title\":\"Margin\"}]}"), null); //$NON-NLS-1$
+        assertFalse("a valid calculated field must not error: " + r.error, r.hasError()); //$NON-NLS-1$
+        assertEquals(1, r.calculatedFields);
+        assertEquals(1, schema.getCalculatedFields().size());
+
+        DataCompositionSchemaCalculatedField field = schema.getCalculatedFields().get(0);
+        assertEquals("Margin", field.getDataPath()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Revenue - Cost", field.getExpression()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a titled calculated field must carry a Presentation", field.getTitle()); //$NON-NLS-1$
+        assertEquals("Margin", field.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCalculatedFieldWithoutTitleCarriesNoPresentation()
+    {
+        DataCompositionSchema schema = newSchema();
+        Result r = DcsWriter.apply(schema,
+            json("{\"calculatedFields\":[{\"dataPath\":\"Margin\",\"expression\":\"Revenue - Cost\"}]}"), //$NON-NLS-1$
+            null);
+        assertFalse(r.error, r.hasError());
+        assertNull("an untitled calculated field carries no Presentation", //$NON-NLS-1$
+            schema.getCalculatedFields().get(0).getTitle());
+    }
+
+    @Test
+    public void testCalculatedFieldReapplyUpdatesExpressionInPlace()
+    {
+        DataCompositionSchema schema = newSchema();
+        DcsWriter.apply(schema, json("{\"calculatedFields\":[{\"dataPath\":\"Margin\"," //$NON-NLS-1$
+            + "\"expression\":\"Revenue - Cost\",\"title\":\"Margin\"}]}"), null); //$NON-NLS-1$
+        Result r = DcsWriter.apply(schema, json("{\"calculatedFields\":[{\"dataPath\":\"Margin\"," //$NON-NLS-1$
+            + "\"expression\":\"Revenue - Cost * 2\"}]}"), null); //$NON-NLS-1$
+        assertFalse(r.error, r.hasError());
+        assertEquals("a re-applied calculated field must not duplicate", 1, //$NON-NLS-1$
+            schema.getCalculatedFields().size());
+        DataCompositionSchemaCalculatedField field = schema.getCalculatedFields().get(0);
+        assertEquals("the second apply must UPDATE the expression in place", //$NON-NLS-1$
+            "Revenue - Cost * 2", field.getExpression()); //$NON-NLS-1$ //$NON-NLS-2$
+        // The first apply's title is left alone (the second apply's entry carries none), matching a
+        // data set field's find-or-update discipline: only supplied members are overwritten.
+        assertNotNull("a title set by an earlier apply must survive an update that omits it", //$NON-NLS-1$
+            field.getTitle());
+        assertEquals("Margin", field.getTitle().getValue()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMissingCalculatedFieldDataPathIsError()
+    {
+        Result r = DcsWriter.apply(newSchema(),
+            json("{\"calculatedFields\":[{\"expression\":\"Revenue - Cost\"}]}"), null); //$NON-NLS-1$
+        assertTrue("a calculated field without a dataPath must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must mention 'dataPath'", r.error.contains("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMissingCalculatedFieldExpressionIsError()
+    {
+        Result r = DcsWriter.apply(newSchema(),
+            json("{\"calculatedFields\":[{\"dataPath\":\"Margin\"}]}"), null); //$NON-NLS-1$
+        assertTrue("a calculated field without an expression must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must mention 'expression'", r.error.contains("expression")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCalculatedFieldsNotAnArrayIsError()
+    {
+        Result r = DcsWriter.apply(newSchema(), json("{\"calculatedFields\":\"nope\"}"), null); //$NON-NLS-1$
+        assertTrue("calculatedFields that is not an array must error", r.hasError()); //$NON-NLS-1$
+    }
+
     // ==================== idempotency ====================
 
     @Test
@@ -205,13 +284,16 @@ public class DcsWriterTest
     {
         DataCompositionSchema schema = newSchema();
         String spec = "{\"dataSets\":[{\"name\":\"DS\",\"type\":\"query\",\"query\":\"SELECT 1\"," //$NON-NLS-1$
-            + "\"fields\":[{\"dataPath\":\"A\"}]}],\"parameters\":[{\"name\":\"P\"}]}"; //$NON-NLS-1$
+            + "\"fields\":[{\"dataPath\":\"A\"}]}],\"parameters\":[{\"name\":\"P\"}]," //$NON-NLS-1$
+            + "\"calculatedFields\":[{\"dataPath\":\"CF\",\"expression\":\"1 + 1\"}]}"; //$NON-NLS-1$
         DcsWriter.apply(schema, json(spec), null);
         DcsWriter.apply(schema, json(spec), null);
         assertEquals("a re-applied data set must not duplicate", 1, schema.getDataSets().size()); //$NON-NLS-1$
         assertEquals("a re-applied field must not duplicate", 1, firstQuery(schema).getFields().size()); //$NON-NLS-1$
         assertEquals("a re-applied parameter must not duplicate", 1, schema.getParameters().size()); //$NON-NLS-1$
         assertEquals("a re-applied data source must not duplicate", 1, schema.getDataSources().size()); //$NON-NLS-1$
+        assertEquals("a re-applied calculated field must not duplicate", 1, //$NON-NLS-1$
+            schema.getCalculatedFields().size());
     }
 
     // ==================== errors ====================

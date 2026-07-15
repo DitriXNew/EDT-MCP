@@ -315,3 +315,96 @@ def test_assignable_on_form_group_lists_extinfo_layout_props():
         "the extInfo 'united' layout flag must be listed as assignable")
     # (No assert_no_diff here: the test intentionally SEEDS the group, so the tree is dirty; the
     # pure-read nature of the assignable view is covered by the mdclass assignable read tests.)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEMPLATE Data Composition Schema (СКД) structure — a template FQN whose content is a
+# DataCompositionSchema renders the schema's STRUCTURE (issue #267): data sources, data sets
+# (with the FULL query text in a fenced block + a fields table), calculated fields, parameters,
+# and (skipped here — the write side has no way to author them yet) the default settings variant.
+# A template whose content is NOT a DataCompositionSchema (a SpreadsheetDocument print form) is
+# UNCHANGED: it still renders the generic object's basic info, never the DCS structure.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_dcs_template_fqn_renders_schema_structure():
+    # Seed a fresh Report (the fixture ships none) and author its Data Composition Schema via
+    # modify_metadata's `dcs` payload (#241/#267) — a query data set with an explicit query text +
+    # field, a calculated field, and an untyped parameter. The FIRST `dcs` write find-or-creates the
+    # report's main DCS template under the platform-default name (ОсновнаяСхемаКомпоновкиДанных).
+    report = "GMDDcsReport"
+    fqn = "Report." + report
+    r0 = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r0, "seed report " + fqn)
+    wait_for_project_ready()
+
+    query_marker = "GMDDcsSource"                     # a query-only table alias
+    query = "SELECT " + query_marker + ".Ref AS Ref FROM Catalog.Catalog AS " + query_marker
+    field_path = "GMDDcsFieldRef"                      # authored dataset field dataPath
+    calc_path = "GMDDcsMargin"                         # calculated field dataPath
+    calc_expr = "GMDDcsRevenue - GMDDcsCost"           # calculated field expression
+    parameter = "GMDDcsParam"                          # schema parameter name
+
+    r1 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "dcs": {
+            "dataSets": [{
+                "name": "DataSet1",
+                "type": "query",
+                "query": query,
+                "autoFillFields": False,
+                "fields": [{"dataPath": field_path, "title": "GMDFieldTitle"}],
+            }],
+            "calculatedFields": [{"dataPath": calc_path, "expression": calc_expr, "title": "Margin"}],
+            "parameters": [{"name": parameter, "title": "GMDParamTitle"}],
+        },
+    })
+    assert_ok(r1, "author dataSet + calculatedField + parameter on the fresh report")
+    wait_for_project_ready()
+
+    # The Cyrillic default DCS template name the platform pre-fills for a report's main schema
+    # (matches ModifyMetadataTool.DEFAULT_DCS_TEMPLATE_NAME / EDT's own designer).
+    template_name = "ОсновнаяСхема" \
+        "КомпоновкиДанных"
+    template_fqn = fqn + ".Template." + template_name
+
+    r2 = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": [template_fqn],
+    })
+    assert_ok(r2, "get_metadata_details on the report's DCS template FQN")
+    if "## Errors" in r2.text:
+        raise AssertionError(
+            "the DCS template FQN should resolve, but a ## Errors section was emitted:\n" + r2.text[:600])
+    assert_contains(r2.text, "Data Composition Schema", "must render the DCS structure heading")
+    assert_contains(r2.text, "## Data sets", "must render the Data sets section")
+    # The FULL query text lands verbatim inside a fenced code block, not a mangled table cell.
+    assert_contains(r2.text, "```sql", "the query text must be in a fenced code block")
+    assert_contains(r2.text, query, "the FULL query text must be present verbatim")
+    assert_contains(r2.text, field_path, "the authored dataset field's dataPath must be listed")
+    assert_contains(r2.text, "## Calculated fields", "must render the Calculated fields section")
+    assert_contains(r2.text, calc_path, "the calculated field's dataPath must be listed")
+    assert_contains(r2.text, calc_expr, "the calculated field's expression must be listed")
+    assert_contains(r2.text, "## Parameters", "must render the Parameters section")
+    assert_contains(r2.text, parameter, "the schema parameter's name must be listed")
+    # (No assert_no_diff: the test intentionally seeds a Report and authors its DCS content, so the
+    # tree is dirty by design — kind="write-metadata" resets it after the test.)
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_non_dcs_template_fqn_renders_basic_info_unchanged():
+    # A template FQN whose content is NOT a DataCompositionSchema (the real fixture common template
+    # CommonTemplate.PrintForm is a SpreadsheetDocument print form, per test_get_template_screenshot.py)
+    # must behave EXACTLY as before #267: no DCS structure, just the generic object's basic info.
+    r = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": ["CommonTemplate.PrintForm"],
+    })
+    assert_ok(r, "get_metadata_details on a non-DCS common template")
+    if "## Errors" in r.text:
+        raise AssertionError(
+            "CommonTemplate.PrintForm should resolve, but a ## Errors section was emitted:\n" + r.text[:400])
+    assert_not_contains(r.text, "Data Composition Schema",
+        "a non-DCS template must NOT render the DCS structure heading")
+    assert_contains(r.text, "PrintForm", "the template's own name must still appear")
+    assert_no_diff("a non-DCS template read must not change the project")

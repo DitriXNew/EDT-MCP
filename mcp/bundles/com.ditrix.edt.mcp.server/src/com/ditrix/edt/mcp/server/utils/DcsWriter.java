@@ -19,6 +19,7 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterUse;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSource;
@@ -55,7 +56,8 @@ import com.google.gson.JsonPrimitive;
  *                    "role":{"dimension":true}} ] }
  *   ],
  *   "parameters": [ {"name":"Period", "valueType":{types:[{kind:'Date'}]},
- *                    "title":"Period", "use":"Auto"} ]
+ *                    "title":"Period", "use":"Auto"} ],
+ *   "calculatedFields": [ {"dataPath":"Margin", "expression":"Revenue - Cost", "title":"Margin"} ]
  * }
  * </pre>
  *
@@ -77,6 +79,12 @@ import com.google.gson.JsonPrimitive;
  * <li>{@link DataCompositionSchema#getParameters()} holds {@link DataCompositionSchemaParameter}s
  * ({@code name} + an optional mcore {@link TypeDescription} value type + an optional {@code title}
  * {@link Presentation} + an optional {@link DataCompositionParameterUse use}).</li>
+ * <li>{@link DataCompositionSchema#getCalculatedFields()} holds {@link DataCompositionSchemaCalculatedField}s
+ * ({@code dataPath} = the available-field path exposed to settings, {@code expression} = the 1C
+ * expression computed from the OTHER available fields (e.g. two other dataset fields), and an optional
+ * {@code title} {@link Presentation}). Found-or-updated by {@code dataPath}, exactly like a data set
+ * field: a repeated {@code calculatedFields} entry for the same {@code dataPath} UPDATES its
+ * {@code expression} / {@code title} in place rather than adding a duplicate.</li>
  * </ul>
  *
  * <p>A {@code title} is a core {@link Presentation}: a plain JSON string sets its language-neutral
@@ -104,6 +112,7 @@ public final class DcsWriter
     private static final String KEY_DATA_SOURCES = "dataSources"; //$NON-NLS-1$
     private static final String KEY_DATA_SETS = "dataSets"; //$NON-NLS-1$
     private static final String KEY_PARAMETERS = "parameters"; //$NON-NLS-1$
+    private static final String KEY_CALCULATED_FIELDS = "calculatedFields"; //$NON-NLS-1$
 
     // ---- per-entry keys -----------------------------------------------------------------------
 
@@ -115,6 +124,7 @@ public final class DcsWriter
     private static final String KEY_FIELDS = "fields"; //$NON-NLS-1$
     private static final String KEY_DATA_PATH = "dataPath"; //$NON-NLS-1$
     private static final String KEY_FIELD = "field"; //$NON-NLS-1$
+    private static final String KEY_EXPRESSION = "expression"; //$NON-NLS-1$
     private static final String KEY_TITLE = "title"; //$NON-NLS-1$
     private static final String KEY_ROLE = "role"; //$NON-NLS-1$
     private static final String KEY_VALUE_TYPE = "valueType"; //$NON-NLS-1$
@@ -125,6 +135,7 @@ public final class DcsWriter
     private static final String ERR_DATA_SET = "A data set ("; //$NON-NLS-1$
     private static final String ERR_PARAMETER = "A parameter ("; //$NON-NLS-1$
     private static final String ERR_FIELD_ROLE = "A field role ("; //$NON-NLS-1$
+    private static final String ERR_CALCULATED_FIELD = "A calculated field ("; //$NON-NLS-1$
     private static final String ERR_NEEDS_NAME = ") needs a non-empty 'name'."; //$NON-NLS-1$
 
     // ---- role keys ----------------------------------------------------------------------------
@@ -235,24 +246,28 @@ public final class DcsWriter
         public final int fields;
         /** Number of schema parameters applied. */
         public final int parameters;
+        /** Number of calculated fields applied (created or updated in place). */
+        public final int calculatedFields;
 
-        private Result(String error, int dataSources, int dataSets, int fields, int parameters)
+        private Result(String error, int dataSources, int dataSets, int fields, int parameters,
+            int calculatedFields)
         {
             this.error = error;
             this.dataSources = dataSources;
             this.dataSets = dataSets;
             this.fields = fields;
             this.parameters = parameters;
+            this.calculatedFields = calculatedFields;
         }
 
         static Result failed(String error)
         {
-            return new Result(error, 0, 0, 0, 0);
+            return new Result(error, 0, 0, 0, 0, 0);
         }
 
-        static Result ok(int dataSources, int dataSets, int fields, int parameters)
+        static Result ok(int dataSources, int dataSets, int fields, int parameters, int calculatedFields)
         {
-            return new Result(null, dataSources, dataSets, fields, parameters);
+            return new Result(null, dataSources, dataSets, fields, parameters, calculatedFields);
         }
 
         public boolean hasError()
@@ -334,12 +349,13 @@ public final class DcsWriter
 
         int sources = applyDataSets(schema, plan);
         int fields = applyFields(schema, plan);
+        int calculatedFields = applyCalculatedFields(schema, plan);
         for (int i = 0; i < plan.parameters.size(); i++)
         {
             applyParameter(schema, plan.parameters.get(i), paramTypes[i]);
         }
 
-        return Result.ok(sources, plan.dataSets.size(), fields, plan.parameters.size());
+        return Result.ok(sources, plan.dataSets.size(), fields, plan.parameters.size(), calculatedFields);
     }
 
     // ---- model mutation (typed DCS API) -------------------------------------------------------
@@ -418,6 +434,36 @@ public final class DcsWriter
         if (plan.role != null)
         {
             field.setRole(buildRole(plan.role));
+        }
+    }
+
+    /**
+     * Find-or-updates each planned calculated field by {@code dataPath}, writing its {@code expression}
+     * and optional {@code title}. Returns the number of calculated fields applied (created or updated).
+     */
+    private static int applyCalculatedFields(DataCompositionSchema schema, Plan plan)
+    {
+        for (CalculatedFieldPlan calcPlan : plan.calculatedFields)
+        {
+            applyCalculatedField(schema, calcPlan);
+        }
+        return plan.calculatedFields.size();
+    }
+
+    /**
+     * Writes one calculated field: find-or-creates the {@link DataCompositionSchemaCalculatedField} by
+     * data path (an existing one with the same {@code dataPath} is UPDATED in place, never duplicated -
+     * the same find-or-update discipline as a query data set / a data set field), then sets its
+     * {@code expression} and an optional {@code title} {@link Presentation}.
+     */
+    private static void applyCalculatedField(DataCompositionSchema schema, CalculatedFieldPlan plan)
+    {
+        DataCompositionSchemaCalculatedField field = getOrCreateCalculatedField(schema, plan.dataPath);
+        field.setDataPath(plan.dataPath);
+        field.setExpression(plan.expression);
+        if (plan.title != null)
+        {
+            field.setTitle(buildPresentation(plan.title));
         }
     }
 
@@ -574,6 +620,23 @@ public final class DcsWriter
         return field;
     }
 
+    /** Find-or-creates a calculated field by data path (mirrors {@link #getOrCreateField}). */
+    private static DataCompositionSchemaCalculatedField getOrCreateCalculatedField(DataCompositionSchema schema,
+        String dataPath)
+    {
+        for (DataCompositionSchemaCalculatedField existing : schema.getCalculatedFields())
+        {
+            if (dataPath.equals(existing.getDataPath()))
+            {
+                return existing;
+            }
+        }
+        DataCompositionSchemaCalculatedField field = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaCalculatedField();
+        schema.getCalculatedFields().add(field);
+        return field;
+    }
+
     /** Find-or-creates a schema parameter by name. */
     private static DataCompositionSchemaParameter getOrCreateParameter(DataCompositionSchema schema,
         String name)
@@ -623,15 +686,20 @@ public final class DcsWriter
         {
             error = parseParameters(spec, plan);
         }
+        if (error == null)
+        {
+            error = parseCalculatedFields(spec, plan);
+        }
         if (error != null)
         {
             return ParseResult.failed(error);
         }
-        if (plan.dataSets.isEmpty() && plan.parameters.isEmpty() && plan.dataSources.isEmpty())
+        if (plan.dataSets.isEmpty() && plan.parameters.isEmpty() && plan.dataSources.isEmpty()
+            && plan.calculatedFields.isEmpty())
         {
             return ParseResult.failed("The 'dcs' payload is empty: provide at least one of 'dataSets', " //$NON-NLS-1$
-                + "'parameters' or 'dataSources', e.g. {dataSets:[{name:'DataSet1',type:'query'," //$NON-NLS-1$
-                + "query:'SELECT ...'}]}."); //$NON-NLS-1$
+                + "'parameters', 'dataSources' or 'calculatedFields', e.g. {dataSets:[{name:'DataSet1'," //$NON-NLS-1$
+                + "type:'query',query:'SELECT ...'}]}."); //$NON-NLS-1$
         }
         return ParseResult.ok(plan);
     }
@@ -800,6 +868,51 @@ public final class DcsWriter
             }
         }
         plan.parameters.add(new ParameterPlan(name, valueTypeSpec, title.plan, use));
+        return null;
+    }
+
+    private static String parseCalculatedFields(JsonObject spec, Plan plan)
+    {
+        List<JsonObject> entries = objectArray(spec, KEY_CALCULATED_FIELDS);
+        if (entries == null)
+        {
+            return notAnObjectArray(KEY_CALCULATED_FIELDS);
+        }
+        for (int i = 0; i < entries.size(); i++)
+        {
+            String error = parseCalculatedField(entries.get(i), i, plan);
+            if (error != null)
+            {
+                return error;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Parses + validates one {@code calculatedFields[index]} entry (a non-empty {@code dataPath}, a
+     * non-empty {@code expression}, an optional {@code title}) into a {@link CalculatedFieldPlan}, or a
+     * ready error naming the exact offending entry.
+     */
+    private static String parseCalculatedField(JsonObject entry, int index, Plan plan)
+    {
+        String where = KEY_CALCULATED_FIELDS + "[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+        String dataPath = nonEmptyString(entry, KEY_DATA_PATH);
+        if (dataPath == null)
+        {
+            return ERR_CALCULATED_FIELD + where + ") needs a non-empty '" + KEY_DATA_PATH + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String expression = nonEmptyString(entry, KEY_EXPRESSION);
+        if (expression == null)
+        {
+            return ERR_CALCULATED_FIELD + where + ") needs a non-empty '" + KEY_EXPRESSION + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        TitleResult title = parseTitle(entry, where);
+        if (title.error != null)
+        {
+            return title.error;
+        }
+        plan.calculatedFields.add(new CalculatedFieldPlan(dataPath, expression, title.plan));
         return null;
     }
 
@@ -1073,6 +1186,7 @@ public final class DcsWriter
         final List<DataSourcePlan> dataSources = new ArrayList<>();
         final List<DataSetPlan> dataSets = new ArrayList<>();
         final List<ParameterPlan> parameters = new ArrayList<>();
+        final List<CalculatedFieldPlan> calculatedFields = new ArrayList<>();
     }
 
     /** A validated data source (a name + a data source type). */
@@ -1139,6 +1253,21 @@ public final class DcsWriter
             this.valueTypeSpec = valueTypeSpec;
             this.title = title;
             this.use = use;
+        }
+    }
+
+    /** A validated calculated field (a data path + expression + optional title). */
+    static final class CalculatedFieldPlan
+    {
+        final String dataPath;
+        final String expression;
+        final TitlePlan title;
+
+        CalculatedFieldPlan(String dataPath, String expression, TitlePlan title)
+        {
+            this.dataPath = dataPath;
+            this.expression = expression;
+            this.title = title;
         }
     }
 

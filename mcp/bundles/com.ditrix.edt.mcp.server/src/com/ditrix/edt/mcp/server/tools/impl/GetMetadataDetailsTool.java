@@ -20,7 +20,9 @@ import org.eclipse.ui.PlatformUI;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
@@ -32,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
@@ -267,6 +270,24 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
+        // A FQN that addresses a TEMPLATE whose content is a DataCompositionSchema (a report's DCS
+        // template, a common template, or an object-owned template - issue #267) renders the
+        // schema's STRUCTURE (data sources / data sets / calculated fields / total fields /
+        // parameters / the default settings variant) via the cross-model hop
+        // (DcsStructureReader), mirroring the FORM branch above. Resolved through the shared
+        // MetadataNodeResolver (handles both the 2-part CommonTemplate FQN and the 4-part
+        // owned-template FQN, bilingually - the same resolver TemplateScreenshotHelper uses), so
+        // this does not duplicate FQN navigation. A FQN that is not a template, or a template whose
+        // content is NOT a DataCompositionSchema (e.g. a SpreadsheetDocument print form), falls
+        // through UNCHANGED to the generic object-resolution path below.
+        String dcsStructure = renderTemplateDcsIfApplicable(ctx.config, ctx.bmModel, fqn, ctx.effectiveLanguage);
+        if (dcsStructure != null)
+        {
+            sb.append(dcsStructure);
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+
         MdObject mdObject = resolveObject(ctx.config, fqn);
         if (mdObject == null)
         {
@@ -489,6 +510,56 @@ public class GetMetadataDetailsTool implements IMcpTool
                 return null;
             }
             return FormStructureReader.render(normalized, formModel, language);
+        });
+    }
+
+    /**
+     * Renders a template's Data Composition Schema STRUCTURE for a template FQN whose content is a
+     * {@link DataCompositionSchema} (issue #267): resolves the FQN to its {@link BasicTemplate} via the
+     * shared {@link MetadataNodeResolver} (handles a 2-part common template and a 4-part owned-object
+     * template, bilingually - the same resolver {@code TemplateScreenshotHelper} uses for the analogous
+     * SpreadsheetDocument-template screenshot), then inside a {@link BmTransactions#executeAndRollback}
+     * boundary re-fetches it by its BM id and reads its content. A write-capable-but-rolled-back
+     * transaction is required here (not a plain read) because {@code BasicTemplate.getTemplate()} lazily
+     * materializes the content from the separate, lazily-loaded {@code .dcs} resource - a model-write side
+     * effect - mirroring {@code TemplateScreenshotHelper.renderTemplate}'s reasoning for a
+     * SpreadsheetDocument template; every edit the lazy materialization makes is discarded when the
+     * transaction returns, so this pure read never persists anything.
+     *
+     * @param config the resolved configuration
+     * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
+     * @param fqn the requested FQN (not yet normalized)
+     * @param language the resolved title/presentation language CODE (may be {@code null})
+     * @return the rendered Markdown, or {@code null} when the FQN does not resolve to a template, the BM
+     *         model is unavailable, or the resolved template's content is NOT a
+     *         {@link DataCompositionSchema} (a {@code null} content, a {@code SpreadsheetDocument} print
+     *         form, etc.) - {@code null} means "not applicable here", NOT a failure: the caller falls
+     *         through to the generic object-resolution render.
+     */
+    private static String renderTemplateDcsIfApplicable(Configuration config, IBmModel bmModel, String fqn,
+        String language)
+    {
+        if (bmModel == null)
+        {
+            return null;
+        }
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, fqn);
+        if (node == null || !(node.object instanceof BasicTemplate) || !(node.object instanceof IBmObject))
+        {
+            return null;
+        }
+        final long templateBmId = ((IBmObject)node.object).bmGetId();
+        final String normalized = MetadataTypeUtils.normalizeFqn(fqn);
+        return BmTransactions.executeAndRollback(bmModel, "GetMetadataDetailsTemplateDcs", (tx, monitor) -> //$NON-NLS-1$
+        {
+            EObject txTemplate = tx.getObjectById(templateBmId);
+            EObject content =
+                txTemplate instanceof BasicTemplate ? ((BasicTemplate)txTemplate).getTemplate() : null;
+            if (!(content instanceof DataCompositionSchema))
+            {
+                return null;
+            }
+            return DcsStructureReader.render(normalized, (DataCompositionSchema)content, language);
         });
     }
 
