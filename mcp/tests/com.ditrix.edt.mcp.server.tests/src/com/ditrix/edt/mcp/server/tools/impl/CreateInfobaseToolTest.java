@@ -282,8 +282,10 @@ public class CreateInfobaseToolTest
     @Test
     public void testStandaloneServerWithCredentialsIsError()
     {
-        // Credentials apply only to a file infobase; pairing them with standaloneServer is rejected
-        // (not silently dropped). Validated before any platform/service lookup (headless-safe).
+        // #275: credentials remain rejected for a newly created standalone server (mode='create',
+        // the default) — pairing them with standaloneServer+create is rejected (not silently
+        // dropped). Validated before any platform/service lookup (headless-safe). The message must
+        // steer to BOTH supported alternatives: applicationKind='infobase', or mode='register'.
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("infobaseFile", "C:/infobases/Any"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -291,10 +293,36 @@ public class CreateInfobaseToolTest
         params.put("user", "Admin"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new CreateInfobaseTool().execute(params);
         assertNotNull(result);
-        assertTrue("credentials with standaloneServer must be an error", //$NON-NLS-1$
+        assertTrue("credentials with standaloneServer+create must be an error", //$NON-NLS-1$
             result.contains("\"success\":false")); //$NON-NLS-1$
         assertTrue("error must steer to applicationKind='infobase'", //$NON-NLS-1$
             result.contains("infobase")); //$NON-NLS-1$
+        assertTrue("error must steer to mode='register' as the supported standalone-server alternative", //$NON-NLS-1$
+            result.contains("register")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRegisterWithCredentialsPassesValidation()
+    {
+        // #275: standaloneServer + mode='register' + credentials must NOT be rejected by the
+        // credentials guard (that guard now fires only for standaloneServer+create). Execution
+        // proceeds into the register-path validation instead, which fails on the missing 1Cv8.1CD at
+        // this fake path — proving the credentials guard let it through rather than blocking it.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/edt_mcp_no_such_ib_zzz2"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("user", "Admin"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("password", "secret"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("must still be an error (no 1Cv8.1CD at the fake path)", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("must NOT be the credentials-rejected error", //$NON-NLS-1$
+            !result.contains("are supported only with")); //$NON-NLS-1$
+        assertTrue("must be the register-path 'no file infobase found' error instead", //$NON-NLS-1$
+            result.contains("1Cv8.1CD")); //$NON-NLS-1$
     }
 
     @Test

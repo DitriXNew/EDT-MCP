@@ -1,6 +1,6 @@
 # create_infobase
 
-Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').
+Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). user/password/access store connection credentials for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register' — rejected for a newly created standalone server (mode='create'). Full parameters and examples: call get_tool_guide('create_infobase').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -12,9 +12,9 @@ Create a new FILE infobase (1C database) OR register an existing one, and bind i
 | platform | — | string | 1C platform version mask to use for creation (e.g. '8.3.25'). If omitted, EDT resolves the best available installed version automatically. |
 | setDefault | — | boolean | Set the new infobase as the default application for the project after creation (default false). |
 | applicationKind | — | string (one of: infobase, standaloneServer) | 'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). With mode='register' the server instead wraps an EXISTING file infobase (a 1Cv8.1CD must be present at infobaseFile) rather than creating a new one. The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result. |
-| user | — | string | Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. |
-| password | — | string | Password for 'user'. Optional; default empty (demo bases use an empty password). |
-| access | — | string (one of: INFOBASE, OS) | Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies only to applicationKind='infobase' (a file infobase). |
+| user | — | string | Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create'). |
+| password | — | string | Password for 'user'. Optional; default empty (demo bases use an empty password). Same applicationKind/mode restriction as 'user' (issue #275). |
+| access | — | string (one of: INFOBASE, OS) | Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies to applicationKind='infobase' (a file infobase), and to applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create'). |
 
 ## Guide
 Creates a new FILE infobase (1C:Enterprise database) OR registers an existing one, and binds it to a configuration project so it appears in `get_applications` as an application of type `com.e1c.g5.dt.applications.type.infobase`. This mirrors the two choices of the EDT "new infobase" dialog: make a new database, or use a database that already exists on disk.
@@ -50,7 +50,17 @@ On success the result's `action` is **`registered`** (not `created`), and the `m
 #    -> action="registered"; webUrl/port point at the running server; the existing 1Cv8.1CD is reused as-is.
 ```
 
-Note: the `user`/`password`/`access` connection-credential parameters remain **rejected** for `applicationKind='standaloneServer'` in either mode (a standalone server manages its own infobase and authentication) — this behavior is unchanged.
+### Connection credentials for a standalone server (`mode='register'` only, issue #275)
+
+The `user`/`password`/`access` connection-credential parameters (see "Parameter details" below) are now **accepted** for `applicationKind='standaloneServer'` **with `mode='register'`** — the wrapped infobase already exists and already has users, so storing credentials is meaningful. They are still **rejected** for `applicationKind='standaloneServer'` with `mode='create'` (a brand-new server has no infobase reference to store them against yet — omit them or add the credentials afterwards with `set_infobase_credentials` once the base has users).
+
+Credentials for a registered standalone server are stored against the **application EDT's own launch path resolves** (`ServerApplicationBehaviourDelegate` adapts the `wst-server` application/module to an `InfobaseReference` via `org.eclipse.core.runtime.Adapters`), so they authenticate the SAME update agent a later `debug_launch`/`update_database` starts.
+
+```
+# Register a standalone server over an EXISTING infobase AND store credentials for its 'Admin' user:
+1. create_infobase  projectName="MyProject"  infobaseFile="C:\infobases\ExistingApp"  applicationKind="standaloneServer"  mode="register"  user="Admin"  password="secret"
+#    -> action="registered"; the message confirms the credentials were stored (or, non-fatally, a WARNING if storage failed).
+```
 
 ### Prerequisites and result
 
@@ -82,7 +92,7 @@ Note: the `user`/`password`/`access` connection-credential parameters remain **r
 - **infobaseName** (optional): display name for the infobase in the EDT Infobases view. If omitted, a name is auto-generated.
 - **platform** (optional, `create` only): 1C platform version mask (e.g. `8.3.25`). If omitted, EDT resolves the best available installed version automatically.
 - **setDefault** (boolean, default false): set the infobase as the default application for the project afterwards.
-- **user** / **password** / **access** (optional, #194): store **infobase connection credentials** so a later `update_database` / `debug_launch` can authenticate the update agent against a base with a user list. `access` is `INFOBASE` (default, 1C user auth) or `OS`. Most useful with `mode='register'` (the existing base already has users); for a `mode='create'` base there are no users yet, so the credentials authenticate only once a matching user is added. Use `set_infobase_credentials` to change them later.
+- **user** / **password** / **access** (optional, #194; standalone-server support #275): store **infobase connection credentials** so a later `update_database` / `debug_launch` can authenticate the update agent against a base with a user list. `access` is `INFOBASE` (default, 1C user auth) or `OS`. Accepted for `applicationKind='infobase'` (any mode), and for `applicationKind='standaloneServer'` with `mode='register'` — **rejected** for `applicationKind='standaloneServer'` with `mode='create'` (a brand-new server has no infobase reference to store them against yet). Most useful with `mode='register'` (the existing base already has users); for a `mode='create'` file infobase there are no users yet, so the credentials authenticate only once a matching user is added. Use `set_infobase_credentials` to change them later.
 - **applicationKind** (optional, `infobase` | `standaloneServer`, default `infobase`): see "Application kind" above. The standalone-server path takes no port/publication input — EDT auto-allocates the web port and reports it back as `port`/`webUrl`.
 
 ## Result

@@ -190,11 +190,11 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
+    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). user/password/access store connection credentials for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register' — rejected for a newly created standalone server (mode='create'). Full parameters and examples: call get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
         "access": {
-          "description": "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies only to applicationKind='infobase' (a file infobase).",
+          "description": "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies to applicationKind='infobase' (a file infobase), and to applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create').",
           "enum": [
             "INFOBASE",
             "OS"
@@ -226,7 +226,7 @@
           "type": "string"
         },
         "password": {
-          "description": "Password for 'user'. Optional; default empty (demo bases use an empty password).",
+          "description": "Password for 'user'. Optional; default empty (demo bases use an empty password). Same applicationKind/mode restriction as 'user'.",
           "type": "string"
         },
         "platform": {
@@ -242,7 +242,7 @@
           "type": "boolean"
         },
         "user": {
-          "description": "Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials.",
+          "description": "Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create').",
           "type": "string"
         }
       },
@@ -3919,7 +3919,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
+    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
     "inputSchema": {
       "properties": {
         "access": {

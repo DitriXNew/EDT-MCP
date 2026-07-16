@@ -1,5 +1,7 @@
 Stores the **infobase connection credentials** (user / password) EDT uses to authenticate the 1C designer agent that runs the pre-launch DB update for `update_database` and `debug_launch`. Needed when the target infobase has a **user list** (issue #194): without stored credentials the agent is started without the infobase user, fails to authenticate, and the platform pops a blocking "Configure Infobase access Settings" dialog that hangs an unattended call.
 
+**Also works for a standalone server (issue #275):** the target application does not have to be a plain file/server infobase (`IInfobaseApplication`) — a `standaloneServer` (`wst-server`) application that wraps an already-registered infobase is supported too. EDT's own launch path for such an application resolves the infobase to authenticate against by ADAPTING the application (or its module) to an `InfobaseReference` (`org.eclipse.core.runtime.Adapters`); this tool stores credentials against that SAME adapted reference, so a later `debug_launch`/`update_database` on the server authenticates with them. An application that is neither an infobase nor an adaptable standalone server is rejected with an actionable error naming the application id.
+
 ## What these credentials are (and are not)
 
 - They select an **EXISTING** infobase user to connect AS — they do **NOT** create infobase users. The user must already exist in the infobase (added via the configurator's Administration → Users, or BSL `ПользователиИнформационнойБазы`).
@@ -48,6 +50,6 @@ While an MCP tool is in flight (plus a short grace window for the asynchronous r
 ## Gotchas
 
 - **The user must exist in the infobase.** Storing credentials for a user that does not exist makes the next connect fail authentication (while a tool is running the MCP server auto-cancels the resulting dialog — see the auto-cancel note above — and the operation fails fast with a hint back to this tool). Add the user first, then set credentials.
-- **`create_infobase` can store credentials too** (its `user`/`password`/`access` parameters) — handy with `mode='register'` (the existing base already has users). For a brand-new `mode='create'` base there are no users yet, so set credentials only after adding a matching user.
+- **`create_infobase` can store credentials too** (its `user`/`password`/`access` parameters) — handy with `mode='register'` (the existing base already has users), including `applicationKind='standaloneServer'` + `mode='register'` (issue #275). For a brand-new `mode='create'` base (file infobase or standalone server) there are no users yet, so set credentials only after adding a matching user — `create_infobase` rejects credentials up front for a newly created standalone server.
 - **Wrong password / wrong user** → `update_database`/`debug_launch` fail fast with "the infobase requires authentication — set the connection credentials with set_infobase_credentials" instead of hanging.
 - These are connection credentials, not a permission grant: the user's rights inside the infobase are unchanged.

@@ -37,7 +37,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * Stores the <em>infobase connection credentials</em> (user/password) EDT uses
  * to authenticate the designer agent for {@code update_database} and
  * {@code debug_launch} against an infobase that requires user authentication
- * (issue #194).
+ * (issue #194) — including a standalone-server ({@code wst-server}) application
+ * wrapping an already-registered infobase (issue #275).
  *
  * <p>Without stored credentials the update agent is started without the infobase
  * user and fails to authenticate, popping a blocking "Configure Infobase access
@@ -49,13 +50,14 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * empty {@code password} is valid.
  *
  * <p><strong>Unattended-safety:</strong> the model work (resolve application -&gt;
- * {@code IInfobaseApplication.getInfobase()} -&gt; {@code IInfobaseAccessManager.updateSettings}
- * -&gt; read-back display name) runs in a bounded background Eclipse Job joined with a short
- * {@link #CREDENTIALS_TIMEOUT_SECONDS}-second timeout — never on the UI thread. Resolving an
- * application can provoke EDT's background application-update-state recompute, which can loop
- * for a long time on an unbounded worker thread; the bounded Job guarantees the call returns.
- * The credentials are recorded as a success the instant {@code updateSettings} commits (before
- * the cosmetic name read-back), so a timeout AFTER the commit still reports success.
+ * {@link InfobaseAccessSupport#storeCredentials(IApplication, String, String, InfobaseAccess)}
+ * -&gt; {@code IInfobaseAccessManager.updateSettings} -&gt; read-back display name) runs in a
+ * bounded background Eclipse Job joined with a short {@link #CREDENTIALS_TIMEOUT_SECONDS}-second
+ * timeout — never on the UI thread. Resolving an application can provoke EDT's background
+ * application-update-state recompute, which can loop for a long time on an unbounded worker
+ * thread; the bounded Job guarantees the call returns. The credentials are recorded as a success
+ * the instant {@code updateSettings} commits (before the cosmetic name read-back), so a timeout
+ * AFTER the commit still reports success.
  */
 public class SetInfobaseCredentialsTool implements IMcpTool
 {
@@ -84,9 +86,11 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     {
         return "Store infobase connection credentials (user/password) so update_database and " //$NON-NLS-1$
             + "debug_launch can authenticate the update agent on an infobase that has a user list " //$NON-NLS-1$
-            + "(issue #194). Selects an EXISTING infobase user (does not create users); an empty " //$NON-NLS-1$
-            + "password is valid (demo bases). Target by launchConfigurationName (preferred) or " //$NON-NLS-1$
-            + "projectName + applicationId (from get_applications). " //$NON-NLS-1$
+            + "(issue #194) — also for a standalone-server application wrapping an already-" //$NON-NLS-1$
+            + "registered infobase (issue #275). Selects an EXISTING infobase user (does not " //$NON-NLS-1$
+            + "create users); an empty password is valid (demo bases). Target by " //$NON-NLS-1$
+            + "launchConfigurationName (preferred) or projectName + applicationId (from " //$NON-NLS-1$
+            + "get_applications). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
 
