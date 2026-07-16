@@ -190,7 +190,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
+    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -202,7 +202,7 @@
           "type": "string"
         },
         "applicationKind": {
-          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result.",
+          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). With mode='register' the server instead wraps an EXISTING file infobase (a 1Cv8.1CD must be present at infobaseFile) rather than creating a new one. The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result.",
           "enum": [
             "infobase",
             "standaloneServer"
@@ -218,7 +218,7 @@
           "type": "string"
         },
         "mode": {
-          "description": "'create' (default) = make a new file infobase at infobaseFile (launches the 1C platform); 'register' = add an EXISTING infobase already present at infobaseFile (no platform launch).",
+          "description": "'create' (default) = make a new file infobase at infobaseFile (launches the 1C platform); 'register' = add an EXISTING infobase already present at infobaseFile (no platform launch). With applicationKind='standaloneServer', mode='register' wraps an EXISTING file infobase (a 1Cv8.1CD must be present) with a standalone server instead of creating a new one.",
           "enum": [
             "create",
             "register"

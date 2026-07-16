@@ -223,6 +223,14 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     @Override
+    public boolean connectsToInfobase()
+    {
+        // The pre-launch recompute + the launch itself connect to the infobase, both
+        // possibly running in the background prep Job (issue #270).
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$

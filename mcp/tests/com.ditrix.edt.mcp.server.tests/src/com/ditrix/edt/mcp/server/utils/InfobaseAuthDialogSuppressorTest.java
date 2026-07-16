@@ -10,7 +10,13 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Map;
+
 import org.junit.Test;
+
+import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
+import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 
 /**
  * Headless ratchet for {@link InfobaseAuthDialogSuppressor}. Covers the pure, SWT-free seams:
@@ -356,5 +362,108 @@ public class InfobaseAuthDialogSuppressorTest
         boolean hint = !auth && InfobaseAuthDialogSuppressor.isSecureStorageHintDialogTitle(title);
         return hint || (auth && InfobaseAuthDialogSuppressor.shouldSuppressAuthDialog(
             envEnabled, inFlight, now, lastActivityEnd, grace));
+    }
+
+    // =====================================================================
+    // #270 — McpProtocolHandler dispatch only arms IN_FLIGHT for a connectsToInfobase tool
+    // =====================================================================
+
+    /**
+     * End-to-end (headless) proof of the #270 fix at the real dispatch seam
+     * {@code McpProtocolHandler.executeToolTimed}: a {@code tools/call} for a tool flagged
+     * {@link IMcpTool#connectsToInfobase()} increments {@link #IN_FLIGHT} for the duration of
+     * {@code execute()}, while a tool left on the {@code false} default does not — so
+     * continuous polling by a plain read tool no longer keeps the auth-dialog suppression
+     * window permanently hot. This test lives alongside the suppressor's own tests (rather
+     * than in the {@code protocol} package) because {@link #IN_FLIGHT} is package-private.
+     */
+    @Test
+    public void dispatchArmsInFlightOnlyForConnectsToInfobaseTool()
+    {
+        int baseline = InfobaseAuthDialogSuppressor.IN_FLIGHT.get();
+        McpToolRegistry registry = McpToolRegistry.getInstance();
+        registry.clear();
+        try
+        {
+            ProbeTool connecting = new ProbeTool("probe_connects_to_infobase", true); //$NON-NLS-1$
+            ProbeTool plain = new ProbeTool("probe_plain_read", false); //$NON-NLS-1$
+            registry.register(connecting);
+            registry.register(plain);
+
+            McpProtocolHandler handler = new McpProtocolHandler();
+            handler.processRequest(toolCallRequest(connecting.getName()));
+            handler.processRequest(toolCallRequest(plain.getName()));
+
+            assertEquals("a connectsToInfobase()==true tool must be counted IN_FLIGHT during execute()", //$NON-NLS-1$
+                baseline + 1, connecting.inFlightDuringExecute);
+            assertEquals("a connectsToInfobase()==false tool must NOT arm IN_FLIGHT during execute()", //$NON-NLS-1$
+                baseline, plain.inFlightDuringExecute);
+            assertEquals("IN_FLIGHT must be back to the baseline once both calls have returned", //$NON-NLS-1$
+                baseline, InfobaseAuthDialogSuppressor.IN_FLIGHT.get());
+        }
+        finally
+        {
+            registry.clear();
+        }
+    }
+
+    /**
+     * Builds a minimal {@code tools/call} JSON-RPC request for {@code toolName} with no arguments.
+     */
+    private static String toolCallRequest(String toolName)
+    {
+        return "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\"," //$NON-NLS-1$
+            + "\"params\":{\"name\":\"" + toolName + "\",\"arguments\":{}}}"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Minimal {@link IMcpTool} whose {@code execute()} snapshots {@link #IN_FLIGHT} at the
+     * moment it runs, so a test can observe whether the dispatch armed the suppressor's
+     * activity counter for this particular tool.
+     */
+    private static final class ProbeTool implements IMcpTool
+    {
+        private final String name;
+        private final boolean connects;
+
+        /** {@link #IN_FLIGHT} as observed from inside {@link #execute}; -1 until called. */
+        private volatile int inFlightDuringExecute = -1;
+
+        ProbeTool(String name, boolean connects)
+        {
+            this.name = name;
+            this.connects = connects;
+        }
+
+        @Override
+        public String getName()
+        {
+            return name;
+        }
+
+        @Override
+        public String getDescription()
+        {
+            return "probe tool for the #270 dispatch-arming test"; //$NON-NLS-1$
+        }
+
+        @Override
+        public String getInputSchema()
+        {
+            return "{\"type\":\"object\"}"; //$NON-NLS-1$
+        }
+
+        @Override
+        public boolean connectsToInfobase()
+        {
+            return connects;
+        }
+
+        @Override
+        public String execute(Map<String, String> params)
+        {
+            inFlightDuringExecute = InfobaseAuthDialogSuppressor.IN_FLIGHT.get();
+            return "{\"success\":true}"; //$NON-NLS-1$
+        }
     }
 }

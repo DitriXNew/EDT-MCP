@@ -88,6 +88,14 @@ public class DebugLaunchToolTest
     }
 
     @Test
+    public void testConnectsToInfobaseIsTrue()
+    {
+        // #270: config.launch(...) connects a runtime client to the infobase — it must arm
+        // the auth-dialog suppressor's activity window.
+        assertTrue(new DebugLaunchTool().connectsToInfobase());
+    }
+
+    @Test
     public void testDescriptionNotEmpty()
     {
         String desc = new DebugLaunchTool().getDescription();

@@ -58,6 +58,15 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
+    public void testConnectsToInfobaseIsTrue()
+    {
+        // #270: the pre-launch recompute + the launch itself connect to the infobase
+        // (possibly from the background prep Job) — it must arm the auth-dialog
+        // suppressor's activity window.
+        assertTrue(new RunYaxunitTestsTool().connectsToInfobase());
+    }
+
+    @Test
     public void testGuideHasMigratedDetail()
     {
         IMcpTool tool = new RunYaxunitTestsTool();

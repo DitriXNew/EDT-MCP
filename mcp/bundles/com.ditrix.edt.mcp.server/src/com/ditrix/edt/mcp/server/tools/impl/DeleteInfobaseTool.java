@@ -170,6 +170,14 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     @Override
+    public boolean connectsToInfobase()
+    {
+        // Stopping a standalone server / dissociating an infobase reaches the
+        // application/infobase connection layer (issue #270).
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME);

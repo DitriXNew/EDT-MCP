@@ -140,6 +140,14 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     @Override
+    public boolean connectsToInfobase()
+    {
+        // config.launch(...) connects a runtime client to the infobase, synchronously or
+        // via the fire-and-forget background launch Job (issue #270).
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$

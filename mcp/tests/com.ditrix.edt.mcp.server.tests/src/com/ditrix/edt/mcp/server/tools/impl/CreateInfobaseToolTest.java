@@ -291,4 +291,45 @@ public class CreateInfobaseToolTest
         assertTrue("error must steer to applicationKind='infobase'", //$NON-NLS-1$
             result.contains("infobase")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testStandaloneServerRegisterIsNoLongerRejected()
+    {
+        // #271: applicationKind='standaloneServer' + mode='register' is now SUPPORTED (it wraps an
+        // EXISTING file infobase with a standalone server). The old "mode='register' is not supported
+        // with applicationKind='standaloneServer'" routing rejection must be GONE — a register call now
+        // flows into the register-path validation instead. Headless-safe: with a path that has no
+        // 1Cv8.1CD the validation fires before any workspace/service lookup.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/edt_mcp_no_such_ib_zzz"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("standaloneServer+register must no longer be rejected as 'not supported'", //$NON-NLS-1$
+            !result.contains("not supported")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRegisterMissingDatabaseNamesPath()
+    {
+        // #271: registering a standalone server over a path that holds no 1Cv8.1CD must fail fast with an
+        // actionable error that NAMES the path and steers to mode='create' — the SAME check the plain
+        // register path uses. Validated before any workspace/service lookup (headless-safe).
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/edt_mcp_no_such_ib_zzz"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("missing existing infobase must be an error", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("error must name the path", //$NON-NLS-1$
+            result.contains("edt_mcp_no_such_ib_zzz")); //$NON-NLS-1$
+        assertTrue("error must mention the expected 1Cv8.1CD file", //$NON-NLS-1$
+            result.contains("1Cv8.1CD")); //$NON-NLS-1$
+        assertTrue("error must steer to mode='create'", result.contains("create")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

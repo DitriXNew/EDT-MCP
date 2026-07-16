@@ -16,7 +16,22 @@ FILE infobases only. SERVER and WEB infobases are out of scope for v1 and are re
 
 No port/publication parameters are accepted: for a file-backed standalone server EDT **auto-allocates** the web port (a requested port is ignored) and the publication base is fixed. The **actual** port and the web URL are reported back in the result (`port`, `webUrl`).
 
-The standalone-server path **always creates** a new infobase (`mode='register'` is not supported with `applicationKind='standaloneServer'`).
+### Wrapping an EXISTING infobase with a standalone server (`mode='register'`)
+
+`applicationKind='standaloneServer'` supports **both** modes:
+
+- **`mode='create'` (default)** — creates and serves a brand-new file infobase (described above).
+- **`mode='register'`** — wraps an **EXISTING** file infobase (a `1Cv8.1CD` must already be present at `infobaseFile`) with a standalone server: it performs the **same** WST server registration and web-URL exposure but **does not materialize a database** (your existing data is left untouched). The `1Cv8.1CD` requirement is validated up front, so a wrong path fails fast with an actionable error and no server is registered. A registered 1C standalone-server runtime (platform >= 8.3.23) is still required — the server needs it to run.
+
+On success the result's `action` is **`registered`** (not `created`), and the `message` states the server was registered over the existing infobase.
+
+```
+# Register a standalone server over an EXISTING file infobase (data already on disk):
+1. create_infobase  projectName="MyProject"  infobaseFile="C:\infobases\ExistingApp"  applicationKind="standaloneServer"  mode="register"
+#    -> action="registered"; webUrl/port point at the running server; the existing 1Cv8.1CD is reused as-is.
+```
+
+Note: the `user`/`password`/`access` connection-credential parameters remain **rejected** for `applicationKind='standaloneServer'` in either mode (a standalone server manages its own infobase and authentication) — this behavior is unchanged.
 
 ### Prerequisites and result
 
