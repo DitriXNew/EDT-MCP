@@ -615,6 +615,13 @@ it overrides the preference and lets every gated operation proceed without a dia
 e2e suite uses). When there is no active workbench window (a headless server), the gate never blocks
 either. The dialog only ever appears on a live UI session at the *Ask* level.
 
+**The prompt is time-bounded.** A confirmation dialog waits at most **120 seconds** for a human to
+answer (below common MCP client request budgets, so a caller gets an actionable error instead of its
+own transport timing out first). If nobody answers in time, the operation auto-rejects — nothing is
+changed — with an error naming the tool, the 120 s budget, and the three ways to proceed: allow the
+tool via Preferences (*Allow all* or per-tool), set `EDT_MCP_DESTRUCTIVE_CONSENT=allow` for unattended
+runs, or re-run the call and answer the dialog promptly.
+
 ### Infobase authentication dialog
 
 When a target infobase has a **user list**, connecting to it during `update_database` or `debug_launch`

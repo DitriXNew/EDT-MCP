@@ -1955,8 +1955,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      *
      * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
      * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
-     * the preview. Returns a ready JSON error ({@code "Operation declined by user"}) when the human
-     * REJECTS - the caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
+     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
+     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
+     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
      */
     private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
     {
@@ -1976,9 +1977,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
             retyped.size(), retyped);
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
+        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
         return null;
     }
@@ -1988,8 +1990,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * when it retypes a form ATTRIBUTE (a {@code type} / {@code valueType} property on an Attribute ref).
      * Scoped to the ATTRIBUTE kind (like the dynamic-list-query branch) so a decoration's benign enum
      * {@code type} never prompts, and run here - not inside the tx callback - because the gate may block
-     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error
-     * ({@code "Operation declined by user"}) on REJECT, or {@code null} to proceed.
+     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error on
+     * REJECT or TIMEOUT (see {@link DestructiveConsentGate#consentDeniedMessage}), or {@code null} to
+     * proceed.
      */
     private static String consentForFormTypeChange(String normFqn, FormElementWriter.FormMemberRef ref,
         List<JsonObject> properties)
@@ -2016,9 +2019,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
             1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
+        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
         return null;
     }

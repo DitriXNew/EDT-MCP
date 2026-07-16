@@ -413,22 +413,25 @@ public class DeleteInfobaseTool implements IMcpTool
     /**
      * Destructive-operation consent gate shared by both deletion paths (file infobase + standalone
      * server): builds a {@link ConsentPreview} naming the single target and asks
-     * {@link DestructiveConsentGate}. Returns the ready {@code "Operation declined by user"} error JSON
-     * on REJECT (the caller returns it and mutates nothing), or {@code null} on ALLOW to continue.
-     * Headless / env-bypass / non-ASK never block. This is the LAST check before the deletion.
+     * {@link DestructiveConsentGate}. Returns the ready error JSON on a non-ALLOW verdict (REJECT: the
+     * human declined; TIMEOUT: nobody answered within the gate's bounded wait — see
+     * {@link DestructiveConsentGate#consentDeniedMessage}) — the caller returns it and mutates nothing
+     * — or {@code null} on ALLOW to continue. Headless / env-bypass / non-ASK never block. This is the
+     * LAST check before the deletion.
      *
      * @param targetName the resolved infobase / server display name (the single top-name)
      * @param subtitle a human-readable description of what will be removed
-     * @return the decline error JSON on REJECT, or {@code null} on ALLOW
+     * @return the decline/timeout error JSON on a non-ALLOW verdict, or {@code null} on ALLOW
      */
     private static String checkDestructiveConsent(String targetName, String subtitle)
     {
         ConsentPreview preview = new ConsentPreview("Delete infobase", subtitle, 1, //$NON-NLS-1$
             java.util.Collections.singletonList(targetName));
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
-            == DestructiveConsentGate.ConsentDecision.REJECT)
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
         return null;
     }
