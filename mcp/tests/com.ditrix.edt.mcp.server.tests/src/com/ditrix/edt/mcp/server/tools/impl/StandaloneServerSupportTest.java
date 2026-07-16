@@ -11,6 +11,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
@@ -95,7 +96,9 @@ public class StandaloneServerSupportTest
     @Test
     public void testInfobaseIdOfReturnsNullWhenMethodAbsent()
     {
-        // An object without getInfobaseId() -> NoSuchMethodException is swallowed -> null.
+        // #273: an object with NEITHER the 2025.2 shape (getInfobaseId()) NOR the 2026.1 fallback
+        // chain (getStandaloneServerConfiguration()) -> both NoSuchMethodExceptions are swallowed ->
+        // null, and the "both shapes missing" error is LOGGED, never thrown.
         assertNull(StandaloneServerSupport.infobaseIdOf(new Object()));
     }
 
@@ -105,6 +108,44 @@ public class StandaloneServerSupportTest
         // A UUID-like non-String id is rendered via toString().
         Object module = new FakeInfobaseModule(Integer.valueOf(7));
         assertEquals("7", StandaloneServerSupport.infobaseIdOf(module)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInfobaseIdOfReadsUuidViaGetInfobaseId()
+    {
+        // The real 2025.2 shape: getInfobaseId() returns a java.util.UUID -> its toString() is
+        // returned (the raw id string that keys the infobases.yaml registry entry).
+        java.util.UUID uuid = java.util.UUID.randomUUID();
+        Object module = new FakeInfobaseModule(uuid);
+        assertEquals(uuid.toString(), StandaloneServerSupport.infobaseIdOf(module));
+    }
+
+    // ---- #273: 2026.1 fallback shape — getStandaloneServerConfiguration().getInfobase().getId() ----
+
+    @Test
+    public void testInfobaseIdOfFallsBackToConfigurationChainWhenGetInfobaseIdAbsent()
+    {
+        // 2026.1: getInfobaseId() is GONE (no replacement); the raw id lives instead at
+        // getStandaloneServerConfiguration().getInfobase().getId(): String.
+        Object module = new FakeInfobaseModule2026Only(
+            new Fake2026Configuration(new Fake2026Infobase("ib-2026"))); //$NON-NLS-1$
+        assertEquals("ib-2026", StandaloneServerSupport.infobaseIdOf(module)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInfobaseIdOfFallbackIsNullSafeWhenConfigurationIsNull()
+    {
+        // getStandaloneServerConfiguration() present but returns null -> null-safe, no NPE.
+        Object module = new FakeInfobaseModule2026Only(null);
+        assertNull(StandaloneServerSupport.infobaseIdOf(module));
+    }
+
+    @Test
+    public void testInfobaseIdOfFallbackIsNullSafeWhenInfobaseIsNull()
+    {
+        // getInfobase() present but returns null -> null-safe, no NPE.
+        Object module = new FakeInfobaseModule2026Only(new Fake2026Configuration(null));
+        assertNull(StandaloneServerSupport.infobaseIdOf(module));
     }
 
     // ==================== databaseDirOf ====================
@@ -137,9 +178,28 @@ public class StandaloneServerSupportTest
     @Test
     public void testDatabaseDirOfReturnsNullForRdbmsDatabaseWithoutConfigDirectory()
     {
-        // An RDBMS database has no getConfigDirectory() -> NoSuchMethodException -> null.
+        // An RDBMS database has NEITHER getConfigDirectory() (2025.2) NOR getPath() (2026.1) -> null.
         Object module = new FakeServerInfobaseModule(
             new FakeConfiguration(new FakeRdbmsDatabase()));
+        assertNull(StandaloneServerSupport.databaseDirOf(module));
+    }
+
+    @Test
+    public void testDatabaseDirOfReadsGetPathOn2026Shape()
+    {
+        // #273: 2026.1 renamed FileDatabase.getConfigDirectory() -> getPath(); the read must accept
+        // either accessor (this is why deleteDatabaseFiles resolved nothing on 2026.1).
+        Object module = new FakeServerInfobaseModule(
+            new FakeConfiguration(new Fake2026PathDatabase("C:/data/ib2026"))); //$NON-NLS-1$
+        assertEquals("C:/data/ib2026", StandaloneServerSupport.databaseDirOf(module)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDatabaseDirOfReturnsNullWhenGetPathIsNotAString()
+    {
+        // #273: getPath() exists but returns a non-String -> null (same instanceof guard as 2025.2).
+        Object module = new FakeServerInfobaseModule(
+            new FakeConfiguration(new FakeNonStringPathDatabase()));
         assertNull(StandaloneServerSupport.databaseDirOf(module));
     }
 
@@ -304,11 +364,12 @@ public class StandaloneServerSupportTest
     // ==================== removeFromInfobaseRegistry ====================
 
     @Test
-    public void testRemoveFromInfobaseRegistryNullIdReturnsFailed()
+    public void testRemoveFromInfobaseRegistryNullModuleAndIdReturnsFailed()
     {
-        // PURE branch (no OSGi): a null infobaseId can target no entry -> FAILED (honest, not NOT_PRESENT).
+        // PURE branch (no OSGi): with NEITHER the module NOR the raw id, no entry can be targeted ->
+        // FAILED (honest, not NOT_PRESENT).
         assertSame(RegistryCleanup.FAILED,
-            StandaloneServerSupport.removeFromInfobaseRegistry(null, MONITOR));
+            StandaloneServerSupport.removeFromInfobaseRegistry(null, null, MONITOR));
     }
 
     @Test
@@ -318,8 +379,109 @@ public class StandaloneServerSupportTest
         // runtime the cleanup cannot run: it must return a non-null RegistryCleanup (FAILED) and never
         // throw. (On a real EDT with the feature installed this is where REMOVED/NOT_PRESENT happen.)
         RegistryCleanup result =
-            StandaloneServerSupport.removeFromInfobaseRegistry("some-id", MONITOR); //$NON-NLS-1$
+            StandaloneServerSupport.removeFromInfobaseRegistry(null, "some-id", MONITOR); //$NON-NLS-1$
         assertNotNull(result);
+    }
+
+    @Test
+    public void testRemoveFromInfobaseRegistryWithModuleOnlyDegradesGracefully()
+    {
+        // A module without a raw id (the 2026.1 shape when only the instance is known) must also
+        // degrade gracefully in the headless runtime — non-null result, never a throw.
+        RegistryCleanup result = StandaloneServerSupport.removeFromInfobaseRegistry(
+            new FakeIdModule("prefixed#abc"), null, MONITOR); //$NON-NLS-1$
+        assertNotNull(result);
+    }
+
+    // ==================== removeModuleEntries (#273: the version-proof map surgery) ====================
+    // The delegate's modules-map KEY scheme differs per EDT version: 2025.2 keys by the raw uuid,
+    // 2026.1 by the PREFIXED StandaloneServerInfobase.getId() module-id — so key-based removal by the
+    // raw id silently misses on 2026.1. The extracted seam is tested here strategy by strategy; the
+    // delegate/mapper/location plumbing around it stays live-verified.
+
+    @Test
+    public void testRemoveModuleEntriesByValueIdentity()
+    {
+        // Strategy 1: the map value IS the passed instance — removed regardless of the key scheme
+        // (here the 2026.1-style prefixed key, which the raw id would miss).
+        FakeIdModule module = new FakeIdModule("srv#raw-1"); //$NON-NLS-1$
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("srv#raw-1", module); //$NON-NLS-1$
+        assertEquals(1, StandaloneServerSupport.removeModuleEntries(modules, module, "raw-1")); //$NON-NLS-1$
+        assertTrue(modules.isEmpty());
+    }
+
+    @Test
+    public void testRemoveModuleEntriesIdentityDoesNotTouchOtherEntries()
+    {
+        // Identity removal must be surgical: an unrelated entry (even one with the SAME getId) stays,
+        // because strategy 2 only runs when strategy 1 removed nothing.
+        FakeIdModule module = new FakeIdModule("srv#raw-1"); //$NON-NLS-1$
+        FakeIdModule twin = new FakeIdModule("srv#raw-1"); //$NON-NLS-1$
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("k1", module); //$NON-NLS-1$
+        modules.put("k2", twin); //$NON-NLS-1$
+        assertEquals(1, StandaloneServerSupport.removeModuleEntries(modules, module, null));
+        assertSame(twin, modules.get("k2")); //$NON-NLS-1$
+        assertEquals(1, modules.size());
+    }
+
+    @Test
+    public void testRemoveModuleEntriesByGetIdEquality()
+    {
+        // Strategy 2: a DIFFERENT instance with the SAME getId() (a re-created module) is matched by
+        // reflective getId() String equality when identity misses.
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("srv#raw-2", new FakeIdModule("srv#raw-2")); //$NON-NLS-1$ //$NON-NLS-2$
+        FakeIdModule sameIdOtherInstance = new FakeIdModule("srv#raw-2"); //$NON-NLS-1$
+        assertEquals(1,
+            StandaloneServerSupport.removeModuleEntries(modules, sameIdOtherInstance, null));
+        assertTrue(modules.isEmpty());
+    }
+
+    @Test
+    public void testRemoveModuleEntriesByRawIdKeyFallback()
+    {
+        // Strategy 3: identity and getId both miss (value has no matching id) -> the proven 2025.2
+        // key-based removal by the raw id still fires.
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("raw-3", new Object()); //$NON-NLS-1$
+        assertEquals(1, StandaloneServerSupport.removeModuleEntries(modules,
+            new FakeIdModule("srv#other"), "raw-3")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(modules.isEmpty());
+    }
+
+    @Test
+    public void testRemoveModuleEntriesKeyFallbackWithNullModule()
+    {
+        // module == null (the pre-#273 caller shape): only the key-based strategy applies.
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("raw-4", new Object()); //$NON-NLS-1$
+        assertEquals(1, StandaloneServerSupport.removeModuleEntries(modules, null, "raw-4")); //$NON-NLS-1$
+        assertTrue(modules.isEmpty());
+    }
+
+    @Test
+    public void testRemoveModuleEntriesFullMissReturnsZero()
+    {
+        // No identity, no id equality, no key match -> 0 (the caller maps this to NOT_PRESENT).
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("other-key", new FakeIdModule("srv#other")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(0, StandaloneServerSupport.removeModuleEntries(modules,
+            new FakeIdModule("srv#mine"), "raw-mine")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, modules.size());
+    }
+
+    @Test
+    public void testRemoveModuleEntriesToleratesValuesWithoutGetId()
+    {
+        // Strategy 2 must skip values that have no getId() (or are null) without throwing.
+        java.util.Map<Object, Object> modules = new java.util.HashMap<>();
+        modules.put("k1", new Object()); //$NON-NLS-1$
+        modules.put("k2", null); //$NON-NLS-1$
+        assertEquals(0, StandaloneServerSupport.removeModuleEntries(modules,
+            new FakeIdModule("srv#raw-5"), null)); //$NON-NLS-1$
+        assertEquals(2, modules.size());
     }
 
     // ==================== acquireService ====================
@@ -341,6 +503,25 @@ public class StandaloneServerSupportTest
 
     // ==================== Fakes (plain classes the reflective wrappers introspect) ====================
 
+    /**
+     * #273: a registry module with a {@code getId()} — on 2026.1 that PREFIXED module-id string is the
+     * delegate's map key. Used by the {@code removeModuleEntries} strategy tests.
+     */
+    public static final class FakeIdModule
+    {
+        private final String id;
+
+        FakeIdModule(String id)
+        {
+            this.id = id;
+        }
+
+        public String getId()
+        {
+            return id;
+        }
+    }
+
     /** Stands in for {@code StandaloneServerInfobase} for {@code infobaseIdOf}. */
     public static final class FakeInfobaseModule
     {
@@ -352,6 +533,57 @@ public class StandaloneServerSupportTest
         }
 
         public Object getInfobaseId()
+        {
+            return id;
+        }
+    }
+
+    /**
+     * #273: a module exposing ONLY the 2026.1 config-chain fallback for {@code infobaseIdOf} —
+     * deliberately has NO {@code getInfobaseId()}, mirroring EDT 2026.1 where that method was removed.
+     */
+    public static final class FakeInfobaseModule2026Only
+    {
+        private final Object configuration;
+
+        FakeInfobaseModule2026Only(Object configuration)
+        {
+            this.configuration = configuration;
+        }
+
+        public Object getStandaloneServerConfiguration()
+        {
+            return configuration;
+        }
+    }
+
+    /** #273: stands in for the 2026.1 {@code StandaloneServerConfiguration}'s {@code getInfobase()} hop. */
+    public static final class Fake2026Configuration
+    {
+        private final Object infobase;
+
+        Fake2026Configuration(Object infobase)
+        {
+            this.infobase = infobase;
+        }
+
+        public Object getInfobase()
+        {
+            return infobase;
+        }
+    }
+
+    /** #273: stands in for the 2026.1 {@code Infobase}, holding the raw id via {@code getId(): String}. */
+    public static final class Fake2026Infobase
+    {
+        private final String id;
+
+        Fake2026Infobase(String id)
+        {
+            this.id = id;
+        }
+
+        public String getId()
         {
             return id;
         }
@@ -405,10 +637,10 @@ public class StandaloneServerSupportTest
         }
     }
 
-    /** RDBMS database: deliberately has NO getConfigDirectory() method. */
+    /** RDBMS database: deliberately has NEITHER getConfigDirectory() (2025.2) nor getPath() (2026.1). */
     public static final class FakeRdbmsDatabase
     {
-        // no getConfigDirectory()
+        // no getConfigDirectory() / getPath()
     }
 
     /** File-like database whose getConfigDirectory() returns a non-String (the instanceof guard). */
@@ -417,6 +649,31 @@ public class StandaloneServerSupportTest
         public Object getConfigDirectory()
         {
             return new java.io.File("x"); //$NON-NLS-1$
+        }
+    }
+
+    /** #273: a 2026.1-shaped file database — the directory accessor was RENAMED to getPath(). */
+    public static final class Fake2026PathDatabase
+    {
+        private final String path;
+
+        Fake2026PathDatabase(String path)
+        {
+            this.path = path;
+        }
+
+        public String getPath()
+        {
+            return path;
+        }
+    }
+
+    /** #273: a 2026.1-shaped database whose getPath() returns a non-String (the instanceof guard). */
+    public static final class FakeNonStringPathDatabase
+    {
+        public Object getPath()
+        {
+            return new java.io.File("y"); //$NON-NLS-1$
         }
     }
 

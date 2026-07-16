@@ -139,6 +139,24 @@ public class CreateInfobaseTool implements IMcpTool
     private static final String STANDALONE_SERVER_INFOBASE_CLASS =
         "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.StandaloneServerInfobase"; //$NON-NLS-1$
 
+    /**
+     * FQN of the create-template file database ({@code FileCreateTemplateDatabase extends FileDatabase
+     * implements ICreateTemplateDatabase}; javap-verified IDENTICAL on EDT 2025.2 and 2026.1, bundle
+     * {@code com.e1c.g5.v8.dt.platform.standaloneserver.core}). Loaded via the LIVE database object's
+     * own classloader (same bundle) — never {@code Class.forName}: this plugin has no dependency on
+     * that bundle. See {@link #ssEnsureCreateTemplateDatabase}.
+     */
+    private static final String CREATE_TEMPLATE_DATABASE_CLASS =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.core.config.FileCreateTemplateDatabase"; //$NON-NLS-1$
+
+    /**
+     * SIMPLE name of the create-template marker interface
+     * ({@code com.e1c.g5.v8.dt.platform.standaloneserver.core.config.ICreateTemplateDatabase}).
+     * {@link #ssIsCreateTemplateDatabase} matches it by simple name so the decision logic is
+     * unit-testable with headless stub interfaces (the platform ships no other type with this name).
+     */
+    private static final String CREATE_TEMPLATE_DATABASE_INTERFACE = "ICreateTemplateDatabase"; //$NON-NLS-1$
+
     /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
     private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
         "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
@@ -1073,9 +1091,13 @@ public class CreateInfobaseTool implements IMcpTool
     /**
      * Best-effort marks a just-registered {@code StandaloneServerInfobase} module as ALREADY existing
      * for mode='register' — {@code setExist(true)} (mirrors the EDT wizard's existing-infobase branch).
-     * Never called with {@code setCreate(true)}: the served {@code 1Cv8.1CD} already exists on disk, so
-     * no database is materialized. Any reflective failure is logged and swallowed — the WST server
-     * registration already succeeded and must not be failed by a best-effort flag.
+     * Never called with the create-flag setter ({@link #ssSetCreateFlag}): the served {@code 1Cv8.1CD}
+     * already exists on disk, so no database is materialized. {@code setExist} exists only on EDT
+     * 2025.2 — it was REMOVED on 2026.1 with no replacement, so there the reflective {@link #ssInvoke}
+     * call below resolves to a silent no-op (method not found -> returns {@code null}, no exception, no
+     * log) and this method degrades to a harmless no-op. Any OTHER reflective failure (e.g. an actual
+     * invocation error on 2025.2) is logged and swallowed — the WST server registration already
+     * succeeded and must not be failed by a best-effort flag.
      *
      * @param standaloneServerInfobase the module returned by {@link #ssCreateServerWithInfobase}
      */
@@ -1379,12 +1401,22 @@ public class CreateInfobaseTool implements IMcpTool
     /**
      * Physically creates the served file infobase for a standalone server that
      * {@link #ssCreateServerWithInfobase} just registered. That call builds the {@code StandaloneServerInfobase}
-     * with {@code create=false}, so {@code ibcmd infobase create} (which writes {@code 1Cv8.1CD}) never runs and
-     * the server fails to start with "Информационная база не обнаружена". This flips {@code create=true} on the
-     * returned LIVE module — the same flag the EDT new-server wizard sets — and invokes the WST behaviour
-     * delegate's {@code createStandaloneServerInfobase} DIRECTLY (the only place that runs the create, gated by
-     * {@code isCreate()}; verified against EDT 2025.2 bytecode — no start/publish path creates the DB, and
-     * re-adding the module via {@code modifyModules} is blocked by an "already have module" guard).
+     * with the create-new-infobase flag {@code false}, so {@code ibcmd infobase create} (which writes
+     * {@code 1Cv8.1CD}) never runs and the server fails to start with "Информационная база не обнаружена". This
+     * flips that flag to {@code true} on the returned LIVE module — the same flag the EDT new-server wizard sets,
+     * named {@code setCreate} on EDT 2025.2 and renamed (no back-compat alias) to {@code setCreateNewInfobase} on
+     * 2026.1, resolved version-tolerantly by {@link #ssSetCreateFlag} — and invokes the WST behaviour delegate's
+     * {@code createStandaloneServerInfobase} DIRECTLY (the only place that runs the create, gated by the flag's
+     * getter; verified against EDT 2025.2 bytecode — no start/publish path creates the DB, and re-adding the
+     * module via {@code modifyModules} is blocked by an "already have module" guard).
+     *
+     * <p>On 2026.1 there is a SECOND drift layer past the setter rename: {@code createServerWithInfobase}
+     * builds the module config with a PLAIN {@code FileDatabase}, but the behaviour delegate's
+     * {@code createStandaloneServerInfobase} now CASTS the config's database to
+     * {@code ICreateTemplateDatabase} (live error: "FileDatabase cannot be cast to class
+     * ...ICreateTemplateDatabase"). {@link #ssEnsureCreateTemplateDatabase} swaps in a
+     * {@code FileCreateTemplateDatabase} (identical on both versions, harmless on 2025.2 — it IS a
+     * {@code FileDatabase}) before the delegate runs.
      *
      * <p>Runs inside the create Job (with its monitor). Throws on failure so the caller reports an honest
      * error (the server is then registered without a DB; {@code delete_infobase} can clean it up).
@@ -1397,15 +1429,18 @@ public class CreateInfobaseTool implements IMcpTool
             throw new IllegalStateException("createServerWithInfobase returned no infobase handle; " //$NON-NLS-1$
                 + "the served infobase could not be created."); //$NON-NLS-1$
         }
-        // Flip create=true (the flag that gates the physical creation) on the live module. setExist=false
-        // mirrors the EDT wizard's "new infobase" branch and is optional (a no-op if the API lacks it).
-        if (ssMethod(infobase.getClass(), "setCreate", 1) == null) //$NON-NLS-1$
-        {
-            throw new IllegalStateException("StandaloneServerInfobase.setCreate not found — the standalone-" //$NON-NLS-1$
-                + "server API may have changed; the served infobase could not be created."); //$NON-NLS-1$
-        }
-        ssInvoke(infobase, "setCreate", 1, Boolean.TRUE); //$NON-NLS-1$
+        // Flip the create-new-infobase flag to true (the flag that gates the physical creation) on the
+        // live module — version-tolerant name resolution, see ssSetCreateFlag. setExist=false mirrors the
+        // EDT wizard's "new infobase" branch on 2025.2 and stays best-effort/optional: setExist was
+        // REMOVED on 2026.1 with no replacement, and ssInvoke resolves a missing method to a silent
+        // no-op (returns null, no exception, no log) — matching the clean log observed on a live 2026.1
+        // register run.
+        ssSetCreateFlag(infobase, true);
         ssInvoke(infobase, "setExist", 1, Boolean.FALSE); //$NON-NLS-1$
+
+        // 2026.1's behaviour delegate casts the config's database to ICreateTemplateDatabase — make sure
+        // it is one BEFORE invoking the delegate (a no-op when it already is; safe on 2025.2 too).
+        ssEnsureCreateTemplateDatabase(infobase);
 
         // Resolve the WST behaviour delegate for this server and run the (otherwise publish-time) create now.
         Object delegate = ssInvoke(service, "findBehaviourDelegate", 1, server); //$NON-NLS-1$
@@ -1470,6 +1505,186 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
         return null;
+    }
+
+    /**
+     * First public method on {@code cls} (incl. inherited) matching any of {@code names} (tried in
+     * order) and the given parameter count — a version-tolerant lookup for an API whose method name was
+     * RENAMED across EDT platform versions with no back-compat alias (e.g. {@code setCreate} on 2025.2 /
+     * {@code setCreateNewInfobase} on 2026.1). Returns the first match by name-priority order, or
+     * {@code null} when none of {@code names} resolve. Package-private for direct unit testing with stub
+     * classes exposing one name, the other, or neither.
+     */
+    static Method ssMethodAny(Class<?> cls, int paramCount, String... names)
+    {
+        for (String name : names)
+        {
+            Method m = ssMethod(cls, name, paramCount);
+            if (m != null)
+            {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves and invokes the version-tolerant "create a new infobase" flag setter on the live
+     * {@code StandaloneServerInfobase} module: {@code setCreate(boolean)} on EDT 2025.2, renamed with no
+     * back-compat alias to {@code setCreateNewInfobase(boolean)} on EDT 2026.1 ({@code isCreate}/
+     * {@code getInfobaseId} renames are the sibling cases of the same 2026.1 API drift — see
+     * {@link StandaloneServerSupport#infobaseIdOf}). Package-private for direct unit testing with stub
+     * classes exposing one name, the other, or neither.
+     *
+     * @param infobase the live {@code StandaloneServerInfobase} module returned by
+     *            {@link #ssCreateServerWithInfobase}
+     * @param value the flag value to set (always {@code true} from {@link #ssMaterializeInfobase})
+     * @throws IllegalStateException when NEITHER setter name resolves — names both tried methods so the
+     *             failure is diagnosable without a javap session
+     */
+    static void ssSetCreateFlag(Object infobase, boolean value) throws Exception
+    {
+        Method setter = ssMethodAny(infobase.getClass(), 1, "setCreate", "setCreateNewInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (setter == null)
+        {
+            throw new IllegalStateException(
+                "Neither StandaloneServerInfobase.setCreate nor setCreateNewInfobase was found — " //$NON-NLS-1$
+                    + "the standalone-server API may have changed; the served infobase could not be " //$NON-NLS-1$
+                    + "created."); //$NON-NLS-1$
+        }
+        try
+        {
+            setter.invoke(infobase, Boolean.valueOf(value));
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /**
+     * Ensures the module config's database IS a create-template one before the behaviour delegate runs
+     * the physical create. On EDT 2026.1 {@code createServerWithInfobase} builds the config with a PLAIN
+     * {@code FileDatabase}, but the delegate's {@code createStandaloneServerInfobase} casts the config's
+     * database to {@code ICreateTemplateDatabase} — a live {@code ClassCastException} without this swap.
+     * When needed, a {@code FileCreateTemplateDatabase} (javap-verified identical on 2025.2 and 2026.1;
+     * it {@code extends FileDatabase}, so the swap is harmless on 2025.2 too) is instantiated via the
+     * live database object's OWN classloader (same bundle — never {@code Class.forName}), the directory
+     * is copied across the {@code getConfigDirectory}/{@code getPath} rename
+     * ({@link #ssCopyDatabaseDirectory}), and {@code Config.setDatabase} (present on both versions)
+     * installs it. ONLY the mode='create' materialization path calls this — the register path must
+     * NEVER get a create-template database.
+     *
+     * <p>Decision logic ({@code null} database untouched — the delegate then fails with its own honest
+     * error; already-a-create-template database untouched — the 2025.2-compatible/future-proof path) is
+     * split into the headless-testable {@link #ssIsCreateTemplateDatabase}/{@link #ssCopyDatabaseDirectory};
+     * the bundle class-loading step itself is live-verified only. BEST-EFFORT: any failure is logged and
+     * swallowed — on 2025.2 a plain {@code FileDatabase} still materializes fine (never regress that),
+     * and on 2026.1 the delegate then surfaces its own cast error.
+     *
+     * @param infobase the live {@code StandaloneServerInfobase} module returned by
+     *            {@link #ssCreateServerWithInfobase}
+     */
+    static void ssEnsureCreateTemplateDatabase(Object infobase)
+    {
+        try
+        {
+            Object cfg = ssInvoke(infobase, "getStandaloneServerConfiguration", 0); //$NON-NLS-1$
+            if (cfg == null)
+            {
+                return;
+            }
+            Object db = ssInvoke(cfg, "getDatabase", 0); //$NON-NLS-1$
+            if (db == null)
+            {
+                // Leave as-is: the behaviour delegate fails with its own honest error on a missing DB.
+                return;
+            }
+            if (ssIsCreateTemplateDatabase(db.getClass()))
+            {
+                // Already create-template capable — nothing to do (also future-proof).
+                return;
+            }
+            Class<?> templateClass =
+                db.getClass().getClassLoader().loadClass(CREATE_TEMPLATE_DATABASE_CLASS);
+            Object templateDb = templateClass.getDeclaredConstructor().newInstance();
+            ssCopyDatabaseDirectory(db, templateDb);
+            ssInvoke(cfg, "setDatabase", 1, templateDb); //$NON-NLS-1$
+        }
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        {
+            Activator.logError("create_infobase: could not swap the standalone-server database to a " //$NON-NLS-1$
+                + "FileCreateTemplateDatabase (best-effort; on 2026.1 the create may fail with an " //$NON-NLS-1$
+                + "ICreateTemplateDatabase cast error)", t); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Whether {@code cls} (or any superclass / (super)interface of it) is the create-template marker
+     * interface {@code ICreateTemplateDatabase} — matched by SIMPLE name (the live FQN is
+     * {@code com.e1c.g5.v8.dt.platform.standaloneserver.core.config.ICreateTemplateDatabase}; the type
+     * is intentionally not imported, so {@code instanceof} is impossible, and the simple-name match
+     * keeps the check unit-testable with stub interfaces). Package-private for direct unit testing.
+     */
+    static boolean ssIsCreateTemplateDatabase(Class<?> cls)
+    {
+        if (cls == null)
+        {
+            return false;
+        }
+        if (cls.isInterface() && CREATE_TEMPLATE_DATABASE_INTERFACE.equals(cls.getSimpleName()))
+        {
+            return true;
+        }
+        for (Class<?> iface : cls.getInterfaces())
+        {
+            if (ssIsCreateTemplateDatabase(iface))
+            {
+                return true;
+            }
+        }
+        return ssIsCreateTemplateDatabase(cls.getSuperclass());
+    }
+
+    /**
+     * Copies the file database's on-disk directory from {@code from} to {@code to}, version-tolerant
+     * across the {@code FileDatabase} 2025.2 -> 2026.1 accessor rename: read via
+     * {@code getConfigDirectory()} (2025.2) OR {@code getPath()} (2026.1), write via
+     * {@code setConfigDirectory(String)} OR {@code setPath(String)} — each side resolved independently
+     * with {@link #ssMethodAny}. A missing accessor on either side, or a {@code null} directory value,
+     * degrades to a no-op (best-effort — the caller already treats the whole swap as best-effort).
+     * Package-private for direct unit testing with stubs exposing either accessor generation.
+     */
+    static void ssCopyDatabaseDirectory(Object from, Object to) throws Exception
+    {
+        Method read = ssMethodAny(from.getClass(), 0, "getConfigDirectory", "getPath"); //$NON-NLS-1$ //$NON-NLS-2$
+        Method write = ssMethodAny(to.getClass(), 1, "setConfigDirectory", "setPath"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (read == null || write == null)
+        {
+            return;
+        }
+        try
+        {
+            Object dir = read.invoke(from);
+            if (dir != null)
+            {
+                write.invoke(to, dir);
+            }
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
     }
 
     /**

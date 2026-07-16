@@ -1,0 +1,6 @@
+projectKey=TestConfiguration
+serverUrl=http://localhost:9001
+serverVersion=26.7.0.124771
+dashboardUrl=http://localhost:9001/dashboard?id=TestConfiguration
+ceTaskId=4b123390-1b2d-40e0-b5e0-7d92a290d52f
+ceTaskUrl=http://localhost:9001/api/ce/task?id=4b123390-1b2d-40e0-b5e0-7d92a290d52f
