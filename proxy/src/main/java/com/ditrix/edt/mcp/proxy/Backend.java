@@ -97,8 +97,14 @@ public final class Backend
      * The plugin's health handler always answers HTTP 200 and distinguishes readiness in
      * the {@code status} field ({@code ok} / {@code starting} / {@code degraded}), so the
      * probe requires BOTH a 200 status AND {@code "status":"ok"} in the JSON body.
+     * <p>
+     * A healthy responder that declares {@code "role":"proxy"} is REJECTED: that is another
+     * edt-mcp-proxy - or this very proxy, when its own port falls inside the scan range.
+     * Registering a proxy as a backend makes every forwarded request re-enter a proxy and
+     * recurse without bound, exhausting memory or the request pool.
      *
-     * @return {@code true} when the backend answered 200 with {@code status == "ok"}
+     * @return {@code true} when the backend answered 200 with {@code status == "ok"} and is
+     *         not itself a proxy
      */
     public boolean probeHealth()
     {
@@ -114,7 +120,8 @@ public final class Backend
                 return false;
             }
             JsonObject body = Json.parseObject(response.body());
-            return body != null && "ok".equals(Json.str(body, "status")); //$NON-NLS-1$ //$NON-NLS-2$
+            return body != null && "ok".equals(Json.str(body, "status")) //$NON-NLS-1$ //$NON-NLS-2$
+                && !"proxy".equals(Json.str(body, "role")); //$NON-NLS-1$ //$NON-NLS-2$
         }
         catch (IOException e)
         {

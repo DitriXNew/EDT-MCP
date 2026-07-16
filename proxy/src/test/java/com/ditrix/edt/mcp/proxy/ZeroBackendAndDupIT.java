@@ -121,6 +121,40 @@ public class ZeroBackendAndDupIT
     }
 
     /**
+     * A scanned port that answers {@code /health} but declares {@code "role":"proxy"} —
+     * another edt-mcp-proxy, or this very proxy when its own (ephemeral) port lands inside
+     * the scan range — must NOT be registered as a backend: forwarding to a proxy re-enters
+     * a proxy and recurses without bound (the CI-runner-killing runaway this guards
+     * against). The registry must stay EMPTY instead.
+     */
+    @Test
+    public void testProxyRoleResponderInScanRangeIsNotRegisteredAsBackend() throws Exception
+    {
+        int[] deadPorts = reserveFreePorts(2);
+        ProxyFixture inner = new ProxyFixture(deadPorts[0], deadPorts[1]);
+        inner.start();
+        try
+        {
+            // The outer proxy's scan range covers EXACTLY the inner proxy - the deterministic
+            // version of the flaky self-discovery (own ephemeral port inside a wide range).
+            proxy = new ProxyFixture(inner.port(), inner.port());
+            proxy.start();
+            McpTestClient client = new McpTestClient(proxy.port());
+            client.handshake();
+
+            JsonObject status = client.callTool(TOOL_ROUTER_STATUS, new JsonObject());
+            assertFalse("router_status must succeed: " + status, isToolError(status)); //$NON-NLS-1$
+            JsonObject structured = structuredContent(status);
+            assertEquals("a proxy-role /health responder must never be registered as a backend: " //$NON-NLS-1$
+                + structured, 0, structured.getAsJsonArray("backends").size()); //$NON-NLS-1$
+        }
+        finally
+        {
+            inner.stop();
+        }
+    }
+
+    /**
      * Two backends both serving the same project: a call routed by that project name must
      * be refused with the duplicate error naming BOTH owning ports (the proxy must never
      * silently pick one).
