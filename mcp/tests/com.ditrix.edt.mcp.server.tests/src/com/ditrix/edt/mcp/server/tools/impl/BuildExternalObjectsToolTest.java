@@ -65,6 +65,14 @@ public class BuildExternalObjectsToolTest
     }
 
     @Test
+    public void testConnectsToInfobaseIsTrue()
+    {
+        // #270: the background dump Job connects to the infobase to read external objects
+        // back — it must arm the auth-dialog suppressor's activity window.
+        assertTrue(new BuildExternalObjectsTool().connectsToInfobase());
+    }
+
+    @Test
     public void testDescriptionNotEmpty()
     {
         String desc = new BuildExternalObjectsTool().getDescription();

@@ -133,6 +133,14 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     @Override
+    public boolean connectsToInfobase()
+    {
+        // getUpdateState()/update() open a live connection to run the database update
+        // (issue #270) — the classic case #194 introduced the auth dialog for.
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$

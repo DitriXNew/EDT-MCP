@@ -67,6 +67,26 @@ import com.ditrix.edt.mcp.server.Activator;
  * first time a workbench {@link Display} is available — {@link #ensureInstalled()} is
  * called on every tool dispatch) and stays installed for the workbench's lifetime;
  * the activity/env decision is applied per event, only to the auth dialog.
+ *
+ * <h2>Narrowed to connection-reaching tools — issue #270</h2>
+ * #230 armed the in-flight counter around <em>every</em> MCP tool call. On a stand with
+ * continuous MCP traffic (an agent polling {@code list_projects} / {@code
+ * get_metadata_details} / other read tools every few seconds) the window was therefore
+ * <b>always</b> hot, so a human launching a client and hitting the access-settings dialog
+ * had it auto-cancelled out from under them before they could type credentials — the very
+ * safeguard #230 added (idle = human can use it) never actually went idle. The fix scopes
+ * {@link #markActivityStart()} / {@link #markActivityEnd()} to only the tools flagged
+ * {@link com.ditrix.edt.mcp.server.tools.IMcpTool#connectsToInfobase()} — those whose
+ * execution (sync or via an async read-back Job) can actually reach an infobase
+ * connection and thus raise this dialog (e.g. {@code update_database}, {@code
+ * debug_launch}, {@code run_yaxunit_tests}, {@code build_external_objects}, {@code
+ * get_applications}, {@code delete_infobase}, {@code create_infobase}). A pure model/read
+ * tool no longer arms the window at all, so constant polling by those tools leaves the
+ * server genuinely idle between connection-reaching calls. <b>Residual (by design):</b> a
+ * manual launch that happens to race an <em>in-flight</em> connection-reaching MCP call
+ * (or its trailing grace window) is still auto-cancelled — the counter has no way to tell
+ * "my dialog" from "someone else's dialog" once a connecting call is active; this is the
+ * same trade-off #230 already accepted, just with a much smaller hot window.
  * <p>The Secure Storage password-<b>hint</b> dialog stays <b>always-suppressed</b>
  * (dismissed unconditionally, ignoring both the activity window and the env flag): it
  * is an internal follow-up to the MCP server supplying the keyring master password
@@ -174,10 +194,12 @@ public final class InfobaseAuthDialogSuppressor
     /**
      * Marks the start of an MCP tool call: increments the {@link #IN_FLIGHT} counter so an auth dialog
      * raised while the call runs is auto-cancelled. Paired with {@link #markActivityEnd()} in the
-     * dispatch {@code finally} ({@code McpProtocolHandler.executeToolTimed}). Also armed around the
-     * <em>fire-and-forget</em> launch in {@code DebugLaunchTool} (whose infobase connect happens in a
-     * background Job after {@code execute()} has returned, so the trailing grace alone would not cover a
-     * minutes-long launch — see issue #230).
+     * dispatch {@code finally} ({@code McpProtocolHandler.executeToolTimed}), where the pair is now
+     * called only for a tool flagged {@code connectsToInfobase()} (issue #270) — a plain read/model
+     * tool never arms this counter. Also armed around the <em>fire-and-forget</em> launch in
+     * {@code DebugLaunchTool} (whose infobase connect happens in a background Job after
+     * {@code execute()} has returned, so the trailing grace alone would not cover a minutes-long launch
+     * — see issue #230).
      */
     public static void markActivityStart()
     {

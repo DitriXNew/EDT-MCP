@@ -61,6 +61,14 @@ public class GetMetadataDetailsToolTest
         assertEquals(ResponseType.MARKDOWN, new GetMetadataDetailsTool().getResponseType());
     }
 
+    @Test
+    public void testConnectsToInfobaseIsFalse()
+    {
+        // #270: get_metadata_details reads EDT/workspace metadata only — it must NOT arm
+        // the auth-dialog suppressor's activity window.
+        assertFalse(new GetMetadataDetailsTool().connectsToInfobase());
+    }
+
     /**
      * A MARKDOWN tool returns content, not structured data, so it leaves the
      * {@code outputSchema} at the interface default ({@code null}); pinning this

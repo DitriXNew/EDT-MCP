@@ -161,8 +161,9 @@ public class CreateInfobaseTool implements IMcpTool
             + "makes a new database (requires a registered 1C platform runtime); mode='register' " //$NON-NLS-1$
             + "adds an already-existing infobase at the given path without launching the platform. " //$NON-NLS-1$
             + "applicationKind='infobase' (default) makes a plain file infobase; " //$NON-NLS-1$
-            + "applicationKind='standaloneServer' creates an autonomous (standalone) server that also " //$NON-NLS-1$
-            + "exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
+            + "applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING " //$NON-NLS-1$
+            + "file infobase with) an autonomous (standalone) server that also exposes a web URL for " //$NON-NLS-1$
+            + "HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
             + "platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job " //$NON-NLS-1$
             + "(up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
@@ -176,7 +177,9 @@ public class CreateInfobaseTool implements IMcpTool
             .enumProperty("mode", //$NON-NLS-1$
                 "'create' (default) = make a new file infobase at infobaseFile (launches the 1C " //$NON-NLS-1$
                 + "platform); 'register' = add an EXISTING infobase already present at infobaseFile " //$NON-NLS-1$
-                + "(no platform launch).", //$NON-NLS-1$
+                + "(no platform launch). With applicationKind='standaloneServer', mode='register' " //$NON-NLS-1$
+                + "wraps an EXISTING file infobase (a 1Cv8.1CD must be present) with a standalone " //$NON-NLS-1$
+                + "server instead of creating a new one.", //$NON-NLS-1$
                 "create", "register") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_INFOBASE_FILE,
                 "Absolute path to the infobase directory (required). For mode='create' the directory " //$NON-NLS-1$
@@ -195,7 +198,9 @@ public class CreateInfobaseTool implements IMcpTool
                 "'infobase' (default) = a plain file infobase via the configurator; " //$NON-NLS-1$
                 + "'standaloneServer' = an autonomous (standalone) server that creates and serves a " //$NON-NLS-1$
                 + "new file infobase and exposes a web URL for HTTP testing (requires a registered 1C " //$NON-NLS-1$
-                + "standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by " //$NON-NLS-1$
+                + "standalone-server runtime, platform >= 8.3.23). With mode='register' the server " //$NON-NLS-1$
+                + "instead wraps an EXISTING file infobase (a 1Cv8.1CD must be present at infobaseFile) " //$NON-NLS-1$
+                + "rather than creating a new one. The web port is auto-allocated by " //$NON-NLS-1$
                 + "EDT and reported back as 'port'/'webUrl' in the result.", //$NON-NLS-1$
                 KIND_INFOBASE, KIND_STANDALONE_SERVER)
             .stringProperty(KEY_USER,
@@ -243,6 +248,17 @@ public class CreateInfobaseTool implements IMcpTool
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;
+    }
+
+    /**
+     * {@code create_infobase} launches the 1C platform / standalone-server runtime and reads the
+     * project's applications back, either of which can open an infobase connection and raise EDT's
+     * access-settings dialog — so it opts into the auth-dialog-suppressor scope (issue #270).
+     */
+    @Override
+    public boolean connectsToInfobase()
+    {
+        return true;
     }
 
     @Override
@@ -318,6 +334,19 @@ public class CreateInfobaseTool implements IMcpTool
                 + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
 
+        // Standalone server + mode='register': the served infobase must ALREADY exist on disk. Validate
+        // the 1Cv8.1CD up front — the SAME check the plain register path uses — BEFORE the (workspace-
+        // touching) building-state check and before any service lookup or Job, so a wrong path fails
+        // fast and cleanly. (The plain register path runs this same check later, inside createInfobase.)
+        if (standaloneServer && register)
+        {
+            String registerError = validateRegisterPath(infobaseDir);
+            if (registerError != null)
+            {
+                return registerError;
+            }
+        }
+
         // Refuse only the transient BUILDING state; missing/closed project falls through below.
         String building = ProjectStateChecker.buildingErrorOrNull(projectName);
         if (building != null)
@@ -327,16 +356,11 @@ public class CreateInfobaseTool implements IMcpTool
 
         if (standaloneServer)
         {
-            // The standalone-server path always CREATES a new infobase (served by the server); it has
-            // no register analogue, so reject mode='register' for clarity.
-            if (register)
-            {
-                return ToolResult.error("mode='register' is not supported with " //$NON-NLS-1$
-                    + "applicationKind='standaloneServer'. A standalone server creates and serves a " //$NON-NLS-1$
-                    + "new infobase; omit mode (or use mode='create').").toJson(); //$NON-NLS-1$
-            }
+            // mode='create' creates and serves a NEW infobase; mode='register' wraps an EXISTING file
+            // infobase (1Cv8.1CD already on disk) with a standalone server — same registration, minus
+            // the database materialization.
             return createStandaloneServer(projectName, infobaseDir, infobaseName, platform,
-                setDefault);
+                setDefault, register);
         }
 
         return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register,
@@ -896,17 +920,26 @@ public class CreateInfobaseTool implements IMcpTool
      * the Job so "no runtime" fails instantly; the {@code ibcmd} shell-out runs entirely inside a
      * bounded background Job — never on the UI thread, no modal.
      *
+     * <p>With {@code register == true} the served file infobase already exists on disk: the WST
+     * server registration is performed exactly as for the create path but the database materialization
+     * ({@link #ssMaterializeInfobase}) is SKIPPED (a best-effort {@code setExist(true)} marks the module
+     * as existing instead). The presence of a {@code 1Cv8.1CD} at {@code infobaseDir} is validated by
+     * {@link #execute(Map)} up front (fail fast, before this method) using the same check the plain
+     * register path uses.
+     *
      * @param projectName the configuration project to bind the new server to
      * @param infobaseDir the infobase / server working directory
      * @param infobaseName the display name (auto-generated from the directory if absent)
      * @param platform the platform version mask (may be {@code null}/empty = any)
      * @param setDefault set the new server as the project's default application after creation
+     * @param register {@code true} to wrap an EXISTING file infobase (mode='register'); {@code false} to
+     *            create and serve a new one (mode='create')
      * @return the tool result JSON
      */
     private String createStandaloneServer(String projectName, Path infobaseDir,
-            String infobaseName, String platform, boolean setDefault)
+            String infobaseName, String platform, boolean setDefault, boolean register)
     {
-        // --- 1-2. Resolve project + services ---
+        // --- 1-2. Resolve project + services --- (register-path validation ran in execute() already)
         StandaloneContext sctx = resolveStandaloneContext(projectName);
         if (sctx.error != null)
         {
@@ -962,13 +995,24 @@ public class CreateInfobaseTool implements IMcpTool
                 {
                     Object pair = ssCreateServerWithInfobase(finalService, createArgs, monitor);
                     // createServerWithInfobase registers the server with the module's create flag = false,
-                    // so the served file infobase (1Cv8.1CD) is never physically written — the server then
-                    // fails to start ("Информационная база не обнаружена"). Materialize it now (same step
-                    // the EDT new-server wizard performs).
+                    // so the served file infobase (1Cv8.1CD) is never physically written.
                     if (pair instanceof Pair)
                     {
-                        ssMaterializeInfobase(finalService, ((Pair<?, ?>)pair).getFirst(),
-                            ((Pair<?, ?>)pair).getSecond(), monitor);
+                        if (register)
+                        {
+                            // mode='register': the 1Cv8.1CD already exists on disk (validated up front),
+                            // so do NOT materialize a new DB — that would fail / overwrite. Best-effort
+                            // mark the module as existing (mirrors the EDT wizard's existing-infobase
+                            // branch; a no-op if the API lacks setExist). Never call setCreate(true).
+                            markInfobaseExisting(((Pair<?, ?>)pair).getSecond());
+                        }
+                        else
+                        {
+                            // mode='create': the server would otherwise fail to start ("Информационная база
+                            // не обнаружена"), so materialize the DB now (same step the EDT wizard performs).
+                            ssMaterializeInfobase(finalService, ((Pair<?, ?>)pair).getFirst(),
+                                ((Pair<?, ?>)pair).getSecond(), monitor);
+                        }
                     }
                     jobResult.set(pair);
                 }
@@ -983,7 +1027,7 @@ public class CreateInfobaseTool implements IMcpTool
         createJob.setSystem(true);
         createJob.schedule();
 
-        String waitError = awaitStandaloneJob(createJob, infobaseDir);
+        String waitError = awaitStandaloneJob(createJob, infobaseDir, register);
         if (waitError != null)
         {
             return waitError;
@@ -994,11 +1038,7 @@ public class CreateInfobaseTool implements IMcpTool
             Exception ex = jobError.get();
             Activator.logError("create_infobase: standalone-server creation failed for " //$NON-NLS-1$
                 + infobaseDir, ex);
-            return ToolResult.error("Standalone-server creation failed: " + ex.getMessage() //$NON-NLS-1$
-                + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
-                + "registered and that the directory '" + infobaseDir + "' is accessible. The server may " //$NON-NLS-1$ //$NON-NLS-2$
-                + "have been registered without its database; if so, use delete_infobase to remove it.") //$NON-NLS-1$
-                .toJson();
+            return ToolResult.error(standaloneJobErrorMessage(ex, infobaseDir, register)).toJson();
         }
 
         Pair<?, ?> pair = asPair(jobResult.get());
@@ -1027,7 +1067,58 @@ public class CreateInfobaseTool implements IMcpTool
 
         // --- 9. Read back applications and return ---
         ResultContext rc = new ResultContext(projectName, infobaseDir, effectiveName, appManager, project);
-        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault);
+        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault, register);
+    }
+
+    /**
+     * Best-effort marks a just-registered {@code StandaloneServerInfobase} module as ALREADY existing
+     * for mode='register' — {@code setExist(true)} (mirrors the EDT wizard's existing-infobase branch).
+     * Never called with {@code setCreate(true)}: the served {@code 1Cv8.1CD} already exists on disk, so
+     * no database is materialized. Any reflective failure is logged and swallowed — the WST server
+     * registration already succeeded and must not be failed by a best-effort flag.
+     *
+     * @param standaloneServerInfobase the module returned by {@link #ssCreateServerWithInfobase}
+     */
+    private static void markInfobaseExisting(Object standaloneServerInfobase)
+    {
+        if (standaloneServerInfobase == null)
+        {
+            return;
+        }
+        try
+        {
+            ssInvoke(standaloneServerInfobase, "setExist", 1, Boolean.TRUE); //$NON-NLS-1$
+        }
+        catch (Exception e) // NOSONAR best-effort: the server is registered; the flag is non-fatal
+        {
+            Activator.logError("create_infobase: best-effort setExist(true) failed for the " //$NON-NLS-1$
+                + "registered standalone server (non-fatal — the server is registered)", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Builds the "standalone-server creation failed" error message, honestly worded for the mode. For
+     * mode='create' it notes the server may have been registered WITHOUT its database; for
+     * mode='register' the database already existed (validated up front), so it must NOT suggest the DB
+     * may have been created — it points at the existing-infobase wrap instead.
+     *
+     * @param ex the failure cause
+     * @param infobaseDir the served infobase / working directory
+     * @param register {@code true} for mode='register', {@code false} for mode='create'
+     * @return the error message
+     */
+    private static String standaloneJobErrorMessage(Exception ex, Path infobaseDir, boolean register)
+    {
+        String prefix = "Standalone-server " + (register ? "registration" : "creation") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " failed: " + ex.getMessage() //$NON-NLS-1$
+            + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
+            + "registered and that the directory '" + infobaseDir + "' is accessible."; //$NON-NLS-1$ //$NON-NLS-2$
+        String tail = register
+            ? " The server may have been registered over the existing infobase; if so, use " //$NON-NLS-1$
+                + "delete_infobase to remove the server registration (the database is left in place)." //$NON-NLS-1$
+            : " The server may have been registered without its database; if so, use delete_infobase " //$NON-NLS-1$
+                + "to remove it."; //$NON-NLS-1$
+        return prefix + tail;
     }
 
     /**
@@ -1077,9 +1168,10 @@ public class CreateInfobaseTool implements IMcpTool
      * message (Job cancelled) when it did not finish, or an interrupted message (interrupt flag
      * restored) when the join threw. Returns {@code null} when the Job finished within the budget. The
      * {@code InterruptedException} from {@code join} is handled inline here (not propagated) exactly as
-     * before.
+     * before. The wording is register-aware: mode='register' materializes no database, so the timeout
+     * must not imply a partial DB was written.
      */
-    private static String awaitStandaloneJob(Job createJob, Path infobaseDir)
+    private static String awaitStandaloneJob(Job createJob, Path infobaseDir, boolean register)
     {
         try
         {
@@ -1088,16 +1180,21 @@ public class CreateInfobaseTool implements IMcpTool
             if (!finished)
             {
                 createJob.cancel();
-                return ToolResult.error("Standalone-server creation timed out after " //$NON-NLS-1$
-                    + CREATE_TIMEOUT_SECONDS + " seconds. The ibcmd process may still be running. " //$NON-NLS-1$
+                String verb = register ? "registration" : "creation"; //$NON-NLS-1$ //$NON-NLS-2$
+                String proc = register
+                    ? "The server-registration step may still be running. " //$NON-NLS-1$
+                    : "The ibcmd process may still be running. "; //$NON-NLS-1$
+                return ToolResult.error("Standalone-server " + verb + " timed out after " //$NON-NLS-1$ //$NON-NLS-2$
+                    + CREATE_TIMEOUT_SECONDS + " seconds. " + proc //$NON-NLS-1$
                     + "Check the EDT log and the directory '" + infobaseDir //$NON-NLS-1$
-                    + "' for partial results.").toJson(); //$NON-NLS-1$
+                    + "'.").toJson(); //$NON-NLS-1$
             }
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            return ToolResult.error("Standalone-server creation was interrupted.").toJson(); //$NON-NLS-1$
+            String verb = register ? "registration" : "creation"; //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Standalone-server " + verb + " was interrupted.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
     }
@@ -1556,7 +1653,7 @@ public class CreateInfobaseTool implements IMcpTool
      * the file path to absorb the provision-delegate listener race.
      */
     private static String buildStandaloneServerResult(ResultContext rc, int actualPort, String webUrl,
-            boolean setDefault)
+            boolean setDefault, boolean register)
     {
         // Read back the applications (bounded re-poll) and locate the just-created wst-server.
         ServerReadBack readBack =
@@ -1594,7 +1691,7 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         ToolResult result = ToolResult.success()
-            .put(McpKeys.ACTION, "created") //$NON-NLS-1$
+            .put(McpKeys.ACTION, register ? "registered" : "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER)
             .put(McpKeys.PROJECT, rc.projectName)
             .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
@@ -1617,7 +1714,7 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(rc.projectName, rc.infobaseDir,
-            rc.infobaseName, actualPort, webUrl, setDefaultNote));
+            rc.infobaseName, actualPort, webUrl, setDefaultNote, register));
 
         return result.toJson();
     }
@@ -1724,15 +1821,21 @@ public class CreateInfobaseTool implements IMcpTool
 
     /**
      * Builds the human-readable status message for the standalone-server success result (read-only
-     * string assembly). Byte-for-byte identical to the inline message; appends {@code setDefaultNote}
-     * when non-null.
+     * string assembly). For mode='create' it says the server CREATED a new infobase; for mode='register'
+     * it says the server was REGISTERED over the EXISTING infobase (no new database was written).
+     * Appends {@code setDefaultNote} when non-null.
      */
     private static String buildStandaloneServerMessage(String projectName, Path infobaseDir,
-            String infobaseName, int actualPort, String webUrl, String setDefaultNote)
+            String infobaseName, int actualPort, String webUrl, String setDefaultNote, boolean register)
     {
-        return "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
-            + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
-            + "' and bound to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+        String lead = register
+            ? "Registered a standalone server over the existing infobase '" + infobaseName //$NON-NLS-1$
+                + "' at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
+                + "' and bound it to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            : "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
+                + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
+                + "' and bound to project '" + projectName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        return lead
             + (actualPort > 0 ? " (web port " + actualPort + ")" : "") + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + (webUrl != null ? " Web URL for HTTP testing: " + webUrl + "." : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " To load the configuration, use the coordinated launch flow (debug_launch or " //$NON-NLS-1$

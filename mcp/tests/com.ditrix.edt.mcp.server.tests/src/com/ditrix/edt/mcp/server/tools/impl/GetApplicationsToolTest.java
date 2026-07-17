@@ -68,6 +68,15 @@ public class GetApplicationsToolTest
     }
 
     @Test
+    public void testConnectsToInfobaseIsTrue()
+    {
+        // #270: the update-state read-back (appManager.getUpdateState) is the async
+        // recompute that historically raised the auth dialog (#230's history) — it must
+        // arm the auth-dialog suppressor's activity window.
+        assertTrue(new GetApplicationsTool().connectsToInfobase());
+    }
+
+    @Test
     public void testDescriptionMentionsConsumingTools()
     {
         // The description must steer callers to the tools that consume the application id.

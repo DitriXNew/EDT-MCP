@@ -54,6 +54,14 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testConnectsToInfobaseIsTrue()
+    {
+        // #270: update_database opens a live connection to run the update — it must arm
+        // the auth-dialog suppressor's activity window.
+        assertTrue(new UpdateDatabaseTool().connectsToInfobase());
+    }
+
+    @Test
     public void testDescriptionNotEmpty()
     {
         String desc = new UpdateDatabaseTool().getDescription();
