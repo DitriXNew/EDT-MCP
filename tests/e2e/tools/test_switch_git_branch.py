@@ -31,6 +31,7 @@ fixture (and never touch the plugin repo's checked-out branch).
 """
 
 from harness import (
+    E2ESkip,
     call,
     assert_error,
     assert_error_quality,
@@ -91,6 +92,10 @@ def test_nonexistent_branch_names_it_and_the_current_branch():
     current = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if not current:
         raise AssertionError("could not determine the plugin repo's current branch via git")
+    if current == "HEAD":
+        # Detached HEAD (the CI checkout): the tool honestly reports the commit SHA instead
+        # of a branch name - keep the same independent ground truth, just in SHA form.
+        current = _git("rev-parse", "HEAD").stdout.strip()
 
     r = call("switch_git_branch", {"projectName": PROJECT, "branch": NONEXISTENT_BRANCH})
     err = assert_error(r, "nonexistent branch")
@@ -108,9 +113,11 @@ def test_switching_to_the_current_branch_is_rejected():
     `git` call, independent of the tool under test."""
     current = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if not current or current == "HEAD":
-        raise AssertionError(
-            "plugin repo must be on a real branch (not detached) to run this test, got: %r" % current
-        )
+        # Detached HEAD (the CI checkout leaves the merge ref detached): there is no named
+        # branch to be "already on", so this path is untestable here - covered by the unit
+        # tests and the live-gate scenario. SKIP, not fail.
+        raise E2ESkip("plugin repo is on a detached HEAD (CI checkout); the already-on-it "
+                      "path needs a named branch")
 
     r = call("switch_git_branch", {"projectName": PROJECT, "branch": current})
     err = assert_error(r, "already on the current branch")
