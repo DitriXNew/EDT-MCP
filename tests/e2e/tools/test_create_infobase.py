@@ -169,6 +169,26 @@ def test_no_platform_runtime_errors_actionably():
 
 
 @e2e_test(tool="create_infobase", kind="action")
+def test_standalone_create_with_credentials_errors_steering_to_register():
+    """#275 negative (CI-safe): applicationKind='standaloneServer' with the default mode='create'
+    plus any of user/password/access must still be rejected -- a brand-new standalone server has no
+    existing infobase reference to store credentials against yet. Unlike the OLD blanket rejection
+    (any standaloneServer + credentials), the error must now steer to BOTH supported alternatives:
+    applicationKind='infobase', or applicationKind='standaloneServer' + mode='register' (which DOES
+    accept credentials -- see test_live_standalone_register_over_existing_infobase below). Validated
+    before any platform/service lookup (headless-safe)."""
+    r = call("create_infobase",
+             {"projectName": PROJECT,
+              "infobaseFile": "C:\\infobases\\ci_probe_credentials_test",
+              "applicationKind": "standaloneServer",
+              "user": "Admin"})
+    err = assert_error(r, "standaloneServer+create with credentials")
+    assert_error_quality(err, names=["infobase"], suggests=["register"],
+                         ctx="standaloneServer+create+credentials must steer to mode='register'")
+    assert_no_diff("a rejected call must not touch the fixture")
+
+
+@e2e_test(tool="create_infobase", kind="action")
 def test_standalone_register_without_database_errors_naming_path():
     """#271 negative (CI-safe): applicationKind='standaloneServer' + mode='register' pointed at a
     directory that holds NO 1Cv8.1CD must fail FAST — before any platform/standalone-runtime lookup —
@@ -300,6 +320,10 @@ def test_live_standalone_register_over_existing_infobase():
     1. Creates a plain FILE infobase (mode='create') at a temp directory — this writes the 1Cv8.1CD.
     2. Registers a standalone server OVER that SAME directory (mode='register'); the existing database
        must be reused (no new DB materialized), so action=='registered' and webUrl/port are reported.
+       #275: also passes user/password -- standaloneServer+register is the ONE standalone-server
+       combination that accepts connection credentials -- and asserts the result acknowledges they
+       were stored (the message notes it; storing does not require the user to actually exist in the
+       infobase, only actual authentication would).
     3. Verifies get_applications lists a wst-server application for the directory.
     4. Cleans up: delete the standalone-server registration (keeping the database), then delete the
        plain infobase registration, then the temp directory.
@@ -317,13 +341,17 @@ def test_live_standalone_register_over_existing_infobase():
         assert os.path.isfile(os.path.join(_SRV_IB_DIR, "1Cv8.1CD")), \
             "the seed step must write a 1Cv8.1CD into %s" % _SRV_IB_DIR
 
-        # 2. Register a standalone server OVER the existing infobase.
+        # 2. Register a standalone server OVER the existing infobase, ALSO passing connection
+        #    credentials (#275): standaloneServer+register is the one standalone-server combination
+        #    that accepts them.
         r_reg = call("create_infobase",
                      {"projectName": PROJECT,
                       "infobaseFile": _SRV_IB_DIR,
                       "infobaseName": _SRV_IB_NAME,
                       "applicationKind": "standaloneServer",
-                      "mode": "register"})
+                      "mode": "register",
+                      "user": "Admin",
+                      "password": ""})
         assert_ok(r_reg, "standalone register over existing infobase")
         sc = r_reg.structured
         assert isinstance(sc, dict), "structured must be a dict: %r" % sc
@@ -336,6 +364,12 @@ def test_live_standalone_register_over_existing_infobase():
         # The existing database must still be on disk (register must not have removed/rewritten it).
         assert os.path.isfile(os.path.join(_SRV_IB_DIR, "1Cv8.1CD")), \
             "the existing 1Cv8.1CD must remain after register: %s" % _SRV_IB_DIR
+        # #275: the result must acknowledge the stored connection credentials (a success note, or --
+        # non-fatally -- a WARNING naming why storage failed; either way NOT silently dropped).
+        message = sc.get("message") or ""
+        assert ("stored connection credentials" in message.lower()
+                or "connection credentials were not stored" in message.lower()), \
+            "message must acknowledge the credentials request (stored or an explicit WARNING): %r" % sc
 
         # 3. Verify a wst-server application now exists for the directory.
         r_apps = call("get_applications", {"projectName": PROJECT})

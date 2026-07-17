@@ -183,7 +183,10 @@ public class CreateInfobaseTool implements IMcpTool
             + "file infobase with) an autonomous (standalone) server that also exposes a web URL for " //$NON-NLS-1$
             + "HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
             + "platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job " //$NON-NLS-1$
-            + "(up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
+            + "(up to 120 s). user/password/access store connection credentials for " //$NON-NLS-1$
+            + "applicationKind='infobase', and for applicationKind='standaloneServer' with " //$NON-NLS-1$
+            + "mode='register' — rejected for a newly created standalone server " //$NON-NLS-1$
+            + "(mode='create'). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
 
     @Override
@@ -224,14 +227,20 @@ public class CreateInfobaseTool implements IMcpTool
             .stringProperty(KEY_USER,
                 "Infobase connection user to store so update_database / debug_launch can authenticate " //$NON-NLS-1$
                 + "the update agent (issue #194). Selects an EXISTING user; most useful with " //$NON-NLS-1$
-                + "mode='register' (the existing base already has users). Omit to store no credentials.") //$NON-NLS-1$
+                + "mode='register' (the existing base already has users). Omit to store no credentials. " //$NON-NLS-1$
+                + "Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' " //$NON-NLS-1$
+                + "with mode='register'; rejected for a newly created standalone server " //$NON-NLS-1$
+                + "(mode='create').") //$NON-NLS-1$
             .stringProperty("password", //$NON-NLS-1$
-                "Password for 'user'. Optional; default empty (demo bases use an empty password).") //$NON-NLS-1$
+                "Password for 'user'. Optional; default empty (demo bases use an empty password). " //$NON-NLS-1$
+                + "Same applicationKind/mode restriction as 'user'.") //$NON-NLS-1$
             .enumProperty(KEY_ACCESS,
                 "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) " //$NON-NLS-1$
                 + "or 'OS'. Credentials are stored when ANY of user/password/access is given; " //$NON-NLS-1$
                 + "access='OS' on its own stores OS-authentication settings (no 1C user/password). " //$NON-NLS-1$
-                + "Applies only to applicationKind='infobase' (a file infobase).", //$NON-NLS-1$
+                + "Applies to applicationKind='infobase' (a file infobase), and to " //$NON-NLS-1$
+                + "applicationKind='standaloneServer' with mode='register'; rejected for " //$NON-NLS-1$
+                + "a newly created standalone server (mode='create').", //$NON-NLS-1$
                 "INFOBASE", "OS") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -322,23 +331,32 @@ public class CreateInfobaseTool implements IMcpTool
         }
         boolean standaloneServer = kind.value;
 
-        // Credentials (#194) target a FILE infobase's access settings; the standalone-server path
-        // manages its own infobase/auth and would silently drop them. Reject up front (before any
-        // workspace/service access) rather than no-op so the caller is not misled.
-        if (standaloneServer && credentials.any())
-        {
-            return ToolResult.error("user/password/access are supported only with " //$NON-NLS-1$
-                + "applicationKind='infobase' (a file infobase). A standalone server manages its " //$NON-NLS-1$
-                + "own infobase and authentication — omit these parameters.").toJson(); //$NON-NLS-1$
-        }
-
-        // Validate mode (default 'create').
+        // Validate mode (default 'create'). Parsed BEFORE the credentials guard below (issue #275
+        // needs to know register to decide whether standaloneServer+credentials is allowed).
         FlagResult mode = parseMode(modeStr);
         if (mode.error != null)
         {
             return mode.error;
         }
         boolean register = mode.value;
+
+        // Credentials (#194) always apply to a FILE infobase's access settings. A newly created
+        // standalone server (mode='create') has no existing infobase reference to store them
+        // against at this point and would silently drop them — reject up front (before any
+        // workspace/service access) rather than no-op. mode='register' wraps an EXISTING file
+        // infobase that already has users, so credentials DO apply there (issue #275): the
+        // read-back wst-server application is adapted to an InfobaseReference via the widened
+        // InfobaseAccessSupport.storeCredentials(IApplication, ...), which is exactly what EDT's
+        // own launch path (ServerApplicationBehaviourDelegate) resolves against later.
+        if (standaloneServer && !register && credentials.any())
+        {
+            return ToolResult.error("user/password/access are supported only with " //$NON-NLS-1$
+                + "applicationKind='infobase' (a file infobase), or with applicationKind=" //$NON-NLS-1$
+                + "'standaloneServer' AND mode='register' (a standalone server wrapping an existing, " //$NON-NLS-1$
+                + "already-registered infobase). A newly created standalone server " //$NON-NLS-1$
+                + "(mode='create') has no existing infobase users yet — omit these parameters or " //$NON-NLS-1$
+                + "use mode='register'.").toJson(); //$NON-NLS-1$
+        }
 
         // Validate and normalize the infobase path early (before acquiring services)
         Path infobaseDir;
@@ -376,9 +394,10 @@ public class CreateInfobaseTool implements IMcpTool
         {
             // mode='create' creates and serves a NEW infobase; mode='register' wraps an EXISTING file
             // infobase (1Cv8.1CD already on disk) with a standalone server — same registration, minus
-            // the database materialization.
+            // the database materialization. credentials (issue #275) are only ever non-empty here
+            // when register==true — the guard above already rejected mode='create'+credentials.
             return createStandaloneServer(projectName, infobaseDir, infobaseName, platform,
-                setDefault, register);
+                setDefault, register, credentials);
         }
 
         return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register,
@@ -952,10 +971,14 @@ public class CreateInfobaseTool implements IMcpTool
      * @param setDefault set the new server as the project's default application after creation
      * @param register {@code true} to wrap an EXISTING file infobase (mode='register'); {@code false} to
      *            create and serve a new one (mode='create')
+     * @param credentials connection credentials to store against the read-back wst-server application
+     *            (issue #275); non-empty only when {@code register} is {@code true} — {@link #execute}
+     *            already rejects credentials with mode='create'
      * @return the tool result JSON
      */
     private String createStandaloneServer(String projectName, Path infobaseDir,
-            String infobaseName, String platform, boolean setDefault, boolean register)
+            String infobaseName, String platform, boolean setDefault, boolean register,
+            Credentials credentials)
     {
         // --- 1-2. Resolve project + services --- (register-path validation ran in execute() already)
         StandaloneContext sctx = resolveStandaloneContext(projectName);
@@ -1085,7 +1108,7 @@ public class CreateInfobaseTool implements IMcpTool
 
         // --- 9. Read back applications and return ---
         ResultContext rc = new ResultContext(projectName, infobaseDir, effectiveName, appManager, project);
-        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault, register);
+        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault, register, credentials);
     }
 
     /**
@@ -1868,7 +1891,7 @@ public class CreateInfobaseTool implements IMcpTool
      * the file path to absorb the provision-delegate listener race.
      */
     private static String buildStandaloneServerResult(ResultContext rc, int actualPort, String webUrl,
-            boolean setDefault, boolean register)
+            boolean setDefault, boolean register, Credentials credentials)
     {
         // Read back the applications (bounded re-poll) and locate the just-created wst-server.
         ServerReadBack readBack =
@@ -1905,6 +1928,13 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
 
+        // Optionally store infobase connection credentials (issue #275): standaloneServer +
+        // mode='register' ONLY — execute() already rejects credentials with mode='create'. Targets
+        // the READ-BACK wst-server IApplication (not the FILE ibRef built earlier for the create
+        // call) — InfobaseAccessSupport.storeCredentials(IApplication, ...) adapts IT to the
+        // InfobaseReference that EDT's own launch path (ServerApplicationBehaviourDelegate) resolves.
+        String credNote = register ? storeStandaloneCredentialsIfRequested(newApp, credentials) : null;
+
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, register ? "registered" : "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER)
@@ -1928,10 +1958,50 @@ public class CreateInfobaseTool implements IMcpTool
             result.put(McpKeys.APPLICATION_ID, newAppId);
         }
 
+        String combinedNote = (setDefaultNote != null ? setDefaultNote : "") //$NON-NLS-1$
+            + (credNote != null ? credNote : ""); //$NON-NLS-1$
         result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(rc.projectName, rc.infobaseDir,
-            rc.infobaseName, actualPort, webUrl, setDefaultNote, register));
+            rc.infobaseName, actualPort, webUrl, combinedNote.isEmpty() ? null : combinedNote, register));
 
         return result.toJson();
+    }
+
+    /**
+     * Stores infobase connection credentials against the READ-BACK wst-server application (issue
+     * #275) when the caller supplied any of {@code user}/{@code password}/{@code access}, returning
+     * a note to append to the result message — a success note, a non-fatal WARNING when the store
+     * failed (or the application was not visible yet within the read-back poll budget), or
+     * {@code null} when no credentials were requested. Credential storage never fails the
+     * standalone-server registration itself (the server is already registered and bound). Mirrors
+     * {@link #storeCredentialsIfRequested(InfobaseReference, Credentials, boolean)}, the plain
+     * file-infobase equivalent.
+     *
+     * @param application the read-back wst-server application ({@code null} if not found within the
+     *            poll budget)
+     * @param credentials the requested connection credentials (any field may be {@code null}/empty)
+     * @return a message note, or {@code null} when no credentials were requested
+     */
+    private static String storeStandaloneCredentialsIfRequested(IApplication application,
+            Credentials credentials)
+    {
+        if (!credentials.any())
+        {
+            return null;
+        }
+        if (application == null)
+        {
+            return " WARNING: connection credentials were NOT stored: the new standalone-server " //$NON-NLS-1$
+                + "application was not visible yet within the read-back poll budget - retry with " //$NON-NLS-1$
+                + "set_infobase_credentials once it appears in get_applications."; //$NON-NLS-1$
+        }
+        String error = InfobaseAccessSupport.storeCredentials(application, credentials.user, credentials.password,
+            InfobaseAccessSupport.parseAccess(credentials.access));
+        if (error != null)
+        {
+            return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
+        }
+        return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
+            + "' (change them later with set_infobase_credentials)."; //$NON-NLS-1$
     }
 
     /**
