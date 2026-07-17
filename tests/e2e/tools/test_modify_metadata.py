@@ -277,6 +277,40 @@ def test_set_typed_ref_shorthand():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_valuestorage_type():
+    # ValueStorage - a platform simple type with no qualifiers.
+    _seed_attr_and_set_type("E2ETypeVSAttr", {"types": [{"kind": "ValueStorage"}]})
+    poll_diff_contains("<types>ValueStorage</types>",
+                       ctx="the ValueStorage type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_uuid_type():
+    # UUID - a platform simple type with no qualifiers. The candidate list (UUID / UniqueIdentifier)
+    # tolerates a platform-version rename of the same type; UUID is the expected on-disk .mdo name.
+    _seed_attr_and_set_type("E2ETypeUuidAttr", {"types": [{"kind": "UUID"}]})
+    poll_diff_contains("<types>UUID</types>",
+                       ctx="the UUID type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_type_unknown_kind_lists_valuestorage_and_uuid():
+    # An unrecognized kind is a clean error that now also names ValueStorage/UUID among the
+    # supported primitive kinds (issue #279).
+    attr = "E2ETypeUnknownKindAttr"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "NotAKind_zzz"}]}}],
+    })
+    e = assert_error(r, "unknown type kind")
+    assert_error_quality(e, names=["NotAKind_zzz"], suggests=["ValueStorage", "UUID"],
+                         ctx="the unknown-kind error must list ValueStorage/UUID among the supported kinds")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_type_on_nested_tabular_section_attribute():
     # A member of a NESTED object (a tabular-section attribute, depth-6) is modifiable: the tool
     # re-fetches the TOP object and re-navigates to the leaf's owner inside the write transaction.
