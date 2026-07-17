@@ -3060,6 +3060,28 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "List a project's git branches: local and remote-tracking, with the CURRENT branch marked (detached HEAD flagged), plus the 1C application/infobase each branch context is bound to (best-effort). Precedes switch_git_branch. Full parameters and examples: call get_tool_guide('list_git_branches').",
+    "inputSchema": {
+      "properties": {
+        "projectName": {
+          "description": "EDT project to list git branches for (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "list_git_branches",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. Use this to enumerate a project's modules; for the methods/regions inside one module use get_module_structure. Full parameters and examples: call get_tool_guide('list_modules').",
     "inputSchema": {
       "properties": {
@@ -4229,6 +4251,60 @@
         },
         "success": {
           "description": "Whether the operation succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/feature/x'); a remote-only branch is rejected (create a local branch first). Refuses to switch when the working tree has uncommitted changes (untracked files alone do not block) or when already on the target branch. The 1C application/infobase binding follows the checkout automatically; the result reports it. Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('switch_git_branch').",
+    "inputSchema": {
+      "properties": {
+        "branch": {
+          "description": "Branch to switch to (required): a short local name (e.g. 'feature/x') or a full ref ('refs/heads/feature/x'). A remote-tracking ref (e.g. 'origin/feature/x') is rejected - create a local branch first.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to switch (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "switch_git_branch",
+    "outputSchema": {
+      "properties": {
+        "bindings": {
+          "description": "Best-effort application-binding read-back for the new branch context: {infobases: [...], defaultInfobase}. Absent when unavailable.",
+          "type": "object"
+        },
+        "branch": {
+          "description": "The branch now checked out.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Present only when the post-checkout workspace refresh failed: a short warning noting the EDT model may be stale until a manual refresh. The switch itself still succeeded (success stays true).",
+          "type": "string"
+        },
+        "previousBranch": {
+          "description": "The branch (or detached-HEAD commit) checked out BEFORE the switch.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the switch succeeded",
           "type": "boolean"
         }
       },
