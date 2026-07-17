@@ -303,10 +303,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview preview = new ConsentPreview(
             "Delete metadata node", //$NON-NLS-1$
             subtitle, 1, Collections.singletonList(fqn));
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
-            == DestructiveConsentGate.ConsentDecision.REJECT)
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
 
         try
