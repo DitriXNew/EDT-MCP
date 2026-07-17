@@ -1,0 +1,453 @@
+/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.tools.impl;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.egit.core.op.BranchOperation;
+import org.eclipse.jgit.api.CheckoutResult;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.lib.Repository;
+
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociation;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationException;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
+
+/**
+ * Switches a project's git repository to another branch via the headless EGit
+ * checkout ({@link BranchOperation}) - the non-UI sibling of EDT's own "Switch to"
+ * command (issue #281). The application/infobase context that
+ * {@code list_git_branches} reports follows the checkout automatically (it is
+ * derived live from the repository's checked-out branch), so a successful switch
+ * reads back the new context's bindings as proof.
+ * <p>
+ * <b>Two deliberate safety choices, stated once here:</b>
+ * <ul>
+ * <li>This tool does NOT participate in the destructive-consent gate
+ * ({@code DestructiveConsentGate.GATED_TOOLS} does not list it): a branch switch is
+ * reversible (switch back), and the mandatory clean-working-tree pre-check below is
+ * the actual safety net, not a human prompt.</li>
+ * <li>This tool never opens or authenticates against a 1C infobase - it only reads
+ * the association manager's already-resolved bindings - so it needs no
+ * infobase-connection bookkeeping (no auth-dialog activity marking).</li>
+ * </ul>
+ * The checkout itself runs on a bounded (120 s) background {@link Job}, never on
+ * the UI thread, mirroring {@code CreateInfobaseTool}'s Job pattern. After a
+ * successful checkout, the SAME Job unconditionally refreshes the project
+ * ({@link IResource#refreshLocal(int, org.eclipse.core.runtime.IProgressMonitor)},
+ * {@code DEPTH_INFINITE}) so the Eclipse workspace - and the EDT model built on it -
+ * picks up the checkout's file changes: on the EGit-mapped resolution path
+ * {@code BranchOperation} already refreshes affected projects itself, so this is a
+ * cheap near no-op there; on the {@link GitRepositoryResolver} discovery-fallback
+ * path (project not EGit-shared) there is NO other guarantee the workspace notices
+ * the checkout at all - native-hook workspace auto-refresh defaults OFF - so this
+ * refresh is what keeps the model from going stale. A refresh failure is caught,
+ * logged, and surfaced as a short note in the result {@code message}; it never
+ * fails the already-successful switch.
+ */
+public class SwitchGitBranchTool implements IMcpTool
+{
+    /** MCP tool name. */
+    public static final String NAME = "switch_git_branch"; //$NON-NLS-1$
+
+    /** Input param: the branch to switch to (short local name or a full {@code refs/heads/...} ref). */
+    private static final String KEY_BRANCH = "branch"; //$NON-NLS-1$
+
+    /** Output key: the branch that was checked out before the switch. */
+    private static final String KEY_PREVIOUS_BRANCH = "previousBranch"; //$NON-NLS-1$
+
+    /** Output key: best-effort application-binding read-back for the new branch context. */
+    private static final String KEY_BINDINGS = "bindings"; //$NON-NLS-1$
+
+    private static final String REFS_HEADS = "refs/heads/"; //$NON-NLS-1$
+
+    private static final String REFS_REMOTES = "refs/remotes/"; //$NON-NLS-1$
+
+    /** Background-Job timeout for the checkout (mirrors {@code CreateInfobaseTool}). */
+    private static final long CHECKOUT_TIMEOUT_SECONDS = 120;
+
+    /** Cap on how many conflicting/undeleted paths are echoed in an error. */
+    private static final int MAX_LISTED_PATHS = 20;
+
+    @Override
+    public String getName()
+    {
+        return NAME;
+    }
+
+    @Override
+    public String getDescription()
+    {
+        return "Switch a project's git repository to another branch (headless EGit checkout). " //$NON-NLS-1$
+            + "branch may be a short local name (e.g. 'feature/x') or a full ref " //$NON-NLS-1$
+            + "('refs/heads/feature/x'); a remote-only branch is rejected (create a local branch " //$NON-NLS-1$
+            + "first). Refuses to switch when the working tree has uncommitted changes (untracked " //$NON-NLS-1$
+            + "files alone do not block) or when already on the target branch. The 1C " //$NON-NLS-1$
+            + "application/infobase binding follows the checkout automatically; the result reports it. " //$NON-NLS-1$
+            + "Runs in a background Job (up to 120 s). " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('switch_git_branch')."; //$NON-NLS-1$
+    }
+
+    @Override
+    public String getInputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .stringProperty(McpKeys.PROJECT_NAME,
+                "EDT project whose git repository to switch (required).", true) //$NON-NLS-1$
+            .stringProperty(KEY_BRANCH,
+                "Branch to switch to (required): a short local name (e.g. 'feature/x') or a full " //$NON-NLS-1$
+                + "ref ('refs/heads/feature/x'). A remote-tracking ref (e.g. 'origin/feature/x') is " //$NON-NLS-1$
+                + "rejected - create a local branch first.", //$NON-NLS-1$
+                true)
+            .build();
+    }
+
+    @Override
+    public String getOutputSchema()
+    {
+        return JsonSchemaBuilder.object()
+            .booleanProperty("success", "Whether the switch succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_PREVIOUS_BRANCH, "The branch (or detached-HEAD commit) checked out BEFORE the switch.") //$NON-NLS-1$
+            .stringProperty(KEY_BRANCH, "The branch now checked out.") //$NON-NLS-1$
+            .objectProperty(KEY_BINDINGS,
+                "Best-effort application-binding read-back for the new branch context: " //$NON-NLS-1$
+                + "{infobases: [...], defaultInfobase}. Absent when unavailable.") //$NON-NLS-1$
+            .stringProperty(McpKeys.MESSAGE,
+                "Present only when the post-checkout workspace refresh failed: a short warning " //$NON-NLS-1$
+                + "noting the EDT model may be stale until a manual refresh. The switch itself still " //$NON-NLS-1$
+                + "succeeded (success stays true).") //$NON-NLS-1$
+            .build();
+    }
+
+    @Override
+    public ResponseType getResponseType()
+    {
+        return ResponseType.JSON;
+    }
+
+    @Override
+    public String execute(Map<String, String> params)
+    {
+        String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, KEY_BRANCH);
+        if (err != null)
+        {
+            return err;
+        }
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String branch = JsonUtils.extractStringArgument(params, KEY_BRANCH);
+
+        GitRepositoryResolver.Resolution resolution = GitRepositoryResolver.resolve(projectName);
+        if (!resolution.ok())
+        {
+            return resolution.errorJson();
+        }
+
+        try
+        {
+            return switchBranch(resolution.project(), resolution.repository(), branch);
+        }
+        catch (Exception e) // NOSONAR unattended-safety: no exception may escape the tool (CLAUDE.md #8)
+        {
+            Activator.logError("switch_git_branch: failed for project '" + projectName //$NON-NLS-1$
+                + "', branch '" + branch + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Failed to switch branch: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+        finally
+        {
+            resolution.closeIfOwned();
+        }
+    }
+
+    private String switchBranch(IProject project, Repository repo, String branch) throws Exception
+    {
+        // --- pre-checks (before ANY mutation) ---
+
+        Ref targetRef = repo.findRef(branch);
+        if (targetRef == null)
+        {
+            String current = safeCurrentBranch(repo);
+            return ToolResult.error("Branch not found: '" + branch + "' (currently on '" + current //$NON-NLS-1$ //$NON-NLS-2$
+                + "'). Use list_git_branches to see available branches.").toJson(); //$NON-NLS-1$
+        }
+
+        String refName = targetRef.getName();
+        if (refName.startsWith(REFS_REMOTES))
+        {
+            return ToolResult.error("'" + branch + "' resolves to the remote-tracking ref '" + refName //$NON-NLS-1$ //$NON-NLS-2$
+                + "', which is not checked out directly in v1. Create a local branch tracking it first " //$NON-NLS-1$
+                + "(e.g. via EDT's Team menu), then switch to that local branch.").toJson(); //$NON-NLS-1$
+        }
+        if (!refName.startsWith(REFS_HEADS))
+        {
+            return ToolResult.error("'" + branch + "' resolves to '" + refName //$NON-NLS-1$ //$NON-NLS-2$
+                + "', which is not a branch (e.g. a tag). Use list_git_branches to see available " //$NON-NLS-1$
+                + "branches.").toJson(); //$NON-NLS-1$
+        }
+
+        String previousFullBranch = repo.getFullBranch();
+        String previousShort = safeCurrentBranch(repo);
+        if (refName.equals(previousFullBranch))
+        {
+            return ToolResult.error("Already on branch '" + previousShort + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        boolean uncommitted;
+        try
+        {
+            uncommitted = Git.wrap(repo).status().call().hasUncommittedChanges();
+        }
+        catch (Exception e)
+        {
+            return ToolResult.error("Could not read the working-tree status: " + e.getMessage()).toJson(); //$NON-NLS-1$
+        }
+        if (uncommitted)
+        {
+            return ToolResult.error("The working tree has uncommitted changes; commit or stash them " //$NON-NLS-1$
+                + "before switching branches. (Untracked files alone do not block a switch.)").toJson(); //$NON-NLS-1$
+        }
+
+        // --- execute the checkout in a bounded background Job (never on the UI thread) ---
+
+        String targetShort = refName.substring(REFS_HEADS.length());
+        BranchOperation op = new BranchOperation(repo, refName);
+        AtomicReference<Exception> jobError = new AtomicReference<>();
+        AtomicReference<String> refreshWarning = new AtomicReference<>();
+
+        Job checkoutJob = new Job("Switch git branch: " + targetShort) //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                try
+                {
+                    op.execute(monitor);
+                    // Unconditional, same-Job refresh (see class javadoc): on the EGit-mapped
+                    // path BranchOperation already refreshed affected projects, so this is a
+                    // cheap near no-op; on the discovery-fallback path it is the ONLY thing
+                    // that keeps the EDT model from going stale (native-hook auto-refresh
+                    // defaults OFF). A failure here must not fail the already-successful
+                    // checkout - it is caught, logged, and surfaced as a result note instead.
+                    CheckoutResult checkoutResult = op.getResult(repo);
+                    if (checkoutResult != null && checkoutResult.getStatus() == CheckoutResult.Status.OK)
+                    {
+                        refreshAfterCheckout(project, monitor, refreshWarning);
+                    }
+                }
+                catch (CoreException e)
+                {
+                    jobError.set(e);
+                }
+                return Status.OK_STATUS;
+            }
+        };
+        checkoutJob.setUser(false);
+        checkoutJob.setSystem(true);
+        checkoutJob.schedule();
+
+        String waitError = awaitCheckoutJob(checkoutJob, targetShort);
+        if (waitError != null)
+        {
+            return waitError;
+        }
+        if (jobError.get() != null)
+        {
+            Activator.logError("switch_git_branch: checkout failed for branch '" + targetShort + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                jobError.get());
+            return ToolResult.error("Checkout failed: " + jobError.get().getMessage()).toJson(); //$NON-NLS-1$
+        }
+
+        return mapCheckoutResult(op.getResult(repo), project, previousShort, targetShort, refreshWarning.get());
+    }
+
+    /**
+     * Refreshes {@code project} ({@code IResource.DEPTH_INFINITE}) after a successful
+     * checkout, inside the SAME bounded Job. A refresh failure is caught and logged,
+     * and a short warning is stashed into {@code refreshWarning} for the caller to
+     * append to the result {@code message} - it never fails the already-successful
+     * switch (see class javadoc).
+     *
+     * @param project the project to refresh
+     * @param monitor the Job's progress monitor
+     * @param refreshWarning set to a short warning note on failure, left {@code null} on success
+     */
+    private static void refreshAfterCheckout(IProject project, IProgressMonitor monitor,
+        AtomicReference<String> refreshWarning)
+    {
+        try
+        {
+            project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("switch_git_branch: post-checkout workspace refresh failed for project '" //$NON-NLS-1$
+                + project.getName() + "'", e); //$NON-NLS-1$
+            refreshWarning.set("Workspace refresh after the checkout failed (" + e.getMessage() //$NON-NLS-1$
+                + "); the EDT model may be stale until a manual refresh."); //$NON-NLS-1$
+        }
+    }
+
+    private static String awaitCheckoutJob(Job job, String targetShort)
+    {
+        try
+        {
+            boolean finished = job.join(TimeUnit.SECONDS.toMillis(CHECKOUT_TIMEOUT_SECONDS), null);
+            if (!finished)
+            {
+                job.cancel();
+                return ToolResult.error("Switching to branch '" + targetShort + "' timed out after " //$NON-NLS-1$ //$NON-NLS-2$
+                    + CHECKOUT_TIMEOUT_SECONDS + " seconds. Check the repository state before retrying.") //$NON-NLS-1$
+                    .toJson();
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return ToolResult.error("Switching branch was interrupted.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    private String mapCheckoutResult(CheckoutResult result, IProject project, String previousShort,
+        String targetShort, String refreshWarning)
+    {
+        CheckoutResult.Status status = result != null ? result.getStatus() : CheckoutResult.Status.ERROR;
+        switch (status)
+        {
+            case OK:
+            {
+                ToolResult ok = ToolResult.success()
+                    .put(KEY_PREVIOUS_BRANCH, previousShort)
+                    .put(KEY_BRANCH, targetShort);
+                Map<String, Object> bindings = readBackBindings(project);
+                if (bindings != null)
+                {
+                    ok.put(KEY_BINDINGS, bindings);
+                }
+                if (refreshWarning != null)
+                {
+                    ok.put(McpKeys.MESSAGE, refreshWarning);
+                }
+                return ok.toJson();
+            }
+            case CONFLICTS:
+                return ToolResult.error("Checkout of '" + targetShort + "' left uncommitted-change " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "conflicts; the working tree was left on the ORIGINAL branch '" + previousShort //$NON-NLS-1$
+                    + "'. Conflicting paths: " + joinBounded(result.getConflictList())).toJson(); //$NON-NLS-1$
+            case NONDELETED:
+                return ToolResult.error("Checkout of '" + targetShort + "' succeeded, but some files " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "could not be deleted (likely locked or dirty): " //$NON-NLS-1$
+                    + joinBounded(result.getUndeletedList())).toJson(); //$NON-NLS-1$
+            default:
+                return ToolResult.error("Checkout of '" + targetShort + "' failed (status: " + status //$NON-NLS-1$ //$NON-NLS-2$
+                    + "). The working tree may be left on the ORIGINAL branch '" + previousShort //$NON-NLS-1$
+                    + "'.").toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Best-effort read-back of the CURRENT application/infobase binding after a
+     * successful switch - the proof that the context followed the checkout. Any
+     * failure (manager absent, {@link InfobaseAssociationException}, no binding
+     * recorded) yields {@code null} (the caller then omits the {@code bindings}
+     * key) rather than failing the already-successful switch.
+     */
+    private static Map<String, Object> readBackBindings(IProject project)
+    {
+        IInfobaseAssociationManager assocManager = Activator.getDefault().getInfobaseAssociationManager();
+        if (assocManager == null)
+        {
+            return null;
+        }
+        try
+        {
+            Optional<IInfobaseAssociation> assoc = assocManager.getAssociation(project);
+            if (assoc.isEmpty())
+            {
+                return null;
+            }
+            Collection<InfobaseReference> infobases = assoc.get().getInfobases();
+            InfobaseReference def = assoc.get().getDefaultInfobase();
+            List<String> names = new ArrayList<>();
+            if (infobases != null)
+            {
+                for (InfobaseReference ib : infobases)
+                {
+                    names.add(ib.getName());
+                }
+            }
+            Map<String, Object> bindings = new LinkedHashMap<>();
+            bindings.put("infobases", names); //$NON-NLS-1$
+            bindings.put("defaultInfobase", def != null ? def.getName() : null); //$NON-NLS-1$
+            return bindings;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("switch_git_branch: bindings read-back failed for project '" //$NON-NLS-1$
+                + project.getName() + "'", e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    private static String safeCurrentBranch(Repository repo)
+    {
+        try
+        {
+            String branch = repo.getBranch();
+            return branch != null ? branch : "(unknown)"; //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            return "(unknown)"; //$NON-NLS-1$
+        }
+    }
+
+    private static String joinBounded(List<String> paths)
+    {
+        if (paths == null || paths.isEmpty())
+        {
+            return "(none)"; //$NON-NLS-1$
+        }
+        int shown = Math.min(paths.size(), MAX_LISTED_PATHS);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < shown; i++)
+        {
+            if (i > 0)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            sb.append(paths.get(i));
+        }
+        if (paths.size() > shown)
+        {
+            sb.append(" ...and ").append(paths.size() - shown).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.toString();
+    }
+}
