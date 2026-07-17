@@ -819,6 +819,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // and keeps it off the request thread. ---
         final Object finalService = service;
         final Object finalServer = server;
+        final Object finalModule = deletionCtx.module;
         final String finalInfobaseId = infobaseId;
         final boolean doRegistry = deleteRegistration;
         final AtomicReference<IStatus> jobStatus = new AtomicReference<>();
@@ -839,8 +840,8 @@ public class DeleteInfobaseTool implements IMcpTool
                     // means deleteServer did not run/succeed, so the server still exists.
                     if (s != null && s.isOK() && doRegistry)
                     {
-                        jobCleanup.set(
-                            StandaloneServerSupport.removeFromInfobaseRegistry(finalInfobaseId, monitor));
+                        jobCleanup.set(StandaloneServerSupport.removeFromInfobaseRegistry(finalModule,
+                            finalInfobaseId, monitor));
                     }
                 }
                 catch (Exception e)
@@ -946,9 +947,11 @@ public class DeleteInfobaseTool implements IMcpTool
             return ctx;
         }
 
-        // Capture the infobaseId AND the served-DB directory (database.path) BEFORE deletion — the
-        // module/config is torn down by deleteServer. The infobaseId drives the yaml cleanup; the DB
-        // directory is used only when deleteDatabaseFiles=true (deleteServer itself never deletes it).
+        // Capture the module, its infobaseId AND the served-DB directory (database.path) BEFORE
+        // deletion — the module/config is torn down by deleteServer. The module + infobaseId drive the
+        // yaml cleanup (value-identity first, raw-id key fallback — the map key scheme differs per EDT
+        // version, see StandaloneServerSupport.removeFromInfobaseRegistry); the DB directory is used
+        // only when deleteDatabaseFiles=true (deleteServer itself never deletes it).
         Object module = StandaloneServerSupport.moduleOfApplication(targetApp);
         final String infobaseId = module != null ? StandaloneServerSupport.infobaseIdOf(module) : null;
         final String dbDirStr = module != null ? StandaloneServerSupport.databaseDirOf(module) : null;
@@ -960,6 +963,7 @@ public class DeleteInfobaseTool implements IMcpTool
 
         ctx.service = service;
         ctx.server = server;
+        ctx.module = module;
         ctx.infobaseId = infobaseId;
         ctx.dbDir = dbDir;
         ctx.dbSharedWithOthers = dbSharedWithOthers;
@@ -1059,14 +1063,16 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Holder for {@link #resolveDeletionContext}: the resolved service, WST server,
-     * infobaseId, served-DB directory and shared-files guard, or an {@code error} payload
-     * the caller returns as-is.
+     * Holder for {@link #resolveDeletionContext}: the resolved service, WST server, live
+     * {@code StandaloneServerInfobase} module (the value-identity target of the infobases.yaml
+     * cleanup), infobaseId, served-DB directory and shared-files guard, or an {@code error}
+     * payload the caller returns as-is.
      */
     private static class DeletionContext
     {
         Object service;
         Object server;
+        Object module;
         String infobaseId;
         Path dbDir;
         boolean dbSharedWithOthers;

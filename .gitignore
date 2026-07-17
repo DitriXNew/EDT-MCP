@@ -25,3 +25,4 @@ log.log
 
 # Proxy module build output
 proxy/target/
+tests/TestConfiguration/.scannerwork/
