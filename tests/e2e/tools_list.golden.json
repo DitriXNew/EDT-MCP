@@ -190,6 +190,84 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's context. Rejects a name that already exists (use switch_git_branch instead). Full parameters and examples: call get_tool_guide('create_git_branch').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Optional: application id from get_applications to attach to the new branch's context (the base is FOR this branch).",
+          "type": "string"
+        },
+        "branch": {
+          "description": "New branch's short name (required); must not already exist.",
+          "type": "string"
+        },
+        "checkout": {
+          "description": "Check out the new branch immediately after creating it (bounded background Job, up to 120 s). Default false.",
+          "type": "boolean"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to branch (required).",
+          "type": "string"
+        },
+        "setDefault": {
+          "description": "Only with applicationId: also make it the DEFAULT infobase for the new branch's context. Default false.",
+          "type": "boolean"
+        },
+        "startPoint": {
+          "description": "Existing branch, ref, or commit to start the new branch from. Optional; defaults to the current HEAD.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "create_git_branch",
+    "outputSchema": {
+      "properties": {
+        "bound": {
+          "description": "Branch-infobase binding read-back: {infobases: [...], defaultInfobase}. Present only when applicationId was given and the binding succeeded.",
+          "type": "object"
+        },
+        "branch": {
+          "description": "The new branch's short name.",
+          "type": "string"
+        },
+        "checkedOut": {
+          "description": "Whether the branch ended up checked out. False when checkout was not requested, or was requested but did not complete cleanly (see message).",
+          "type": "boolean"
+        },
+        "created": {
+          "description": "Always true on a non-error result.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Present only when checkout or the infobase binding did not fully succeed: a short warning. The branch itself was still created (success stays true).",
+          "type": "string"
+        },
+        "startPoint": {
+          "description": "The start point actually used ('HEAD' when none was given).",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the branch was created",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). user/password/access store connection credentials for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register' — rejected for a newly created standalone server (mode='create'). Full parameters and examples: call get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
@@ -3861,6 +3939,77 @@
     },
     "name": "search_in_code",
     "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Attach or detach an EXISTING infobase (application) to/from a specific git branch context, so switch_git_branch's automatic binding follows that branch. Target the application via applicationId (from get_applications) - this tool never creates an infobase, only records the binding. Full parameters and examples: call get_tool_guide('set_branch_infobase').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "'attach' (default) binds the application to the branch context; 'detach' removes an existing binding.",
+          "enum": [
+            "attach",
+            "detach"
+          ],
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Application id from get_applications - the infobase to attach/detach (required).",
+          "type": "string"
+        },
+        "branch": {
+          "description": "Short branch name (e.g. 'feature/x') whose context to bind/unbind (required).",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project whose branch-infobase binding to change (required).",
+          "type": "string"
+        },
+        "setDefault": {
+          "description": "attach only: also make this the DEFAULT infobase for the branch context. Ignored (and documented as such) for detach. Default false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "projectName",
+        "branch",
+        "applicationId"
+      ],
+      "type": "object"
+    },
+    "name": "set_branch_infobase",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "The action performed: 'attach' or 'detach'.",
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "The target application id.",
+          "type": "string"
+        },
+        "bound": {
+          "description": "Read-back of the branch context after the change: {infobases: [...], defaultInfobase}. Proves the base is now bound (attach) or gone (detach).",
+          "type": "object"
+        },
+        "branch": {
+          "description": "The branch context that was changed.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the binding change succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
   },
   {
     "annotations": {

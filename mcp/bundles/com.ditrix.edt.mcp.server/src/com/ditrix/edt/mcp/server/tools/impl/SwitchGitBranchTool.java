@@ -12,17 +12,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.Job;
-import org.eclipse.egit.core.op.BranchOperation;
 import org.eclipse.jgit.api.CheckoutResult;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.Ref;
@@ -38,11 +30,12 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
 /**
  * Switches a project's git repository to another branch via the headless EGit
- * checkout ({@link BranchOperation}) - the non-UI sibling of EDT's own "Switch to"
+ * checkout ({@code BranchOperation}) - the non-UI sibling of EDT's own "Switch to"
  * command (issue #281). The application/infobase context that
  * {@code list_git_branches} reports follows the checkout automatically (it is
  * derived live from the repository's checked-out branch), so a successful switch
@@ -58,9 +51,11 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
  * the association manager's already-resolved bindings - so it needs no
  * infobase-connection bookkeeping (no auth-dialog activity marking).</li>
  * </ul>
- * The checkout itself runs on a bounded (120 s) background {@link Job}, never on
- * the UI thread, mirroring {@code CreateInfobaseTool}'s Job pattern. After a
- * successful checkout, the SAME Job unconditionally refreshes the project
+ * The checkout itself runs via {@link GitCheckoutSupport#checkout(IProject, Repository, String)}
+ * - a bounded (120 s) background {@code Job}, never on the UI thread (issue #281
+ * phase 2 extracted the Job/refresh mechanics there so {@code create_git_branch}'s
+ * optional checkout can share it). After a successful checkout, the SAME Job
+ * unconditionally refreshes the project
  * ({@link IResource#refreshLocal(int, org.eclipse.core.runtime.IProgressMonitor)},
  * {@code DEPTH_INFINITE}) so the Eclipse workspace - and the EDT model built on it -
  * picks up the checkout's file changes: on the EGit-mapped resolution path
@@ -89,9 +84,6 @@ public class SwitchGitBranchTool implements IMcpTool
     private static final String REFS_HEADS = "refs/heads/"; //$NON-NLS-1$
 
     private static final String REFS_REMOTES = "refs/remotes/"; //$NON-NLS-1$
-
-    /** Background-Job timeout for the checkout (mirrors {@code CreateInfobaseTool}). */
-    private static final long CHECKOUT_TIMEOUT_SECONDS = 120;
 
     /** Cap on how many conflicting/undeleted paths are echoed in an error. */
     private static final int MAX_LISTED_PATHS = 20;
@@ -233,105 +225,29 @@ public class SwitchGitBranchTool implements IMcpTool
                 + "before switching branches. (Untracked files alone do not block a switch.)").toJson(); //$NON-NLS-1$
         }
 
-        // --- execute the checkout in a bounded background Job (never on the UI thread) ---
+        // --- execute the checkout via the shared bounded-Job helper (never on the UI thread) ---
 
         String targetShort = refName.substring(REFS_HEADS.length());
-        BranchOperation op = new BranchOperation(repo, refName);
-        AtomicReference<Exception> jobError = new AtomicReference<>();
-        AtomicReference<String> refreshWarning = new AtomicReference<>();
+        GitCheckoutSupport.CheckoutOutcome outcome = GitCheckoutSupport.checkout(project, repo, refName);
 
-        Job checkoutJob = new Job("Switch git branch: " + targetShort) //$NON-NLS-1$
+        if (outcome.timedOut())
         {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
-            {
-                try
-                {
-                    op.execute(monitor);
-                    // Unconditional, same-Job refresh (see class javadoc): on the EGit-mapped
-                    // path BranchOperation already refreshed affected projects, so this is a
-                    // cheap near no-op; on the discovery-fallback path it is the ONLY thing
-                    // that keeps the EDT model from going stale (native-hook auto-refresh
-                    // defaults OFF). A failure here must not fail the already-successful
-                    // checkout - it is caught, logged, and surfaced as a result note instead.
-                    CheckoutResult checkoutResult = op.getResult(repo);
-                    if (checkoutResult != null && checkoutResult.getStatus() == CheckoutResult.Status.OK)
-                    {
-                        refreshAfterCheckout(project, monitor, refreshWarning);
-                    }
-                }
-                catch (CoreException e)
-                {
-                    jobError.set(e);
-                }
-                return Status.OK_STATUS;
-            }
-        };
-        checkoutJob.setUser(false);
-        checkoutJob.setSystem(true);
-        checkoutJob.schedule();
-
-        String waitError = awaitCheckoutJob(checkoutJob, targetShort);
-        if (waitError != null)
-        {
-            return waitError;
+            return ToolResult.error("Switching to branch '" + targetShort + "' timed out after " //$NON-NLS-1$ //$NON-NLS-2$
+                + GitCheckoutSupport.CHECKOUT_TIMEOUT_SECONDS
+                + " seconds. Check the repository state before retrying.").toJson(); //$NON-NLS-1$
         }
-        if (jobError.get() != null)
+        if (outcome.interrupted())
         {
-            Activator.logError("switch_git_branch: checkout failed for branch '" + targetShort + "'", //$NON-NLS-1$ //$NON-NLS-2$
-                jobError.get());
-            return ToolResult.error("Checkout failed: " + jobError.get().getMessage()).toJson(); //$NON-NLS-1$
-        }
-
-        return mapCheckoutResult(op.getResult(repo), project, previousShort, targetShort, refreshWarning.get());
-    }
-
-    /**
-     * Refreshes {@code project} ({@code IResource.DEPTH_INFINITE}) after a successful
-     * checkout, inside the SAME bounded Job. A refresh failure is caught and logged,
-     * and a short warning is stashed into {@code refreshWarning} for the caller to
-     * append to the result {@code message} - it never fails the already-successful
-     * switch (see class javadoc).
-     *
-     * @param project the project to refresh
-     * @param monitor the Job's progress monitor
-     * @param refreshWarning set to a short warning note on failure, left {@code null} on success
-     */
-    private static void refreshAfterCheckout(IProject project, IProgressMonitor monitor,
-        AtomicReference<String> refreshWarning)
-    {
-        try
-        {
-            project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
-        }
-        catch (CoreException e)
-        {
-            Activator.logError("switch_git_branch: post-checkout workspace refresh failed for project '" //$NON-NLS-1$
-                + project.getName() + "'", e); //$NON-NLS-1$
-            refreshWarning.set("Workspace refresh after the checkout failed (" + e.getMessage() //$NON-NLS-1$
-                + "); the EDT model may be stale until a manual refresh."); //$NON-NLS-1$
-        }
-    }
-
-    private static String awaitCheckoutJob(Job job, String targetShort)
-    {
-        try
-        {
-            boolean finished = job.join(TimeUnit.SECONDS.toMillis(CHECKOUT_TIMEOUT_SECONDS), null);
-            if (!finished)
-            {
-                job.cancel();
-                return ToolResult.error("Switching to branch '" + targetShort + "' timed out after " //$NON-NLS-1$ //$NON-NLS-2$
-                    + CHECKOUT_TIMEOUT_SECONDS + " seconds. Check the repository state before retrying.") //$NON-NLS-1$
-                    .toJson();
-            }
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
             return ToolResult.error("Switching branch was interrupted.").toJson(); //$NON-NLS-1$
         }
-        return null;
+        if (outcome.jobError() != null)
+        {
+            Activator.logError("switch_git_branch: checkout failed for branch '" + targetShort + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                outcome.jobError());
+            return ToolResult.error("Checkout failed: " + outcome.jobError().getMessage()).toJson(); //$NON-NLS-1$
+        }
+
+        return mapCheckoutResult(outcome.result(), project, previousShort, targetShort, outcome.refreshWarning());
     }
 
     private String mapCheckoutResult(CheckoutResult result, IProject project, String previousShort,

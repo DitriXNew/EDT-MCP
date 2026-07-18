@@ -18,7 +18,9 @@ import static org.mockito.Mockito.withSettings;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
 /**
  * Tests for {@link InfobaseAccessSupport#parseAccess(String)} — the access-kind argument parser
@@ -123,5 +125,52 @@ public class InfobaseAccessSupportTest
     public interface StubModuleAccessor
     {
         Object getModule();
+    }
+
+    // ==================== issue #281 phase 2: resolveInfobaseReference(IApplication) extraction ====================
+    // storeCredentials(IApplication, ...) now delegates entirely to resolveInfobaseReference(IApplication);
+    // these tests exercise the extracted resolver directly, covering the same three branches
+    // (IInfobaseApplication fast path / adapter-miss / getInfobase() failure) it was extracted from.
+
+    @Test
+    public void testResolveInfobaseReferenceReturnsGetInfobaseForInfobaseApplication()
+    {
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        InfobaseReference ref = mock(InfobaseReference.class);
+        when(app.getInfobase()).thenReturn(ref);
+
+        assertSame("must return the IInfobaseApplication's own getInfobase() reference verbatim", //$NON-NLS-1$
+            ref, InfobaseAccessSupport.resolveInfobaseReference(app));
+    }
+
+    @Test
+    public void testResolveInfobaseReferenceReturnsNullWhenGetInfobaseThrows()
+    {
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getId()).thenReturn("infobase-app-1"); //$NON-NLS-1$
+        when(app.getInfobase()).thenThrow(new RuntimeException("boom")); //$NON-NLS-1$
+
+        assertNull("a getInfobase() failure must degrade to null, never throw or crash the caller", //$NON-NLS-1$
+            InfobaseAccessSupport.resolveInfobaseReference(app));
+    }
+
+    @Test
+    public void testResolveInfobaseReferenceReturnsNullWhenGetInfobaseReturnsNull()
+    {
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getInfobase()).thenReturn(null);
+
+        assertNull(InfobaseAccessSupport.resolveInfobaseReference(app));
+    }
+
+    @Test
+    public void testResolveInfobaseReferenceReturnsNullWhenNoAdapterMatches()
+    {
+        // A non-IInfobaseApplication with no getModule() and (in this headless unit JVM, no OSGi
+        // adapter registry) no adapter hit either - mirrors the wst-server "adapter miss" scenario
+        // storeCredentials's own test above already covers end-to-end.
+        IApplication app = mock(IApplication.class);
+
+        assertNull(InfobaseAccessSupport.resolveInfobaseReference(app));
     }
 }

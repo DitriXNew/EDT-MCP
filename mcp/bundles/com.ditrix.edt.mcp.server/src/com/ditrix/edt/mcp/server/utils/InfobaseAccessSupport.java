@@ -126,28 +126,55 @@ public final class InfobaseAccessSupport
     public static String storeCredentials(IApplication application, String user, String password,
             InfobaseAccess access)
     {
+        InfobaseReference ref = resolveInfobaseReference(application);
+        if (ref != null)
+        {
+            return storeCredentials(ref, user, password, access);
+        }
+        return "Application '" + application.getId() //$NON-NLS-1$
+            + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
+            + "servers wrapping a registered infobase (issue #275); this application is neither."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the {@link InfobaseReference} an application binds to — the target the update/launch
+     * agent authenticates against ({@link #storeCredentials(IApplication, String, String,
+     * InfobaseAccess)}), and (issue #281 phase 2) the value {@code set_branch_infobase} /
+     * {@code create_git_branch} associate with a git branch context. Extracted from
+     * {@code storeCredentials} so there is ONE resolver; mirrors its exact resolution order:
+     * <ol>
+     *   <li>{@link IInfobaseApplication#getInfobase()} — the direct fast path for a file/server
+     *   infobase application (unchanged since issue #194);</li>
+     *   <li>otherwise, {@link #adaptToInfobaseReference(Object)} on the application itself, then — if
+     *   that misses — on its module ({@link #moduleOfApplication(IApplication)}) — the
+     *   standalone-server ({@code wst-server}) path (issue #275); see the field-level javadoc on the
+     *   original {@code storeCredentials} overload for the full rationale of this adapter path.</li>
+     * </ol>
+     * Never throws: a {@code getInfobase()} failure is logged and treated the same as "no reference" —
+     * the caller cannot distinguish a resolution error from a genuine absence, and for every current
+     * caller both mean "nothing to bind/authenticate against".
+     *
+     * @param application the target application (must not be {@code null})
+     * @return the resolved {@link InfobaseReference}, or {@code null} when none resolves
+     */
+    public static InfobaseReference resolveInfobaseReference(IApplication application)
+    {
         if (application instanceof IInfobaseApplication)
         {
-            InfobaseReference ref;
             try
             {
-                ref = ((IInfobaseApplication)application).getInfobase();
+                return ((IInfobaseApplication)application).getInfobase();
             }
-            catch (Exception e) // NOSONAR EDT model access — report verbatim, never crash the tool
+            catch (Exception e) // NOSONAR EDT model access — degrade to "no reference", never crash the caller
             {
-                Activator.logError("set credentials: getInfobase() failed for " + application.getId(), e); //$NON-NLS-1$
-                return "Could not resolve the infobase for application '" + application.getId() + "': " //$NON-NLS-1$ //$NON-NLS-2$
-                    + e.getMessage();
+                Activator.logError("resolve infobase reference: getInfobase() failed for " + application.getId(), //$NON-NLS-1$
+                    e);
+                return null;
             }
-            if (ref == null)
-            {
-                return "Could not resolve the infobase for application '" + application.getId() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            return storeCredentials(ref, user, password, access);
         }
 
         // Not an IInfobaseApplication (issue #275): try the SAME adapter path EDT's own launch
-        // uses — first the application itself, then (if that misses) its module — before giving up.
+        // uses — first the application itself, then (if that misses) its module.
         InfobaseReference adapted = adaptToInfobaseReference(application);
         if (adapted == null)
         {
@@ -157,14 +184,7 @@ public final class InfobaseAccessSupport
                 adapted = adaptToInfobaseReference(module);
             }
         }
-        if (adapted != null)
-        {
-            return storeCredentials(adapted, user, password, access);
-        }
-
-        return "Application '" + application.getId() //$NON-NLS-1$
-            + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
-            + "servers wrapping a registered infobase (issue #275); this application is neither."; //$NON-NLS-1$
+        return adapted;
     }
 
     /**
