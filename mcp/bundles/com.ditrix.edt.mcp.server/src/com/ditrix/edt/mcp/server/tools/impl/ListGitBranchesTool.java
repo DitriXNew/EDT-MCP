@@ -158,7 +158,8 @@ public class ListGitBranchesTool implements IMcpTool
         return md.toString();
     }
 
-    private String renderBranchTable(List<Ref> refs, String fullBranch, boolean detached)
+    /** Package-visible (not private) so it is directly unit-testable with hand-built {@link Ref}s. */
+    static String renderBranchTable(List<Ref> refs, String fullBranch, boolean detached)
     {
         StringBuilder md = new StringBuilder();
         md.append("| Branch | Type | Current |\n"); //$NON-NLS-1$

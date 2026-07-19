@@ -121,7 +121,10 @@ public final class InfobaseAuthDialogSuppressor
      * {@code project.build.sourceEncoding=UTF-8} and {@code <encoding>UTF-8</encoding>}, so it
      * compiles identically (CLAUDE.md rule #7 allows justified Cyrillic in matched string literals).
      */
-    static final String AUTH_DIALOG_TITLE_PREFIX_RU =
+    // NOSONAR S6418 false positive: a localized UI dialog TITLE the code matches (a Russian
+    // sentence EDT shows), NOT a secret - the "AUTH" in the constant name trips the
+    // hard-coded-credential heuristic.
+    static final String AUTH_DIALOG_TITLE_PREFIX_RU = // NOSONAR
         "Сконфигурируйте" //$NON-NLS-1$
             + " доступ к инфо" //$NON-NLS-1$
             + "рмационной базе"; //$NON-NLS-1$

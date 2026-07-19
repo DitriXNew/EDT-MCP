@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -167,5 +168,70 @@ public class SetBranchInfobaseToolTest
             || result.contains("\"error\"")); //$NON-NLS-1$
         assertTrue("error must name the bad project", result.contains(NONEXISTENT_PROJECT)); //$NON-NLS-1$
         assertTrue("error must steer to list_projects", result.contains("list_projects")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== validateAction: every value that must PASS the pure guard ====================
+    //
+    // The "bogus" case above covers the guard's rejection branch; these cover every acceptance branch
+    // (null / empty / 'attach' case-insensitively / 'detach') by observing that each one reaches PAST the
+    // action guard to project resolution instead of being rejected as an invalid action - reachable
+    // headlessly, no live service needed, same technique the existing pre-check tests already use.
+
+    @Test
+    public void testMissingActionDefaultsToAttachAndReachesProjectResolution()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", NONEXISTENT_PROJECT); //$NON-NLS-1$
+        params.put("branch", "feature/x"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        // action omitted entirely.
+        String result = new SetBranchInfobaseTool().execute(params);
+        assertTrue("must reject with an error", result.contains("\"success\":false") //$NON-NLS-1$ //$NON-NLS-2$
+            || result.contains("\"error\"")); //$NON-NLS-1$
+        assertFalse("a missing action must NOT be rejected as invalid", //$NON-NLS-1$
+            result.contains("Invalid action")); //$NON-NLS-1$
+        assertTrue("the guard must pass through to project resolution", //$NON-NLS-1$
+            result.contains(NONEXISTENT_PROJECT));
+    }
+
+    @Test
+    public void testEmptyActionDefaultsToAttachAndReachesProjectResolution()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", NONEXISTENT_PROJECT); //$NON-NLS-1$
+        params.put("branch", "feature/x"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("action", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBranchInfobaseTool().execute(params);
+        assertFalse("an empty action must NOT be rejected as invalid", //$NON-NLS-1$
+            result.contains("Invalid action")); //$NON-NLS-1$
+        assertTrue(result.contains(NONEXISTENT_PROJECT));
+    }
+
+    @Test
+    public void testAttachActionIsAcceptedCaseInsensitively()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", NONEXISTENT_PROJECT); //$NON-NLS-1$
+        params.put("branch", "feature/x"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("action", "ATTACH"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBranchInfobaseTool().execute(params);
+        assertFalse("'ATTACH' (any case) must NOT be rejected as invalid", //$NON-NLS-1$
+            result.contains("Invalid action")); //$NON-NLS-1$
+        assertTrue(result.contains(NONEXISTENT_PROJECT));
+    }
+
+    @Test
+    public void testDetachActionIsAccepted()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", NONEXISTENT_PROJECT); //$NON-NLS-1$
+        params.put("branch", "feature/x"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationId", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("action", "detach"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBranchInfobaseTool().execute(params);
+        assertFalse("'detach' must NOT be rejected as invalid", result.contains("Invalid action")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.contains(NONEXISTENT_PROJECT));
     }
 }

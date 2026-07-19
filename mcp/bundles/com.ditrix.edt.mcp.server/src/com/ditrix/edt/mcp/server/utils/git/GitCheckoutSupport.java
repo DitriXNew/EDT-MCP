@@ -92,6 +92,18 @@ public final class GitCheckoutSupport
         }
 
         /**
+         * Package-private test-only factory: builds a {@link CheckoutOutcome} directly, bypassing
+         * {@link GitCheckoutSupport#checkout(IProject, Repository, String)}'s live background {@link Job},
+         * so the pure accessors are unit-testable (issue #171 coverage). No behaviour change - mirrors the
+         * private constructor exactly.
+         */
+        static CheckoutOutcome forTest(CheckoutResult result, String refreshWarning, boolean timedOut,
+            boolean interrupted, Exception jobError)
+        {
+            return new CheckoutOutcome(result, refreshWarning, timedOut, interrupted, jobError);
+        }
+
+        /**
          * @return {@code true} when the Job ran to completion (the checkout may still have a
          *         non-OK {@link CheckoutResult} - that is a normal outcome, not this flag)
          */
