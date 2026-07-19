@@ -11,7 +11,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
@@ -137,5 +141,57 @@ public class SwitchGitBranchToolTest
         assertTrue("error must name the bad project", result.contains(NONEXISTENT_PROJECT)); //$NON-NLS-1$
         assertTrue("error must steer to list_projects", result.contains("list_projects")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("a rejected call must not claim success", result.contains("\"success\":true")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== joinBounded: pure list-to-string joiner (used in error messages) ====================
+
+    @Test
+    public void testJoinBoundedNullIsNone()
+    {
+        assertEquals("(none)", SwitchGitBranchTool.joinBounded(null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJoinBoundedEmptyIsNone()
+    {
+        assertEquals("(none)", SwitchGitBranchTool.joinBounded(Collections.emptyList())); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJoinBoundedJoinsAllPathsWhenUnderTheCap()
+    {
+        assertEquals("a, b, c", SwitchGitBranchTool.joinBounded(Arrays.asList("a", "b", "c"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testJoinBoundedCapsAtTwentyAndReportsTheRemainderCount()
+    {
+        List<String> paths = new ArrayList<>();
+        for (int i = 1; i <= 25; i++)
+        {
+            paths.add("path" + i); //$NON-NLS-1$
+        }
+
+        String joined = SwitchGitBranchTool.joinBounded(paths);
+
+        assertTrue("the first path must be listed", joined.startsWith("path1, path2")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("exactly the first 20 paths must be listed", joined.contains("path20")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the 21st path exceeds the cap and must NOT be listed", joined.contains("path21")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the remainder count must be reported", joined.endsWith(" ...and 5 more")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testJoinBoundedExactlyAtTheCapReportsNoRemainder()
+    {
+        List<String> paths = new ArrayList<>();
+        for (int i = 1; i <= 20; i++)
+        {
+            paths.add("path" + i); //$NON-NLS-1$
+        }
+
+        String joined = SwitchGitBranchTool.joinBounded(paths);
+
+        assertTrue(joined.contains("path20")); //$NON-NLS-1$
+        assertFalse("exactly 20 paths need no '...and N more' suffix", joined.contains("...and")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

@@ -63,6 +63,18 @@ public final class GitRepositoryResolver
             this.errorJson = errorJson;
         }
 
+        /**
+         * Package-private test-only factory: builds a {@link Resolution} directly, bypassing
+         * {@link #resolve(String)}'s {@code ProjectContext}/EDT-workspace dependency, so the pure
+         * accessors and {@link #closeIfOwned()} are unit-testable against a real (non-EDT) JGit
+         * {@link Repository} (issue #171 coverage). No behaviour change - mirrors the private
+         * constructor exactly.
+         */
+        static Resolution forTest(IProject project, Repository repository, boolean owned, String errorJson)
+        {
+            return new Resolution(project, repository, owned, errorJson);
+        }
+
         /** @return {@code true} when the repository resolved (no error). */
         public boolean ok()
         {
@@ -174,16 +186,9 @@ public final class GitRepositoryResolver
         {
             return null;
         }
-        File projectDir = project.getLocation().toFile();
         try
         {
-            FileRepositoryBuilder builder = new FileRepositoryBuilder().findGitDir(projectDir);
-            if (builder.getGitDir() == null)
-            {
-                // No .git directory found anywhere up the tree - not a git working tree.
-                return null;
-            }
-            return builder.build();
+            return discoverFromDirectory(project.getLocation().toFile());
         }
         catch (IOException | IllegalArgumentException e)
         {
@@ -191,6 +196,29 @@ public final class GitRepositoryResolver
                 + project.getName() + "'", e); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * Pure JGit {@code .git} directory discovery from a filesystem location, with NO {@code IProject}/EDT
+     * dependency - the mechanics behind {@link #discoverRepository}, extracted so it is directly
+     * unit-testable against a real temp git repository (issue #171 coverage). Package-visible for exactly
+     * that reason; no behaviour change - {@link #discoverRepository} still catches and logs exactly as
+     * before, just one level up.
+     *
+     * @param dir the filesystem directory to search upward from
+     * @return the discovered, caller-owned repository, or {@code null} when no {@code .git} directory is
+     *         found anywhere up the tree
+     * @throws IOException propagated from {@link FileRepositoryBuilder#build()}
+     */
+    static Repository discoverFromDirectory(File dir) throws IOException
+    {
+        FileRepositoryBuilder builder = new FileRepositoryBuilder().findGitDir(dir);
+        if (builder.getGitDir() == null)
+        {
+            // No .git directory found anywhere up the tree - not a git working tree.
+            return null;
+        }
+        return builder.build();
     }
 
     private static Resolution failed(String errorJson)

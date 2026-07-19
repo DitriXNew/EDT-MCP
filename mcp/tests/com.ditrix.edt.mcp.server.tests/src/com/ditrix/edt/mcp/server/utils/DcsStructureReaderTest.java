@@ -28,18 +28,32 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterUse;
 import com._1c.g5.v8.dt.dcs.model.core.DcsFactory;
+import com._1c.g5.v8.dt.dcs.model.core.DesignTimeValue;
+import com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue;
+import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaCalculatedField;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetField;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetFieldFolder;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaNestedDataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
+import com._1c.g5.v8.dt.mcore.BooleanValue;
+import com._1c.g5.v8.dt.mcore.DateValue;
+import com._1c.g5.v8.dt.mcore.EnumValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
+import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.TypeSet;
+import com._1c.g5.v8.dt.mcore.TypeValue;
+import com._1c.g5.v8.dt.mcore.UndefinedValue;
 
 /**
  * Tests {@link DcsStructureReader}: the pure Markdown renderer for a {@link DataCompositionSchema} content.
@@ -157,6 +171,86 @@ public class DcsStructureReaderTest
         assertTrue(rendered.contains("**Object:** Catalog.Goods")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testObjectDataSetRendersDataSourceWhenPresent()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetObject dataSet =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetObject();
+        dataSet.setName("Obj2"); //$NON-NLS-1$
+        dataSet.setObjectName("Catalog.Warehouses"); //$NON-NLS-1$
+        dataSet.setDataSource("Local2"); //$NON-NLS-1$
+        schema.getDataSets().add(dataSet);
+
+        String rendered = DcsStructureReader.render("CommonTemplate.Obj2", schema, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an object data set's own data source must be present", //$NON-NLS-1$
+            rendered.contains("**Data source:** Local2")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnionDataSetRendersUnionOfNestedNames()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetUnion union =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetUnion();
+        union.setName("Combined"); //$NON-NLS-1$
+
+        DataCompositionSchemaDataSetObject first =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetObject();
+        first.setName("Sales"); //$NON-NLS-1$
+        DataCompositionSchemaDataSetObject second =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetObject();
+        second.setName("Returns"); //$NON-NLS-1$
+        union.getItems().add(first);
+        union.getItems().add(second);
+        schema.getDataSets().add(union);
+
+        String rendered = DcsStructureReader.render("Report.X.Template.Main", schema, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the union's own kind/name subsection must be present", //$NON-NLS-1$
+            rendered.contains("### Combined (union)")); //$NON-NLS-1$
+        assertTrue("the union's nested item names must be joined", //$NON-NLS-1$
+            rendered.contains("**Union of:** Sales, Returns")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDataSetFieldFolderRendersAsAFolderRow()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery dataSet =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetQuery();
+        dataSet.setName("Sales"); //$NON-NLS-1$
+        DataCompositionSchemaDataSetFieldFolder folder = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaDataSetFieldFolder();
+        folder.setDataPath("Group"); //$NON-NLS-1$
+        folder.setTitle(title("Group title")); //$NON-NLS-1$
+        dataSet.getFields().add(folder);
+        schema.getDataSets().add(dataSet);
+
+        String rendered = DcsStructureReader.render("Report.X.Template.Main", schema, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the folder's data path must be present", rendered.contains("Group")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the folder's title must be present", rendered.contains("Group title")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a folder field must be marked as such", rendered.contains("(folder)")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDataSetFieldOfUnrecognizedKindFallsBackToEClassName()
+    {
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaDataSetQuery dataSet =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchemaDataSetQuery();
+        dataSet.setName("Sales"); //$NON-NLS-1$
+        // DataCompositionSchemaNestedDataSet is a THIRD DataSetField subinterface (besides Field/Folder) -
+        // it hits the reader's defensive "else" row (data path/field/title columns empty, EClass name only).
+        DataCompositionSchemaNestedDataSet nested = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaNestedDataSet();
+        dataSet.getFields().add(nested);
+        schema.getDataSets().add(dataSet);
+
+        String rendered = DcsStructureReader.render("Report.X.Template.Main", schema, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an unrecognized DataSetField kind must fall back to its EClass simple name", //$NON-NLS-1$
+            rendered.contains("DataCompositionSchemaNestedDataSet")); //$NON-NLS-1$
+    }
+
     // ==================== calculated fields / total fields ====================
 
     @Test
@@ -227,6 +321,93 @@ public class DcsStructureReaderTest
             rendered.contains(DataCompositionParameterUse.AUTO.getName()));
     }
 
+    @Test
+    public void testParameterDefaultValuesCoverEveryDescribeValueKind()
+    {
+        // One parameter with one default value of every mcore Value kind describeValue/describeSimpleValue/
+        // describeTypedValue dispatch on, plus one kind NONE of them recognize (the eClass-name fallback) -
+        // joinValues comma-joins them all into a single table cell, so one render covers every branch.
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaParameter parameter = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        parameter.setName("Mixed"); //$NON-NLS-1$
+
+        StringValue stringValue = McoreFactory.eINSTANCE.createStringValue();
+        stringValue.setValue("Hello"); //$NON-NLS-1$
+        parameter.getValues().add(stringValue);
+
+        BooleanValue booleanValue = McoreFactory.eINSTANCE.createBooleanValue();
+        booleanValue.setValue(true);
+        parameter.getValues().add(booleanValue);
+
+        DateValue dateValue = McoreFactory.eINSTANCE.createDateValue();
+        com._1c.g5.v8.dt.mcore.util.Date rawDate = new com._1c.g5.v8.dt.mcore.util.Date(2024, 1, 1, 0, 0, 0);
+        dateValue.setValue(rawDate);
+        parameter.getValues().add(dateValue);
+
+        EnumValue enumValue = McoreFactory.eINSTANCE.createEnumValue();
+        enumValue.setValue(DataCompositionParameterUse.AUTO);
+        parameter.getValues().add(enumValue);
+
+        TypeValue typeValue = McoreFactory.eINSTANCE.createTypeValue();
+        Type numberType = McoreFactory.eINSTANCE.createType();
+        numberType.setName("Number"); //$NON-NLS-1$
+        typeValue.setValue(numberType);
+        parameter.getValues().add(typeValue);
+
+        ReferenceValue referenceValue = McoreFactory.eINSTANCE.createReferenceValue();
+        LocalString referenceTarget = DcsFactory.eINSTANCE.createLocalString();
+        referenceValue.setValue(referenceTarget);
+        parameter.getValues().add(referenceValue);
+
+        DesignTimeValue designTimeValue = DcsFactory.eINSTANCE.createDesignTimeValue();
+        designTimeValue.setValue("MyDesignTimeExpr"); //$NON-NLS-1$
+        DesignTimeValueValue designTimeValueValue = DcsFactory.eINSTANCE.createDesignTimeValueValue();
+        designTimeValueValue.setValue(designTimeValue);
+        parameter.getValues().add(designTimeValueValue);
+
+        UndefinedValue undefinedValue = McoreFactory.eINSTANCE.createUndefinedValue();
+        parameter.getValues().add(undefinedValue);
+
+        schema.getParameters().add(parameter);
+
+        String rendered = DcsStructureReader.render("Report.X.Template.Main", schema, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a StringValue must render quoted", rendered.contains("\"Hello\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a BooleanValue must render its literal", rendered.contains("true")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a DateValue must render the mcore Date's raw toString()", //$NON-NLS-1$
+            rendered.contains(rawDate.toString()));
+        assertTrue("an EnumValue must render its literal name", //$NON-NLS-1$
+            rendered.contains(DataCompositionParameterUse.AUTO.getName()));
+        assertTrue("a TypeValue must render the resolved type name", rendered.contains("Number")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a ReferenceValue must render the referenced object's toString()", //$NON-NLS-1$
+            rendered.contains(referenceTarget.toString()));
+        assertTrue("a DesignTimeValueValue must render its raw text", //$NON-NLS-1$
+            rendered.contains("MyDesignTimeExpr")); //$NON-NLS-1$
+        assertTrue("an unrecognized Value kind must fall back to its EClass simple name", //$NON-NLS-1$
+            rendered.contains("UndefinedValue")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParameterValueTypeFallsBackToEClassNameForANonTypeTypeItem()
+    {
+        // TypeSet is a TypeItem that is NOT a Type - typeItemName() must fall back to its EClass simple
+        // name rather than a (nonexistent) getName() call.
+        DataCompositionSchema schema = newSchema();
+        DataCompositionSchemaParameter parameter = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        parameter.setName("SetParam"); //$NON-NLS-1$
+
+        TypeDescription valueType = McoreFactory.eINSTANCE.createTypeDescription();
+        TypeSet typeSet = McoreFactory.eINSTANCE.createTypeSet();
+        valueType.getTypes().add(typeSet);
+        parameter.setValueType(valueType);
+        schema.getParameters().add(parameter);
+
+        String rendered = DcsStructureReader.render("Report.X.Template.Main", schema, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a non-Type TypeItem must fall back to its EClass simple name", //$NON-NLS-1$
+            rendered.contains("TypeSet")); //$NON-NLS-1$
+    }
+
     // ==================== default settings: selection / filter (incl. group) / order ====================
     //
     // com._1c.g5.v8.dt.dcs.model.settings is access-restricted (see the class javadoc), so these exercise
@@ -257,6 +438,53 @@ public class DcsStructureReaderTest
         assertTrue(DcsStructureReader.renderSelection(null, "en").isEmpty()); //$NON-NLS-1$
         EObject emptySelection = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.selectedFields);
         assertTrue(DcsStructureReader.renderSelection(emptySelection, "en").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRenderSelectionFlagsADisabledField()
+    {
+        EObject selectedField = SETTINGS_MODEL.newItem(SETTINGS_MODEL.selectedField);
+        selectedField.eSet(SETTINGS_MODEL.selectedField.getEStructuralFeature("field"), field("Description")); //$NON-NLS-1$ //$NON-NLS-2$
+        selectedField.eSet(SETTINGS_MODEL.selectedField.getEStructuralFeature("use"), Boolean.FALSE); //$NON-NLS-1$
+
+        EObject selection = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.selectedFields);
+        SETTINGS_MODEL.addItem(selection, selectedField);
+
+        String rendered = DcsStructureReader.renderSelection(selection, "en"); //$NON-NLS-1$
+        assertTrue("a disabled selected field must be flagged", rendered.contains("[not used]")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRenderSelectionRendersAGroupWithNestedChildren()
+    {
+        EObject child = SETTINGS_MODEL.newItem(SETTINGS_MODEL.selectedField);
+        child.eSet(SETTINGS_MODEL.selectedField.getEStructuralFeature("field"), field("Description")); //$NON-NLS-1$ //$NON-NLS-2$
+        child.eSet(SETTINGS_MODEL.selectedField.getEStructuralFeature("use"), Boolean.TRUE); //$NON-NLS-1$
+
+        EObject group = SETTINGS_MODEL.newItem(SETTINGS_MODEL.selectedFieldGroup);
+        group.eSet(SETTINGS_MODEL.selectedFieldGroup.getEStructuralFeature("field"), field("GroupField")); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(SETTINGS_MODEL.selectedFieldGroup.getEStructuralFeature("use"), Boolean.TRUE); //$NON-NLS-1$
+        SETTINGS_MODEL.addTo(group, "items", child); //$NON-NLS-1$
+
+        EObject selection = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.selectedFields);
+        SETTINGS_MODEL.addItem(selection, group);
+
+        String rendered = DcsStructureReader.renderSelection(selection, "en"); //$NON-NLS-1$
+        assertTrue("the group's own field must be present", rendered.contains("GroupField")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a group item must be marked as such", rendered.contains("(group)")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the nested child must be rendered too", rendered.contains("Description")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRenderSelectionRendersTheAutoFieldsMarker()
+    {
+        EObject auto = SETTINGS_MODEL.newItem(SETTINGS_MODEL.autoSelectedField);
+        EObject selection = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.selectedFields);
+        SETTINGS_MODEL.addItem(selection, auto);
+
+        String rendered = DcsStructureReader.renderSelection(selection, "en"); //$NON-NLS-1$
+        assertTrue("a DataCompositionAuto* item must render the auto-fields marker", //$NON-NLS-1$
+            rendered.contains("_(auto fields)_")); //$NON-NLS-1$
     }
 
     @Test
@@ -301,6 +529,34 @@ public class DcsStructureReaderTest
         assertTrue(DcsStructureReader.renderFilter(SETTINGS_MODEL.newContainer(SETTINGS_MODEL.filter)).isEmpty());
     }
 
+    // NOTE (SKIPPED sub-branch, honestly documented rather than forced): appendFilterItem's
+    // "groupType.isEmpty() ? "group" : ..." bare-label fallback (reached when enumFeature() returns "")
+    // is NOT reachable through this dynamic fixture: an unset EMF EEnum-typed attribute does not resolve
+    // to null/absent - it defaults to the enum's own lowest-value LITERAL (verified empirically; e.g. an
+    // untouched "groupType" here still reads back as AND_GROUP, not "") - so an empty result would need
+    // either an EEnum with literally zero literals (which cannot share groupTypeEnum without breaking
+    // testRenderFilterConditionAndNestedGroup's AND_GROUP assertions) or the real restricted settings
+    // type's actual (unknown) unset behaviour. Not forced with fixture surgery; left uncovered.
+
+    @Test
+    public void testRenderFilterConditionWithoutARightHandValue()
+    {
+        // "right" is intentionally left EMPTY (a many-valued reference feature genuinely reads back as an
+        // empty list when untouched, unlike a single-valued enum/boolean attribute - see the NOTE above) -
+        // the optional trailing right-hand value must simply be omitted, not rendered as empty junk.
+        EObject condition = SETTINGS_MODEL.newItem(SETTINGS_MODEL.filterItem);
+        condition.eSet(SETTINGS_MODEL.filterItem.getEStructuralFeature("left"), field("Quantity")); //$NON-NLS-1$ //$NON-NLS-2$
+        SETTINGS_MODEL.setEnum(condition, SETTINGS_MODEL.filterItem, "comparisonType", "GREATER"); //$NON-NLS-1$ //$NON-NLS-2$
+        condition.eSet(SETTINGS_MODEL.filterItem.getEStructuralFeature("use"), Boolean.TRUE); //$NON-NLS-1$
+
+        EObject filter = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.filter);
+        SETTINGS_MODEL.addTo(filter, "items", condition); //$NON-NLS-1$
+
+        String rendered = DcsStructureReader.renderFilter(filter);
+        assertTrue("with no right-hand value the line must end right after the comparison literal", //$NON-NLS-1$
+            rendered.contains("- Quantity GREATER\n")); //$NON-NLS-1$
+    }
+
     @Test
     public void testRenderOrderListsFieldDirectionAndUse()
     {
@@ -326,6 +582,34 @@ public class DcsStructureReaderTest
         assertTrue(DcsStructureReader.renderOrder(SETTINGS_MODEL.newContainer(SETTINGS_MODEL.order)).isEmpty());
     }
 
+    @Test
+    public void testRenderOrderFlagsADisabledItem()
+    {
+        EObject orderItem = SETTINGS_MODEL.newItem(SETTINGS_MODEL.orderItem);
+        orderItem.eSet(SETTINGS_MODEL.orderItem.getEStructuralFeature("field"), field("Description")); //$NON-NLS-1$ //$NON-NLS-2$
+        SETTINGS_MODEL.setEnum(orderItem, SETTINGS_MODEL.orderItem, "orderType", "DESC"); //$NON-NLS-1$ //$NON-NLS-2$
+        orderItem.eSet(SETTINGS_MODEL.orderItem.getEStructuralFeature("use"), Boolean.FALSE); //$NON-NLS-1$
+
+        EObject order = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.order);
+        SETTINGS_MODEL.addTo(order, "items", orderItem); //$NON-NLS-1$
+
+        String rendered = DcsStructureReader.renderOrder(order);
+        assertTrue(rendered.contains("DESC")); //$NON-NLS-1$
+        assertTrue("a disabled order item must be flagged", rendered.contains("[not used]")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRenderOrderRendersTheAutoOrderMarker()
+    {
+        EObject auto = SETTINGS_MODEL.newItem(SETTINGS_MODEL.autoOrderItem);
+        EObject order = SETTINGS_MODEL.newContainer(SETTINGS_MODEL.order);
+        SETTINGS_MODEL.addTo(order, "items", auto); //$NON-NLS-1$
+
+        String rendered = DcsStructureReader.renderOrder(order);
+        assertTrue("a DataCompositionAuto* item must render the auto-order marker", //$NON-NLS-1$
+            rendered.contains("_(auto order)_")); //$NON-NLS-1$
+    }
+
     // ==================== dynamic EMF fixture for the access-restricted "settings" subtree ====================
 
     private static final SettingsLikeModel SETTINGS_MODEL = new SettingsLikeModel();
@@ -344,11 +628,14 @@ public class DcsStructureReaderTest
     {
         final EClass selectedFields;
         final EClass selectedField;
+        final EClass selectedFieldGroup;
+        final EClass autoSelectedField;
         final EClass filter;
         final EClass filterItem;
         final EClass filterItemGroup;
         final EClass order;
         final EClass orderItem;
+        final EClass autoOrderItem;
 
         SettingsLikeModel()
         {
@@ -369,6 +656,16 @@ public class DcsStructureReaderTest
 
             selectedFields = newEClass(factory, "DataCompositionSelectedFields"); //$NON-NLS-1$
             manyObjectRef(factory, selectedFields, "items"); //$NON-NLS-1$
+
+            selectedFieldGroup = newEClass(factory, "DataCompositionSelectedFieldGroup"); //$NON-NLS-1$
+            objectRef(factory, selectedFieldGroup, "field"); //$NON-NLS-1$
+            manyObjectRef(factory, selectedFieldGroup, "items"); //$NON-NLS-1$
+            boolAttr(factory, selectedFieldGroup, "use"); //$NON-NLS-1$
+
+            // Name only matters: isAutoItem() dispatches purely on the "DataCompositionAuto" EClass-name
+            // prefix, so these two carry no features at all.
+            autoSelectedField = newEClass(factory, "DataCompositionAutoSelectedField"); //$NON-NLS-1$
+            autoOrderItem = newEClass(factory, "DataCompositionAutoOrderItem"); //$NON-NLS-1$
 
             filterItem = newEClass(factory, "DataCompositionFilterItem"); //$NON-NLS-1$
             objectRef(factory, filterItem, "left"); //$NON-NLS-1$
@@ -397,10 +694,13 @@ public class DcsStructureReaderTest
             pkg.getEClassifiers().add(sortDirectionEnum);
             pkg.getEClassifiers().add(selectedField);
             pkg.getEClassifiers().add(selectedFields);
+            pkg.getEClassifiers().add(selectedFieldGroup);
+            pkg.getEClassifiers().add(autoSelectedField);
             pkg.getEClassifiers().add(filterItem);
             pkg.getEClassifiers().add(filterItemGroup);
             pkg.getEClassifiers().add(filter);
             pkg.getEClassifiers().add(orderItem);
+            pkg.getEClassifiers().add(autoOrderItem);
             pkg.getEClassifiers().add(order);
         }
 

@@ -352,7 +352,8 @@ public class SwitchGitBranchTool implements IMcpTool
         }
     }
 
-    private static String joinBounded(List<String> paths)
+    /** Package-visible (not private) so it is directly unit-testable. */
+    static String joinBounded(List<String> paths)
     {
         if (paths == null || paths.isEmpty())
         {
