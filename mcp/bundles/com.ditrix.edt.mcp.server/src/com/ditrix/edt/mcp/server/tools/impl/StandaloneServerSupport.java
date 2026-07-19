@@ -72,6 +72,9 @@ final class StandaloneServerSupport
     /** Plugin id used for synthesized error statuses. */
     private static final String PLUGIN_ID = "com.ditrix.edt.mcp.server"; //$NON-NLS-1$
 
+    /** Reflective method name: {@code getId()}, used across several unrelated reflected types. */
+    private static final String METHOD_GET_ID = "getId"; //$NON-NLS-1$
+
     /** Outcome of the best-effort infobases.yaml registry cleanup. */
     enum RegistryCleanup
     {
@@ -285,7 +288,7 @@ final class StandaloneServerSupport
             {
                 return null;
             }
-            Object id = infobase.getClass().getMethod("getId").invoke(infobase); //$NON-NLS-1$
+            Object id = infobase.getClass().getMethod(METHOD_GET_ID).invoke(infobase);
             return (id instanceof String) ? (String)id : null;
         }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
@@ -445,7 +448,7 @@ final class StandaloneServerSupport
             Object factory = null;
             for (Object f : factories)
             {
-                Object id = f.getClass().getMethod("getId").invoke(f); //$NON-NLS-1$
+                Object id = f.getClass().getMethod(METHOD_GET_ID).invoke(f);
                 if (MODULE_FACTORY_ID.equals(id))
                 {
                     factory = f;
@@ -577,7 +580,7 @@ final class StandaloneServerSupport
         }
         try
         {
-            Method m = findMethod(module.getClass(), "getId", 0); //$NON-NLS-1$
+            Method m = findMethod(module.getClass(), METHOD_GET_ID, 0);
             if (m == null)
             {
                 return null;

@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -95,6 +96,9 @@ public class CreateGitBranchTool implements IMcpTool
 
     /** Literal reported as {@link #KEY_START_POINT} when no explicit start point was given. */
     private static final String HEAD_LITERAL = "HEAD"; //$NON-NLS-1$
+
+    /** Common prefix of every {@link #performCheckout} warning. */
+    private static final String CHECKOUT_OF_NEW_BRANCH = "Checkout of the newly created branch '"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -276,14 +280,14 @@ public class CreateGitBranchTool implements IMcpTool
 
         if (outcome.timedOut())
         {
-            warnings.add("Checkout of the newly created branch '" + branch + "' timed out after " //$NON-NLS-1$ //$NON-NLS-2$
+            warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' timed out after " //$NON-NLS-1$
                 + GitCheckoutSupport.CHECKOUT_TIMEOUT_SECONDS
                 + " seconds; the branch was created but is not checked out."); //$NON-NLS-1$
             return false;
         }
         if (outcome.interrupted())
         {
-            warnings.add("Checkout of the newly created branch '" + branch + "' was interrupted; the " //$NON-NLS-1$ //$NON-NLS-2$
+            warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' was interrupted; the " //$NON-NLS-1$
                 + "branch was created but is not checked out."); //$NON-NLS-1$
             return false;
         }
@@ -291,7 +295,7 @@ public class CreateGitBranchTool implements IMcpTool
         {
             Activator.logError("create_git_branch: checkout failed for branch '" + branch + "'", //$NON-NLS-1$ //$NON-NLS-2$
                 outcome.jobError());
-            warnings.add("Checkout of the newly created branch '" + branch + "' failed: " //$NON-NLS-1$ //$NON-NLS-2$
+            warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' failed: " //$NON-NLS-1$
                 + outcome.jobError().getMessage() + "; the branch was created but is not checked out."); //$NON-NLS-1$
             return false;
         }
@@ -306,7 +310,7 @@ public class CreateGitBranchTool implements IMcpTool
             }
             return true;
         }
-        warnings.add("Checkout of the newly created branch '" + branch + "' did not complete cleanly " //$NON-NLS-1$ //$NON-NLS-2$
+        warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' did not complete cleanly " //$NON-NLS-1$
             + "(status: " + status + "); the branch was created but is not checked out."); //$NON-NLS-1$ //$NON-NLS-2$
         return false;
     }
@@ -355,7 +359,7 @@ public class CreateGitBranchTool implements IMcpTool
         }
 
         Map<String, Object> bound = readBack(assocManager, project, ctx);
-        if (bound != null)
+        if (!bound.isEmpty())
         {
             ok.put(KEY_BOUND, bound);
         }
@@ -393,7 +397,7 @@ public class CreateGitBranchTool implements IMcpTool
         {
             Activator.logError("create_git_branch: bindings read-back failed for project '" //$NON-NLS-1$
                 + project.getName() + "'", e); //$NON-NLS-1$
-            return null;
+            return Collections.emptyMap();
         }
     }
 

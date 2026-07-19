@@ -139,8 +139,8 @@ public class ListGitBranchesTool implements IMcpTool
         StringBuilder md = new StringBuilder();
         md.append("## Git Branches: ").append(projectName).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        // getBranch() is the short branch name, or the 40-hex commit SHA when detached;
-        // getFullBranch() is the full ref (refs/heads/x) or the same SHA when detached.
+        // The short branch name is the 40-hex commit SHA when the HEAD is detached; the full
+        // ref is refs/heads/... on a named branch, or the same SHA when detached.
         String currentShort = repo.getBranch();
         String fullBranch = repo.getFullBranch();
         boolean detached = fullBranch == null || !fullBranch.startsWith(REFS_HEADS);

@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -228,7 +229,7 @@ public class SetBranchInfobaseTool implements IMcpTool
         }
         catch (InfobaseAssociationException e)
         {
-            String verb = attach ? "attach" : "detach"; //$NON-NLS-1$ //$NON-NLS-2$
+            String verb = attach ? ACTION_ATTACH : ACTION_DETACH;
             Activator.logError("set_branch_infobase: " + verb + " failed for branch '" + branch //$NON-NLS-1$ //$NON-NLS-2$
                 + "', application '" + applicationId + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
             return ToolResult.error("Failed to " + verb + " application '" + applicationId + "' " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -240,7 +241,7 @@ public class SetBranchInfobaseTool implements IMcpTool
             .put(KEY_BRANCH, branch)
             .put(McpKeys.APPLICATION_ID, applicationId);
         Map<String, Object> bound = readBack(assocManager, project, ctx);
-        if (bound != null)
+        if (!bound.isEmpty())
         {
             ok.put(KEY_BOUND, bound);
         }
@@ -288,7 +289,7 @@ public class SetBranchInfobaseTool implements IMcpTool
     /**
      * Best-effort read-back of the branch context's bindings after the change -
      * proof the base is now bound (attach) or gone (detach). Any failure (manager
-     * absent, {@link InfobaseAssociationException}) yields {@code null} (the
+     * absent, {@link InfobaseAssociationException}) yields an empty map (the
      * caller then omits the {@code bound} key) rather than failing the
      * already-successful change.
      */
@@ -325,7 +326,7 @@ public class SetBranchInfobaseTool implements IMcpTool
         {
             Activator.logError("set_branch_infobase: bindings read-back failed for project '" //$NON-NLS-1$
                 + project.getName() + "'", e); //$NON-NLS-1$
-            return null;
+            return Collections.emptyMap();
         }
     }
 

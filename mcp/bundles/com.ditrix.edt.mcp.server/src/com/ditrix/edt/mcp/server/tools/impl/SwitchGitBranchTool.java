@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +88,9 @@ public class SwitchGitBranchTool implements IMcpTool
 
     /** Cap on how many conflicting/undeleted paths are echoed in an error. */
     private static final int MAX_LISTED_PATHS = 20;
+
+    /** Common prefix of every {@link #mapCheckoutResult} error message. */
+    private static final String CHECKOUT_OF = "Checkout of '"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -253,8 +257,12 @@ public class SwitchGitBranchTool implements IMcpTool
     private String mapCheckoutResult(CheckoutResult result, IProject project, String previousShort,
         String targetShort, String refreshWarning)
     {
-        CheckoutResult.Status status = result != null ? result.getStatus() : CheckoutResult.Status.ERROR;
-        switch (status)
+        if (result == null)
+        {
+            return ToolResult.error(CHECKOUT_OF + targetShort + "' failed (no checkout result). The " //$NON-NLS-1$
+                + "working tree may be left on the ORIGINAL branch '" + previousShort + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        switch (result.getStatus())
         {
             case OK:
             {
@@ -262,7 +270,7 @@ public class SwitchGitBranchTool implements IMcpTool
                     .put(KEY_PREVIOUS_BRANCH, previousShort)
                     .put(KEY_BRANCH, targetShort);
                 Map<String, Object> bindings = readBackBindings(project);
-                if (bindings != null)
+                if (!bindings.isEmpty())
                 {
                     ok.put(KEY_BINDINGS, bindings);
                 }
@@ -273,15 +281,15 @@ public class SwitchGitBranchTool implements IMcpTool
                 return ok.toJson();
             }
             case CONFLICTS:
-                return ToolResult.error("Checkout of '" + targetShort + "' left uncommitted-change " //$NON-NLS-1$ //$NON-NLS-2$
+                return ToolResult.error(CHECKOUT_OF + targetShort + "' left uncommitted-change " //$NON-NLS-1$
                     + "conflicts; the working tree was left on the ORIGINAL branch '" + previousShort //$NON-NLS-1$
                     + "'. Conflicting paths: " + joinBounded(result.getConflictList())).toJson(); //$NON-NLS-1$
             case NONDELETED:
-                return ToolResult.error("Checkout of '" + targetShort + "' succeeded, but some files " //$NON-NLS-1$ //$NON-NLS-2$
+                return ToolResult.error(CHECKOUT_OF + targetShort + "' succeeded, but some files " //$NON-NLS-1$
                     + "could not be deleted (likely locked or dirty): " //$NON-NLS-1$
                     + joinBounded(result.getUndeletedList())).toJson(); //$NON-NLS-1$
             default:
-                return ToolResult.error("Checkout of '" + targetShort + "' failed (status: " + status //$NON-NLS-1$ //$NON-NLS-2$
+                return ToolResult.error(CHECKOUT_OF + targetShort + "' failed (status: " + result.getStatus() //$NON-NLS-1$
                     + "). The working tree may be left on the ORIGINAL branch '" + previousShort //$NON-NLS-1$
                     + "'.").toJson(); //$NON-NLS-1$
         }
@@ -291,7 +299,7 @@ public class SwitchGitBranchTool implements IMcpTool
      * Best-effort read-back of the CURRENT application/infobase binding after a
      * successful switch - the proof that the context followed the checkout. Any
      * failure (manager absent, {@link InfobaseAssociationException}, no binding
-     * recorded) yields {@code null} (the caller then omits the {@code bindings}
+     * recorded) yields an empty map (the caller then omits the {@code bindings}
      * key) rather than failing the already-successful switch.
      */
     private static Map<String, Object> readBackBindings(IProject project)
@@ -299,14 +307,14 @@ public class SwitchGitBranchTool implements IMcpTool
         IInfobaseAssociationManager assocManager = Activator.getDefault().getInfobaseAssociationManager();
         if (assocManager == null)
         {
-            return null;
+            return Collections.emptyMap();
         }
         try
         {
             Optional<IInfobaseAssociation> assoc = assocManager.getAssociation(project);
             if (assoc.isEmpty())
             {
-                return null;
+                return Collections.emptyMap();
             }
             Collection<InfobaseReference> infobases = assoc.get().getInfobases();
             InfobaseReference def = assoc.get().getDefaultInfobase();
@@ -327,7 +335,7 @@ public class SwitchGitBranchTool implements IMcpTool
         {
             Activator.logError("switch_git_branch: bindings read-back failed for project '" //$NON-NLS-1$
                 + project.getName() + "'", e); //$NON-NLS-1$
-            return null;
+            return Collections.emptyMap();
         }
     }
 
