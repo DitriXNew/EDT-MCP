@@ -166,6 +166,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Error-message fragment between an FQN and its EClass name (e.g. "'X' is a Catalog"). */
     private static final String MSG_IS_A = "' is a "; //$NON-NLS-1$
 
+    /** Common prefix of every {@link #validateReferenceTarget} error. */
+    private static final String MSG_REFERENCE_TARGET = "Reference target '"; //$NON-NLS-1$
+
+    /** Common infix of every {@link #validateReferenceTarget} error, between the value and the property. */
+    private static final String MSG_FOR_PROP = "' for '"; //$NON-NLS-1$
+
     /** Confirmation-message fragment before a removed count. */
     private static final String MSG_REMOVED_COUNT = ", removed: "; //$NON-NLS-1$
 
@@ -2477,11 +2483,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
+        PrepareContext ctx = new PrepareContext(config, version);
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
             // object's own features, so this stays byte-identical to the pre-extInfo behaviour.
-            String pErr = prepare(config, version, target, null, prop, changes, normReport,
+            String pErr = prepare(ctx, target, null, prop, changes, normReport,
                 isExtensionProject);
             if (pErr != null)
             {
@@ -3053,8 +3060,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // (validateAndPrepare, which threads the project's extension status through); a form member's
         // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
         // so there is no unresolved-reference case here to hint.
-        String pErr = prepare(config, version, member, holder.classifyExtInfo, normProp, built, normReport,
-            false);
+        String pErr = prepare(new PrepareContext(config, version), member, holder.classifyExtInfo, normProp, built,
+            normReport, false);
         if (pErr != null)
         {
             throw new FormValidationException(pErr);
@@ -3542,7 +3549,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
      * it.</p>
      */
-    private String prepare(Configuration config, Version version, EObject target, EObject extInfo,
+    /**
+     * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
+     * model context every {@code ValueKind} branch resolves references / types against. Folded together
+     * purely to bring {@link #prepare}'s parameter count under the 7-parameter threshold (S107); no
+     * behaviour change.
+     */
+    private static final class PrepareContext
+    {
+        final Configuration config;
+
+        final Version version;
+
+        PrepareContext(Configuration config, Version version)
+        {
+            this.config = config;
+            this.version = version;
+        }
+    }
+
+    private String prepare(PrepareContext ctx, EObject target, EObject extInfo,
         JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
@@ -3581,7 +3607,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         switch (info.valueKind)
         {
             case LOCALIZED_STRING:
-                return prepareLocalized(config, name, value, prop, info, out, normReport);
+                return prepareLocalized(ctx.config, name, value, prop, info, out, normReport);
             case ENUM:
                 return prepareEnum(name, value, info, out);
             case BOOLEAN:
@@ -3589,11 +3615,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case INTEGER:
                 return prepareInteger(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(config, version, name, prop, info, out, isExtensionProject);
+                return prepareTypeDescription(ctx.config, ctx.version, name, prop, info, out, isExtensionProject);
             case REFERENCE:
-                return prepareReference(config, target, name, value, info, out);
+                return prepareReference(ctx.config, target, name, value, info, out);
             case MANY_REFERENCE:
-                return prepareManyReference(config, name, prop, info, out);
+                return prepareManyReference(ctx.config, name, prop, info, out);
             case STYLE_VALUE:
                 return prepareStyleValue(name, prop, target, info, out);
             case STRING:
@@ -3889,18 +3915,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         if (target == null)
         {
-            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' was not found. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' was not found. " //$NON-NLS-1$
                 + referenceNotFoundHint(feature)).toJson();
         }
         if (!(target instanceof IBmObject))
         {
-            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
                 + "top-level object; references to members are not supported.").toJson(); //$NON-NLS-1$
         }
         boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
         if (!((IBmObject)target).bmIsTop() && !isForm)
         {
-            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
                 + "top-level object; references to members are not supported (forms are the one " //$NON-NLS-1$
                 + "supported member reference).").toJson(); //$NON-NLS-1$
         }

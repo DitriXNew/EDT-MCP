@@ -111,9 +111,9 @@ public class MetadataTypeBuilderTest
         assertArrayEquals(new String[] { "UUID", "UniqueIdentifier" }, //$NON-NLS-1$ //$NON-NLS-2$
             MetadataTypeBuilder.platformSimpleTypeCandidates("уникальныйидентификатор")); //$NON-NLS-1$
 
-        assertNull(MetadataTypeBuilder.platformSimpleTypeCandidates("String")); //$NON-NLS-1$
-        assertNull(MetadataTypeBuilder.platformSimpleTypeCandidates("nonsense")); //$NON-NLS-1$
-        assertNull(MetadataTypeBuilder.platformSimpleTypeCandidates(null));
+        assertEquals(0, MetadataTypeBuilder.platformSimpleTypeCandidates("String").length); //$NON-NLS-1$
+        assertEquals(0, MetadataTypeBuilder.platformSimpleTypeCandidates("nonsense").length); //$NON-NLS-1$
+        assertEquals(0, MetadataTypeBuilder.platformSimpleTypeCandidates(null).length);
     }
 
     @Test
@@ -218,7 +218,7 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"nonsense\"}").getAsJsonObject(); //$NON-NLS-1$
         // the unknown-kind branch never touches `provider` (checked only after both normalizePrimitive
-        // and platformSimpleTypeCandidates return null), so null is safe here.
+        // returns null and platformSimpleTypeCandidates returns an empty array), so null is safe here.
         String err = MetadataTypeBuilder.addType(td, item, "nonsense", null, //$NON-NLS-1$
             MdClassFactory.eINSTANCE.createConfiguration(), false);
 

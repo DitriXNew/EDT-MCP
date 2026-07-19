@@ -1412,8 +1412,8 @@ public final class FormElementWriter
             // Neither the produced-types path nor the by-name fallback resolved a value type - say so
             // loudly (naming the owner) instead of the previous silent skip, so the gap is diagnosable
             // rather than surfacing only as a cascade of downstream form-validation markers. Issue #262.
-            String ownerLabel = (owner instanceof IBmObject) ? ((IBmObject)owner).bmGetFqn()
-                : (ownerName != null ? ownerEnglishType + "." + ownerName : "<unknown>"); //$NON-NLS-1$ //$NON-NLS-2$
+            String fallbackLabel = ownerName != null ? ownerEnglishType + "." + ownerName : "<unknown>"; //$NON-NLS-1$ //$NON-NLS-2$
+            String ownerLabel = (owner instanceof IBmObject) ? ((IBmObject)owner).bmGetFqn() : fallbackLabel;
             Activator.logWarning("create_metadata form-object seeding could not resolve the main Object " //$NON-NLS-1$
                 + "attribute's value type for owner '" + ownerLabel + "'; the attribute was left untyped"); //$NON-NLS-1$ //$NON-NLS-2$
         }

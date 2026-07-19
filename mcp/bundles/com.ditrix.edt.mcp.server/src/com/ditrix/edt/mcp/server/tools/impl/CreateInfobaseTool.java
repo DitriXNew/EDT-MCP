@@ -112,6 +112,15 @@ public class CreateInfobaseTool implements IMcpTool
     /** Input key: authentication kind (INFOBASE / OS) for the stored credentials (#194). */
     private static final String KEY_ACCESS = "access"; //$NON-NLS-1$
 
+    /** Common prefix of a standalone-server create/register failure message. */
+    private static final String STANDALONE_SERVER_MSG_PREFIX = "Standalone-server "; //$NON-NLS-1$
+
+    /** mode='register' word used in standalone-server failure/timeout messages. */
+    private static final String VERB_REGISTRATION = "registration"; //$NON-NLS-1$
+
+    /** mode='create' word used in standalone-server failure/timeout messages. */
+    private static final String VERB_CREATION = "creation"; //$NON-NLS-1$
+
     /**
      * Port HINT passed to {@code createServerWithInfobase} for a standalone server. For a FILE-backed
      * standalone server EDT does NOT honour a requested port: {@code generateDefaultConfig} uses this
@@ -1154,7 +1163,7 @@ public class CreateInfobaseTool implements IMcpTool
      */
     private static String standaloneJobErrorMessage(Exception ex, Path infobaseDir, boolean register)
     {
-        String prefix = "Standalone-server " + (register ? "registration" : "creation") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String prefix = STANDALONE_SERVER_MSG_PREFIX + (register ? VERB_REGISTRATION : VERB_CREATION)
             + " failed: " + ex.getMessage() //$NON-NLS-1$
             + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
             + "registered and that the directory '" + infobaseDir + "' is accessible."; //$NON-NLS-1$ //$NON-NLS-2$
@@ -1225,11 +1234,11 @@ public class CreateInfobaseTool implements IMcpTool
             if (!finished)
             {
                 createJob.cancel();
-                String verb = register ? "registration" : "creation"; //$NON-NLS-1$ //$NON-NLS-2$
+                String verb = register ? VERB_REGISTRATION : VERB_CREATION;
                 String proc = register
                     ? "The server-registration step may still be running. " //$NON-NLS-1$
                     : "The ibcmd process may still be running. "; //$NON-NLS-1$
-                return ToolResult.error("Standalone-server " + verb + " timed out after " //$NON-NLS-1$ //$NON-NLS-2$
+                return ToolResult.error(STANDALONE_SERVER_MSG_PREFIX + verb + " timed out after " //$NON-NLS-1$
                     + CREATE_TIMEOUT_SECONDS + " seconds. " + proc //$NON-NLS-1$
                     + "Check the EDT log and the directory '" + infobaseDir //$NON-NLS-1$
                     + "'.").toJson(); //$NON-NLS-1$
@@ -1238,8 +1247,8 @@ public class CreateInfobaseTool implements IMcpTool
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            String verb = register ? "registration" : "creation"; //$NON-NLS-1$ //$NON-NLS-2$
-            return ToolResult.error("Standalone-server " + verb + " was interrupted.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            String verb = register ? VERB_REGISTRATION : VERB_CREATION;
+            return ToolResult.error(STANDALONE_SERVER_MSG_PREFIX + verb + " was interrupted.").toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -1565,7 +1574,8 @@ public class CreateInfobaseTool implements IMcpTool
      * @throws IllegalStateException when NEITHER setter name resolves — names both tried methods so the
      *             failure is diagnosable without a javap session
      */
-    static void ssSetCreateFlag(Object infobase, boolean value) throws Exception
+    static void ssSetCreateFlag(Object infobase, boolean value)
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Method setter = ssMethodAny(infobase.getClass(), 1, "setCreate", "setCreateNewInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
         if (setter == null)
@@ -1683,7 +1693,8 @@ public class CreateInfobaseTool implements IMcpTool
      * degrades to a no-op (best-effort — the caller already treats the whole swap as best-effort).
      * Package-private for direct unit testing with stubs exposing either accessor generation.
      */
-    static void ssCopyDatabaseDirectory(Object from, Object to) throws Exception
+    static void ssCopyDatabaseDirectory(Object from, Object to)
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
     {
         Method read = ssMethodAny(from.getClass(), 0, "getConfigDirectory", "getPath"); //$NON-NLS-1$ //$NON-NLS-2$
         Method write = ssMethodAny(to.getClass(), 1, "setConfigDirectory", "setPath"); //$NON-NLS-1$ //$NON-NLS-2$

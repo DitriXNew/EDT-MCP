@@ -364,7 +364,7 @@ public final class MetadataTypeBuilder
         }
 
         String[] simpleTypeCandidates = platformSimpleTypeCandidates(kind);
-        if (simpleTypeCandidates != null)
+        if (simpleTypeCandidates.length > 0)
         {
             return addSimplePlatformType(td, provider, simpleTypeCandidates);
         }
@@ -527,13 +527,13 @@ public final class MetadataTypeBuilder
      * ({@link #applyQualifiers} is never invoked for them).
      *
      * @param kind the raw {@code kind} token from the spec
-     * @return the candidate proxy names, or {@code null} when {@code kind} is not ValueStorage/UUID
+     * @return the candidate proxy names, or an empty array when {@code kind} is not ValueStorage/UUID
      */
     static String[] platformSimpleTypeCandidates(String kind)
     {
         if (kind == null)
         {
-            return null;
+            return new String[0];
         }
         switch (kind.trim().toLowerCase())
         {
@@ -545,7 +545,7 @@ public final class MetadataTypeBuilder
             case "уникальныйидентификатор": //$NON-NLS-1$
                 return new String[] { "UUID", "UniqueIdentifier" }; //$NON-NLS-1$ //$NON-NLS-2$
             default:
-                return null;
+                return new String[0];
         }
     }
 
