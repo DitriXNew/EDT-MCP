@@ -12,7 +12,15 @@ with assert_no_diff() because a read tool must never mutate the project on disk.
 Negative matrix targets the tool's REAL execute() error paths:
   - missing required projectName  -> "projectName is required"  (JsonUtils.requireArgument)
   - non-existent project          -> "Project not found: <name>"
-  - invalid metadataType enum     -> "Unknown metadata type: <type>. Supported ..."
+  - invalid metadataType enum     -> "Unknown metadata type: <type>. Supported categories ..."
+
+issue #289: metadataType now ALSO accepts a standard type-name token (the FQN form, as
+used elsewhere in the API - English or Russian, singular or plural, e.g. "CommonModule",
+"Справочник"), resolved via the shared MetadataTypeUtils resolver, IN ADDITION TO the
+legacy lowercase-plural category tokens (documents/catalogs/.../scheduledJobs) which stay
+supported for back-compat. Separately, an AI naturally sending an undeclared
+types=["ScheduledJob"] array (instead of the declared metadataType) is now caught and
+rejected with an actionable error instead of being silently ignored.
 
 Fixture inventory used (TestConfiguration, English Names):
   Catalog.Catalog, CommonModule.Error, CommonModule.OK,
@@ -81,6 +89,40 @@ def test_namefilter_narrows_results():
     assert_no_diff("a read tool must not touch the project on disk")
 
 
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_filter_by_english_type_name_token_returns_only_that_type():
+    # issue #289 fix: metadataType now ALSO accepts a standard type-name token (the FQN
+    # form, e.g. "CommonModule"), not just the legacy category token ("commonModules").
+    # Must behave identically to test_filter_commonmodules_returns_both_fixture_modules -
+    # both resolve to the same internal category via MetadataTypeUtils.
+    r = call("get_metadata_objects",
+             {"projectName": PROJECT, "metadataType": "CommonModule"})
+    assert_ok(r, "get_metadata_objects metadataType=CommonModule (type-name token)")
+    assert_contains(r.text, "Error", "type-name filter must list CommonModule 'Error'")
+    assert_contains(r.text, "OK", "type-name filter must list CommonModule 'OK'")
+    # Mutation guard: a broken (ignored) filter would leak in the fixture Catalog row -
+    # the ONLY object in the fixture whose Name/Type is "Catalog", so its total absence
+    # proves the filter narrowed to common modules only.
+    assert_not_contains(r.text, "Catalog",
+                        "CommonModule type-name filter must EXCLUDE the fixture Catalog")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_filter_by_russian_type_name_token_returns_only_that_type():
+    # Bilingual side of the same fix: the Russian singular "Справочник" (Catalog) must
+    # resolve to the same category as the English "Catalog"/"catalogs" token, via the
+    # shared MetadataTypeUtils resolver (not a second hand-rolled Russian table).
+    r = call("get_metadata_objects",
+             {"projectName": PROJECT, "metadataType": "Справочник"})
+    assert_ok(r, "get_metadata_objects metadataType=Справочник (Russian type-name token)")
+    assert_contains(r.text, "Catalog", "Russian type-name filter must list the fixture Catalog")
+    # Mutation guard: a broken (ignored) filter would leak in CommonModule rows.
+    assert_not_contains(r.text, "CommonModule",
+                        "Russian type-name filter must EXCLUDE common modules")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Negative matrix (mandatory)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -113,9 +155,10 @@ def test_nonexistent_project_errors_and_names_value():
 
 @e2e_test(tool="get_metadata_objects", kind="read")
 def test_invalid_metadatatype_enum_errors_actionably():
-    # metadataType is an enum; an unknown value -> "Unknown metadata type: <type>.
-    # Supported (case-insensitive): all, documents, catalogs, ...". This error IS
-    # actionable: it enumerates the valid values.
+    # metadataType accepts EITHER a category token OR a standard type-name token; a
+    # value recognized as NEITHER -> "Unknown metadata type: <type>. Supported
+    # categories (case-insensitive): all, documents, catalogs, ...". This error IS
+    # actionable: it enumerates the valid category values.
     bad = "bogusType_e2e"
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": bad})
     err = assert_error(r, "invalid metadataType enum")
@@ -123,4 +166,17 @@ def test_invalid_metadatatype_enum_errors_actionably():
     # listed supported values) -> the message is genuinely actionable.
     assert_error_quality(err, names=[bad], suggests=["catalogs"],
                          ctx="invalid metadataType names value and lists valid ones")
+    assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_objects", kind="read")
+def test_unrecognized_type_name_token_still_errors():
+    # A value that IS a metadata type name MetadataTypeUtils recognizes, but that this
+    # tool has NO collector for (e.g. Subsystem - see SUPPORTED_CATEGORIES), must still
+    # fall through to the actionable "Unknown metadata type" error, same as a totally
+    # bogus value - not silently succeed with an empty/wrong result.
+    r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "Subsystem"})
+    err = assert_error(r, "recognized-but-uncollected type name")
+    assert_error_quality(err, names=["Subsystem"], suggests=["catalogs"],
+                         ctx="uncollected type name still names the value and lists valid ones")
     assert_no_diff("an invalid call must not touch the project on disk")
