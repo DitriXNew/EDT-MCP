@@ -384,4 +384,47 @@ public class CreateMetadataToolTest
         assertTrue("guide should document nested-object members", //$NON-NLS-1$
             guide.contains("tabular-section attribute")); //$NON-NLS-1$
     }
+
+    // ===== XDTO package member creation (issue #183 stream 1) - schema/description contract ==========
+    //
+    // create_metadata's execute() needs a live workbench + BM model, so the ObjectType/Property write
+    // path itself (XdtoWriter.createObjectType / createProperty / applyObjectTypeProperties /
+    // applyPropertyProperties, the FQN grammar XdtoWriter.parseMemberRef) is unit-tested headlessly in
+    // XdtoWriterTest; the live materialize + attach + force-export is covered by the E2E suite. Here:
+    // the wire-contract surface (description / schema) documents the new FQN shapes and vocabulary.
+
+    @Test
+    public void testDescriptionDocumentsXdtoPackageMembers()
+    {
+        String desc = new CreateMetadataTool().getDescription();
+        assertTrue("description should mention the ObjectType member FQN shape", //$NON-NLS-1$
+            desc.contains("ObjectType")); //$NON-NLS-1$
+        assertTrue("description should mention a nested Property member FQN shape", //$NON-NLS-1$
+            desc.contains("XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPropertiesDescriptionDocumentsXdtoVocabulary()
+    {
+        String schema = new CreateMetadataTool().getInputSchema();
+        // The 'properties' array is reused (not a new payload key) for XDTO members - its description
+        // must document the different vocabulary (ObjectType flags, Property attributes incl. the
+        // REQUIRED 'type').
+        int propsIdx = schema.indexOf("\"properties\""); //$NON-NLS-1$
+        assertTrue(propsIdx >= 0);
+        String tail = schema.substring(propsIdx);
+        assertTrue("properties doc should mention the ObjectType 'open' flag", tail.contains("'open'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("properties doc should mention the REQUIRED Property 'type'", //$NON-NLS-1$
+            tail.contains("REQUIRES 'type'")); //$NON-NLS-1$
+        assertTrue("properties doc should mention 'lowerBound'/'upperBound'", //$NON-NLS-1$
+            tail.contains("lowerBound")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresApplied()
+    {
+        String schema = new CreateMetadataTool().getOutputSchema();
+        assertTrue("output schema must declare 'applied' (XDTO member create counts)", //$NON-NLS-1$
+            schema.contains("\"applied\"")); //$NON-NLS-1$
+    }
 }

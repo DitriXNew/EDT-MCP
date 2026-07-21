@@ -524,6 +524,30 @@ with `python docs/generate_tool_docs.py`.
 
 <!-- TOOLS-INDEX:END -->
 
+## XDTO Packages
+
+1C XDTO packages (`XDTOPackage`) can be authored end-to-end through MCP, down to their
+package-local structure, without hand-editing XML:
+
+- **`create_metadata`** / **`modify_metadata`** / **`delete_metadata`** address XDTO
+  package members by FQN, layered on top of the existing top-level `XDTOPackage.<Name>`
+  create/delete:
+  - `XDTOPackage.<Package>.ObjectType.<Type>` — an ObjectType in the package (optional
+    flags: `open`, `abstract`, `mixed`, `ordered`, `sequenced`).
+  - `XDTOPackage.<Package>.Property.<Name>` — a package-global Property.
+  - `XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>` — a Property nested in an
+    ObjectType.
+
+  A Property's `type` accepts a built-in XSD type name (e.g. `string`), the exact name
+  of another ObjectType already in the same package (a same-package reference), or an
+  explicit `{nsUri, name}` pair; optional `lowerBound`/`upperBound`, `nillable`,
+  `fixed`+`default` round out the vocabulary. See `get_tool_guide('create_metadata')`
+  for the full parameter list.
+- **`validate_xdto_package`** runs EDT's own configuration validation scoped to one
+  package and returns a pass/fail verdict plus any problems found (e.g. a Property left
+  referencing an ObjectType that was since deleted) — a thin, read-only wrapper over
+  `get_project_errors`, handy right after authoring or editing package members.
+
 ## Output Formats
 
 Each tool declares a response type (`IMcpTool.getResponseType()`). **The default — and the most common type — is Markdown**: any tool that does not override `getResponseType()` returns Markdown as an EmbeddedResource with `mimeType: text/markdown`. The non-default types are enumerated exhaustively below; everything not listed here is Markdown.
@@ -551,7 +575,7 @@ Which tool families stay JSON, and why:
 
 Errors are reported the same way regardless of a tool's normal format — see the **Error contract** below.
 
-- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects`, `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
+- **Markdown tools** (the default): every tool that is not listed under another type below, returned as an EmbeddedResource with `mimeType: text/markdown`. This includes all read/list/search/navigation tools that emit human-readable reports — for example `list_projects`, `list_modules`, `list_subsystems`, `list_configurations`*, `get_project_errors`, `validate_xdto_package`, `get_markers`, `get_problem_summary`, `get_check_description`, `get_metadata_objects`, `get_metadata_details`, `get_module_structure`, `get_subsystem_content`, `get_symbol_info`, `get_method_call_hierarchy`, `get_objects_by_tags`, `get_tags`, `get_platform_documentation`, `find_references`, `go_to_definition`, `search_in_code`, `read_module_source`, `read_method_source`, `write_module_source`, `rename_metadata_object`, `run_yaxunit_tests`, `terminate_launch`, `revalidate_objects`, `export_configuration_to_xml`, `import_configuration_from_xml`, and all three LanguageTool tools (`generate_translation_strings`, `translate_configuration`, `get_translation_project_info`). (*`list_configurations` is the exception among the `list_*` tools — it returns JSON; see below.)
 - **YAML tools**: `get_configuration_properties` — returns a human-readable YAML body as an EmbeddedResource (resource named `*.yaml`, `mimeType: text/yaml`).
 - **JSON tools** (return JSON with `structuredContent`): `get_server_status`, `get_applications`, `create_infobase`, `delete_infobase`, `get_content_assist`, `get_variables`, `get_profiling_results`, `list_configurations`, `list_breakpoints`, `set_breakpoint`, `remove_breakpoint`, `step`, `resume`, `wait_for_break`, `debug_launch`, `debug_status`, `debug_yaxunit_tests`, `evaluate_expression`, `start_profiling`, `stop_profiling`, `validate_query`, `clean_project`, `update_database`, `delete_project`, plus the metadata-write tools that inherit JSON from `AbstractMetadataWriteTool` (`create_metadata`, `modify_metadata`, `delete_metadata`).
 - **Text tools** (plain text): `get_edt_version`, `get_form_layout_snapshot`.

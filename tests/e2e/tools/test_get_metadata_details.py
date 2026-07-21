@@ -563,3 +563,43 @@ def test_information_register_dimension_indexing_rendered():
     assert_ok(r_full, "get_metadata_details on the register (full)")
     assert_contains(r_full.text, "### Dimension Indexing", "the section must also render in full mode")
     assert_contains(r_full.text, dim, "the seeded dimension must be listed in full mode too")
+
+
+# XDTO PACKAGE structure (issue #183 stream 1) — a package FQN renders its
+# ObjectTypes + their nested Properties (XdtoStructureReader, folded into the
+# generic render as a "## XDTO content" section, alongside the Basic Properties
+# section every top object gets). The fixture ships no XDTOPackage, so seed one.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_get_metadata_details_renders_xdto_structure():
+    pkg, obj, prop = "E2EXdtoDet", "Card", "Title"
+    pkg_fqn = "XDTOPackage." + pkg
+    r0 = call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn})
+    assert_ok(r0, "seed the XDTO package " + pkg)
+    wait_for_project_ready()
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType." + obj})
+    assert_ok(r1, "seed the ObjectType " + obj)
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType.%s.Property.%s" % (obj, prop),
+        "properties": [{"name": "type", "value": "string"}]})
+    assert_ok(r2, "seed the Property " + prop)
+    wait_for_project_ready()
+
+    r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [pkg_fqn]})
+    assert_ok(r, "get_metadata_details on the XDTOPackage FQN")
+    if "## Errors" in r.text:
+        raise AssertionError(
+            "the freshly seeded XDTO package should resolve, but a ## Errors section was emitted:\n"
+            + r.text[:400])
+    assert_contains(r.text, "XDTO content", "the XDTO content section must render")
+    assert_contains(r.text, "#### " + obj, "the ObjectType must be enumerated as its own heading")
+    # The nested property must appear as its own table row under the ObjectType (not merely
+    # anywhere in the body -- a false match on the FQN heading would not prove enumeration).
+    row = next((ln for ln in r.text.splitlines() if ln.strip().startswith("| " + prop + " |")), None)
+    assert row is not None, \
+        "the nested property must be listed in the ObjectType's property table: %r" % (r.text[:800])
+    assert_contains(row, "string", "the property row must show its XSD string type")
+    # (No assert_no_diff: the test intentionally seeds a fresh XDTO package + members, so the tree
+    # is dirty by design -- kind="write-metadata" resets it after the test.)

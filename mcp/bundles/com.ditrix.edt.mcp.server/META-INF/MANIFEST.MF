@@ -110,4 +110,5 @@ Import-Package: com._1c.g5.v8.bm.common.collections,
  com._1c.g5.v8.dt.ql.dcs.resource,
  com._1c.g5.v8.dt.dcs.model.schema,
  com._1c.g5.v8.dt.dcs.model.core,
- com._1c.g5.v8.dt.dcs.model.common
+ com._1c.g5.v8.dt.dcs.model.common,
+ com._1c.g5.v8.dt.xdto.model

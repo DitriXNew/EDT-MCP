@@ -27,10 +27,12 @@ from harness import (
     assert_not_contains,
     assert_no_diff,
     assert_tree_unchanged,
+    assert_diff_contains,
     poll_diff_contains,
     tree_snapshot,
     wait_for_project_ready,
     diff,
+    read_disk,
     e2e_test,
     PROJECT,
     TESTS_PROJECT,
@@ -991,6 +993,85 @@ def test_rebind_button_command_mixed_with_other_property_rejected():
     assert_error_quality(e, suggests=["cannot be combined", "separate call"],
                          ctx="a button command rebind cannot be mixed with a property change")
     assert_tree_unchanged(before, "a rejected mixed rebind must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# XDTO PACKAGE MEMBER editing (issue #183 stream 1) — an ObjectType-nested Property
+# is addressed by 'XDTOPackage.<P>.ObjectType.<T>.Property.<N>' and takes the
+# XDTO-specific vocabulary (type/lowerBound/upperBound/nillable/fixed/default) via
+# XdtoWriter, not the generic mdclass reflection path. On disk the change lands in
+# the package's own Package.xdto (confirmed live: <property name="Amount"
+# type="xs:decimal" lowerBound="0" nillable="true"/>), sibling to the
+# XDTOPackage's own .mdo (which carries only <namespace>).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_xdto_object_type_property():
+    pkg, obj, prop = "E2EXdtoMod", "Doc", "Amount"
+    pkg_fqn = "XDTOPackage." + pkg
+    ns = "http://example.org/e2e/%s" % pkg
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": pkg_fqn, "targetNamespace": ns}), "seed the XDTO package")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType." + obj}),
+              "seed the ObjectType " + obj)
+    wait_for_project_ready()
+    prop_fqn = pkg_fqn + ".ObjectType.%s.Property.%s" % (obj, prop)
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": prop_fqn,
+        "properties": [{"name": "type", "value": "string"}]}),
+        "seed the Property %s (type=string)" % prop)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": prop_fqn,
+        "properties": [
+            {"name": "type", "value": "decimal"},
+            {"name": "lowerBound", "value": 0},
+            {"name": "nillable", "value": True},
+        ],
+    })
+    assert_ok(r, "modify the ObjectType-nested Property's type/lowerBound/nillable")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    applied = r.structured.get("applied") or []
+    for f in ("type", "lowerBound", "nillable"):
+        assert f in applied, "%s must be in applied: %r" % (f, r.structured)
+    assert r.structured.get("persisted") is True, \
+        "the XDTO member change must force-export the package content to disk: %r" % (r.structured,)
+
+    # ON-DISK: Package.xdto now carries the changed type + the new nillable flag, and the stale
+    # xs:string type is gone (replaced, not left dangling alongside the new one). Package.xdto is a
+    # brand-new UNTRACKED file (this test creates the whole package), so a plain `git diff` (tracked
+    # files only) would never see it -- assert_diff_contains / poll_diff_contains cover untracked
+    # files too; the "must NOT contain" check reads the file directly (read_disk) for the same reason.
+    xdto_path = "src/XDTOPackages/%s/Package.xdto" % pkg
+    poll_diff_contains('type="xs:decimal"',
+                       ctx="the changed type must land as xs:decimal in Package.xdto on disk")
+    assert_diff_contains('name="%s"' % prop,
+                         ctx="the property's own name attribute must be present in the .xdto diff")
+    assert_diff_contains('nillable="true"',
+                         ctx="the nillable=true flag must land in Package.xdto on disk")
+    assert_not_contains(read_disk(xdto_path), 'type="xs:string"',
+                        "the old xs:string type must be replaced, not left dangling")
+
+    # MODEL read-back: the package structure render shows the Amount row with the new type/nillable.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [pkg_fqn]})
+    assert_ok(d, "get_metadata_details read-back on the package")
+    row = next((ln for ln in d.text.splitlines() if ln.strip().startswith("| " + prop + " |")), None)
+    assert row is not None, "the %s property row must be listed in the read-back: %r" % (prop, d.text[:800])
+    assert_contains(row, "decimal", "the read-back row must show the new decimal type")
+    assert_contains(row, "true", "the read-back row must show nillable=true")
+
+    # Negative: an unknown type token is neither an XSD builtin nor a same-package ObjectType name.
+    before_bad = tree_snapshot()
+    r2 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": prop_fqn,
+        "properties": [{"name": "type", "value": "NoSuchType_e2e"}],
+    })
+    e = assert_error(r2, "unknown XDTO type token")
+    assert_error_quality(e, names=["NoSuchType_e2e"], suggests=["ObjectType", "XSD"],
+                         ctx="an unrecognized type token names the bad value and explains the two valid forms")
+    assert_tree_unchanged(before_bad, "a rejected type set must change nothing")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
