@@ -51,13 +51,15 @@ public final class BslSyntaxChecker
         "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438|EndTry)\\b", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    // Opening keywords
+    // Opening keywords. An optional "\u0410\u0441\u0438\u043D\u0445"/"Async" prefix is allowed before
+    // Procedure/Function (async procedures/functions, #287); "\u0416\u0434\u0430\u0442\u044C"/"Await" is
+    // an expression keyword and introduces no block of its own, so it is intentionally not matched here.
     private static final Pattern PROCEDURE_START = Pattern.compile(
-        "^\\s*(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|Procedure)\\b", //$NON-NLS-1$
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|Procedure)\\b", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private static final Pattern FUNCTION_START = Pattern.compile(
-        "^\\s*(?:\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Function)\\b", //$NON-NLS-1$
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Function)\\b", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     // If but NOT ElsIf/ElseIf/ИначеЕсли
@@ -118,12 +120,24 @@ public final class BslSyntaxChecker
         List<String> errors = new ArrayList<>();
         // Stack of (tag, lineNumber as string)
         Deque<String[]> stack = new ArrayDeque<>();
+        // Carries whether a string literal is still open across physical lines
+        StringLiteralState stringState = new StringLiteralState();
 
         for (int i = 0; i < lines.size(); i++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
             int lineNum = i + 1;
 
-            String trimmed = preprocessLine(lines.get(i));
+            // A double-quote string only continues onto the next physical line via a leading '|'
+            // continuation. If the previous line ended still inside a string but THIS line is not a
+            // continuation, the literal was not a valid multi-line string (a mis-tracked quote or a
+            // genuinely unclosed string) - reset so it does not mask the real code that follows,
+            // which would hide real block keywords (and their imbalance).
+            if (stringState.insideString && !lines.get(i).trim().startsWith("|")) //$NON-NLS-1$
+            {
+                stringState.insideString = false;
+            }
+
+            String trimmed = preprocessLine(lines.get(i), stringState);
             if (trimmed == null)
             {
                 continue;
@@ -145,43 +159,132 @@ public final class BslSyntaxChecker
     }
 
     /**
-     * Normalize a source line for keyword matching: trims it, skips blank/comment/string
-     * continuation lines, and strips any inline comment.
+     * Carries whether a string literal opened on an earlier physical line is still
+     * open when the next line starts. BSL string literals can span several lines,
+     * each continuation line starting with a leading {@code |}.
+     */
+    private static final class StringLiteralState
+    {
+        private boolean insideString;
+    }
+
+    /**
+     * Normalize a source line for keyword matching: masks any string-literal (and
+     * comment) content via {@link #maskStringLiterals}, then drops leading
+     * whitespace and stray statement separators.
+     * <p>
+     * The leftover leading {@code ;} case shows up when a string literal closes
+     * mid-line and the assignment's trailing {@code ;} is the only unmasked
+     * character before the next real statement — e.g. a closing continuation line
+     * such as {@code |tail"; If x Then} masks to a run of spaces followed by
+     * {@code ; If x Then}; skipping that separator lets {@code If} still be
+     * recognized "at line start".
      *
      * @param line the raw source line
-     * @return the trimmed line ready for matching, or {@code null} if the line must be skipped
+     * @param state carries whether a string literal is already open when this
+     *     line starts; updated in place to reflect the state after this line
+     * @return the masked line ready for keyword matching, or {@code null} if there
+     *     is no real code left on the line (blank, a full comment, a pure string
+     *     continuation line, or only statement separators)
      */
-    private static String preprocessLine(String line)
+    private static String preprocessLine(String line, StringLiteralState state)
     {
-        // Skip empty lines
-        if (line.trim().isEmpty())
+        String masked = maskStringLiterals(line, state);
+
+        int start = 0;
+        int len = masked.length();
+        while (start < len && (Character.isWhitespace(masked.charAt(start)) || masked.charAt(start) == ';'))
         {
-            return null;
+            start++;
+        }
+        return start >= len ? null : masked.substring(start);
+    }
+
+    /**
+     * Masks the parts of a line that are lexically inside a string literal so that
+     * keyword-looking text embedded in query or message text can never match a
+     * block keyword, while any real code on the same physical line — including
+     * code that follows the string's closing quote — is left untouched.
+     * <p>
+     * Walks the line character by character, toggling {@code state.insideString}
+     * on every double quote, EXCEPT a doubled {@code ""} which is an escaped quote
+     * inside the literal and does not close it. Masked characters are replaced
+     * with a space (not removed), so the column position of any real code after
+     * the string is preserved. An inline {@code //} comment is only recognized
+     * while NOT inside a string, so a {@code //} inside a URL or message text no
+     * longer truncates the line. {@code state.insideString} is updated in place so
+     * the flag carries across lines for a literal that spans several physical
+     * lines (each continuation masks to blank and is effectively skipped, same
+     * outcome as before, but now for the correct reason).
+     *
+     * @param line the raw source line
+     * @param state carries whether a string literal is already open when this
+     *     line starts; updated in place to reflect the state after this line
+     * @return the line with string-literal content (and any trailing comment)
+     *     replaced by spaces or dropped
+     */
+    private static String maskStringLiterals(String line, StringLiteralState state)
+    {
+        int len = line.length();
+        StringBuilder masked = new StringBuilder(len);
+        boolean insideString = state.insideString; // double-quote "..." string, CARRIED across lines
+        boolean insideDate = false;                 // single-quote '...' date literal, intra-line only
+
+        for (int i = 0; i < len; i++)
+        {
+            char c = line.charAt(i);
+            if (insideString)
+            {
+                if (c == '"' && i + 1 < len && line.charAt(i + 1) == '"')
+                {
+                    // Doubled quote: an escaped quote inside the literal, string stays open
+                    masked.append(' ').append(' ');
+                    i++;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    insideString = false;
+                }
+                masked.append(' ');
+                continue;
+            }
+            if (insideDate)
+            {
+                // A single-quote '...' date literal. A double-quote inside it is CONTENT, not a
+                // string toggle - masking it here is what stops a stray '"' inside a date/'...'
+                // token from flipping insideString and swallowing the rest of the module.
+                if (c == '\'')
+                {
+                    insideDate = false;
+                }
+                masked.append(' ');
+                continue;
+            }
+            if (c == '"')
+            {
+                insideString = true;
+                masked.append(' ');
+                continue;
+            }
+            if (c == '\'')
+            {
+                insideDate = true;
+                masked.append(' ');
+                continue;
+            }
+            if (c == '/' && i + 1 < len && line.charAt(i + 1) == '/')
+            {
+                break; // inline comment - the rest of the line is not code
+            }
+            masked.append(c);
         }
 
-        // Skip lines that are entirely a comment
-        String trimmed = line.trim();
-        if (trimmed.startsWith("//")) //$NON-NLS-1$
-        {
-            return null;
-        }
-
-        // Skip multiline string continuation lines (start with |)
-        if (trimmed.startsWith("|")) //$NON-NLS-1$
-        {
-            return null;
-        }
-
-        // Remove inline comment (everything after //)
-        // Known limitation: // inside string literals (e.g. URLs like "https://...")
-        // will be treated as a comment start. This is acceptable because keywords
-        // are matched at line start (^\s*keyword\b), so truncation does not affect results.
-        int commentIdx = trimmed.indexOf("//"); //$NON-NLS-1$
-        if (commentIdx > 0)
-        {
-            trimmed = trimmed.substring(0, commentIdx);
-        }
-        return trimmed;
+        // A single-quote date literal never spans physical lines, so insideDate is intentionally
+        // NOT persisted; only the double-quote string carries (via the '|'-continuation rule the
+        // caller applies before the next line - see check()).
+        state.insideString = insideString;
+        return masked.toString();
     }
 
     /**
