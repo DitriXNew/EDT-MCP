@@ -23,9 +23,14 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -57,6 +62,9 @@ public class GetMetadataDetailsTool implements IMcpTool
     /** Markdown separator between rendered object sections. */
     private static final String SECTION_SEPARATOR = "\n---\n\n"; //$NON-NLS-1$
 
+    /** Placeholder for an absent/empty value in the type-specific property tables below. */
+    private static final String DASH = "-"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -75,6 +83,10 @@ public class GetMetadataDetailsTool implements IMcpTool
                "ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role " + //$NON-NLS-1$
                "properties ('full: true' shows every object, otherwise only the non-default rows, the " + //$NON-NLS-1$
                "first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). " + //$NON-NLS-1$
+               "In the default (non-full) view a ScheduledJob or CommonModule also renders a " + //$NON-NLS-1$
+               "type-specific Properties table (e.g. methodName/schedule/use for a job; " + //$NON-NLS-1$
+               "server/serverCall/global/returnValuesReuse for a module), and an InformationRegister's " + //$NON-NLS-1$
+               "Dimensions additionally show their Indexing. " + //$NON-NLS-1$
                "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
@@ -306,6 +318,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         sb.append(MetadataFormatterRegistry.format(mdObject, ctx.full, ctx.effectiveLanguage));
+        // Type-specific properties the universal reflective formatter's default view omits
+        // (issue #288): ScheduledJob / CommonModule / an InformationRegister's dimension Indexing.
+        sb.append(formatTypeSpecificProperties(mdObject, ctx.full));
         // ORIGIN footer: core / core (adopted) / extension. For a base
         // configuration this is always "core"; for an extension it distinguishes
         // an adopted base object from one the extension itself owns.
@@ -468,6 +483,168 @@ public class GetMetadataDetailsTool implements IMcpTool
             sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), p.currentValue, allowed));
         }
         return sb.toString();
+    }
+
+    /**
+     * Renders TYPE-SPECIFIC properties that the universal reflective formatter's DEFAULT
+     * (non-{@code full}) view does not surface (issue #288): {@code modify_metadata} already WRITES
+     * a ScheduledJob's execution properties (Schedule presence via {@code eIsSet} - EXPLICITLY set,
+     * not a non-null default), a CommonModule's context-availability flags, and an
+     * InformationRegister dimension's Indexing, but the basic details view rendered only Name /
+     * Synonym for the first two, and no Indexing at all for the third - reading them back was
+     * impossible. Appended right after the universal object section, before the ORIGIN footer.
+     * <p>
+     * The ScheduledJob/CommonModule "Properties" table is skipped when {@code full} is {@code true}:
+     * {@code UniversalMetadataFormatter}'s full-mode "All Properties" reflective dump already lists
+     * every plain {@code EAttribute} of both types (methodName / use / predefined /
+     * restartCountOnFailure / restartIntervalOnFailure / key; server / serverCall / ... /
+     * returnValuesReuse), so a second table here would only duplicate it.
+     * <p>
+     * The InformationRegister "Dimension Indexing" table is emitted regardless of {@code full}: the
+     * generic attributes-table Indexing column (in {@code UniversalMetadataFormatter}) only
+     * recognizes {@code com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute}, while a register
+     * dimension is a {@code com._1c.g5.v8.dt.metadata.mdclass.RegisterDimension} - a SEPARATE
+     * sub-interface of {@code BasicFeature} - so a dimension never gets an Indexing value there in
+     * EITHER mode; this is the only place Indexing is visible for a dimension.
+     *
+     * @param mdObject the resolved top object (a type this method does not handle is a no-op)
+     * @param full the request's full-mode flag
+     * @return the Markdown section to append (possibly empty)
+     */
+    static String formatTypeSpecificProperties(MdObject mdObject, boolean full)
+    {
+        StringBuilder sb = new StringBuilder();
+        // Render in BOTH basic and full mode. It would be tempting to skip these in full mode
+        // (the generic "All Properties" dump repeats the scalar getters), but that dump does NOT
+        // include the transient Schedule reference, so skipping in full mode silently LOSES the
+        // Schedule row that basic mode shows (codex #288). A little overlap in full mode is
+        // preferable to full mode carrying LESS information than basic.
+        if (mdObject instanceof ScheduledJob)
+        {
+            appendScheduledJobProperties(sb, (ScheduledJob)mdObject);
+        }
+        else if (mdObject instanceof CommonModule)
+        {
+            appendCommonModuleProperties(sb, (CommonModule)mdObject);
+        }
+        else if (mdObject instanceof InformationRegister)
+        {
+            appendDimensionIndexing(sb, (InformationRegister)mdObject);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Renders a ScheduledJob's execution properties as a Property/Value table: the method it calls,
+     * whether it is enabled/predefined, its failure-restart policy, its (import) key, and whether a
+     * Schedule is attached. The Schedule is rendered as mere PRESENCE ("set" / {@link #DASH}), never a
+     * {@code toString()} dump - a {@code Schedule} is a cross-model {@code EObject} (not an
+     * {@code MdObject}), so dumping it would print an unhelpful implementation-detail string instead of
+     * a meaningful value. Presence is read via {@link #scheduledJobHasSchedule(ScheduledJob)}.
+     */
+    private static void appendScheduledJobProperties(StringBuilder sb, ScheduledJob job)
+    {
+        sb.append("\n### Properties\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(MarkdownUtils.tableRow("Method Name", valueOrDash(job.getMethodName()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Use", yesNo(job.isUse()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Predefined", yesNo(job.isPredefined()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Restart Count On Failure", //$NON-NLS-1$
+            String.valueOf(job.getRestartCountOnFailure())));
+        sb.append(MarkdownUtils.tableRow("Restart Interval On Failure", //$NON-NLS-1$
+            String.valueOf(job.getRestartIntervalOnFailure())));
+        sb.append(MarkdownUtils.tableRow("Key", valueOrDash(job.getKey()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Schedule", scheduledJobHasSchedule(job) ? "set" : DASH)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Returns whether the job has an EXPLICITLY-configured Schedule, via EMF {@code eIsSet} on the
+     * {@code SCHEDULED_JOB__SCHEDULE} feature. This deliberately does NOT use {@code getSchedule() != null}:
+     * a {@code create_metadata}-made job carries a non-null DEFAULT schedule, so a null-check would
+     * always report "set". {@code eIsSet} needs only the EMF feature literal, so it avoids importing the
+     * {@code com._1c.g5.v8.dt.schedule.model} package (which this bundle's {@code MANIFEST.MF} does not
+     * declare) and needs no reflection.
+     */
+    private static boolean scheduledJobHasSchedule(ScheduledJob job)
+    {
+        // eIsSet (EXPLICITLY configured), NOT getSchedule() != null: a create_metadata-made job
+        // carries a non-null DEFAULT schedule, so a plain null-check would always render "set".
+        // eIsSet is true only once a schedule is actually assigned - and it takes the EMF feature
+        // literal, so it needs no import of the schedule model package (which this bundle does not
+        // declare in its MANIFEST).
+        return job.eIsSet(MdClassPackage.Literals.SCHEDULED_JOB__SCHEDULE);
+    }
+
+    /**
+     * Renders a CommonModule's context-availability flags and its return-values-reuse mode as a
+     * Property/Value table. Every boolean is rendered directly (Yes/No) - {@code false} is a valid,
+     * meaningful value here (the user wants to see e.g. server=No), not an "absent" marker. The
+     * {@code returnValuesReuse} enum is rendered by its LITERAL name (via {@link #enumLiteral(Object)}),
+     * never a raw object dump.
+     */
+    private static void appendCommonModuleProperties(StringBuilder sb, CommonModule module)
+    {
+        sb.append("\n### Properties\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(MarkdownUtils.tableRow("Server", yesNo(module.isServer()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Server Call", yesNo(module.isServerCall()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Client (Managed Application)", //$NON-NLS-1$
+            yesNo(module.isClientManagedApplication())));
+        sb.append(MarkdownUtils.tableRow("Client (Ordinary Application)", //$NON-NLS-1$
+            yesNo(module.isClientOrdinaryApplication())));
+        sb.append(MarkdownUtils.tableRow("External Connection", yesNo(module.isExternalConnection()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Global", yesNo(module.isGlobal()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Privileged", yesNo(module.isPrivileged()))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Return Values Reuse", //$NON-NLS-1$
+            enumLiteral(module.getReturnValuesReuse())));
+    }
+
+    /**
+     * Renders an InformationRegister's dimensions' Indexing as a small Dimension/Indexing table. A
+     * no-op when the register has no dimensions. See {@link #formatTypeSpecificProperties} for why this
+     * cannot be folded into the shared attributes table.
+     */
+    private static void appendDimensionIndexing(StringBuilder sb, InformationRegister register)
+    {
+        List<InformationRegisterDimension> dimensions = register.getDimensions();
+        if (dimensions == null || dimensions.isEmpty())
+        {
+            return;
+        }
+        sb.append("\n### Dimension Indexing\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Dimension", "Indexing")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (InformationRegisterDimension dimension : dimensions)
+        {
+            sb.append(MarkdownUtils.tableRow(dimension.getName(), enumLiteral(dimension.getIndexing())));
+        }
+    }
+
+    /**
+     * Renders a possibly-{@code null}/empty string, or {@link #DASH} when absent.
+     */
+    private static String valueOrDash(String value)
+    {
+        return value != null && !value.isEmpty() ? value : DASH;
+    }
+
+    /**
+     * Renders a boolean as {@code Yes}/{@code No}, matching the Yes/No Markdown convention the rest of
+     * get_metadata_details uses. {@code false} is rendered as {@code No}, not omitted - it is a real,
+     * meaningful value for these flags.
+     */
+    private static String yesNo(boolean value)
+    {
+        return value ? "Yes" : "No"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Renders an EMF enum's LITERAL name (its {@code toString()}, which the generated enum overrides to
+     * return the literal), or {@link #DASH} when {@code null}. Never used on a plain {@link EObject}
+     * (e.g. a ScheduledJob's Schedule) - only on an actual enum value.
+     */
+    private static String enumLiteral(Object enumValue)
+    {
+        return enumValue != null ? enumValue.toString() : DASH;
     }
 
     /**
