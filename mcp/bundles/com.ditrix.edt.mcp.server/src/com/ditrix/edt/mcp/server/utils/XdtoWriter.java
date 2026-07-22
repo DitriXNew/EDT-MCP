@@ -374,6 +374,11 @@ public final class XdtoWriter
             fqnGenerator.generateExternalPropertyFqn(txPkg, MdClassPackage.Literals.XDTO_PACKAGE__PACKAGE);
         if (contentFqn == null || contentFqn.isEmpty())
         {
+            // UNDO the just-set reference: leaving the owner pointing at a fresh, UNATTACHED Package
+            // would make the surrounding transaction fail at commit ("Failed to persist reference
+            // value") even for callers that treat this resolution as best-effort (the top-level
+            // XDTOPackage create). The owner is then created cleanly WITHOUT content.
+            txPkg.setPackage(null);
             return ContentResolution.failed(ToolResult.error("Could not generate the content resource FQN " //$NON-NLS-1$
                 + "for the XDTO package; report it with the package FQN.").toJson()); //$NON-NLS-1$
         }

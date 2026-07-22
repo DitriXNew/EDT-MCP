@@ -39,9 +39,9 @@ import com.google.gson.JsonParser;
  * {@code DcsFactory.eINSTANCE} fixtures - no BM transaction involved), the typed attribute writers
  * ({@link XdtoWriter#applyObjectTypeProperties} / {@link XdtoWriter#applyPropertyProperties}) and QName
  * resolution ({@link XdtoWriter#resolveQName}). The BM-transaction persistence hook
- * ({@link XdtoWriter#resolvePackageContent}) is intentionally NOT unit-tested here (mirrors the DCS /
- * template precedent): {@code IBmObject} is only implemented by live BM-backed proxies, so that path is
- * e2e/live-tested only.
+ * ({@link XdtoWriter#resolvePackageContent}) is mostly e2e/live-tested ({@code IBmObject} is only
+ * implemented by live BM-backed proxies), with ONE mocked exception: the fresh-materialize FAILURE
+ * path never reaches BM, so its reference-rollback contract is unit-tested here with Mockito.
  * <p>
  * Every error-path assertion also checks the result is a READY {@code ToolResult.error(...).toJson()}
  * envelope (codex review issue #183 finding #9: {@code XdtoWriteException}/{@code Result.error} must
@@ -1286,5 +1286,26 @@ public class XdtoWriterTest
         nested.setItemType(nestedItem);
         assertTrue(XdtoWriter.rewriteNamespaceReferences(q, "http://x", "http://y")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("http://y", nestedItem.getNsUri()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFailedFreshMaterializationUndoesThePackageReference()
+    {
+        // When the external-property FQN cannot be generated, the just-set reference to the fresh
+        // UNATTACHED content must be undone - otherwise the surrounding transaction fails at commit
+        // ("Failed to persist reference value") even for best-effort callers (codex finding).
+        com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage owner =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createXDTOPackage();
+        owner.setName("P"); //$NON-NLS-1$
+        owner.setNamespace("http://p"); //$NON-NLS-1$
+        com._1c.g5.v8.bm.core.IBmTransaction tx =
+            org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmTransaction.class);
+        com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator gen =
+            org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator.class);
+        // generator returns null -> the fresh path must fail AND leave no dangling reference.
+        XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(owner, tx, gen);
+        assertJsonError(resolved.error);
+        assertNull("the owner must NOT keep a reference to the unattached fresh content", //$NON-NLS-1$
+            owner.getPackage());
     }
 }
