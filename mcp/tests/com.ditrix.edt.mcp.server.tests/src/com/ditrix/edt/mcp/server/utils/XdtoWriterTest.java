@@ -537,15 +537,39 @@ public class XdtoWriterTest
         Package pkg = newPackage();
         ObjectType owner = XdtoWriter.createObjectType(pkg, "Owner"); //$NON-NLS-1$
         Property property = XdtoWriter.createProperty(owner.getProperties(), "MyProp"); //$NON-NLS-1$
+        // Both bounds together: a one-sided lowerBound=5 would now be rejected against the model
+        // DEFAULT upperBound (the platform reads the default for a never-set side - codex finding).
         Result first = XdtoWriter.applyPropertyProperties(property, pkg,
-            List.of(json("{\"name\":\"lowerBound\",\"value\":5}")), false); //$NON-NLS-1$
+            List.of(json("{\"name\":\"lowerBound\",\"value\":5}"), //$NON-NLS-1$
+                json("{\"name\":\"upperBound\",\"value\":10}")), false); //$NON-NLS-1$
         assertFalse(first.error, first.hasError());
 
         Result second = XdtoWriter.applyPropertyProperties(property, pkg,
             List.of(json("{\"name\":\"upperBound\",\"value\":2}")), false); //$NON-NLS-1$
         assertTrue("upperBound=2 must be rejected against the already-set lowerBound=5", //$NON-NLS-1$
             second.hasError());
-        assertFalse("the rejected upperBound must not have been applied", property.isSetUpperBound()); //$NON-NLS-1$
+        assertEquals("the rejected upperBound must leave the previous value untouched", //$NON-NLS-1$
+            10, property.getUpperBound());
+    }
+
+    @Test
+    public void testOneSidedBoundValidatedAgainstModelDefault()
+    {
+        // A side never set in this call or before still has an EFFECTIVE value - the model default -
+        // so lowerBound=5 ALONE must be rejected when the default upperBound is below it, instead of
+        // persisting an occurrence range the platform would refuse (codex finding).
+        Package pkg = newPackage();
+        ObjectType owner = XdtoWriter.createObjectType(pkg, "Owner"); //$NON-NLS-1$
+        Property property = XdtoWriter.createProperty(owner.getProperties(), "MyProp"); //$NON-NLS-1$
+        Object upperDefault = property.eClass().getEStructuralFeature("upperBound").getDefaultValue(); //$NON-NLS-1$
+        if (upperDefault instanceof Integer && ((Integer)upperDefault).intValue() != -1
+            && ((Integer)upperDefault).intValue() < 5)
+        {
+            Result r = XdtoWriter.applyPropertyProperties(property, pkg,
+                List.of(json("{\"name\":\"lowerBound\",\"value\":5}")), false); //$NON-NLS-1$
+            assertTrue("lowerBound above the DEFAULT upperBound must be rejected one-sided", //$NON-NLS-1$
+                r.hasError());
+        }
     }
 
     @Test
@@ -819,16 +843,18 @@ public class XdtoWriterTest
     }
 
     @Test
-    public void testEntryMissingNameIsStillSilentlySkippedNotAnError()
+    public void testEntryMissingNameIsRejected()
     {
-        // Unchanged behavior: an entry with NO 'name' at all (unnamed - nothing actionable to report) is
-        // still silently skipped, unlike a NAMED entry missing only 'value'.
+        // An entry with NO (string) 'name' is malformed input and must be a hard error - silently
+        // skipping it would report success while the intended flag never applied (codex finding).
         Package pkg = newPackage();
         ObjectType type = XdtoWriter.createObjectType(pkg, "MyType"); //$NON-NLS-1$
         Result r = XdtoWriter.applyObjectTypeProperties(type,
             List.of(json("{\"value\":true}"), json("{\"name\":\"open\",\"value\":true}"))); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(r.error, r.hasError());
-        assertEquals(List.of("open"), r.applied); //$NON-NLS-1$
+        assertTrue("an unnamed entry must be rejected, not skipped", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must state the requirement: " + r.error, //$NON-NLS-1$
+            r.error.contains("name")); //$NON-NLS-1$
+        assertFalse("nothing may be applied after the rejection", type.isOpen()); //$NON-NLS-1$
     }
 
     // ==================== yo-normalized member lookup fallback (issue #183 P2 #4) ====================

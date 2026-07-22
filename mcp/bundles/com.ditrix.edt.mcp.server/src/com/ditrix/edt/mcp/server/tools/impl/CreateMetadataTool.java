@@ -487,6 +487,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ctx.error;
         }
+        // The leaf name is written verbatim into Package.xdto as an XML name - validate it with the
+        // same identifier rule the mdclass member create enforces (a 1C identifier is a safe subset
+        // of an XML NCName), or 'ObjectType.123Bad' would succeed yet produce an invalid file.
+        String newMemberName = ref.kind == XdtoWriter.Kind.OBJECT_TYPE ? ref.objectTypeName : ref.propertyName;
+        if (!isValidIdentifier(newMemberName))
+        {
+            return ToolResult.error("Invalid XDTO member name '" + newMemberName + "': a name must start " //$NON-NLS-1$ //$NON-NLS-2$
+                + "with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+        }
         MetadataNodeResolver.MetadataNode pkgNode =
             MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
         if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)

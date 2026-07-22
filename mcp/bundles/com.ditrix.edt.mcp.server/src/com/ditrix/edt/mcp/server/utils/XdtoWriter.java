@@ -460,6 +460,32 @@ public final class XdtoWriter
     }
 
     /**
+     * Finds a LOCAL type (an {@link ObjectType} from {@code Package.getObjects()} OR a
+     * {@link ValueType} from {@code Package.getTypes()}) by name, with the same yo fallback
+     * {@link #findObjectType} applies. XDTO property QNames may legitimately target a local
+     * value type (e.g. an imported package's enumerations), not only object types.
+     *
+     * @return the matching type, or {@code null}
+     */
+    public static Type findLocalType(Package pkg, String name)
+    {
+        ObjectType objectType = findObjectType(pkg, name);
+        if (objectType != null || pkg == null || name == null)
+        {
+            return objectType;
+        }
+        String yoNormalized = MdNameNormalizer.normalizeYo(name);
+        for (ValueType valueType : pkg.getTypes())
+        {
+            if (name.equals(valueType.getName()) || yoNormalized.equals(valueType.getName()))
+            {
+                return valueType;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Finds a Property by EXACT (case-SENSITIVE) name in an owner list (either
      * {@code Package.getProperties()} - package-global - or {@code ObjectType.getProperties()} - object
      * members), or {@code null} when not found. Case-sensitive for the same reason as
@@ -923,10 +949,16 @@ public final class XdtoWriter
                 + "('lowerBound'/'upperBound'); those apply only to a property nested in an ObjectType.") //$NON-NLS-1$
                     .toJson();
         }
-        Integer effectiveLower =
-            newLower != null ? newLower : (property.isSetLowerBound() ? Integer.valueOf(property.getLowerBound()) : null);
-        Integer effectiveUpper =
-            newUpper != null ? newUpper : (property.isSetUpperBound() ? Integer.valueOf(property.getUpperBound()) : null);
+        // A side neither set in this call nor already set still has an EFFECTIVE value: the model
+        // DEFAULT the platform serializes/reads. Comparing against it (read from the EMF feature,
+        // not hardcoded) rejects a one-sided range the platform would refuse, e.g. lowerBound=2
+        // with the other side at its default.
+        Integer effectiveLower = newLower != null ? newLower
+            : (property.isSetLowerBound() ? Integer.valueOf(property.getLowerBound())
+                : boundDefault(property, "lowerBound")); //$NON-NLS-1$
+        Integer effectiveUpper = newUpper != null ? newUpper
+            : (property.isSetUpperBound() ? Integer.valueOf(property.getUpperBound())
+                : boundDefault(property, "upperBound")); //$NON-NLS-1$
         if (effectiveLower != null && effectiveLower.intValue() < 0)
         {
             return ToolResult.error("Property 'lowerBound' must be >= 0.").toJson(); //$NON-NLS-1$
@@ -942,6 +974,13 @@ public final class XdtoWriter
                 + effectiveLower + ").").toJson(); //$NON-NLS-1$
         }
         return null;
+    }
+
+    /** The EMF DEFAULT of an occurrence-bound feature ({@code null} when the model declares none). */
+    private static Integer boundDefault(Property property, String featureName)
+    {
+        Object def = property.eClass().getEStructuralFeature(featureName).getDefaultValue();
+        return def instanceof Integer ? (Integer)def : null;
     }
 
     /**
@@ -1045,7 +1084,7 @@ public final class XdtoWriter
             return QNameResult.failed(ToolResult.error(fieldLabel + " must be a non-empty string or an " //$NON-NLS-1$
                 + "object {nsUri, name}.").toJson()); //$NON-NLS-1$
         }
-        ObjectType sameName = findObjectType(pkg, token);
+        Type sameName = findLocalType(pkg, token);
         if (sameName != null)
         {
             QName qname = McoreFactory.eINSTANCE.createQName();
@@ -1101,12 +1140,12 @@ public final class XdtoWriter
         // spelling variant, and serializing the raw input would dangle against the stored name.
         if (pkg != null && !XSD_NS.equals(resolvedNsUri) && resolvedNsUri.equals(pkg.getNsUri()))
         {
-            ObjectType localTarget = findObjectType(pkg, name);
+            Type localTarget = findLocalType(pkg, name);
             if (localTarget == null)
             {
                 return QNameResult.failed(ToolResult.error(fieldLabel + " name '" + name + "' does not match " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "any ObjectType in this package (its own namespace '" + resolvedNsUri + "'). Create " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "the ObjectType first, or reference an imported / XSD type.").toJson()); //$NON-NLS-1$
+                    + "any ObjectType or value type in this package (its own namespace '" + resolvedNsUri //$NON-NLS-1$
+                    + "'). Create the ObjectType first, or reference an imported / XSD type.").toJson()); //$NON-NLS-1$
             }
             name = localTarget.getName();
         }
@@ -1191,7 +1230,10 @@ public final class XdtoWriter
             String name = stringMember(entry, "name"); //$NON-NLS-1$
             if (name == null || name.isEmpty())
             {
-                continue;
+                // A named-value list entry without a (string) name is malformed input, not something
+                // to skip: silently dropping it would report success while the flag never applied.
+                return MapResult.failed(ToolResult.error(
+                    "Each property entry must carry a non-empty string 'name'.").toJson()); //$NON-NLS-1$
             }
             if (!entry.has("value")) //$NON-NLS-1$
             {
@@ -1229,7 +1271,9 @@ public final class XdtoWriter
             return null;
         }
         JsonElement element = obj.get(name);
-        return (element != null && element.isJsonPrimitive()) ? element.getAsString() : null;
+        // Strict STRING primitive (see stringProp): {name: 123} must be rejected, not coerced to "123".
+        return (element != null && element.isJsonPrimitive() && element.getAsJsonPrimitive().isString())
+            ? element.getAsString() : null;
     }
 
     private static Boolean boolProp(Map<String, JsonElement> values, String key)
@@ -1272,6 +1316,9 @@ public final class XdtoWriter
         {
             return null;
         }
-        return element.isJsonPrimitive() ? element.getAsString() : null;
+        // Strict STRING primitive: a number/boolean (default: 42) must not silently coerce to "42" -
+        // the contract documents these fields as strings and the sibling props reject wrong JSON types.
+        return element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()
+            ? element.getAsString() : null;
     }
 }
