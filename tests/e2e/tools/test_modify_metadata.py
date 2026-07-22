@@ -1625,12 +1625,17 @@ def test_xdto_namespace_change_cascades_into_referencing_package():
     with open(cfg_path, "w", encoding="utf-8") as f:
         f.write(cfg.replace(anchor,
             anchor + "\n  <xDTOPackages>XDTOPackage.E2ECascQ</xDTOPackages>", 1))
-    r = call("resync_to_disk", {"projectName": PROJECT})
-    assert_ok(r, "resync loads the planted referencing package")
+    # The planted files land OUTSIDE the Eclipse resource API. A Windows stand happens to pick
+    # them up via auto-refresh, but the Linux CI runner does NOT (no native refresh hooks), so the
+    # import must be DETERMINISTIC: clean_project re-imports the whole project from disk - the same
+    # mechanism the harness itself uses in reset_model(). The MCP-created P was force-exported to
+    # disk by its create, so it survives the re-import unchanged.
     wait_for_project_ready()
-    # The planted files land OUTSIDE the Eclipse resource API, so EDT picks them up via its own
-    # auto-refresh/import job - POLL until Q's content is actually visible in the MODEL (the cascade
-    # walks the model, not the disk; renaming before the import completes would see no referencer).
+    r = call("clean_project", {"projectName": PROJECT})
+    assert_ok(r, "clean_project re-imports the planted referencing package from disk")
+    wait_for_project_ready()
+    # Belt-and-braces: POLL until Q's content is actually visible in the MODEL (the cascade walks
+    # the model, not the disk; renaming before the import completes would see no referencer).
     import time as _time
     for _ in range(60):
         d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["XDTOPackage.E2ECascQ"]})
