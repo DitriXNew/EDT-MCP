@@ -205,4 +205,25 @@ public class XdtoStructureReaderTest
         assertTrue(md.contains("http://example.org/other")); //$NON-NLS-1$
         assertTrue(md.contains("other.xsd")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testExplicitEmptyDefaultRendersDistinctFromAbsent()
+    {
+        // An EXPLICIT empty-string default (legitimate under fixed=true) must not render as the same
+        // blank cell an ABSENT default uses - the read-back would be lossy (codex finding).
+        Package pkg = newPackage();
+        Property withEmpty = XdtoFactory.eINSTANCE.createProperty();
+        withEmpty.setName("WithEmpty"); //$NON-NLS-1$
+        withEmpty.setDefault(""); //$NON-NLS-1$
+        pkg.getProperties().add(withEmpty);
+        Property absent = XdtoFactory.eINSTANCE.createProperty();
+        absent.setName("Absent"); //$NON-NLS-1$
+        pkg.getProperties().add(absent);
+        String md = XdtoStructureReader.render("XDTOPackage.P", pkg); //$NON-NLS-1$
+        String emptyRow = md.lines().filter(l -> l.contains("WithEmpty")).findFirst().orElse(""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the explicit empty default must render a distinct marker: " + emptyRow, //$NON-NLS-1$
+            emptyRow.contains("\"\"")); //$NON-NLS-1$
+        String absentRow = md.lines().filter(l -> l.contains("Absent")).findFirst().orElse(""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an absent default must stay blank", !absentRow.contains("\"\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

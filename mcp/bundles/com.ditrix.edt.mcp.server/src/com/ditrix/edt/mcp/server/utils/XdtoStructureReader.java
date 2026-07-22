@@ -201,14 +201,19 @@ public final class XdtoStructureReader
     }
 
     /**
-     * The property's {@code default} value, or {@code ""} when unset. {@link Property} has no
-     * {@code isSetDefault()}/unset pair ({@code null} is the only "absent" signal - see
-     * {@link XdtoWriter#applyPropertyProperties}'s javadoc), so this mirrors {@link #emptyIfNull} rather
-     * than the {@code isSet}-gated style {@link #nillableSummary}/{@link #fixedSummary} use.
+     * The property's {@code default} value: a blank cell when ABSENT ({@code null} - {@link Property}
+     * has no {@code isSetDefault()} pair, {@code null} is the only absent signal), the quoted marker
+     * {@code ""} for an EXPLICIT EMPTY default (a legitimate value, e.g. under {@code fixed=true} -
+     * rendering it blank would make the read-back lossy), else the value itself.
      */
     private static String defaultSummary(Property property)
     {
-        return emptyIfNull(property.getDefault());
+        String value = property.getDefault();
+        if (value == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return value.isEmpty() ? "\"\"" : value; //$NON-NLS-1$
     }
 
     // ==================== Value types / enumerations ====================

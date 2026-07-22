@@ -488,6 +488,134 @@ public final class XdtoWriter
         return null;
     }
 
+    /**
+     * Rewrites STALE SELF-REFERENCES only, walking the SAME recursive surface as
+     * {@link #rewriteNamespaceReferences} (properties incl. anonymous nested {@code typeDefs} trees,
+     * baseType / itemType / union member / enumeration QNames at every depth). A QName whose
+     * {@code nsUri} equals {@code staleNs} is moved to {@code ownNs} ONLY when its local name matches
+     * (exactly) a symbol of THIS content in the QName's OWN symbol space: a {@code type}-position
+     * QName against the local ObjectTypes/ValueTypes, a {@code ref} QName against the PACKAGE-GLOBAL
+     * properties. That disambiguation keeps a GENUINE reference into another package (whose namespace
+     * happens to equal the stale value, e.g. a rename-collision) untouched for the broader cascade
+     * rewrite to handle. Imports are deliberately NOT touched (importing one's own namespace is
+     * meaningless - an import of the stale value is a remote reference by construction).
+     *
+     * @return {@code true} when at least one QName was rewritten
+     */
+    public static boolean rewriteStaleSelfReferences(Package content, String staleNs, String ownNs)
+    {
+        if (content == null || staleNs == null || ownNs == null || staleNs.equals(ownNs))
+        {
+            return false;
+        }
+        boolean changed = selfRewriteProperties(content.getProperties(), content, staleNs, ownNs);
+        for (ObjectType type : content.getObjects())
+        {
+            changed |= selfRewriteTypeTree(type, content, staleNs, ownNs);
+        }
+        for (ValueType type : content.getTypes())
+        {
+            changed |= selfRewriteTypeTree(type, content, staleNs, ownNs);
+        }
+        return changed;
+    }
+
+    /** Recursive self-pass mirror of {@link #rewriteTypeTree}: every TYPE-space QName (baseType,
+     * itemType, union members, enumeration types) at any nesting depth is disambiguated against the
+     * content's local types; nested anonymous {@code typeDefs} are walked too. */
+    private static boolean selfRewriteTypeTree(Type type, Package content, String staleNs, String ownNs)
+    {
+        boolean changed = retargetSelfTypeQName(type.getBaseType(), content, staleNs, ownNs);
+        if (type instanceof ObjectType)
+        {
+            changed |= selfRewriteProperties(((ObjectType)type).getProperties(), content, staleNs, ownNs);
+        }
+        if (type instanceof ValueType)
+        {
+            ValueType valueType = (ValueType)type;
+            changed |= retargetSelfTypeQName(valueType.getItemType(), content, staleNs, ownNs);
+            for (QName member : valueType.getMemeberTypes())
+            {
+                changed |= retargetSelfTypeQName(member, content, staleNs, ownNs);
+            }
+            for (Enumeration enumeration : valueType.getEnumerations())
+            {
+                changed |= retargetSelfTypeQName(enumeration.getType(), content, staleNs, ownNs);
+            }
+            for (Type nested : valueType.getTypeDefs())
+            {
+                changed |= selfRewriteTypeTree(nested, content, staleNs, ownNs);
+            }
+        }
+        return changed;
+    }
+
+    /** Self-pass property walk: type QNames against the TYPE space, ref QNames against PACKAGE-GLOBAL
+     * properties, plus each property's anonymous nested {@code typeDefs} tree. */
+    private static boolean selfRewriteProperties(EList<Property> properties, Package content,
+        String staleNs, String ownNs)
+    {
+        boolean changed = false;
+        for (Property property : properties)
+        {
+            changed |= retargetSelfTypeQName(property.getType(), content, staleNs, ownNs);
+            changed |= retargetSelfRefQName(property.getRef(), content, staleNs, ownNs);
+            if (property.getTypeDefs() != null)
+            {
+                changed |= selfRewriteTypeTree(property.getTypeDefs(), content, staleNs, ownNs);
+            }
+        }
+        return changed;
+    }
+
+    /** Self-retarget for a TYPE-space QName: the local name must match a local ObjectType/ValueType. */
+    private static boolean retargetSelfTypeQName(QName qname, Package content, String staleNs, String ownNs)
+    {
+        if (qname == null || !staleNs.equals(qname.getNsUri()))
+        {
+            return false;
+        }
+        String local = qname.getName();
+        if (findObjectTypeExact(content, local) == null && findValueTypeExact(content, local) == null)
+        {
+            return false;
+        }
+        qname.setNsUri(ownNs);
+        return true;
+    }
+
+    /** Self-retarget for a REF QName: refs target PACKAGE-GLOBAL properties, not types. */
+    private static boolean retargetSelfRefQName(QName qname, Package content, String staleNs, String ownNs)
+    {
+        if (qname == null || !staleNs.equals(qname.getNsUri()))
+        {
+            return false;
+        }
+        if (findPropertyExact(content.getProperties(), qname.getName()) == null)
+        {
+            return false;
+        }
+        qname.setNsUri(ownNs);
+        return true;
+    }
+
+    /** EXACT-name local ValueType lookup, NO yo fallback (see {@link #findObjectTypeExact}). */
+    public static ValueType findValueTypeExact(Package pkg, String name)
+    {
+        if (pkg == null || name == null)
+        {
+            return null;
+        }
+        for (ValueType valueType : pkg.getTypes())
+        {
+            if (name.equals(valueType.getName()))
+            {
+                return valueType;
+            }
+        }
+        return null;
+    }
+
     /** EXACT-name Property lookup, NO yo fallback (see {@link #findObjectTypeExact}). */
     public static Property findPropertyExact(EList<Property> owner, String name)
     {
@@ -633,12 +761,11 @@ public final class XdtoWriter
      * ({@code content.getProperties()}) and NESTED in every {@link ObjectType}
      * ({@code content.getObjects()}) - whose {@code nsUri} equals {@code oldNs}; an {@link ObjectType}'s
      * or a {@link ValueType}'s own {@code baseType} QName (both extend {@link Type}, which is where
-     * {@code baseType} actually lives - an ObjectType can extend/restrict a type in another namespace
-     * exactly like a Property can reference one, so it carries the SAME dangling-reference risk as a
-     * ValueType's); and each {@link ValueType}'s {@link Enumeration}'s own {@code type} QName. A
-     * Property's {@code getTypeDefs()} (an anonymous INLINE type definition, not a QName reference) is
-     * deliberately NOT touched - it has no {@code nsUri} of its own to go stale, and this codebase never
-     * authors one.
+     * {@code baseType} actually lives); a {@link ValueType}'s {@code itemType} (list) and
+     * {@code getMemeberTypes()} (union - the EDT API's own spelling) QNames and each of its
+     * {@link Enumeration}'s {@code type} QNames; and the WHOLE anonymous nested {@code typeDefs}
+     * tree (a Property's single nested Type and a ValueType's list of them) - nested definitions
+     * recursively carry the same QName surface, so the walk covers every depth.
      *
      * <p>Pure - mutates {@code content} in place and returns whether anything changed; does not touch BM,
      * does not force-export (the caller decides what to do with a {@code true} result).</p>
@@ -668,31 +795,70 @@ public final class XdtoWriter
         changed |= rewritePropertyQNames(content.getProperties(), oldNs, newNs);
         for (ObjectType type : content.getObjects())
         {
-            changed |= rewriteBaseType(type, oldNs, newNs);
-            changed |= rewritePropertyQNames(type.getProperties(), oldNs, newNs);
+            changed |= rewriteTypeTree(type, oldNs, newNs);
         }
         for (ValueType type : content.getTypes())
         {
-            changed |= rewriteBaseType(type, oldNs, newNs);
-            for (Enumeration enumeration : type.getEnumerations())
+            changed |= rewriteTypeTree(type, oldNs, newNs);
+        }
+        return changed;
+    }
+
+    /**
+     * Recursive per-type rewrite for the broad pass: baseType, an ObjectType's properties (each of
+     * which may carry an ANONYMOUS nested {@code typeDefs} type), a ValueType's itemType / union
+     * member types / enumeration types and its own nested {@code typeDefs} - the model nests type
+     * definitions arbitrarily deep, and a QName at any depth can carry the old namespace.
+     */
+    private static boolean rewriteTypeTree(Type type, String oldNs, String newNs)
+    {
+        boolean changed = retargetQName(type.getBaseType(), oldNs, newNs);
+        if (type instanceof ObjectType)
+        {
+            changed |= rewritePropertyQNames(((ObjectType)type).getProperties(), oldNs, newNs);
+        }
+        if (type instanceof ValueType)
+        {
+            ValueType valueType = (ValueType)type;
+            changed |= retargetQName(valueType.getItemType(), oldNs, newNs);
+            for (QName member : valueType.getMemeberTypes())
             {
-                QName qname = enumeration.getType();
-                if (qname != null && oldNs.equals(qname.getNsUri()))
-                {
-                    qname.setNsUri(newNs);
-                    changed = true;
-                }
+                changed |= retargetQName(member, oldNs, newNs);
+            }
+            for (Enumeration enumeration : valueType.getEnumerations())
+            {
+                changed |= retargetQName(enumeration.getType(), oldNs, newNs);
+            }
+            for (Type nested : valueType.getTypeDefs())
+            {
+                changed |= rewriteTypeTree(nested, oldNs, newNs);
             }
         }
         return changed;
     }
 
-    /** Rewrites {@code type}/{@code ref} on every Property in {@code properties} whose nsUri is {@code oldNs}. */
+    /** Moves {@code qname} from {@code oldNs} to {@code newNs}; {@code false} when null/other ns. */
+    private static boolean retargetQName(QName qname, String oldNs, String newNs)
+    {
+        if (qname == null || !oldNs.equals(qname.getNsUri()))
+        {
+            return false;
+        }
+        qname.setNsUri(newNs);
+        return true;
+    }
+
+    /** Rewrites {@code type}/{@code ref} (and any anonymous nested {@code typeDefs} tree) on every
+     * Property in {@code properties} whose QNames carry {@code oldNs}. */
     private static boolean rewritePropertyQNames(EList<Property> properties, String oldNs, String newNs)
     {
         boolean changed = false;
         for (Property property : properties)
         {
+            if (property.getTypeDefs() != null)
+            {
+                changed |= rewriteTypeTree(property.getTypeDefs(), oldNs, newNs);
+            }
             QName type = property.getType();
             if (type != null && oldNs.equals(type.getNsUri()))
             {
@@ -707,18 +873,6 @@ public final class XdtoWriter
             }
         }
         return changed;
-    }
-
-    /** Rewrites an ObjectType's/ValueType's own {@code baseType} QName (via the shared {@link Type}) when it is {@code oldNs}. */
-    private static boolean rewriteBaseType(Type type, String oldNs, String newNs)
-    {
-        QName baseType = type.getBaseType();
-        if (baseType != null && oldNs.equals(baseType.getNsUri()))
-        {
-            baseType.setNsUri(newNs);
-            return true;
-        }
-        return false;
     }
 
     // ==================== apply (typed attribute writes) ====================

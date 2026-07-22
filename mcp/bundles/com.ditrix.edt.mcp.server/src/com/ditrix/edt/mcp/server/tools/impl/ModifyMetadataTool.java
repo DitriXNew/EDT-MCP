@@ -2193,8 +2193,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             && !preContentNs.equals(newNamespace))
                         {
                             // The content targetNamespace was stale before this edit: QNames written
-                            // under THAT value would otherwise stay dangling after the rename.
-                            XdtoWriter.rewriteNamespaceReferences(resolved.content, preContentNs, newNamespace);
+                            // under THAT value and naming THIS package's own local types would stay
+                            // dangling after the rename. Targeted rewrite only (a genuine reference
+                            // to a third package whose namespace equals the stale value is kept).
+                            XdtoWriter.rewriteStaleSelfReferences(resolved.content, preContentNs, newNamespace);
                         }
                         cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
                             fqnGenerator, cascadedPackageNames, cascadedExportFqns);
@@ -2293,8 +2295,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // yet) is skipped, not a failure of THIS modify.
                 continue;
             }
-            boolean rewritten = XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
             boolean repaired = siblingPreNs == null || !siblingPreNs.equals(other.getNamespace());
+            if (repaired && siblingPreNs != null)
+            {
+                // FIRST restore the repaired sibling's SELF-consistency - but ONLY for QNames whose
+                // local name matches one of the sibling's OWN local types (the disambiguation): a
+                // genuine reference into another package whose namespace equals the stale value
+                // (e.g. the renamed package's old namespace) must stay for the cascade rewrite
+                // below, and imports are never self-imports, so they are not touched here.
+                XdtoWriter.rewriteStaleSelfReferences(resolved.content, siblingPreNs, other.getNamespace());
+            }
+            boolean rewritten = XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
             if (!rewritten && !repaired)
             {
                 continue;

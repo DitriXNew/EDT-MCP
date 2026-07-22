@@ -608,6 +608,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             throw new XdtoWriteException(ToolResult.error("ObjectType already exists: '" + ref.objectTypeName //$NON-NLS-1$
                 + "' in package " + ref.packageFqn).toJson()); //$NON-NLS-1$
         }
+        // ObjectTypes and local ValueTypes share the package's TYPE namespace (the QName resolver
+        // treats both as local type targets), so an ObjectType may not reuse a ValueType's name -
+        // the serialized Package.xdto would carry two same-named local types.
+        if (XdtoWriter.findValueTypeExact(content, ref.objectTypeName) != null)
+        {
+            throw new XdtoWriteException(ToolResult.error("A local value type named '" + ref.objectTypeName //$NON-NLS-1$
+                + "' already exists in package " + ref.packageFqn //$NON-NLS-1$
+                + "; an ObjectType may not reuse a local type name.").toJson()); //$NON-NLS-1$
+        }
         ObjectType type = XdtoWriter.createObjectType(content, ref.objectTypeName);
         // The optional flags (open/abstract/mixed/ordered/sequenced) come from the SAME 'properties'
         // array a Property's attributes do - applied here too, else a caller's open=true / etc. is

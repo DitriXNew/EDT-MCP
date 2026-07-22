@@ -1164,4 +1164,127 @@ public class XdtoWriterTest
         assertSame("the exact spelling still matches", property, //$NON-NLS-1$
             XdtoWriter.findPropertyExact(pkg.getProperties(), "\u0415\u043B\u043A\u0430")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testFindValueTypeExactSeesLocalValueTypes()
+    {
+        // ObjectTypes and local ValueTypes share the TYPE namespace: the create-time duplicate check
+        // must see a same-named ValueType (codex finding).
+        Package pkg = newPackage();
+        com._1c.g5.v8.dt.xdto.model.ValueType status = com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createValueType();
+        status.setName("Status"); //$NON-NLS-1$
+        pkg.getTypes().add(status);
+        assertSame(status, XdtoWriter.findValueTypeExact(pkg, "Status")); //$NON-NLS-1$
+        assertNull(XdtoWriter.findValueTypeExact(pkg, "status")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStaleSelfRewriteKeepsGenuineRemoteReferences()
+    {
+        // The rename-collision regression: sibling Q (own ns "http://q") carries a STALE content
+        // namespace equal to the renamed package P's OLD namespace "http://a". A QName under the
+        // stale value naming Q's OWN local type must move to Q's namespace; a QName naming a REMOTE
+        // type (P's) must be left for the cascade old->new rewrite - and imports stay untouched.
+        Package q = XdtoFactory.eINSTANCE.createPackage();
+        q.setNsUri("http://a"); //$NON-NLS-1$ (stale - own is http://q)
+        XdtoWriter.createObjectType(q, "LocalType"); //$NON-NLS-1$
+        Import imp = XdtoFactory.eINSTANCE.createImport();
+        imp.setNamespace("http://a"); //$NON-NLS-1$
+        q.getDependencies().add(imp);
+        Property selfRef = XdtoWriter.createProperty(q.getProperties(), "SelfRef"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.QName selfQ = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        selfQ.setNsUri("http://a"); selfQ.setName("LocalType"); //$NON-NLS-1$ //$NON-NLS-2$
+        selfRef.setType(selfQ);
+        Property remoteRef = XdtoWriter.createProperty(q.getProperties(), "RemoteRef"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.QName remoteQ = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        remoteQ.setNsUri("http://a"); remoteQ.setName("PType"); //$NON-NLS-1$ //$NON-NLS-2$
+        remoteRef.setType(remoteQ);
+
+        assertTrue(XdtoWriter.rewriteStaleSelfReferences(q, "http://a", "http://q")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the self-reference must follow the repair to Q's own namespace", //$NON-NLS-1$
+            "http://q", selfQ.getNsUri()); //$NON-NLS-1$
+        assertEquals("the genuine remote reference must be left for the cascade rewrite", //$NON-NLS-1$
+            "http://a", remoteQ.getNsUri()); //$NON-NLS-1$
+        assertEquals("imports are never self-imports and must stay untouched", //$NON-NLS-1$
+            "http://a", imp.getNamespace()); //$NON-NLS-1$
+
+        // ...and the cascade old->new pass then picks up exactly the remote one.
+        assertTrue(XdtoWriter.rewriteNamespaceReferences(q, "http://a", "http://b")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://b", remoteQ.getNsUri()); //$NON-NLS-1$
+        assertEquals("http://b", imp.getNamespace()); //$NON-NLS-1$
+        assertEquals("http://q", selfQ.getNsUri()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStaleSelfRewriteCoversRefsAndTypeStructureQNames()
+    {
+        // ref QNames disambiguate against PACKAGE-GLOBAL PROPERTY names (not type names), and
+        // baseType / itemType / union member / enumeration QNames are covered by the self pass -
+        // a stale self-QName there must not be hijacked by the following broad old->new rewrite.
+        Package q = XdtoFactory.eINSTANCE.createPackage();
+        q.setNsUri("http://a"); //$NON-NLS-1$ (stale - own is http://q)
+        XdtoWriter.createObjectType(q, "LocalType"); //$NON-NLS-1$
+        XdtoWriter.createProperty(q.getProperties(), "GlobalProp"); //$NON-NLS-1$
+
+        // ref naming a LOCAL global property -> self; ref naming a type (not a property) -> remote.
+        Property refSelf = XdtoWriter.createProperty(q.getProperties(), "RefSelf"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.QName rq = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        rq.setNsUri("http://a"); rq.setName("GlobalProp"); //$NON-NLS-1$ //$NON-NLS-2$
+        refSelf.setRef(rq);
+        Property refRemote = XdtoWriter.createProperty(q.getProperties(), "RefRemote"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.QName rr = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        rr.setNsUri("http://a"); rr.setName("LocalType"); //$NON-NLS-1$ //$NON-NLS-2$ (a TYPE name - not a global property)
+        refRemote.setRef(rr);
+
+        // A list ValueType whose itemType names the local type -> self.
+        com._1c.g5.v8.dt.xdto.model.ValueType list = XdtoFactory.eINSTANCE.createValueType();
+        list.setName("ListOfLocal"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.QName item = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        item.setNsUri("http://a"); item.setName("LocalType"); //$NON-NLS-1$ //$NON-NLS-2$
+        list.setItemType(item);
+        q.getTypes().add(list);
+
+        assertTrue(XdtoWriter.rewriteStaleSelfReferences(q, "http://a", "http://q")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a ref naming a local GLOBAL PROPERTY follows the repair", //$NON-NLS-1$
+            "http://q", rq.getNsUri()); //$NON-NLS-1$
+        assertEquals("a ref naming a TYPE (not a property) is NOT a self-ref - left for the cascade", //$NON-NLS-1$
+            "http://a", rr.getNsUri()); //$NON-NLS-1$
+        assertEquals("a list itemType naming a local type follows the repair", //$NON-NLS-1$
+            "http://q", item.getNsUri()); //$NON-NLS-1$
+
+        // The broad pass now also covers itemType/member QNames for an ORDINARY cascade.
+        com._1c.g5.v8.dt.mcore.QName member = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        member.setNsUri("http://x"); member.setName("Whatever"); //$NON-NLS-1$ //$NON-NLS-2$
+        list.getMemeberTypes().add(member);
+        assertTrue(XdtoWriter.rewriteNamespaceReferences(q, "http://x", "http://y")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://y", member.getNsUri()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNamespaceRewriteWalksNestedTypeDefs()
+    {
+        // Anonymous nested type definitions (Property.typeDefs / ValueType.typeDefs) carry the same
+        // QName surface recursively - BOTH passes must walk them (codex finding).
+        Package q = XdtoFactory.eINSTANCE.createPackage();
+        q.setNsUri("http://a"); //$NON-NLS-1$ (stale - own is http://q)
+        XdtoWriter.createObjectType(q, "LocalType"); //$NON-NLS-1$
+        // A property with an ANONYMOUS nested ValueType whose baseType names the local type.
+        Property holder = XdtoWriter.createProperty(q.getProperties(), "Holder"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.xdto.model.ValueType nested = XdtoFactory.eINSTANCE.createValueType();
+        com._1c.g5.v8.dt.mcore.QName nestedBase = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        nestedBase.setNsUri("http://a"); nestedBase.setName("LocalType"); //$NON-NLS-1$ //$NON-NLS-2$
+        nested.setBaseType(nestedBase);
+        holder.setTypeDefs(nested);
+
+        // Self pass: the nested baseType naming a local type follows the repair.
+        assertTrue(XdtoWriter.rewriteStaleSelfReferences(q, "http://a", "http://q")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://q", nestedBase.getNsUri()); //$NON-NLS-1$
+
+        // Broad pass: a nested REMOTE QName is rewritten by the ordinary cascade too.
+        com._1c.g5.v8.dt.mcore.QName nestedItem = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createQName();
+        nestedItem.setNsUri("http://x"); nestedItem.setName("Remote"); //$NON-NLS-1$ //$NON-NLS-2$
+        nested.setItemType(nestedItem);
+        assertTrue(XdtoWriter.rewriteNamespaceReferences(q, "http://x", "http://y")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://y", nestedItem.getNsUri()); //$NON-NLS-1$
+    }
 }
