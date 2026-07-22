@@ -166,12 +166,13 @@ public final class XdtoStructureReader
         {
             return;
         }
-        sb.append(MarkdownUtils.tableHeader(COLUMN_NAME, COLUMN_TYPE, "Bounds", "Nillable", "Ref")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(MarkdownUtils.tableHeader(COLUMN_NAME, COLUMN_TYPE, "Bounds", "Nillable", "Fixed", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Default", "Ref")); //$NON-NLS-1$ //$NON-NLS-2$
         for (Property property : properties)
         {
             sb.append(MarkdownUtils.tableRow(nameOrUnnamed(property.getName()),
                 describeQName(property.getType()), boundsSummary(property), nillableSummary(property),
-                describeQName(property.getRef())));
+                fixedSummary(property), defaultSummary(property), describeQName(property.getRef())));
         }
         sb.append('\n');
     }
@@ -191,6 +192,23 @@ public final class XdtoStructureReader
     private static String nillableSummary(Property property)
     {
         return property.isSetNillable() ? Boolean.toString(property.isNillable()) : ""; //$NON-NLS-1$
+    }
+
+    /** {@code "true"/"false"} when {@code fixed} is explicitly SET, else {@code ""} - mirrors {@link #nillableSummary}. */
+    private static String fixedSummary(Property property)
+    {
+        return property.isSetFixed() ? Boolean.toString(property.isFixed()) : ""; //$NON-NLS-1$
+    }
+
+    /**
+     * The property's {@code default} value, or {@code ""} when unset. {@link Property} has no
+     * {@code isSetDefault()}/unset pair ({@code null} is the only "absent" signal - see
+     * {@link XdtoWriter#applyPropertyProperties}'s javadoc), so this mirrors {@link #emptyIfNull} rather
+     * than the {@code isSet}-gated style {@link #nillableSummary}/{@link #fixedSummary} use.
+     */
+    private static String defaultSummary(Property property)
+    {
+        return emptyIfNull(property.getDefault());
     }
 
     // ==================== Value types / enumerations ====================

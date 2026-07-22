@@ -18,10 +18,12 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.QName;
+import com._1c.g5.v8.dt.xdto.model.Enumeration;
 import com._1c.g5.v8.dt.xdto.model.Import;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
+import com._1c.g5.v8.dt.xdto.model.ValueType;
 import com._1c.g5.v8.dt.xdto.model.XdtoFactory;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter.QNameResult;
@@ -716,5 +718,327 @@ public class XdtoWriterTest
         QNameResult r = XdtoWriter.resolveQName(null, null, "'type'"); //$NON-NLS-1$
         assertTrue(r.error != null);
         assertJsonError(r.error);
+    }
+
+    // ==================== object-form XSD name validation (issue #183 P2 #5) ====================
+    //
+    // The bare-STRING shorthand already rejects an unknown name via XSD_BUILTIN_TYPES
+    // (testPropertyRejectsUnknownBareStringShorthand above); the explicit object form {nsUri, name} did
+    // not apply the SAME check once the resolved nsUri turned out to be the XSD namespace (either
+    // explicitly supplied or defaulted, since 'nsUri' is optional and defaults to XSD), silently
+    // persisting an invalid 'xs:<typo>' reference.
+
+    @Test
+    public void testResolveQNameObjectFormRejectsUnknownXsdNameWithDefaultNamespace()
+    {
+        // 'nsUri' omitted -> defaults to the XSD namespace, so the name must still be a real XSD builtin.
+        QNameResult r = XdtoWriter.resolveQName(json("{\"name\":\"strng\"}"), null, "'type'"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a typo'd XSD type name via the object form's default namespace must be rejected", //$NON-NLS-1$
+            r.error != null);
+        assertJsonError(r.error);
+    }
+
+    @Test
+    public void testResolveQNameObjectFormRejectsUnknownXsdNameWithExplicitNamespace()
+    {
+        QNameResult r = XdtoWriter.resolveQName(
+            json("{\"nsUri\":\"http://www.w3.org/2001/XMLSchema\",\"name\":\"strng\"}"), null, "'type'"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a typo'd XSD type name via an EXPLICIT XSD nsUri must be rejected too", r.error != null); //$NON-NLS-1$
+        assertJsonError(r.error);
+    }
+
+    @Test
+    public void testResolveQNameObjectFormAcceptsValidXsdName()
+    {
+        QNameResult r = XdtoWriter.resolveQName(json("{\"name\":\"string\"}"), null, "'type'"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(r.error, r.error != null);
+        assertEquals("string", r.qname.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://www.w3.org/2001/XMLSchema", r.qname.getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testResolveQNameObjectFormNonXsdNamespaceStillAcceptsAnyName()
+    {
+        // The XSD-name check must be scoped to the XSD namespace only - a genuine cross-namespace
+        // reference (Custom, in a non-XSD namespace) must remain unaffected.
+        JsonObject spec = json("{\"nsUri\":\"http://custom/ns\",\"name\":\"Custom\"}"); //$NON-NLS-1$
+        QNameResult r = XdtoWriter.resolveQName(spec, null, "'type'"); //$NON-NLS-1$
+        assertFalse(r.error, r.error != null);
+        assertEquals("Custom", r.qname.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== entries without a 'value' are a hard error (issue #183 P2 #3) ====================
+    //
+    // toMap used to silently DROP an entry that had a 'name' but no 'value' - the tool then reported
+    // SUCCESS with that property simply missing from 'applied'. It must now be a hard, actionable error
+    // naming the entry, mutating nothing (fail before any write, like every other malformed entry here).
+
+    @Test
+    public void testObjectTypePropertyEntryWithoutValueIsHardError()
+    {
+        Package pkg = newPackage();
+        ObjectType type = XdtoWriter.createObjectType(pkg, "MyType"); //$NON-NLS-1$
+        Result r = XdtoWriter.applyObjectTypeProperties(type, List.of(json("{\"name\":\"open\"}"))); //$NON-NLS-1$
+        assertTrue("an entry with a name but no value must be a hard error, not silently dropped", //$NON-NLS-1$
+            r.hasError());
+        assertJsonError(r.error);
+        assertTrue("the error must name the offending entry: " + r.error, //$NON-NLS-1$
+            r.error.contains("'open'") && r.error.contains("value")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a rejected entry must not mutate the type", type.isSetOpen()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPropertyEntryWithoutValueIsHardError()
+    {
+        Package pkg = newPackage();
+        Property property = XdtoWriter.createProperty(pkg.getProperties(), "MyProp"); //$NON-NLS-1$
+        Result r = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{\"name\":\"nillable\"}")), false); //$NON-NLS-1$
+        assertTrue("an entry with a name but no value must be a hard error", r.hasError()); //$NON-NLS-1$
+        assertJsonError(r.error);
+        assertTrue("the error must name the offending entry: " + r.error, //$NON-NLS-1$
+            r.error.contains("'nillable'") && r.error.contains("value")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a rejected entry must not mutate the property", property.isSetNillable()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEntryWithoutValueFailsBeforeAnyOtherEntryIsApplied()
+    {
+        // A well-formed entry earlier in the list must NOT land when a LATER entry in the same call is
+        // missing its 'value' - fail fast, no partial mutation (the same contract every other malformed
+        // entry in this class already gets).
+        Package pkg = newPackage();
+        ObjectType type = XdtoWriter.createObjectType(pkg, "MyType"); //$NON-NLS-1$
+        Result r = XdtoWriter.applyObjectTypeProperties(type,
+            List.of(json("{\"name\":\"open\",\"value\":true}"), json("{\"name\":\"abstract\"}"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(r.hasError());
+        assertFalse("no entry must land when a later one in the same call is malformed", type.isSetOpen()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEntryMissingNameIsStillSilentlySkippedNotAnError()
+    {
+        // Unchanged behavior: an entry with NO 'name' at all (unnamed - nothing actionable to report) is
+        // still silently skipped, unlike a NAMED entry missing only 'value'.
+        Package pkg = newPackage();
+        ObjectType type = XdtoWriter.createObjectType(pkg, "MyType"); //$NON-NLS-1$
+        Result r = XdtoWriter.applyObjectTypeProperties(type,
+            List.of(json("{\"value\":true}"), json("{\"name\":\"open\",\"value\":true}"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(r.error, r.hasError());
+        assertEquals(List.of("open"), r.applied); //$NON-NLS-1$
+    }
+
+    // ==================== yo-normalized member lookup fallback (issue #183 P2 #4) ====================
+    //
+    // create_metadata normalizes 'yo'->'ye' in the FQN LEAF by default (CreateMetadataTool#
+    // normalizeLeafName), so an ObjectType/Property CREATED from an FQN spelled with the original 'yo' is
+    // STORED under its 'ye'-normalized name. A LATER member-FQN request (modify/delete, or a create
+    // addressing this ObjectType as the OWNER segment of a nested Property FQN - never the leaf, so never
+    // normalized on the way in) that still spells the name with 'yo' must still resolve it - findObjectType
+    // / findProperty are the SHARED lookup used by all three create/modify/delete XDTO member paths.
+
+    // Cyrillic fixtures are built from Unicode code points (MetadataLanguageUtils.cp), not raw Cyrillic
+    // source literals, to keep this source file pure ASCII (matches XdtoWriterTest's own
+    // testParseAcceptsRussianTypeToken precedent). "Zakaz"/"e"/"yo" naming below spells out in comments
+    // what each code-point string actually is: the SAME word, once "ye"-spelled (as create_metadata's
+    // default yo-normalization would store it) and once with the original "yo".
+
+    /** "Zakaz-e" (a Russian word meaning "order"), the 'yo'-normalized spelling create_metadata stores by default. */
+    private static String zakazYeNormalized()
+    {
+        return MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435);
+    }
+
+    /** The SAME word as {@link #zakazYeNormalized}, but with the ORIGINAL 'yo' a later request might still use. */
+    private static String zakazYoSpelled()
+    {
+        return MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+    }
+
+    /** "Pol-e" (a Russian word meaning "field"), the 'yo'-normalized spelling create_metadata stores by default. */
+    private static String poleYeNormalized()
+    {
+        return MetadataLanguageUtils.cp(0x041f, 0x043e, 0x043b, 0x0435);
+    }
+
+    /** The SAME word as {@link #poleYeNormalized}, but with the ORIGINAL 'yo' a later request might still use. */
+    private static String poleYoSpelled()
+    {
+        return MetadataLanguageUtils.cp(0x041f, 0x043e, 0x043b, 0x0451);
+    }
+
+    @Test
+    public void testFindObjectTypeToleratesYoSpelledLookupAgainstYeNormalizedStoredName()
+    {
+        Package pkg = newPackage();
+        // Simulates the create-time storage: the ObjectType is stored under its ALREADY yo-normalized
+        // name (as create_metadata's normalizeLeafName would produce for a name typed with "yo").
+        ObjectType type = XdtoWriter.createObjectType(pkg, zakazYeNormalized());
+
+        // A LATER lookup still spells the name with the original "yo".
+        String yoSpelledLookup = zakazYoSpelled();
+        assertNotNull("an exact miss must fall back to the yo-normalized stored name", //$NON-NLS-1$
+            XdtoWriter.findObjectType(pkg, yoSpelledLookup));
+        assertEquals(type, XdtoWriter.findObjectType(pkg, yoSpelledLookup));
+    }
+
+    @Test
+    public void testFindObjectTypeExactMatchStillWinsOverFallback()
+    {
+        // When a caller explicitly created (normalizeYo:false) an ObjectType still spelled with "yo", an
+        // exact lookup for THAT spelling must resolve it directly - the fallback must never shadow an
+        // exact match.
+        Package pkg = newPackage();
+        String yoSpelledName = zakazYoSpelled();
+        ObjectType type = XdtoWriter.createObjectType(pkg, yoSpelledName);
+        assertEquals(type, XdtoWriter.findObjectType(pkg, yoSpelledName));
+    }
+
+    @Test
+    public void testFindObjectTypeStillReturnsNullWhenGenuinelyMissing()
+    {
+        Package pkg = newPackage();
+        XdtoWriter.createObjectType(pkg, "SomethingElse"); //$NON-NLS-1$
+        assertNull("a name with no yo and no match at all must still return null", //$NON-NLS-1$
+            XdtoWriter.findObjectType(pkg, "TotallyMissing")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindPropertyToleratesYoSpelledLookupAgainstYeNormalizedStoredName()
+    {
+        Package pkg = newPackage();
+        Property property = XdtoWriter.createProperty(pkg.getProperties(), poleYeNormalized());
+
+        String yoSpelledLookup = poleYoSpelled();
+        assertNotNull("an exact miss must fall back to the yo-normalized stored Property name", //$NON-NLS-1$
+            XdtoWriter.findProperty(pkg.getProperties(), yoSpelledLookup));
+        assertEquals(property, XdtoWriter.findProperty(pkg.getProperties(), yoSpelledLookup));
+    }
+
+    @Test
+    public void testFindPropertyToleratesYoSpelledOwnerLookupForNestedProperty()
+    {
+        // Mirrors CreateMetadataTool's OBJECT_TYPE_PROPERTY owner lookup (createXdtoMemberInTx): the
+        // ObjectType OWNER is looked up by name to find where a nested Property must be created/found -
+        // that owner name is never the FQN leaf, so it is never yo-normalized on its own request, even
+        // though the ObjectType itself WAS normalized when it was originally created.
+        Package pkg = newPackage();
+        ObjectType owner = XdtoWriter.createObjectType(pkg, zakazYeNormalized());
+        Property nested = XdtoWriter.createProperty(owner.getProperties(), "Total"); //$NON-NLS-1$
+
+        String yoSpelledOwnerLookup = zakazYoSpelled();
+        ObjectType resolvedOwner = XdtoWriter.findObjectType(pkg, yoSpelledOwnerLookup);
+        assertEquals("the owner ObjectType must resolve despite the yo-spelled lookup", owner, resolvedOwner); //$NON-NLS-1$
+        assertEquals(nested, XdtoWriter.findProperty(resolvedOwner.getProperties(), "Total")); //$NON-NLS-1$
+    }
+
+    // ==================== namespace cascade: rewriteNamespaceReferences (Task 1, maintainer request) ====
+
+    @Test
+    public void testRewriteNamespaceReferencesRewritesMatchingImport()
+    {
+        Package content = newPackage();
+        Import dependency = XdtoFactory.eINSTANCE.createImport();
+        dependency.setNamespace("http://old/ns"); //$NON-NLS-1$
+        content.getDependencies().add(dependency);
+
+        boolean changed = XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(changed);
+        assertEquals("http://new/ns", dependency.getNamespace()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesRewritesPackageGlobalPropertyTypeAndRef()
+    {
+        Package content = newPackage();
+        Property global = XdtoWriter.createProperty(content.getProperties(), "Global"); //$NON-NLS-1$
+        global.setType(qname("http://old/ns", "Custom")); //$NON-NLS-1$ //$NON-NLS-2$
+        global.setRef(qname("http://old/ns", "SomeGlobalProperty")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        boolean changed = XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(changed);
+        assertEquals("http://new/ns", global.getType().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://new/ns", global.getRef().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesRewritesNestedObjectTypeProperty()
+    {
+        Package content = newPackage();
+        ObjectType type = XdtoWriter.createObjectType(content, "Order"); //$NON-NLS-1$
+        Property nested = XdtoWriter.createProperty(type.getProperties(), "Item"); //$NON-NLS-1$
+        nested.setType(qname("http://old/ns", "ItemType")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        boolean changed = XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(changed);
+        assertEquals("http://new/ns", nested.getType().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesRewritesObjectTypeBaseType()
+    {
+        Package content = newPackage();
+        ObjectType type = XdtoWriter.createObjectType(content, "Extended"); //$NON-NLS-1$
+        type.setBaseType(qname("http://old/ns", "Base")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        boolean changed = XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(changed);
+        assertEquals("http://new/ns", type.getBaseType().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesRewritesValueTypeBaseTypeAndEnumerationType()
+    {
+        Package content = newPackage();
+        ValueType valueType = XdtoFactory.eINSTANCE.createValueType();
+        valueType.setName("Status"); //$NON-NLS-1$
+        valueType.setBaseType(qname("http://old/ns", "string")); //$NON-NLS-1$ //$NON-NLS-2$
+        Enumeration active = XdtoFactory.eINSTANCE.createEnumeration();
+        active.setContent("Active"); //$NON-NLS-1$
+        active.setType(qname("http://old/ns", "string")); //$NON-NLS-1$ //$NON-NLS-2$
+        valueType.getEnumerations().add(active);
+        content.getTypes().add(valueType);
+
+        boolean changed = XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(changed);
+        assertEquals("http://new/ns", valueType.getBaseType().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://new/ns", active.getType().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesLeavesNonMatchingReferencesUntouched()
+    {
+        Package content = newPackage();
+        Import dependency = XdtoFactory.eINSTANCE.createImport();
+        dependency.setNamespace("http://unrelated/ns"); //$NON-NLS-1$
+        content.getDependencies().add(dependency);
+        Property global = XdtoWriter.createProperty(content.getProperties(), "Global"); //$NON-NLS-1$
+        global.setType(qname("http://unrelated/ns", "Custom")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        boolean changed = XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a reference under a DIFFERENT namespace must be left untouched", changed); //$NON-NLS-1$
+        assertEquals("http://unrelated/ns", dependency.getNamespace()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("http://unrelated/ns", global.getType().getNsUri()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesReturnsFalseOnEmptyPackage()
+    {
+        Package content = newPackage();
+        assertFalse(XdtoWriter.rewriteNamespaceReferences(content, "http://old/ns", "http://new/ns")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRewriteNamespaceReferencesNullContentIsNoOp()
+    {
+        assertFalse(XdtoWriter.rewriteNamespaceReferences(null, "http://old/ns", "http://new/ns")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static QName qname(String nsUri, String name)
+    {
+        QName q = McoreFactory.eINSTANCE.createQName();
+        q.setNsUri(nsUri);
+        q.setName(name);
+        return q;
     }
 }

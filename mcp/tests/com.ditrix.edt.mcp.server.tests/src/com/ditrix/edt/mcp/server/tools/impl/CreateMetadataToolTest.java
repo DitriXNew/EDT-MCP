@@ -21,6 +21,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleFlags;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleKind;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
  * Lightweight contract tests for {@link CreateMetadataTool}: tool metadata and JSON schema,
@@ -418,6 +419,32 @@ public class CreateMetadataToolTest
             tail.contains("REQUIRES 'type'")); //$NON-NLS-1$
         assertTrue("properties doc should mention 'lowerBound'/'upperBound'", //$NON-NLS-1$
             tail.contains("lowerBound")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateMemberOwnerLookupToleratesYoSpelledObjectTypeName()
+    {
+        // issue #183 P2 #4: createXdtoMemberInTx's OBJECT_TYPE_PROPERTY branch (creating a nested
+        // Property) looks up its OWNER ObjectType via XdtoWriter.findObjectType, using the FQN's OWNER
+        // segment - which, unlike the FQN LEAF, is NEVER yo-normalized on the way in
+        // (CreateMetadataTool#normalizeLeafName only touches the trailing leaf segment). When the
+        // ObjectType itself was created earlier from a yo-spelled name (and is therefore stored
+        // yo-normalized), a LATER nested-Property create whose FQN still spells the OWNER segment with
+        // the original "yo" must still resolve it - findObjectType now falls back to the yo-normalized
+        // stored name on an exact miss.
+        com._1c.g5.v8.dt.xdto.model.Package pkg =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createPackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType owner =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        owner.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(owner);
+
+        // The SAME word, but spelled with the ORIGINAL "yo" - as a later nested-Property create's FQN
+        // owner segment might still be.
+        String yoSpelledOwnerName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        assertEquals("the OBJECT_TYPE_PROPERTY owner lookup must tolerate a yo-spelled owner segment", //$NON-NLS-1$
+            owner, com.ditrix.edt.mcp.server.utils.XdtoWriter.findObjectType(pkg, yoSpelledOwnerName));
     }
 
     @Test

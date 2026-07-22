@@ -1295,4 +1295,27 @@ public class ModifyMetadataToolTest
         assertTrue("a nested property error must name its owning ObjectType", //$NON-NLS-1$
             nestedErr.contains("ObjectType.MyType")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testModifyMemberLookupToleratesYoSpelledObjectTypeName()
+    {
+        // issue #183 P2 #4: modifyXdtoMemberInTx resolves its target ObjectType/Property via
+        // XdtoWriter.findObjectType / findProperty - the SAME shared lookup create_metadata's owner
+        // lookup and delete_metadata's locateXdtoMember use. It now falls back to the yo-normalized
+        // stored name on an exact miss, so a modify_metadata FQN that still spells an ObjectType's name
+        // with the original "yo" (create_metadata normalizes 'yo'->'ye' in a member's own NAME by
+        // default) resolves it instead of reporting "not found" for a member that in fact exists.
+        com._1c.g5.v8.dt.xdto.model.Package pkg =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createPackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        type.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(type);
+
+        // The modify_metadata FQN's target segment, still spelled with the original "yo".
+        String yoSpelledName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        assertEquals("modifyXdtoMemberInTx's own target resolution must tolerate a yo-spelled FQN segment", //$NON-NLS-1$
+            type, com.ditrix.edt.mcp.server.utils.XdtoWriter.findObjectType(pkg, yoSpelledName));
+    }
 }

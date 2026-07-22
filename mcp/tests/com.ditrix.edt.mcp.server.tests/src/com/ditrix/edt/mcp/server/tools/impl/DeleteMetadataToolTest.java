@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
  * Lightweight contract tests for {@link DeleteMetadataTool}: tool metadata and JSON schema, without
@@ -496,6 +497,29 @@ public class DeleteMetadataToolTest
         String[] found = DeleteMetadataTool.locateXdtoMember(pkg, ref);
         assertNotNull("a nested Property must be located", found); //$NON-NLS-1$
         assertEquals("Property", found[0]); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testLocateXdtoMemberToleratesYoSpelledLookup()
+    {
+        // issue #183 P2 #4: locateXdtoMember delegates to XdtoWriter.findObjectType, which now falls
+        // back to the yo-normalized stored name on an exact miss - so delete_metadata's own preview
+        // (and, by the SAME shared helper, the actual delete) resolves a member even when the request
+        // FQN still spells its name with the original "yo" that create_metadata normalized away.
+        com._1c.g5.v8.dt.xdto.model.Package pkg = fixturePackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        type.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(type);
+
+        // The SAME word, but spelled with the ORIGINAL "yo".
+        String yoSpelledName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType." + yoSpelledName); //$NON-NLS-1$
+        String[] found = DeleteMetadataTool.locateXdtoMember(pkg, ref);
+        assertNotNull("delete_metadata's own locate must tolerate a yo-spelled lookup FQN", found); //$NON-NLS-1$
+        assertEquals("ObjectType", found[0]); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

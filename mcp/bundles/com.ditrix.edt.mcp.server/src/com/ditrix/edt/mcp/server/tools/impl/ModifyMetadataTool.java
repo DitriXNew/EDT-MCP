@@ -2133,21 +2133,35 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "target namespace cannot be kept in sync. Retry once EDT has finished " //$NON-NLS-1$
                 + "initializing.").toJson(); //$NON-NLS-1$
         }
+        // Needed only for the namespace CASCADE below (maintainer request: a namespace change on package
+        // P must not leave OTHER packages that import P's OLD namespace, or reference one of P's types via
+        // a QName carrying the OLD nsUri, dangling - renaming one package must not silently break a
+        // DIFFERENT, unrelated package). A Configuration BM id, captured OUTSIDE the write tx and
+        // re-fetched INSIDE it, mirrors CreateMetadataTool.createTopLevel's configBmId precedent.
+        final long configBmId =
+            xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L;
         final String[] contentFqnHolder = { null };
+        final List<String> cascadedPackageNames = new ArrayList<>();
+        final List<String> cascadedExportFqns = new ArrayList<>();
 
         try
         {
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
+                // namespace change - null otherwise, so the cascade below never fires).
+                final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
+                    ? ((XDTOPackage)applyTo).getNamespace() : null;
                 for (PreparedChange change : changes)
                 {
                     change.applyTo(applyTo, tx);
                 }
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
+                    XDTOPackage changedPkg = (XDTOPackage)applyTo;
                     XdtoWriter.ContentResolution resolved =
-                        XdtoWriter.resolvePackageContent((XDTOPackage)applyTo, tx, fqnGenerator);
+                        XdtoWriter.resolvePackageContent(changedPkg, tx, fqnGenerator);
                     if (resolved.error != null)
                     {
                         // Abort + roll back the whole modify rather than committing only the .mdo and
@@ -2156,6 +2170,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         throw new XdtoWriteException(resolved.error);
                     }
                     contentFqnHolder[0] = resolved.contentFqn;
+
+                    String newNamespace = changedPkg.getNamespace();
+                    if (oldNamespace != null && !oldNamespace.equals(newNamespace))
+                    {
+                        cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
+                            fqnGenerator, cascadedPackageNames, cascadedExportFqns);
+                    }
                 }
                 return null;
             });
@@ -2178,9 +2199,76 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             exportFqns.add(contentFqn);
         }
+        for (String cascadedFqn : cascadedExportFqns)
+        {
+            if (!exportFqns.contains(cascadedFqn))
+            {
+                exportFqns.add(cascadedFqn);
+            }
+        }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
-        return buildModifiedResult(normFqn, applied, persisted, normReport);
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames);
+    }
+
+    /**
+     * Cascades an XDTOPackage namespace change to every OTHER XDTOPackage of the same configuration
+     * (maintainer request: changing package P's namespace must not silently break a SIBLING package that
+     * imports P's OLD namespace or references one of P's types via a QName carrying the OLD nsUri - the
+     * maintainer's exact complaint was that renaming one package breaks a DIFFERENT, unrelated package,
+     * not the one being renamed). Runs INSIDE the same write transaction that applied the target
+     * package's own namespace change, so the whole modify commits or rolls back together. A sibling
+     * package whose content cannot be resolved (e.g. it has no namespace of its own set yet - see
+     * {@link XdtoWriter#resolvePackageContent}) is SKIPPED, not treated as a failure of this modify: a
+     * sibling package's own unrelated problem is not this call's business. Appends the FQN of every
+     * REWRITTEN package (its own top-object FQN and its content's own resource FQN) to
+     * {@code exportFqnsOut}, and the package's Name to {@code cascadedNamesOut}, for the caller's
+     * force-export list and confirmation message.
+     *
+     * @param configBmId the Configuration's BM id, captured OUTSIDE this tx (-1 when unavailable, in
+     *            which case this is a no-op - the top-level guard above already required it whenever
+     *            {@code xdtoNamespaceChange} is true, so -1 here would mean the Configuration was not a
+     *            BM object at all)
+     */
+    private static void cascadeNamespaceChange(IBmTransaction tx, long configBmId, XDTOPackage changedPkg,
+        String oldNamespace, String newNamespace, ITopObjectFqnGenerator fqnGenerator,
+        List<String> cascadedNamesOut, List<String> exportFqnsOut)
+    {
+        if (configBmId < 0)
+        {
+            return;
+        }
+        Object cfgObj = tx.getObjectById(configBmId);
+        if (!(cfgObj instanceof Configuration))
+        {
+            return;
+        }
+        Configuration cfg = (Configuration)cfgObj;
+        long changedPkgBmId = ((IBmObject)changedPkg).bmGetId();
+        for (XDTOPackage other : cfg.getXDTOPackages())
+        {
+            if (!(other instanceof IBmObject) || ((IBmObject)other).bmGetId() == changedPkgBmId)
+            {
+                continue;
+            }
+            XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(other, tx, fqnGenerator);
+            if (resolved.error != null)
+            {
+                // Best-effort: a sibling package with no usable content of its own (e.g. no namespace set
+                // yet) is skipped, not a failure of THIS modify.
+                continue;
+            }
+            if (!XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace))
+            {
+                continue;
+            }
+            exportFqnsOut.add("XDTOPackage." + other.getName()); //$NON-NLS-1$
+            if (resolved.contentFqn != null)
+            {
+                exportFqnsOut.add(resolved.contentFqn);
+            }
+            cascadedNamesOut.add(other.getName());
+        }
     }
 
     /**
@@ -2325,10 +2413,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Builds the success JSON for a completed modify (action / fqn / applied / persisted, the
      * normalization report and the confirmation message). Pure helper extracted from
-     * {@link #executeOnUiThread}; the same shape used by the form-member branch.
+     * {@link #executeOnUiThread}; the same shape used by the form-member branch and
+     * {@link #modifyXdtoMember} (neither of those ever cascades a namespace, so they use this overload).
      */
     private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
         MdNameNormalizer.Report normReport)
+    {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, List.of());
+    }
+
+    /**
+     * Same as the 4-arg overload, plus the namespace-CASCADE report (maintainer request): when the
+     * namespace change propagated to one or more OTHER XDTOPackages (see
+     * {@link #cascadeNamespaceChange}), their Names are appended to the confirmation MESSAGE text only -
+     * the output schema / description are deliberately untouched (zero golden churn) - as
+     * {@code "; namespace propagated to N referencing package(s): Q, R"}.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
@@ -2336,9 +2438,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
-        return result
-            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .toJson();
+        String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!cascadedPackageNames.isEmpty())
+        {
+            message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
+                + " referencing package(s): " + String.join(", ", cascadedPackageNames); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return result.put(McpKeys.MESSAGE, message).toJson();
     }
 
     /**

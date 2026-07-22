@@ -112,6 +112,50 @@ public class XdtoStructureReaderTest
         assertTrue(md.contains("[0..*]")); //$NON-NLS-1$
     }
 
+    // ==================== fixed / default read-back (issue #183 P2 #2) ====================
+    //
+    // fixed/default are WRITABLE (XdtoWriter#applyPropertyProperties) but the structure render used to
+    // drop them entirely from the property row - a caller reading the structure back after a write could
+    // never see what it had just set.
+
+    @Test
+    public void testPropertyFixedAndDefaultRenderWhenSet()
+    {
+        Package pkg = newPackage();
+        ObjectType type = XdtoFactory.eINSTANCE.createObjectType();
+        type.setName("Address"); //$NON-NLS-1$
+        pkg.getObjects().add(type);
+        Property country = XdtoFactory.eINSTANCE.createProperty();
+        country.setName("Country"); //$NON-NLS-1$
+        country.setFixed(true);
+        country.setDefault("N/A"); //$NON-NLS-1$
+        type.getProperties().add(country);
+
+        String md = XdtoStructureReader.render("XDTOPackage.MyPackage", pkg); //$NON-NLS-1$
+        assertTrue("the property table header must advertise the Fixed column", md.contains("Fixed")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the property table header must advertise the Default column", md.contains("Default")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a SET fixed=true must render", md.contains("true")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a SET default must render its value", md.contains("N/A")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPropertyFixedAndDefaultOmittedWhenUnset()
+    {
+        Package pkg = newPackage();
+        ObjectType type = XdtoFactory.eINSTANCE.createObjectType();
+        type.setName("Address"); //$NON-NLS-1$
+        pkg.getObjects().add(type);
+        Property street = XdtoFactory.eINSTANCE.createProperty();
+        street.setName("Street"); //$NON-NLS-1$
+        // 'fixed' and 'default' are deliberately left UNTOUCHED - neither setFixed(...) nor setDefault(...)
+        // is called, mirroring how testObjectTypeWithPropertiesAndFlags asserts an unset flag is absent.
+        type.getProperties().add(street);
+
+        String md = XdtoStructureReader.render("XDTOPackage.MyPackage", pkg); //$NON-NLS-1$
+        assertFalse("an UNSET fixed must not render a boolean value", md.contains("| true |") //$NON-NLS-1$ //$NON-NLS-2$
+            || md.contains("| false |")); //$NON-NLS-1$
+    }
+
     @Test
     public void testPackageGlobalPropertiesSection()
     {

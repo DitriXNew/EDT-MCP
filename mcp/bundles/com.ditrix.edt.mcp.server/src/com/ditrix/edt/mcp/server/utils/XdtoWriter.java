@@ -22,10 +22,13 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.xdto.model.Enumeration;
 import com._1c.g5.v8.dt.xdto.model.Import;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
+import com._1c.g5.v8.dt.xdto.model.Type;
+import com._1c.g5.v8.dt.xdto.model.ValueType;
 import com._1c.g5.v8.dt.xdto.model.XdtoFactory;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.google.gson.JsonElement;
@@ -419,6 +422,15 @@ public final class XdtoWriter
      * QName local name is case-SENSITIVE: {@code "Order"} and {@code "order"} are different names, so a
      * case-insensitive match would wrongly collide two distinct members or make a case-distinct member
      * uncreatable.
+     *
+     * <p>On an EXACT miss, retries once with {@code name} run through {@link MdNameNormalizer#normalizeYo}
+     * (issue #183 P2): {@code create_metadata} normalizes 'yo'->'ye' in a member's own NAME segment by
+     * default (the FQN LEAF only - {@code CreateMetadataTool#normalizeLeafName}), so an ObjectType created
+     * from an FQN spelled with the original 'yo' is stored under its 'ye'-normalized name. A LATER
+     * member-FQN request (modify/delete, or a create addressing this ObjectType as the OWNER segment of a
+     * nested Property FQN - never the leaf, so never normalized on the way in) that still spells the name
+     * with 'yo' would otherwise miss it entirely and report "not found" for a member that in fact exists.
+     * The retry is a no-op (and therefore free) whenever {@code name} carries no 'yo' at all.</p>
      */
     public static ObjectType findObjectType(Package pkg, String name)
     {
@@ -433,6 +445,17 @@ public final class XdtoWriter
                 return type;
             }
         }
+        String yoNormalized = MdNameNormalizer.normalizeYo(name);
+        if (!name.equals(yoNormalized))
+        {
+            for (ObjectType type : pkg.getObjects())
+            {
+                if (yoNormalized.equals(type.getName()))
+                {
+                    return type;
+                }
+            }
+        }
         return null;
     }
 
@@ -441,6 +464,10 @@ public final class XdtoWriter
      * {@code Package.getProperties()} - package-global - or {@code ObjectType.getProperties()} - object
      * members), or {@code null} when not found. Case-sensitive for the same reason as
      * {@link #findObjectType} (an XDTO/XML QName local name is case-sensitive).
+     *
+     * <p>On an EXACT miss, retries once with the yo-normalized {@code name} - see
+     * {@link #findObjectType}'s javadoc for the full rationale (the SAME create-time normalization /
+     * later-lookup mismatch applies to a Property's own name).</p>
      */
     public static Property findProperty(EList<Property> owner, String name)
     {
@@ -453,6 +480,17 @@ public final class XdtoWriter
             if (name.equals(property.getName()))
             {
                 return property;
+            }
+        }
+        String yoNormalized = MdNameNormalizer.normalizeYo(name);
+        if (!name.equals(yoNormalized))
+        {
+            for (Property property : owner)
+            {
+                if (yoNormalized.equals(property.getName()))
+                {
+                    return property;
+                }
             }
         }
         return null;
@@ -486,6 +524,112 @@ public final class XdtoWriter
     public static void removeProperty(EList<Property> owner, Property property)
     {
         owner.remove(property);
+    }
+
+    // ==================== namespace cascade (maintainer request) ====================
+    //
+    // modify_metadata's own xdtoNamespaceChange handling (ModifyMetadataTool#applyGenericPropertyChanges)
+    // re-syncs the CHANGED package's own content nsUri to its new namespace - but every OTHER package of
+    // the same configuration that either imports the OLD namespace, or references one of the changed
+    // package's types via a QName carrying the OLD nsUri, is left dangling (the maintainer's exact
+    // complaint: renaming one package's namespace silently breaks a DIFFERENT, unrelated package, not
+    // this one). rewriteNamespaceReferences is the PURE per-package rewrite; the caller
+    // (ModifyMetadataTool) enumerates every OTHER XDTOPackage of the configuration,
+    // materializes each one's content via resolvePackageContent, and applies this to it.
+
+    /**
+     * Rewrites every reference to {@code oldNs} found in {@code content} to {@code newNs}: an
+     * {@link Import} in {@code content.getDependencies()} whose {@code namespace} equals {@code oldNs};
+     * a {@link Property}'s {@code type} / {@code ref} QName - both PACKAGE-GLOBAL
+     * ({@code content.getProperties()}) and NESTED in every {@link ObjectType}
+     * ({@code content.getObjects()}) - whose {@code nsUri} equals {@code oldNs}; an {@link ObjectType}'s
+     * or a {@link ValueType}'s own {@code baseType} QName (both extend {@link Type}, which is where
+     * {@code baseType} actually lives - an ObjectType can extend/restrict a type in another namespace
+     * exactly like a Property can reference one, so it carries the SAME dangling-reference risk as a
+     * ValueType's); and each {@link ValueType}'s {@link Enumeration}'s own {@code type} QName. A
+     * Property's {@code getTypeDefs()} (an anonymous INLINE type definition, not a QName reference) is
+     * deliberately NOT touched - it has no {@code nsUri} of its own to go stale, and this codebase never
+     * authors one.
+     *
+     * <p>Pure - mutates {@code content} in place and returns whether anything changed; does not touch BM,
+     * does not force-export (the caller decides what to do with a {@code true} result).</p>
+     *
+     * @param content the OTHER package's content to rewrite (never the changed package's own content -
+     *            that one is re-synced by {@link #resolvePackageContent} already)
+     * @param oldNs the namespace being replaced
+     * @param newNs the namespace to replace it with
+     * @return {@code true} when at least one reference was rewritten (the caller must force-export this
+     *         package), {@code false} when nothing matched {@code oldNs} (nothing to export)
+     */
+    public static boolean rewriteNamespaceReferences(Package content, String oldNs, String newNs)
+    {
+        if (content == null || oldNs == null || newNs == null)
+        {
+            return false;
+        }
+        boolean changed = false;
+        for (Import dependency : content.getDependencies())
+        {
+            if (oldNs.equals(dependency.getNamespace()))
+            {
+                dependency.setNamespace(newNs);
+                changed = true;
+            }
+        }
+        changed |= rewritePropertyQNames(content.getProperties(), oldNs, newNs);
+        for (ObjectType type : content.getObjects())
+        {
+            changed |= rewriteBaseType(type, oldNs, newNs);
+            changed |= rewritePropertyQNames(type.getProperties(), oldNs, newNs);
+        }
+        for (ValueType type : content.getTypes())
+        {
+            changed |= rewriteBaseType(type, oldNs, newNs);
+            for (Enumeration enumeration : type.getEnumerations())
+            {
+                QName qname = enumeration.getType();
+                if (qname != null && oldNs.equals(qname.getNsUri()))
+                {
+                    qname.setNsUri(newNs);
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    /** Rewrites {@code type}/{@code ref} on every Property in {@code properties} whose nsUri is {@code oldNs}. */
+    private static boolean rewritePropertyQNames(EList<Property> properties, String oldNs, String newNs)
+    {
+        boolean changed = false;
+        for (Property property : properties)
+        {
+            QName type = property.getType();
+            if (type != null && oldNs.equals(type.getNsUri()))
+            {
+                type.setNsUri(newNs);
+                changed = true;
+            }
+            QName ref = property.getRef();
+            if (ref != null && oldNs.equals(ref.getNsUri()))
+            {
+                ref.setNsUri(newNs);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /** Rewrites an ObjectType's/ValueType's own {@code baseType} QName (via the shared {@link Type}) when it is {@code oldNs}. */
+    private static boolean rewriteBaseType(Type type, String oldNs, String newNs)
+    {
+        QName baseType = type.getBaseType();
+        if (baseType != null && oldNs.equals(baseType.getNsUri()))
+        {
+            baseType.setNsUri(newNs);
+            return true;
+        }
+        return false;
     }
 
     // ==================== apply (typed attribute writes) ====================
@@ -537,7 +681,12 @@ public final class XdtoWriter
      */
     public static Result applyObjectTypeProperties(ObjectType type, List<JsonObject> properties)
     {
-        Map<String, JsonElement> values = toMap(properties);
+        MapResult mapResult = toMap(properties);
+        if (mapResult.error != null)
+        {
+            return Result.failed(mapResult.error);
+        }
+        Map<String, JsonElement> values = mapResult.values;
         String unknown = firstUnknownKey(values.keySet(), OBJECT_TYPE_PROPS);
         if (unknown != null)
         {
@@ -606,7 +755,12 @@ public final class XdtoWriter
     public static Result applyPropertyProperties(Property property, Package pkg, List<JsonObject> properties,
         boolean requireType)
     {
-        Map<String, JsonElement> values = toMap(properties);
+        MapResult mapResult = toMap(properties);
+        if (mapResult.error != null)
+        {
+            return Result.failed(mapResult.error);
+        }
+        Map<String, JsonElement> values = mapResult.values;
         if (values.containsKey("ref")) //$NON-NLS-1$
         {
             return Result.failed(ToolResult.error("Property 'ref' (a global-property reference) is not " //$NON-NLS-1$
@@ -929,6 +1083,17 @@ public final class XdtoWriter
         {
             return QNameResult.failed(importError);
         }
+        // The object form's 'name' is free-text (unlike the bare-STRING shorthand, whose same-package
+        // ObjectType branch never reaches here): when the RESOLVED namespace is XSD, the name must still
+        // be one of the whitelisted built-ins, or a typo like {name:'strng'} (explicit or via the
+        // omitted-nsUri default) would silently persist an invalid 'xs:strng' reference (issue #183 P2 -
+        // the bare-string shorthand already rejects this; the object form did not).
+        if (XSD_NS.equals(resolvedNsUri) && !XSD_BUILTIN_TYPES.contains(name))
+        {
+            return QNameResult.failed(ToolResult.error(fieldLabel + " name '" + name + "' is not a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "built-in XSD type (e.g. 'string', 'boolean', 'decimal', 'dateTime', 'date', 'int'); " //$NON-NLS-1$
+                + "the XSD namespace only accepts a built-in type name.").toJson()); //$NON-NLS-1$
+        }
         QName qname = McoreFactory.eINSTANCE.createQName();
         qname.setNsUri(resolvedNsUri);
         qname.setName(name);
@@ -965,27 +1130,60 @@ public final class XdtoWriter
     // ==================== JSON helpers ====================
 
     /**
-     * Flattens the raw {@code [{name, value, language?}]} property entries into a {@code name -> value}
-     * map (last entry wins on a repeated name). An entry missing a non-empty {@code name} or a
-     * {@code value} is skipped.
+     * The outcome of {@link #toMap}: exactly one of {@link #values} / {@link #error} is non-null.
      */
-    private static Map<String, JsonElement> toMap(List<JsonObject> properties)
+    private static final class MapResult
+    {
+        final Map<String, JsonElement> values;
+        final String error;
+
+        private MapResult(Map<String, JsonElement> values, String error)
+        {
+            this.values = values;
+            this.error = error;
+        }
+
+        static MapResult of(Map<String, JsonElement> values)
+        {
+            return new MapResult(values, null);
+        }
+
+        static MapResult failed(String error)
+        {
+            return new MapResult(null, error);
+        }
+    }
+
+    /**
+     * Flattens the raw {@code [{name, value, language?}]} property entries into a {@code name -> value}
+     * map (last entry wins on a repeated name). An entry missing a non-empty {@code name} is skipped (it
+     * addresses nothing actionable). An entry that HAS a non-empty {@code name} but NO {@code value} at
+     * all is a HARD ERROR (issue #183 P2), not a silent drop: {@code toMap} used to skip it the same way
+     * as an unnamed entry, so a caller that mistyped {@code {name:'open'}} (forgetting {@code value})
+     * saw the tool report SUCCESS with that property silently missing from {@code applied} - actionable
+     * only if the caller happened to notice the shorter list.
+     */
+    private static MapResult toMap(List<JsonObject> properties)
     {
         Map<String, JsonElement> map = new LinkedHashMap<>();
         if (properties == null)
         {
-            return map;
+            return MapResult.of(map);
         }
         for (JsonObject entry : properties)
         {
             String name = stringMember(entry, "name"); //$NON-NLS-1$
-            if (name == null || name.isEmpty() || !entry.has("value")) //$NON-NLS-1$
+            if (name == null || name.isEmpty())
             {
                 continue;
             }
+            if (!entry.has("value")) //$NON-NLS-1$
+            {
+                return MapResult.failed(ToolResult.error("Property '" + name + "' has no 'value'.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+            }
             map.put(name, entry.get("value")); //$NON-NLS-1$
         }
-        return map;
+        return MapResult.of(map);
     }
 
     /** The first key in {@code keys} that is NOT in {@code allowed}, or {@code null} when all are known. */
