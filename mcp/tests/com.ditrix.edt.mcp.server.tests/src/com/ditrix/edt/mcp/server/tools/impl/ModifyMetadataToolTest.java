@@ -1220,4 +1220,102 @@ public class ModifyMetadataToolTest
         // Unguarded combo: value passes through unchanged.
         assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
+
+    // ===== XDTO package member payload dispatch guards (issue #183 stream 1) =========================
+    //
+    // An XDTO ObjectType/Property member is edited through the SAME 'properties' surface as an ordinary
+    // mdclass member (there is no dedicated 'xdto' payload key, unlike 'dcs'/'template'), so the guard is
+    // narrower: refuse a Role / membership content payload (neither applies to an XDTO member), then
+    // require a non-empty 'properties'. The pure guard (xdtoMemberPayloadError) and the "member not
+    // found" message builders are covered here; the live BM materialize + write + force-export is
+    // covered by the E2E suite.
+
+    @Test
+    public void testXdtoMemberPayloadRefusesRoleAndContentPayloads()
+    {
+        String roleMix = ModifyMetadataTool.xdtoMemberPayloadError("XDTOPackage.MyPackage.ObjectType.MyType", //$NON-NLS-1$
+            true, false, Collections.singletonList(prop("open", "true"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("an XDTO member FQN carrying a Role payload must be refused", roleMix); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", roleMix.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the offending FQN", //$NON-NLS-1$
+            roleMix.contains("XDTOPackage.MyPackage.ObjectType.MyType")); //$NON-NLS-1$
+        assertTrue("the refusal must point at 'properties'", roleMix.contains("properties")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String contentMix = ModifyMetadataTool.xdtoMemberPayloadError(
+            "XDTOPackage.MyPackage.Property.MyProp", false, true, //$NON-NLS-1$
+            Collections.singletonList(prop("type", "string"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("an XDTO member FQN carrying a membership content payload must be refused", //$NON-NLS-1$
+            contentMix);
+    }
+
+    @Test
+    public void testXdtoMemberPayloadRequiresNonEmptyProperties()
+    {
+        String empty = ModifyMetadataTool.xdtoMemberPayloadError("XDTOPackage.MyPackage.ObjectType.MyType", //$NON-NLS-1$
+            false, false, Collections.<JsonObject> emptyList());
+        assertNotNull("an XDTO member modify with no 'properties' must be refused", empty); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", empty.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must mention the ObjectType flag vocabulary", empty.contains("open")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testXdtoMemberPayloadValidIsNotRefused()
+    {
+        String ok = ModifyMetadataTool.xdtoMemberPayloadError("XDTOPackage.MyPackage.ObjectType.MyType", //$NON-NLS-1$
+            false, false, Collections.singletonList(prop("open", "true"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a lone 'properties' payload on an XDTO member FQN is not refused", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testXdtoObjectTypeNotFoundErrorNamesTheType()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref =
+            com.ditrix.edt.mcp.server.utils.XdtoWriter.parseMemberRef("XDTOPackage.MyPackage.ObjectType.Missing"); //$NON-NLS-1$
+        assertNotNull(ref);
+        String err = ModifyMetadataTool.xdtoObjectTypeNotFoundError(ref);
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the missing ObjectType", err.contains("Missing")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the owning package", err.contains("XDTOPackage.MyPackage")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testXdtoPropertyNotFoundErrorDistinguishesPackageGlobalAndNested()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef packageGlobal =
+            com.ditrix.edt.mcp.server.utils.XdtoWriter.parseMemberRef("XDTOPackage.MyPackage.Property.Missing"); //$NON-NLS-1$
+        String globalErr = ModifyMetadataTool.xdtoPropertyNotFoundError(packageGlobal);
+        assertTrue("a package-global property error must name the package", //$NON-NLS-1$
+            globalErr.contains("XDTOPackage.MyPackage"));
+        assertFalse("a package-global property error must not mention an ObjectType owner", //$NON-NLS-1$
+            globalErr.contains("ObjectType.")); //$NON-NLS-1$
+
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef nested = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.MyType.Property.Missing"); //$NON-NLS-1$
+        String nestedErr = ModifyMetadataTool.xdtoPropertyNotFoundError(nested);
+        assertTrue("a nested property error must name its owning ObjectType", //$NON-NLS-1$
+            nestedErr.contains("ObjectType.MyType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testModifyMemberLookupToleratesYoSpelledObjectTypeName()
+    {
+        // issue #183 P2 #4: modifyXdtoMemberInTx resolves its target ObjectType/Property via
+        // XdtoWriter.findObjectType / findProperty - the SAME shared lookup create_metadata's owner
+        // lookup and delete_metadata's locateXdtoMember use. It now falls back to the yo-normalized
+        // stored name on an exact miss, so a modify_metadata FQN that still spells an ObjectType's name
+        // with the original "yo" (create_metadata normalizes 'yo'->'ye' in a member's own NAME by
+        // default) resolves it instead of reporting "not found" for a member that in fact exists.
+        com._1c.g5.v8.dt.xdto.model.Package pkg =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createPackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        type.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(type);
+
+        // The modify_metadata FQN's target segment, still spelled with the original "yo".
+        String yoSpelledName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        assertEquals("modifyXdtoMemberInTx's own target resolution must tolerate a yo-spelled FQN segment", //$NON-NLS-1$
+            type, com.ditrix.edt.mcp.server.utils.XdtoWriter.findObjectType(pkg, yoSpelledName));
+    }
 }

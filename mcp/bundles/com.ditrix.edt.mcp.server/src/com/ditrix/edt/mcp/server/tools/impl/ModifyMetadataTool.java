@@ -51,8 +51,12 @@ import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
+import com._1c.g5.v8.dt.xdto.model.ObjectType;
+import com._1c.g5.v8.dt.xdto.model.Package;
+import com._1c.g5.v8.dt.xdto.model.Property;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -84,6 +88,8 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
+import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -238,6 +244,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the " //$NON-NLS-1$
             + "report's main schema (query data sets + fields + schema parameters), creating the DCS if " //$NON-NLS-1$
             + "the report has none. " //$NON-NLS-1$
+            + "Edit an XDTO package MEMBER through 'properties' on its own FQN " //$NON-NLS-1$
+            + "('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or " //$NON-NLS-1$
+            + "'...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / " //$NON-NLS-1$
+            + "'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD " //$NON-NLS-1$
+            + "type name, the EXACT name of an ObjectType already in the same package, or " //$NON-NLS-1$
+            + "{nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties " //$NON-NLS-1$
+            + "only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' " //$NON-NLS-1$
+            + "(string). " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -385,6 +399,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (subsystemResult != null)
         {
             return subsystemResult;
+        }
+
+        // A FQN that addresses an XDTO PACKAGE MEMBER (an ObjectType or a Property - issue #183
+        // stream 1) is dispatched EARLY too: an ObjectType/Property lives on the package's lazily
+        // materialized xdto.model content (a cross-model hop, the SAME transient @ExternalProperty
+        // shape a report's DCS uses), not the mdclass tree, so the generic single-segment resolver
+        // below cannot see it (it does not know "ObjectType"/"Property" as mdclass child kinds).
+        String xdtoResult = dispatchXdtoMemberPayload(ctx, normFqn, args);
+        if (xdtoResult != null)
+        {
+            return xdtoResult;
         }
 
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
@@ -596,6 +621,220 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
             args.hasRolePayload);
+    }
+
+    // ===== XDTO package member editing (issue #183 stream 1) ==========================================
+    //
+    // An XDTOPackage member (an ObjectType or a Property, package-global or nested in an ObjectType) is
+    // modified through the SAME 'properties' surface as an ordinary mdclass member, but with an XDTO-
+    // specific vocabulary applied by XdtoWriter (open/abstract/mixed/ordered/sequenced for an ObjectType;
+    // type/ref/lowerBound/upperBound/nillable/fixed/default for a Property) - not the generic
+    // MetadataPropertyIntrospector reflection path (an XDTO Property/ObjectType is not an MdObject).
+    // Persistence mirrors the DCS content: the Package is a transient @ExternalProperty, materialized +
+    // attached via XdtoWriter.resolvePackageContent (shared with create_metadata / delete_metadata).
+
+    /**
+     * Dispatches an XDTO PACKAGE MEMBER FQN: refuses a role / content / template / dcs payload (an XDTO
+     * member is none of those - the same no-mixing policy every other cross-model-hop branch enforces,
+     * so a sibling payload is never silently dropped while this branch reports success), then requires a
+     * non-empty {@code properties} (the XDTO member's own change surface). Returns {@code null} when
+     * {@code normFqn} is not an XDTO member FQN, so the caller continues to the generic mdclass resolver.
+     */
+    private String dispatchXdtoMemberPayload(ProjectContext ctx, String normFqn, ModifyArgs args)
+    {
+        XdtoWriter.MemberRef ref = XdtoWriter.parseMemberRef(normFqn);
+        if (ref == null)
+        {
+            return null;
+        }
+        if (args.hasTemplatePayload)
+        {
+            return templateOnlyForTemplateFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
+        }
+        if (args.hasDcsPayload)
+        {
+            return dcsOnlyForReportFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
+        }
+        String payloadError =
+            xdtoMemberPayloadError(normFqn, args.hasRolePayload, args.hasContentPayload, args.properties);
+        if (payloadError != null)
+        {
+            return payloadError;
+        }
+        return modifyXdtoMember(ctx, normFqn, ref, args.properties);
+    }
+
+    /**
+     * The pure guard for an XDTO member FQN's payload: refuses a Role payload ({@code rights} /
+     * {@code templates} / {@code roleProperties}) or a membership {@code content} payload (an XDTO
+     * member is neither), then requires a non-empty {@code properties} (the XDTO member's own change
+     * surface - there is no dedicated {@code xdto} payload key, unlike {@code dcs}/{@code template}).
+     * Returns the ready JSON error, or {@code null} when the payload is valid. Package-visible for tests
+     * (mirrors {@link #dcsMixError} / {@link #templateMixError}).
+     */
+    static String xdtoMemberPayloadError(String normFqn, boolean hasRolePayload, boolean hasContentPayload,
+        List<JsonObject> properties)
+    {
+        if (hasRolePayload || hasContentPayload)
+        {
+            return ToolResult.error("'" + normFqn + "' addresses an XDTO package member, which cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a membership " //$NON-NLS-1$
+                + "'content' payload. Use 'properties' to change an XDTO ObjectType/Property.").toJson(); //$NON-NLS-1$
+        }
+        if (properties.isEmpty())
+        {
+            return ToolResult.error("'properties' is required to modify an XDTO package member ('" //$NON-NLS-1$
+                + normFqn + "'): an ObjectType takes the optional flags 'open' / 'abstract' / 'mixed' " //$NON-NLS-1$
+                + "/ 'ordered' / 'sequenced'; a Property takes 'type' / 'lowerBound' / 'upperBound' / " //$NON-NLS-1$
+                + "'nillable' / 'fixed' / 'default'.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Modifies an EXISTING XDTO ObjectType / Property's attributes via {@link XdtoWriter}. The owning
+     * XDTOPackage's content is materialized + attached exactly like create_metadata's own XDTO member
+     * write ({@link XdtoWriter#resolvePackageContent}, shared); the target member must ALREADY exist (a
+     * modify does not create one - use create_metadata first). Force-exports the owning package's FQN
+     * (dual-export with the content's own resource FQN when it is a distinct top object).
+     */
+    private String modifyXdtoMember(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
+        List<JsonObject> properties)
+    {
+        MetadataNodeResolver.MetadataNode pkgNode =
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
+        if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
+            || !(pkgNode.object instanceof IBmObject))
+        {
+            return ToolResult.error("XDTOPackage not found: " + ref.packageFqn + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (bmModelManager == null || fqnGenerator == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+        }
+        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        if (bmModel == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MODEL + ctx.project.getName()).toJson();
+        }
+
+        final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        final String[] contentFqnHolder = { null };
+        XdtoWriter.Result result;
+        try
+        {
+            result = BmTransactions.<XdtoWriter.Result> write(bmModel, "ModifyXdtoMember", (tx, pm) -> //$NON-NLS-1$
+                modifyXdtoMemberInTx(tx, pkgBmId, fqnGenerator, ref, properties, contentFqnHolder));
+        }
+        catch (Exception e)
+        {
+            String ready = XdtoWriteException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error modifying XDTO member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to modify XDTO member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        List<String> exportFqns = new ArrayList<>();
+        // Export by the RESOLVED package's canonical FQN: with the yo (ё->е) fallback the
+        // caller-typed ref.packageFqn may differ from the stored name, and force-export must
+        // target the stored top object (never the caller-supplied spelling).
+        String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        exportFqns.add(pkgExportFqn);
+        String contentFqn = contentFqnHolder[0];
+        if (contentFqn != null && !contentFqn.equals(pkgExportFqn))
+        {
+            exportFqns.add(contentFqn);
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+        return buildModifiedResult(normFqn, result.applied, persisted,
+            new MdNameNormalizer.Report(false));
+    }
+
+    /**
+     * The write-transaction body for {@link #modifyXdtoMember}: re-fetches the XDTOPackage, materializes
+     * its content, records the content's own export FQN (captured by {@link XdtoWriter#resolvePackageContent}
+     * itself - NEVER re-derived here via a post-attach {@code bmGetFqn()}, which throws on a just-attached,
+     * not-yet-settled object; a live-stand-caught regression) into {@code contentFqnHolder}, resolves the
+     * target ObjectType / Property (which must ALREADY exist), and applies {@code properties} via
+     * {@link XdtoWriter}. Throws {@link XdtoWriteException} (a ready JSON error) on a resolution /
+     * validation failure, rolling the whole write back.
+     */
+    private static XdtoWriter.Result modifyXdtoMemberInTx(IBmTransaction tx, long pkgBmId,
+        ITopObjectFqnGenerator fqnGenerator, XdtoWriter.MemberRef ref, List<JsonObject> properties,
+        String[] contentFqnHolder)
+    {
+        Object inTx = tx.getObjectById(pkgBmId);
+        if (!(inTx instanceof XDTOPackage))
+        {
+            throw new XdtoWriteException(ToolResult.error("The XDTO package could not be resolved " //$NON-NLS-1$
+                + "inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        XDTOPackage txPkg = (XDTOPackage)inTx;
+        XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(txPkg, tx, fqnGenerator);
+        if (resolved.error != null)
+        {
+            throw new XdtoWriteException(resolved.error);
+        }
+        Package content = resolved.content;
+        contentFqnHolder[0] = resolved.contentFqn;
+
+        XdtoWriter.Result applied;
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE)
+        {
+            ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+            if (type == null)
+            {
+                throw new XdtoWriteException(xdtoObjectTypeNotFoundError(ref));
+            }
+            applied = XdtoWriter.applyObjectTypeProperties(type, properties);
+        }
+        else
+        {
+            EList<Property> owner = content.getProperties();
+            if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY)
+            {
+                ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+                if (type == null)
+                {
+                    throw new XdtoWriteException(xdtoObjectTypeNotFoundError(ref));
+                }
+                owner = type.getProperties();
+            }
+            Property property = XdtoWriter.findProperty(owner, ref.propertyName);
+            if (property == null)
+            {
+                throw new XdtoWriteException(xdtoPropertyNotFoundError(ref));
+            }
+            applied = XdtoWriter.applyPropertyProperties(property, content, properties, false);
+        }
+        if (applied.hasError())
+        {
+            throw new XdtoWriteException(applied.error);
+        }
+        return applied;
+    }
+
+    /** The actionable "ObjectType not found" error, shared by the modify/delete XDTO branches. */
+    static String xdtoObjectTypeNotFoundError(XdtoWriter.MemberRef ref)
+    {
+        return ToolResult.error("ObjectType not found: '" + ref.objectTypeName + "' in package " //$NON-NLS-1$ //$NON-NLS-2$
+            + ref.packageFqn + ". Use get_metadata_details on the package FQN to list its object types.") //$NON-NLS-1$
+                .toJson();
+    }
+
+    /** The actionable "Property not found" error, shared by the modify/delete XDTO branches. */
+    static String xdtoPropertyNotFoundError(XdtoWriter.MemberRef ref)
+    {
+        String owner = ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY
+            ? ref.packageFqn + ".ObjectType." + ref.objectTypeName //$NON-NLS-1$
+            : ref.packageFqn;
+        return ToolResult.error("Property not found: '" + ref.propertyName + "' on " + owner //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Use get_metadata_details on the package FQN to list its properties.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1877,28 +2116,210 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
 
+        final List<String> applied = appliedFeatureNames(changes);
+        // An XDTOPackage's target namespace lives in TWO synced places: the mdclass 'namespace' (this
+        // .mdo edit) and the content Package's targetNamespace (the sibling .xdto). The generic path
+        // exports only the .mdo, so when the namespace changes, re-sync the content (XdtoWriter treats
+        // the owner as the single source of truth) and force-export the .xdto too - else members would be
+        // authored under a stale namespace once the content is eagerly materialized at package-create (a
+        // live-stand-caught drift).
+        final boolean xdtoNamespaceChange =
+            applied.contains(MdClassPackage.Literals.XDTO_PACKAGE__NAMESPACE.getName());
+        final ITopObjectFqnGenerator fqnGenerator =
+            xdtoNamespaceChange ? Activator.getDefault().getTopObjectFqnGenerator() : null;
+        if (xdtoNamespaceChange && fqnGenerator == null)
+        {
+            // Fail BEFORE mutating: without the generator we cannot keep the content .xdto
+            // targetNamespace in sync, and committing only the .mdo would silently reintroduce the
+            // namespace drift while reporting success. Nothing is written here.
+            return ToolResult.error("Cannot change the XDTO package namespace right now: the " //$NON-NLS-1$
+                + "ITopObjectFqnGenerator service is unavailable, so the content resource (.xdto) " //$NON-NLS-1$
+                + "target namespace cannot be kept in sync. Retry once EDT has finished " //$NON-NLS-1$
+                + "initializing.").toJson(); //$NON-NLS-1$
+        }
+        // Needed only for the namespace CASCADE below (maintainer request: a namespace change on package
+        // P must not leave OTHER packages that import P's OLD namespace, or reference one of P's types via
+        // a QName carrying the OLD nsUri, dangling - renaming one package must not silently break a
+        // DIFFERENT, unrelated package). A Configuration BM id, captured OUTSIDE the write tx and
+        // re-fetched INSIDE it, mirrors CreateMetadataTool.createTopLevel's configBmId precedent.
+        final long configBmId =
+            xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L;
+        final String[] contentFqnHolder = { null };
+        final List<String> cascadedPackageNames = new ArrayList<>();
+        final List<String> cascadedExportFqns = new ArrayList<>();
+
         try
         {
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
+                // namespace change - null otherwise, so the cascade below never fires).
+                final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
+                    ? ((XDTOPackage)applyTo).getNamespace() : null;
                 for (PreparedChange change : changes)
                 {
                     change.applyTo(applyTo, tx);
+                }
+                if (fqnGenerator != null && applyTo instanceof XDTOPackage)
+                {
+                    XDTOPackage changedPkg = (XDTOPackage)applyTo;
+                    // Captured BEFORE resolvePackageContent: ensureNamespace re-syncs a STALE content
+                    // targetNamespace to the owner, and QNames still carrying that stale value must be
+                    // rewritten too (not only the old mdclass namespace).
+                    com._1c.g5.v8.dt.xdto.model.Package preContent = changedPkg.getPackage();
+                    String preContentNs = (preContent instanceof IBmObject
+                        && ((IBmObject)preContent).bmIsTop()) ? preContent.getNsUri() : null;
+                    XdtoWriter.ContentResolution resolved =
+                        XdtoWriter.resolvePackageContent(changedPkg, tx, fqnGenerator);
+                    if (resolved.error != null)
+                    {
+                        // Abort + roll back the whole modify rather than committing only the .mdo and
+                        // leaving the content .xdto target namespace stale (a silent partial success).
+                        // Mirrors modifyXdtoMemberInTx.
+                        throw new XdtoWriteException(resolved.error);
+                    }
+                    contentFqnHolder[0] = resolved.contentFqn;
+
+                    String newNamespace = changedPkg.getNamespace();
+                    if (oldNamespace != null && !oldNamespace.equals(newNamespace))
+                    {
+                        // The renamed package's OWN content can hold SAME-PACKAGE references (a property
+                        // typed at a sibling ObjectType carries a QName with the package's own nsUri) -
+                        // rewrite those too, or the package would dangle against ITSELF right after the
+                        // rename. Its content FQN is already force-exported via contentFqnHolder.
+                        XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+                        if (preContentNs != null && !preContentNs.equals(oldNamespace)
+                            && !preContentNs.equals(newNamespace))
+                        {
+                            // The content targetNamespace was stale before this edit: QNames written
+                            // under THAT value and naming THIS package's own local types would stay
+                            // dangling after the rename. Targeted rewrite only (a genuine reference
+                            // to a third package whose namespace equals the stale value is kept).
+                            XdtoWriter.rewriteStaleSelfReferences(resolved.content, preContentNs, newNamespace);
+                        }
+                        cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
+                            fqnGenerator, cascadedPackageNames, cascadedExportFqns);
+                    }
                 }
                 return null;
             });
         }
         catch (Exception e)
         {
+            String ready = XdtoWriteException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
             Activator.logError("Error modifying metadata", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, topFqn);
+        List<String> exportFqns = new ArrayList<>();
+        exportFqns.add(topFqn);
+        String contentFqn = contentFqnHolder[0];
+        if (contentFqn != null && !contentFqn.equals(topFqn))
+        {
+            exportFqns.add(contentFqn);
+        }
+        for (String cascadedFqn : cascadedExportFqns)
+        {
+            if (!exportFqns.contains(cascadedFqn))
+            {
+                exportFqns.add(cascadedFqn);
+            }
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
-        List<String> applied = appliedFeatureNames(changes);
-        return buildModifiedResult(normFqn, applied, persisted, normReport);
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames);
+    }
+
+    /**
+     * Cascades an XDTOPackage namespace change to every OTHER XDTOPackage of the same configuration
+     * (maintainer request: changing package P's namespace must not silently break a SIBLING package that
+     * imports P's OLD namespace or references one of P's types via a QName carrying the OLD nsUri - the
+     * maintainer's exact complaint was that renaming one package breaks a DIFFERENT, unrelated package,
+     * not the one being renamed). Runs INSIDE the same write transaction that applied the target
+     * package's own namespace change, so the whole modify commits or rolls back together. A sibling
+     * package whose content cannot be resolved (e.g. it has no namespace of its own set yet - see
+     * {@link XdtoWriter#resolvePackageContent}) is SKIPPED, not treated as a failure of this modify: a
+     * sibling package's own unrelated problem is not this call's business. Appends the FQN of every
+     * REWRITTEN package (its own top-object FQN and its content's own resource FQN) to
+     * {@code exportFqnsOut}, and the package's Name to {@code cascadedNamesOut}, for the caller's
+     * force-export list and confirmation message.
+     *
+     * @param configBmId the Configuration's BM id, captured OUTSIDE this tx (-1 when unavailable, in
+     *            which case this is a no-op - the top-level guard above already required it whenever
+     *            {@code xdtoNamespaceChange} is true, so -1 here would mean the Configuration was not a
+     *            BM object at all)
+     */
+    private static void cascadeNamespaceChange(IBmTransaction tx, long configBmId, XDTOPackage changedPkg,
+        String oldNamespace, String newNamespace, ITopObjectFqnGenerator fqnGenerator,
+        List<String> cascadedNamesOut, List<String> exportFqnsOut)
+    {
+        if (configBmId < 0)
+        {
+            return;
+        }
+        Object cfgObj = tx.getObjectById(configBmId);
+        if (!(cfgObj instanceof Configuration))
+        {
+            return;
+        }
+        Configuration cfg = (Configuration)cfgObj;
+        long changedPkgBmId = ((IBmObject)changedPkg).bmGetId();
+        for (XDTOPackage other : cfg.getXDTOPackages())
+        {
+            if (!(other instanceof IBmObject) || ((IBmObject)other).bmGetId() == changedPkgBmId)
+            {
+                continue;
+            }
+            // A sibling with NO attached content cannot reference any namespace - skip it WITHOUT
+            // resolvePackageContent, which would otherwise MATERIALIZE + attach a fresh empty content
+            // for an unrelated package as a committed-but-unexported side effect of this modify.
+            com._1c.g5.v8.dt.xdto.model.Package existingContent = other.getPackage();
+            if (!(existingContent instanceof IBmObject) || !((IBmObject)existingContent).bmIsTop())
+            {
+                continue;
+            }
+            // resolvePackageContent may REPAIR this sibling as a side effect (ensureNamespace
+            // re-syncs a stale content targetNamespace to its own owner) - capture the pre-state so
+            // a repaired-but-not-rewritten sibling is still force-exported (an in-memory change that
+            // never reaches disk would leave BM and Package.xdto inconsistent).
+            String siblingPreNs = existingContent.getNsUri();
+            XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(other, tx, fqnGenerator);
+            if (resolved.error != null)
+            {
+                // Best-effort: a sibling package with no usable content of its own (e.g. no namespace set
+                // yet) is skipped, not a failure of THIS modify.
+                continue;
+            }
+            boolean repaired = siblingPreNs == null || !siblingPreNs.equals(other.getNamespace());
+            if (repaired && siblingPreNs != null)
+            {
+                // FIRST restore the repaired sibling's SELF-consistency - but ONLY for QNames whose
+                // local name matches one of the sibling's OWN local types (the disambiguation): a
+                // genuine reference into another package whose namespace equals the stale value
+                // (e.g. the renamed package's old namespace) must stay for the cascade rewrite
+                // below, and imports are never self-imports, so they are not touched here.
+                XdtoWriter.rewriteStaleSelfReferences(resolved.content, siblingPreNs, other.getNamespace());
+            }
+            boolean rewritten = XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+            if (!rewritten && !repaired)
+            {
+                continue;
+            }
+            exportFqnsOut.add("XDTOPackage." + other.getName()); //$NON-NLS-1$
+            if (resolved.contentFqn != null)
+            {
+                exportFqnsOut.add(resolved.contentFqn);
+            }
+            if (rewritten)
+            {
+                cascadedNamesOut.add(other.getName());
+            }
+        }
     }
 
     /**
@@ -2043,10 +2464,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Builds the success JSON for a completed modify (action / fqn / applied / persisted, the
      * normalization report and the confirmation message). Pure helper extracted from
-     * {@link #executeOnUiThread}; the same shape used by the form-member branch.
+     * {@link #executeOnUiThread}; the same shape used by the form-member branch and
+     * {@link #modifyXdtoMember} (neither of those ever cascades a namespace, so they use this overload).
      */
     private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
         MdNameNormalizer.Report normReport)
+    {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, List.of());
+    }
+
+    /**
+     * Same as the 4-arg overload, plus the namespace-CASCADE report (maintainer request): when the
+     * namespace change propagated to one or more OTHER XDTOPackages (see
+     * {@link #cascadeNamespaceChange}), their Names are appended to the confirmation MESSAGE text only -
+     * the output schema / description are deliberately untouched (zero golden churn) - as
+     * {@code "; namespace propagated to N referencing package(s): Q, R"}.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
@@ -2054,9 +2489,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
-        return result
-            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .toJson();
+        String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!cascadedPackageNames.isEmpty())
+        {
+            message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
+                + " referencing package(s): " + String.join(", ", cascadedPackageNames); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return result.put(McpKeys.MESSAGE, message).toJson();
     }
 
     /**

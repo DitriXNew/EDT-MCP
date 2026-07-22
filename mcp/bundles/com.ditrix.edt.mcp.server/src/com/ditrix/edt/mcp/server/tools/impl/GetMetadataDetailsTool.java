@@ -31,6 +31,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.xdto.model.Package;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -50,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
+import com.ditrix.edt.mcp.server.utils.XdtoStructureReader;
 
 /**
  * Tool to get detailed properties of metadata objects from 1C configuration.
@@ -321,6 +324,19 @@ public class GetMetadataDetailsTool implements IMcpTool
         // Type-specific properties the universal reflective formatter's default view omits
         // (issue #288): ScheduledJob / CommonModule / an InformationRegister's dimension Indexing.
         sb.append(formatTypeSpecificProperties(mdObject, ctx.full));
+        // An XDTOPackage FQN additionally renders its CONTENT (object types with their properties,
+        // package-global properties, value types, dependencies - issue #183 stream 1) via the
+        // cross-model hop (XdtoStructureReader), APPENDED after the standard property block (unlike
+        // the template/DCS branch above, the package's own properties - namespace, comment, synonym -
+        // stay useful, so this augments rather than replaces the generic render).
+        if (mdObject instanceof XDTOPackage)
+        {
+            String xdtoStructure = renderXdtoPackageStructure(ctx.bmModel, (XDTOPackage)mdObject, fqn);
+            if (xdtoStructure != null)
+            {
+                sb.append(xdtoStructure);
+            }
+        }
         // ORIGIN footer: core / core (adopted) / extension. For a base
         // configuration this is always "core"; for an extension it distinguishes
         // an adopted base object from one the extension itself owns.
@@ -737,6 +753,33 @@ public class GetMetadataDetailsTool implements IMcpTool
                 return null;
             }
             return DcsStructureReader.render(normalized, (DataCompositionSchema)content, language);
+        });
+    }
+
+    /**
+     * Renders an XDTOPackage's CONTENT (object types with their properties, package-global properties,
+     * value types, dependencies - issue #183 stream 1) via {@link XdtoStructureReader}: re-fetches the
+     * package inside a {@link BmTransactions#executeAndRollback} boundary (required, not a plain read -
+     * {@code XDTOPackage.getPackage()} lazily materializes the content from the separate, lazily-loaded
+     * {@code .xdto} resource, a model-write side effect, exactly like {@code BasicTemplate.getTemplate()}
+     * for the DCS branch above) and renders it. Returns {@code null} only when the BM model or the
+     * package's BM id is unavailable (never - a resolved {@code mdObject} is always a real BM object);
+     * an XDTOPackage with NO content yet still renders the "(no package content)" note, matching
+     * {@link XdtoStructureReader#render}'s null-content contract.
+     */
+    private static String renderXdtoPackageStructure(IBmModel bmModel, XDTOPackage pkg, String fqn)
+    {
+        if (bmModel == null || !(pkg instanceof IBmObject))
+        {
+            return null;
+        }
+        final long pkgBmId = ((IBmObject)pkg).bmGetId();
+        final String normalized = MetadataTypeUtils.normalizeFqn(fqn);
+        return BmTransactions.executeAndRollback(bmModel, "GetMetadataDetailsXdtoPackage", (tx, monitor) -> //$NON-NLS-1$
+        {
+            EObject txPackage = tx.getObjectById(pkgBmId);
+            Package content = txPackage instanceof XDTOPackage ? ((XDTOPackage)txPackage).getPackage() : null;
+            return XdtoStructureReader.render(normalized, content);
         });
     }
 

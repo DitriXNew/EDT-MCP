@@ -183,6 +183,19 @@ public class GetProjectErrorsTool implements IMcpTool
 
     public static String getProjectErrors(String projectName, String severity, String checkId, List<String> objects, int limit, boolean detailed)
     {
+        return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, false);
+    }
+
+    /**
+     * As {@link #getProjectErrors(String, String, String, List, int, boolean)} but with an
+     * {@code exactScope} objects filter: segment-boundary matching instead of the default substring
+     * (see {@link #excludedByObjectsFilter(Set, boolean, String, int[], boolean)}). Package-private -
+     * only validate_xdto_package needs exact per-object scoping (a substring match across
+     * prefix-sharing package names would report a sibling package's problems).
+     */
+    static String getProjectErrors(String projectName, String severity, String checkId,
+        List<String> objects, int limit, boolean detailed, boolean exactScope)
+    {
         try
         {
             IMarkerManager markerManager = Activator.getDefault().getMarkerManager();
@@ -221,7 +234,7 @@ public class GetProjectErrorsTool implements IMcpTool
 
             final CollectContext collectContext = new CollectContext(finalSeverityFilter,
                 finalCheckId, finalObjects, checkRepository, limit, unresolvedShown,
-                unresolvedFilteredOut);
+                unresolvedFilteredOut, exactScope);
             final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
                 collectContext);
 
@@ -360,7 +373,7 @@ public class GetProjectErrorsTool implements IMcpTool
             Runnable collector = () -> projectMarkers.stream()
                 .map(marker -> buildIfMatches(marker, context.severityFilter, context.checkId,
                     context.objects, context.checkRepository, context.unresolvedShown,
-                    context.unresolvedFilteredOut))
+                    context.unresolvedFilteredOut, context.exactScope))
                 .filter(Objects::nonNull)
                 .limit(remaining)
                 .forEach(errors::add);
@@ -397,10 +410,11 @@ public class GetProjectErrorsTool implements IMcpTool
         final int limit;
         final int[] unresolvedShown;
         final int[] unresolvedFilteredOut;
+        final boolean exactScope;
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
             ICheckRepository checkRepository, int limit, int[] unresolvedShown,
-            int[] unresolvedFilteredOut)
+            int[] unresolvedFilteredOut, boolean exactScope)
         {
             this.severityFilter = severityFilter;
             this.checkId = checkId;
@@ -409,6 +423,7 @@ public class GetProjectErrorsTool implements IMcpTool
             this.limit = limit;
             this.unresolvedShown = unresolvedShown;
             this.unresolvedFilteredOut = unresolvedFilteredOut;
+            this.exactScope = exactScope;
         }
     }
 
@@ -564,6 +579,19 @@ public class GetProjectErrorsTool implements IMcpTool
     static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
         Set<String> objects, ICheckRepository checkRepository, int[] unresolvedShown, int[] unresolvedFilteredOut)
     {
+        return buildIfMatches(marker, severityFilter, checkId, objects, checkRepository, unresolvedShown,
+            unresolvedFilteredOut, false);
+    }
+
+    /**
+     * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, ICheckRepository, int[], int[])}
+     * but threading {@code exactScope} into the objects filter (segment-boundary vs substring - see
+     * {@link #excludedByObjectsFilter(Set, boolean, String, int[], boolean)}).
+     */
+    static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
+        Set<String> objects, ICheckRepository checkRepository, int[] unresolvedShown, int[] unresolvedFilteredOut,
+        boolean exactScope)
+    {
         // Severity filter
         if (severityFilter != null && marker.getSeverity() != severityFilter)
         {
@@ -597,7 +625,8 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         
         // Objects filter (FQN matching against the resolved object presentation)
-        if (excludedByObjectsFilter(objects, presentationResolved, objectPresentation, unresolvedFilteredOut))
+        if (excludedByObjectsFilter(objects, presentationResolved, objectPresentation, unresolvedFilteredOut,
+            exactScope))
         {
             return null;
         }
@@ -639,6 +668,24 @@ public class GetProjectErrorsTool implements IMcpTool
     static boolean excludedByObjectsFilter(Set<String> objects, boolean presentationResolved,
         String objectPresentation, int[] unresolvedFilteredOut)
     {
+        return excludedByObjectsFilter(objects, presentationResolved, objectPresentation,
+            unresolvedFilteredOut, false);
+    }
+
+    /**
+     * As {@link #excludedByObjectsFilter(Set, boolean, String, int[])} but with an
+     * {@code exactScope} mode. When {@code false} (the default get_project_errors behavior) a
+     * variant matches by SUBSTRING ({@code contains}) - loose on purpose, so a caller filtering
+     * by {@code Catalog.Order} also sees markers on its members. When {@code true} a variant
+     * matches only at a SEGMENT BOUNDARY: the presentation must EQUAL the variant or start with
+     * {@code variant + "."} (the object itself or a member strictly under it) - so
+     * {@code XDTOPackage.P} no longer matches {@code XDTOPackage.P2}'s markers. Used by
+     * validate_xdto_package, which needs exact per-package scoping (a substring match across
+     * prefix-sharing package names is a false failure).
+     */
+    static boolean excludedByObjectsFilter(Set<String> objects, boolean presentationResolved,
+        String objectPresentation, int[] unresolvedFilteredOut, boolean exactScope)
+    {
         if (objects.isEmpty())
         {
             return false;
@@ -659,7 +706,10 @@ public class GetProjectErrorsTool implements IMcpTool
         String presentationLower = objectPresentation.toLowerCase();
         for (String fqnVariant : objects)
         {
-            if (presentationLower.contains(fqnVariant))
+            boolean matches = exactScope
+                ? presentationLower.equals(fqnVariant) || presentationLower.startsWith(fqnVariant + ".") //$NON-NLS-1$
+                : presentationLower.contains(fqnVariant);
+            if (matches)
             {
                 return false;
             }

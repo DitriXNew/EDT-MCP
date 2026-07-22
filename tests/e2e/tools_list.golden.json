@@ -471,7 +471,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
+    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Also creates an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), 'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or 'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
         "callType": {
@@ -527,7 +527,7 @@
           "type": "string"
         },
         "properties": {
-          "description": "Optional properties to apply at creation, as [{name, value, language?}]. This version applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata).",
+          "description": "Optional properties to apply at creation, as [{name, value, language?}]. For most kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata). XDTO PACKAGE MEMBERS ('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like 'string', the EXACT name of an ObjectType already in the same package for a same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string).",
           "items": {
             "type": "object"
           },
@@ -567,6 +567,13 @@
         "action": {
           "description": "'created' on success",
           "type": "string"
+        },
+        "applied": {
+          "description": "Names of the optional attributes actually applied (XDTO package member create only)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "callType": {
           "description": "Extension event call type written (Before/After/Instead), when an extension event handler (form:EventHandlerExtension) was created",
@@ -1134,7 +1141,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - or an XDTO package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -3314,7 +3321,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Edit a structured membership LIST with 'content' instead of 'properties', dispatched by the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or removes one by its metadata FQN; a CommonAttribute entry takes 'use' ('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and a Catalog owner / Document register record / Subsystem content object is a plain reference (no flag). AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' payload instead of 'properties' on a template FQN (a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): 'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the cells (text or a print-time parameter) with formatting, merged ranges, named areas and column / row sizes into the template's spreadsheet content; render the result with get_template_screenshot. AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of 'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the report's main schema (query data sets + fields + schema parameters), creating the DCS if the report has none. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Edit a structured membership LIST with 'content' instead of 'properties', dispatched by the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or removes one by its metadata FQN; a CommonAttribute entry takes 'use' ('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and a Catalog owner / Document register record / Subsystem content object is a plain reference (no flag). AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' payload instead of 'properties' on a template FQN (a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): 'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the cells (text or a print-time parameter) with formatting, merged ranges, named areas and column / row sizes into the template's spreadsheet content; render the result with get_template_screenshot. AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of 'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the report's main schema (query data sets + fields + schema parameters), creating the DCS if the report has none. Edit an XDTO package MEMBER through 'properties' on its own FQN ('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or '...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD type name, the EXACT name of an ObjectType already in the same package, or {nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string). Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
         "content": {
@@ -4708,6 +4715,37 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and return a pass/fail verdict plus any problems found (e.g. a dangling reference to a deleted ObjectType). It reflects the LATEST validation state already computed by EDT (reads existing markers) rather than forcing a fresh compile; run revalidate_objects first if you need up-to-the-second results. Does not implement any XDTO-specific rule itself - it is a scoped view over get_project_errors. Full parameters and examples: call get_tool_guide('validate_xdto_package').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "FQN of the XDTO package to validate, as 'XDTOPackage.<Name>' (required). Must already exist; check with get_metadata_objects.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max problem rows to report; default 100, max 1000 (optional)",
+          "type": "integer"
+        },
+        "projectName": {
+          "description": "EDT project name (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "validate_xdto_package",
+    "outputSchema": null
   },
   {
     "annotations": {
