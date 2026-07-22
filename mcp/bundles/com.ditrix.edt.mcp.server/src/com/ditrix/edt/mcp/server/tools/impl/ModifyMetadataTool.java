@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.ecore.EClass;
@@ -39,11 +40,13 @@ import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
@@ -75,6 +78,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
@@ -159,6 +163,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** The form attribute's value-type feature / property alias. */
     private static final String PROP_VALUE_TYPE = "valueType"; //$NON-NLS-1$
+
+    /** A ScheduledJob's method-reference property (guarded by {@link MethodReferenceValidator}). */
+    private static final String PROP_METHOD_NAME = "methodName"; //$NON-NLS-1$
 
     /** Confirmation-message prefix for a completed modify. */
     private static final String MSG_MODIFIED_PREFIX = "Modified "; //$NON-NLS-1$
@@ -1841,8 +1848,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // once so an unresolved 'type' reference can append the extension-adopt hint (issue #262).
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         List<PreparedChange> changes = new ArrayList<>();
-        String prepErr = validateAndPrepare(config, version, target, properties, changes, normReport,
-            isExtensionProject);
+        String prepErr = validateAndPrepare(ctx.project, config, version, target, properties, changes,
+            normReport, isExtensionProject);
         if (prepErr != null)
         {
             return prepErr;
@@ -2477,13 +2484,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * mutation), appending a {@link PreparedChange} for each. Returns the first property's JSON error,
      * or {@code null} when all validated. Side-effect-free apart from populating {@code changes};
      * extracted verbatim from {@link #executeOnUiThread} so a failure returns the SAME error in the
-     * SAME case, before the BM transaction runs.
+     * SAME case, before the BM transaction runs. {@code project} is threaded through only so
+     * {@link #validateMethodReference} can read a CommonModule's source when the target is a
+     * ScheduledJob / EventSubscription; every other property ignores it.
      */
-    private String validateAndPrepare(Configuration config, Version version, MdObject target,
+    private String validateAndPrepare(IProject project, Configuration config, Version version, MdObject target,
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        PrepareContext ctx = new PrepareContext(config, version);
+        PrepareContext ctx = new PrepareContext(project, config, version);
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
@@ -3059,9 +3068,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
         // (validateAndPrepare, which threads the project's extension status through); a form member's
         // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
-        // so there is no unresolved-reference case here to hint.
-        String pErr = prepare(new PrepareContext(config, version), member, holder.classifyExtInfo, normProp, built,
-            normReport, false);
+        // so there is no unresolved-reference case here to hint. `project` is null: a form member is
+        // never a ScheduledJob / EventSubscription, so validateMethodReference never dereferences it.
+        String pErr = prepare(new PrepareContext(null, config, version), member, holder.classifyExtInfo, normProp,
+            built, normReport, false);
         if (pErr != null)
         {
             throw new FormValidationException(pErr);
@@ -3166,7 +3176,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** The rebind property names. {@code procedure} (alias {@code handler}) rebinds a handler's BSL
-     * procedure; {@code command} (alias {@code commandName}) re-points a button at a form command. */
+     * procedure; {@code command} (alias {@code commandName}) re-points a button at a form command.
+     * {@code PROP_HANDLER} doubles as an EventSubscription's method-reference property (guarded by
+     * {@link MethodReferenceValidator} on the mdclass path). */
     private static final String PROP_PROCEDURE = "procedure"; //$NON-NLS-1$
     private static final String PROP_HANDLER = "handler"; //$NON-NLS-1$
     private static final String PROP_COMMAND = "command"; //$NON-NLS-1$
@@ -3553,16 +3565,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
      * model context every {@code ValueKind} branch resolves references / types against. Folded together
      * purely to bring {@link #prepare}'s parameter count under the 7-parameter threshold (S107); no
-     * behaviour change.
+     * behaviour change. {@code project} is nullable: it is {@code null} on the form-member path (a form
+     * member is never a ScheduledJob / EventSubscription, so {@link #validateMethodReference} never
+     * dereferences it there) and only non-null on the mdclass path.
      */
     private static final class PrepareContext
     {
+        final IProject project;
+
         final Configuration config;
 
         final Version version;
 
-        PrepareContext(Configuration config, Version version)
+        PrepareContext(IProject project, Configuration config, Version version)
         {
+            this.project = project;
             this.config = config;
             this.version = version;
         }
@@ -3584,6 +3601,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "metadata. modify_metadata only sets non-identity properties.").toJson(); //$NON-NLS-1$
         }
         String value = asString(prop.get(KEY_VALUE));
+
+        // Guard (scoped to exactly two type+property combos - a no-op for everything else, including
+        // every property on the form-member path where ctx.project is null): a ScheduledJob's
+        // methodName / an EventSubscription's handler must reference an EXISTING, Exported, Server-side
+        // CommonModule method BEFORE it is accepted, so binding a job/subscription at a function that
+        // does not exist yet fails HERE with an actionable error instead of only at update_database
+        // ("no such function"). An empty value is left to the pre-existing generic-STRING policy below
+        // (requireValueError: modify_metadata never "clears" a property on an empty value) rather than
+        // being reported as a method-reference failure.
+        String methodRefErr = validateMethodReference(ctx.project, ctx.config, target, name, value);
+        if (methodRefErr != null)
+        {
+            return methodRefErr;
+        }
+        // A VALID reference is re-written to its canonical stored form (resolved module casing;
+        // methodName without a type prefix, handler with the English CommonModule prefix) so a
+        // tolerated variant like 'CommonModule.Calc.Add' / 'ОбщийМодуль.Calc.Add' never serializes
+        // verbatim into the model where the platform's own resolution would miss it.
+        value = canonicalMethodReference(ctx.config, target, name, value);
 
         // findFeature classifies ONLY the matched feature and skips the current-value rendering
         // (eGet + proxy + type rendering) that the full introspect() performs for EVERY assignable
@@ -3626,6 +3662,62 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             default:
                 return prepareString(name, value, info, out, normReport);
         }
+    }
+
+    /**
+     * Dispatches the maintainer-requested method-reference guard (a job/subscription must be bound to a
+     * method that already EXISTS, is EXPORTED and lives in a SERVER module) to {@link
+     * MethodReferenceValidator}, scoped to exactly the two type+property combos it covers. Every other
+     * target/property - including any property on the form-member path, where {@code project} is
+     * {@code null} - returns {@code null} immediately without touching {@code project} / {@code config}.
+     * An empty value is NOT validated here (it falls through to the pre-existing generic-STRING policy,
+     * which itself rejects an empty value rather than "clearing" the property). Package-visible (takes
+     * the plain {@code project}/{@code config} pair rather than the private {@link PrepareContext}) so
+     * the dispatch is unit-testable headlessly, mirroring {@link #formTypeExtInfoComboError}.
+     */
+    static String validateMethodReference(IProject project, Configuration config, EObject target, String name,
+        String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return null;
+        }
+        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        {
+            return MethodReferenceValidator.validate(project, config, value, PROP_METHOD_NAME,
+                "'CommonModuleName.MethodName'", "Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
+        {
+            return MethodReferenceValidator.validate(project, config, value, PROP_HANDLER,
+                "'CommonModule.ModuleName.MethodName'", "CommonModule.Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
+    }
+
+    /**
+     * Canonicalizes an ALREADY-VALIDATED method reference for the two guarded combos (see
+     * {@link #validateMethodReference}): a ScheduledJob's {@code methodName} stores
+     * {@code Module.Method} (no type prefix), an EventSubscription's {@code handler} stores
+     * {@code CommonModule.Module.Method}, both with the RESOLVED module's exact metadata name.
+     * Any other target/property - or a defensive resolution failure - returns the value unchanged.
+     */
+    static String canonicalMethodReference(Configuration config, EObject target, String name, String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return value;
+        }
+        String canonical = null;
+        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        {
+            canonical = MethodReferenceValidator.canonicalReference(config, value, false);
+        }
+        else if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
+        {
+            canonical = MethodReferenceValidator.canonicalReference(config, value, true);
+        }
+        return canonical != null ? canonical : value;
     }
 
     /**

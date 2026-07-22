@@ -32,11 +32,14 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorForm;
+import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
@@ -1126,5 +1129,95 @@ public class ModifyMetadataToolTest
         assertNull("a well-formed 'dcs' arg carries no error", valid.error); //$NON-NLS-1$
         assertNotNull("a well-formed 'dcs' object must parse", valid.spec); //$NON-NLS-1$
         assertTrue("the parsed object must carry its members", valid.spec.has("dataSets")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ===== method-reference guard dispatch (a job/subscription must be bound to an EXISTING, Exported,
+    // Server method) =================================================================================
+    //
+    // validateMethodReference is scoped to exactly two type+property combos (ScheduledJob.methodName /
+    // EventSubscription.handler); the actual parse/resolve/decide logic lives in MethodReferenceValidator
+    // (covered by MethodReferenceValidatorTest) - these tests only prove the DISPATCH: which target/property
+    // combo triggers the guard, which is a no-op, and that an empty value (clearing) is never validated.
+
+    @Test
+    public void testMethodReferenceGuardTriggersOnScheduledJobMethodName()
+    {
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        String err = ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a methodName value with no dot must be rejected", err); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the bad value", err.contains("NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardTriggersOnEventSubscriptionHandler()
+    {
+        EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
+        String err = ModifyMetadataTool.validateMethodReference(null, null, sub, "handler", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a handler value with no dot must be rejected", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the bad value", err.contains("NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardIsNoOpForOtherTargetTypes()
+    {
+        // Even a garbage (no-dot) value on a 'methodName'-NAMED property must be IGNORED on a non
+        // -ScheduledJob target: the guard is scoped by TYPE first.
+        DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
+        assertNull("the guard must not fire on a non-ScheduledJob/EventSubscription target", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, dp, "methodName", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardIsNoOpForOtherPropertyNames()
+    {
+        // A ScheduledJob's 'comment' (or any property other than methodName) is not the guarded one.
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertNull("the guard must only fire on 'methodName', not any other property", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, job, "comment", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardSkipsEmptyOrNullValue()
+    {
+        // An empty/null value is NEVER validated by this guard - it falls through to the pre-existing
+        // generic-STRING policy (which itself rejects an empty value rather than "clearing" the
+        // property; modify_metadata never clears a property on an empty value).
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertNull("an empty methodName value must not be validated by this guard", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", "")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a null methodName value must not be validated by this guard", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMethodReferenceGuardReportsMissingModule()
+    {
+        // A well-formed reference ("Module.Method") whose module does not exist in the (empty)
+        // configuration must be rejected naming the module - end-to-end through
+        // MethodReferenceValidator.validate, proving the dispatch threads project/config correctly.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        String err =
+            ModifyMetadataTool.validateMethodReference(null, config, job, "methodName", "NoSuchModule.Foo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a reference to a non-existent module must be rejected", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing module", err.contains("NoSuchModule")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCanonicalMethodReferenceNormalizesGuardedCombos()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setName("Calc"); //$NON-NLS-1$
+        config.getCommonModules().add(module);
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertEquals("a validated methodName must serialize WITHOUT the type prefix", //$NON-NLS-1$
+            "Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
+        assertEquals("a validated handler must serialize WITH the English CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Unguarded combo: value passes through unchanged.
+        assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 }

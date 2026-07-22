@@ -29,6 +29,14 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
+import com._1c.g5.v8.dt.metadata.mdclass.Indexing;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 
 /**
@@ -482,5 +490,194 @@ public class GetMetadataDetailsToolTest
         literal.setValue(value);
         literal.setLiteral(name);
         eEnum.getELiterals().add(literal);
+    }
+
+    // ==================== Type-specific properties: ScheduledJob / CommonModule / InformationRegister
+    // dimension Indexing (issue #288) ====================
+    //
+    // get_metadata_details WRITES these via modify_metadata but used to render only Name/Synonym for
+    // ScheduledJob/CommonModule in the default (non-full) view, and never showed a register dimension's
+    // Indexing at all - reading them back was impossible. formatTypeSpecificProperties is the pure
+    // rendering hook (package-private, called from processFqn right after the universal formatter and
+    // before the ORIGIN footer); it needs only in-memory MdClassFactory objects, no live workbench.
+
+    @Test
+    public void testScheduledJobPropertiesRenderedInBasicMode()
+    {
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        job.setMethodName("CommonModule.MyJob.Execute"); //$NON-NLS-1$
+        job.setUse(true);
+        job.setPredefined(false);
+        job.setRestartCountOnFailure(3);
+        job.setRestartIntervalOnFailure(60);
+        job.setKey("JobKey"); //$NON-NLS-1$
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(job, false);
+
+        assertTrue("must render the Properties section", md.contains("### Properties")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("methodName must be present", //$NON-NLS-1$
+            md.contains("Method Name") && md.contains("CommonModule.MyJob.Execute")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("use=true must render as Yes", md.contains("| Use | Yes |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("predefined=false must render as No, not be omitted", //$NON-NLS-1$
+            md.contains("| Predefined | No |")); //$NON-NLS-1$
+        assertTrue("restartCountOnFailure must render its int value", //$NON-NLS-1$
+            md.contains("| Restart Count On Failure | 3 |")); //$NON-NLS-1$
+        assertTrue("restartIntervalOnFailure must render its int value", //$NON-NLS-1$
+            md.contains("| Restart Interval On Failure | 60 |")); //$NON-NLS-1$
+        assertTrue("key must be present", md.contains("| Key | JobKey |")); //$NON-NLS-1$ //$NON-NLS-2$
+        // No Schedule was set on this job, so its presence row must show the dash placeholder,
+        // never a raw toString() dump of an absent/unresolvable cross-model object.
+        assertTrue("an unset Schedule must render as the dash placeholder", //$NON-NLS-1$
+            md.contains("| Schedule | - |")); //$NON-NLS-1$
+    }
+
+    /**
+     * A blank {@code methodName}/{@code key} must render as the dash placeholder, not an empty cell
+     * (which would look identical to a table-formatting bug rather than "not set").
+     */
+    @Test
+    public void testScheduledJobBlankStringsRenderAsDash()
+    {
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        // methodName/key left unset (EMF default for an unset String feature is null/empty).
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(job, false);
+
+        assertTrue("an unset Method Name must render as the dash placeholder", //$NON-NLS-1$
+            md.contains("| Method Name | - |")); //$NON-NLS-1$
+        assertTrue("an unset Key must render as the dash placeholder", //$NON-NLS-1$
+            md.contains("| Key | - |")); //$NON-NLS-1$
+    }
+
+    /**
+     * The type-specific Properties table renders in FULL mode too. The generic "All Properties" dump
+     * repeats the plain scalar attributes, but it omits the transient Schedule reference, so full mode
+     * must keep this table or it would carry LESS than basic mode (codex #288).
+     */
+    @Test
+    public void testScheduledJobPropertiesRenderedInFullMode()
+    {
+        // Full mode must ALSO render the type-specific table: the generic "All Properties" dump
+        // does not include the transient Schedule reference, so skipping here would make full mode
+        // lose information present in basic mode (codex #288).
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        job.setMethodName("CommonModule.MyJob.Execute"); //$NON-NLS-1$
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(job, true);
+
+        assertTrue("full mode must still render the ScheduledJob Properties table", //$NON-NLS-1$
+            md.contains("### Properties") && md.contains("Method Name")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCommonModulePropertiesRenderedInBasicMode()
+    {
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setServer(true);
+        module.setServerCall(false);
+        module.setClientManagedApplication(true);
+        module.setClientOrdinaryApplication(false);
+        module.setExternalConnection(false);
+        module.setGlobal(true);
+        module.setPrivileged(false);
+        module.setReturnValuesReuse(ReturnValuesReuse.DURING_SESSION);
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(module, false);
+
+        assertTrue("must render the Properties section", md.contains("### Properties")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("server=true must render as Yes", md.contains("| Server | Yes |")); //$NON-NLS-1$ //$NON-NLS-2$
+        // false is a real, meaningful value for these flags - it must render as No, never be omitted.
+        assertTrue("serverCall=false must render as No, not be omitted", //$NON-NLS-1$
+            md.contains("| Server Call | No |")); //$NON-NLS-1$
+        assertTrue("clientManagedApplication=true must render as Yes", //$NON-NLS-1$
+            md.contains("| Client (Managed Application) | Yes |")); //$NON-NLS-1$
+        assertTrue("clientOrdinaryApplication=false must render as No", //$NON-NLS-1$
+            md.contains("| Client (Ordinary Application) | No |")); //$NON-NLS-1$
+        assertTrue("externalConnection=false must render as No", md.contains("| External Connection | No |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("global=true must render as Yes", md.contains("| Global | Yes |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("privileged=false must render as No", md.contains("| Privileged | No |")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The enum must render its LITERAL name (whatever ReturnValuesReuse.DURING_SESSION.toString()
+        // is), never a raw Java object dump (e.g. containing '@' + a hashcode).
+        assertTrue("returnValuesReuse must render its literal name", //$NON-NLS-1$
+            md.contains(ReturnValuesReuse.DURING_SESSION.toString()));
+        assertFalse("the enum cell must not be a raw object dump", md.contains("@")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Mirrors {@link #testScheduledJobPropertiesRenderedInFullMode} for CommonModule: the
+     * type-specific table renders in full mode too, so full output never carries less than basic.
+     */
+    @Test
+    public void testCommonModulePropertiesRenderedInFullMode()
+    {
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setServer(true);
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(module, true);
+
+        assertTrue("full mode must still render the CommonModule Properties table", //$NON-NLS-1$
+            md.contains("### Properties") && md.contains("| Server | Yes |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * An InformationRegister's dimension Indexing must be visible in BOTH the default and full views:
+     * the shared attributes-table Indexing column only recognizes DbObjectAttribute, and a register
+     * dimension is a separate RegisterDimension sub-interface, so it never gets a value there in either
+     * mode - this dedicated table is the only place it is visible.
+     */
+    @Test
+    public void testInformationRegisterDimensionIndexingRenderedInBothModes()
+    {
+        InformationRegister register = MdClassFactory.eINSTANCE.createInformationRegister();
+        InformationRegisterDimension indexed = MdClassFactory.eINSTANCE.createInformationRegisterDimension();
+        indexed.setName("Indexed"); //$NON-NLS-1$
+        indexed.setIndexing(Indexing.INDEX);
+        InformationRegisterDimension notIndexed = MdClassFactory.eINSTANCE.createInformationRegisterDimension();
+        notIndexed.setName("NotIndexed"); //$NON-NLS-1$
+        notIndexed.setIndexing(Indexing.DONT_INDEX);
+        register.getDimensions().add(indexed);
+        register.getDimensions().add(notIndexed);
+
+        String basic = GetMetadataDetailsTool.formatTypeSpecificProperties(register, false);
+        String full = GetMetadataDetailsTool.formatTypeSpecificProperties(register, true);
+
+        for (String md : new String[] { basic, full })
+        {
+            assertTrue("must render the Dimension Indexing section", md.contains("### Dimension Indexing")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the indexed dimension's row must carry its Indexing literal", //$NON-NLS-1$
+                md.contains("Indexed") && md.contains(Indexing.INDEX.toString())); //$NON-NLS-1$
+            assertTrue("the non-indexed dimension's row must carry its Indexing literal", //$NON-NLS-1$
+                md.contains("NotIndexed") && md.contains(Indexing.DONT_INDEX.toString())); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * A register with no dimensions renders no Dimension Indexing section (and, since an
+     * InformationRegister is neither a ScheduledJob nor a CommonModule, no Properties table either) -
+     * the whole type-specific section is empty.
+     */
+    @Test
+    public void testInformationRegisterWithNoDimensionsRendersNothing()
+    {
+        InformationRegister register = MdClassFactory.eINSTANCE.createInformationRegister();
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(register, false);
+
+        assertEquals("a register with no dimensions must add no section", "", md); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A type this method does not special-case (e.g. Catalog) must add nothing, in either mode - the
+     * hook must be a true no-op for everything else, matching the ratchet other section-formatter tests
+     * apply.
+     */
+    @Test
+    public void testUnrelatedTypeRendersNothing()
+    {
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("Products"); //$NON-NLS-1$
+
+        assertEquals("", GetMetadataDetailsTool.formatTypeSpecificProperties(catalog, false)); //$NON-NLS-1$
+        assertEquals("", GetMetadataDetailsTool.formatTypeSpecificProperties(catalog, true)); //$NON-NLS-1$
     }
 }

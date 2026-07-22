@@ -19,6 +19,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - Markdown, one section per resolved object, separated by `---`.
 - A form FQN renders the enriched form structure instead of an mdclass object section: an Items outline (each item with its visibility, bound `dataPath` and per-kind extras), an Attributes table (with the `Main`/`SavedData` columns), a Commands table and an Event handlers section.
 - A template FQN whose content is a Data Composition Schema renders the schema's structure (see above) instead of an mdclass object section, headed `# Data Composition Schema: <fqn>`.
+- Type-specific properties are appended for a few kinds whose behaviour the basic view otherwise hid: a **ScheduledJob** gets a Properties table (methodName, use, predefined, restartCountOnFailure / restartIntervalOnFailure, key, and whether a Schedule is set), a **CommonModule** gets its context-availability flags (server / serverCall / clientManagedApplication / clientOrdinaryApplication / externalConnection / global / privileged) and returnValuesReuse, and an **InformationRegister**'s Dimensions additionally show their `Indexing`. These render in both the default and `full: true` views.
 - Per-object failures (malformed FQN or object not found) do NOT fail the whole call. They are collected into a dedicated `## Errors` table at the end with an `ERROR` status row carrying the FQN and reason, so a client can tell a failed object from data.
 
 ## Examples

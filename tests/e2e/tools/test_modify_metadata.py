@@ -1270,3 +1270,208 @@ def test_extension_unresolved_ref_gets_adopt_hint():
         e, names=["Cannot resolve the reference target"], suggests=["adopt_metadata_object"],
         ctx="an unresolved ref inside an extension must keep the sentinel AND hint at adopt_metadata_object")
     assert_tree_unchanged(before, "a rejected type set must change nothing on the base project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Method-reference guard — a ScheduledJob.methodName / an EventSubscription.handler must
+# reference an EXISTING, Exported, Server-side CommonModule method (maintainer report on PR
+# #292: an AI bound a job's methodName at a function it had not created yet; EDT accepted it
+# silently and update_database later failed with an opaque "no such function"). Fixture
+# CommonModule.Calc.Add ("Функция Add(A, B) Экспорт" in a <server>true</server> module) is the
+# live-verified happy-path target; each negative test seeds its own fresh module/job/subscription
+# so it never perturbs the shared Calc/OK/Error fixtures other tests depend on.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_accepts_existing_exported_server_method():
+    job = "E2EMrvJobOk"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "Calc.Add"}],
+    })
+    assert_ok(r, "bind methodName to the existing exported server method Calc.Add")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    assert "methodName" in (r.structured.get("applied") or []), \
+        "methodName must be applied: %r" % (r.structured,)
+    poll_diff_contains("Calc.Add", ctx="the methodName must land in the ScheduledJob .mdo on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_missing_module_is_error():
+    job = "E2EMrvJobNoMod"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "E2EMrvNoSuchModule.Foo"}],
+    })
+    e = assert_error(r, "methodName referencing a non-existent CommonModule")
+    assert_error_quality(e, names=["E2EMrvNoSuchModule"],
+                         suggests=["get_metadata_objects"],
+                         ctx="a missing module must be named with a discovery hint")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_missing_method_is_error():
+    job = "E2EMrvJobNoMethod"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "Calc.E2EMrvNoSuchMethod"}],
+    })
+    e = assert_error(r, "methodName referencing a method that does not exist in an existing module")
+    # The error must name the missing method + point at the fix: create it first, THEN bind it
+    # (the exact maintainer-requested order-forcing behaviour).
+    assert_error_quality(e, names=["E2EMrvNoSuchMethod", "Calc"],
+                         suggests=["write_module_source"],
+                         ctx="a missing method must be named with a create-it-first hint")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_not_exported_is_error():
+    module = "E2EMrvNoExpMod"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "CommonModule." + module}),
+              "seed a fresh (default Server-kind) CommonModule")
+    wait_for_project_ready()
+    assert_ok(call("write_module_source", {
+        "projectName": PROJECT, "modulePath": "CommonModules/%s/Module.bsl" % module,
+        "mode": "replace", "overwrite": True,
+        "source": "Procedure Foo()\nEndProcedure\n",
+    }), "seed a NON-exported procedure")
+    wait_for_project_ready()
+
+    job = "E2EMrvJobNoExp"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": module + ".Foo"}],
+    })
+    e = assert_error(r, "methodName referencing a non-exported method")
+    assert_error_quality(e, names=["Foo", module], suggests=["Export"],
+                         ctx="a non-exported method must be rejected naming the Export fix")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_non_server_module_is_error():
+    module = "E2EMrvNotSrvMod"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "CommonModule." + module,
+        "commonModuleKind": "ClientManaged",
+    }), "seed a CLIENT (non-server) CommonModule")
+    wait_for_project_ready()
+    assert_ok(call("write_module_source", {
+        "projectName": PROJECT, "modulePath": "CommonModules/%s/Module.bsl" % module,
+        "mode": "replace", "overwrite": True,
+        "source": "Procedure Foo() Export\nEndProcedure\n",
+    }), "seed an EXPORTED procedure on the non-server module")
+    wait_for_project_ready()
+
+    job = "E2EMrvJobNotSrv"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": module + ".Foo"}],
+    })
+    e = assert_error(r, "methodName referencing an exported method in a non-server module")
+    assert_error_quality(e, names=[module], suggests=["Server"],
+                         ctx="a non-server module must be rejected naming the Server fix")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_no_dot_is_error():
+    job = "E2EMrvJobNoDot"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "JustAName"}],
+    })
+    e = assert_error(r, "methodName with no dot")
+    assert_error_quality(e, names=["JustAName"], suggests=["Module", "Method"],
+                         ctx="a value with no dot must explain the expected Module.Method shape")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_empty_value_skips_the_guard():
+    # An EMPTY value is NOT validated by the method-reference guard (it only fires for a
+    # non-empty binding) - modify_metadata's PRE-EXISTING, unrelated generic-STRING policy is
+    # that an empty value never "clears" a property (see requireValueError: "does not clear a
+    # property on an empty value"). So the call still errors, but it must be THAT generic
+    # error, never a method-reference one (no "Export"/"Server"/"not found in CommonModule"),
+    # proving the guard was skipped rather than firing on the empty value.
+    job = "E2EMrvJobEmpty"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": ""}],
+    })
+    e = assert_error(r, "an empty methodName value")
+    assert_error_quality(e, suggests=["non-empty"],
+                         ctx="an empty value must hit the generic non-empty-value error")
+    assert "CommonModule" not in e, \
+        "an empty value must NOT be routed through the method-reference guard: %r" % (e,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_handler_accepts_existing_exported_server_method():
+    sub = "E2EMrvSubOk"
+    fqn = "EventSubscription." + sub
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "handler", "value": "CommonModule.Calc.Add"}],
+    })
+    assert_ok(r, "bind handler to the existing exported server method CommonModule.Calc.Add")
+    assert "handler" in (r.structured.get("applied") or []), \
+        "handler must be applied: %r" % (r.structured,)
+    poll_diff_contains("Calc.Add", ctx="the handler must land in the EventSubscription .mdo on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_handler_missing_method_is_error():
+    sub = "E2EMrvSubNoMethod"
+    fqn = "EventSubscription." + sub
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "handler", "value": "CommonModule.Calc.E2EMrvSubNoSuchMethod"}],
+    })
+    e = assert_error(r, "handler referencing a method that does not exist")
+    assert_error_quality(e, names=["E2EMrvSubNoSuchMethod", "Calc"], suggests=["write_module_source"],
+                         ctx="a missing handler method must be named with a create-it-first hint")
+    assert_tree_unchanged(before, "a rejected handler must not touch the project")

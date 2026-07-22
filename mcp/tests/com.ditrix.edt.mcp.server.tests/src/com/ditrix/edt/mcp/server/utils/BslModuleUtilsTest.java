@@ -715,4 +715,40 @@ public class BslModuleUtilsTest
         // empty source: the loop never runs and the method returns null
         assertNull(BslModuleUtils.findRegionForLine(List.of(), 1));
     }
+
+    // ---- async declarations (Async/\u0410\u0441\u0438\u043D\u0445 prefix) --------------------------------
+
+    @Test
+    public void testFindMethodViaTextAsyncProcedureEnglish()
+    {
+        List<String> lines = List.of(
+            "Async Procedure Foo() Export", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Foo"); //$NON-NLS-1$
+        assertTrue("an Async Procedure declaration must be discoverable", tm.found); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindMethodViaTextAsyncFunctionRussian()
+    {
+        List<String> lines = List.of(
+            "\u0410\u0441\u0438\u043D\u0445 \u0424\u0443\u043D\u043A\u0446\u0438\u044F Bar() \u042D\u043A\u0441\u043F\u043E\u0440\u0442", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438"); //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Bar"); //$NON-NLS-1$
+        assertTrue("an async (Russian) Function declaration must be discoverable", tm.found); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFuncKeywordPatternAcceptsAsyncPrefix()
+    {
+        // The classifier must agree with METHOD_START_PATTERN on async declarations, or an
+        // `Async Function` found by the text fallback would be reported as a procedure.
+        assertTrue(BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher("Async Function Foo(") //$NON-NLS-1$
+            .find());
+        assertTrue(BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(
+            "\u0410\u0441\u0438\u043D\u0445 \u0424\u0443\u043D\u043A\u0446\u0438\u044F Bar(") //$NON-NLS-1$
+            .find());
+        assertFalse("a procedure must still not classify as a function", //$NON-NLS-1$
+            BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher("Async Procedure Baz(").find()); //$NON-NLS-1$
+    }
 }
