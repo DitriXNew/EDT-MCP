@@ -2174,6 +2174,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     String newNamespace = changedPkg.getNamespace();
                     if (oldNamespace != null && !oldNamespace.equals(newNamespace))
                     {
+                        // The renamed package's OWN content can hold SAME-PACKAGE references (a property
+                        // typed at a sibling ObjectType carries a QName with the package's own nsUri) -
+                        // rewrite those too, or the package would dangle against ITSELF right after the
+                        // rename. Its content FQN is already force-exported via contentFqnHolder.
+                        XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
                         cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
                             fqnGenerator, cascadedPackageNames, cascadedExportFqns);
                     }
@@ -2248,6 +2253,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         for (XDTOPackage other : cfg.getXDTOPackages())
         {
             if (!(other instanceof IBmObject) || ((IBmObject)other).bmGetId() == changedPkgBmId)
+            {
+                continue;
+            }
+            // A sibling with NO attached content cannot reference any namespace - skip it WITHOUT
+            // resolvePackageContent, which would otherwise MATERIALIZE + attach a fresh empty content
+            // for an unrelated package as a committed-but-unexported side effect of this modify.
+            com._1c.g5.v8.dt.xdto.model.Package existingContent = other.getPackage();
+            if (!(existingContent instanceof IBmObject) || !((IBmObject)existingContent).bmIsTop())
             {
                 continue;
             }

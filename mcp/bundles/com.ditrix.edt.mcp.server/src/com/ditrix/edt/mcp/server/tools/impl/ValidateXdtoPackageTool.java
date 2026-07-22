@@ -113,7 +113,10 @@ public class ValidateXdtoPackageTool implements IMcpTool
         Configuration config = resolved.configuration();
 
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
+        // Yo-fallback resolution (mirrors modify/delete): create_metadata normalizes ё->е in the stored
+        // name by default, so validating the ORIGINAL spelling must still find the stored package.
+        MetadataNodeResolver.MetadataNode node =
+            MetadataNodeResolver.resolveExistingWithYoFallback(config, normFqn).node;
         if (node == null || !(node.object instanceof XDTOPackage))
         {
             return ToolResult.error("Not an XDTOPackage: '" + fqn + "'. validate_xdto_package only " //$NON-NLS-1$ //$NON-NLS-2$

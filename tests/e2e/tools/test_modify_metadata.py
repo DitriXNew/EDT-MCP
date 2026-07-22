@@ -18,6 +18,9 @@ reset: kind="write-metadata" -> reset_model() after each test.
 Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc, ...
 """
 
+import os
+import uuid
+
 from harness import (
     call,
     assert_ok,
@@ -35,6 +38,7 @@ from harness import (
     read_disk,
     e2e_test,
     PROJECT,
+    PROJECT_DIR,
     TESTS_PROJECT,
 )
 
@@ -1556,3 +1560,106 @@ def test_event_subscription_handler_missing_method_is_error():
     assert_error_quality(e, names=["E2EMrvSubNoSuchMethod", "Calc"], suggests=["write_module_source"],
                          ctx="a missing handler method must be named with a create-it-first hint")
     assert_tree_unchanged(before, "a rejected handler must not touch the project")
+
+
+# ----------------------------------------------------------------------------
+# XDTO NAMESPACE CASCADE - changing a package namespace must rewrite every OTHER
+# package that references the old namespace (imports + QNames), or the rename
+# silently breaks the REFERENCING package, not the renamed one.
+# ----------------------------------------------------------------------------
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_xdto_namespace_change_cascades_into_referencing_package():
+    """The maintainer case, end-to-end: package P is authored via MCP; package Q -
+    planted straight on the fixture path, because imports are not authorable through
+    MCP - IMPORTS P namespace and types a property into it. Renaming P namespace
+    must (a) report the propagation, (b) rewrite Q import AND the property QName
+    on disk with no trace of the old namespace, and (c) rewrite P own same-package
+    references. kind=write-metadata reverts the fixture afterwards."""
+    old_ns = "http://e2e/casc-old"
+    new_ns = "http://e2e/casc-new"
+    p_fqn = "XDTOPackage.E2ECascP"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": p_fqn, "targetNamespace": old_ns})
+    assert_ok(r, "seed " + p_fqn)
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": p_fqn + ".ObjectType.Src"})
+    assert_ok(r, "seed ObjectType Src")
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": p_fqn + ".ObjectType.User"})
+    assert_ok(r, "seed ObjectType User")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": p_fqn + ".ObjectType.User.Property.Link",
+        "properties": [{"name": "type", "value": "Src"}]})
+    assert_ok(r, "seed the self-referencing property")
+    wait_for_project_ready()
+
+    # Plant the REFERENCING package Q on disk (mdo + content importing P namespace).
+    q_dir = os.path.join(PROJECT_DIR, "src", "XDTOPackages", "E2ECascQ")
+    os.makedirs(q_dir, exist_ok=True)
+    mdo_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<mdclass:XDTOPackage xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="%s">' % uuid.uuid4(),
+        '  <name>E2ECascQ</name>',
+        '  <namespace>http://e2e/casc-q</namespace>',
+        '</mdclass:XDTOPackage>',
+        "",
+    ]
+    with open(os.path.join(q_dir, "E2ECascQ.mdo"), "w", encoding="utf-8") as f:
+        f.write("\n".join(mdo_lines))
+    xdto_lines = [
+        '<package xmlns="http://v8.1c.ru/8.1/xdto" xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:d3p1="%s" targetNamespace="http://e2e/casc-q">' % old_ns,
+        '<import namespace="%s"/>' % old_ns,
+        '<objectType name="UsesP">',
+        '<property name="Link" type="d3p1:Src"/>',
+        '</objectType>',
+        '</package>',
+        "",
+    ]
+    with open(os.path.join(q_dir, "Package.xdto"), "w", encoding="utf-8") as f:
+        f.write("\n".join(xdto_lines))
+    cfg_path = os.path.join(PROJECT_DIR, "src", "Configuration", "Configuration.mdo")
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = f.read()
+    anchor = "<xDTOPackages>XDTOPackage.E2ECascP</xDTOPackages>"
+    if anchor not in cfg:
+        raise AssertionError("setup failed: %s not registered in Configuration.mdo" % p_fqn)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(cfg.replace(anchor,
+            anchor + "\n  <xDTOPackages>XDTOPackage.E2ECascQ</xDTOPackages>", 1))
+    r = call("resync_to_disk", {"projectName": PROJECT})
+    assert_ok(r, "resync loads the planted referencing package")
+    wait_for_project_ready()
+    # The planted files land OUTSIDE the Eclipse resource API, so EDT picks them up via its own
+    # auto-refresh/import job - POLL until Q's content is actually visible in the MODEL (the cascade
+    # walks the model, not the disk; renaming before the import completes would see no referencer).
+    import time as _time
+    for _ in range(60):
+        d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["XDTOPackage.E2ECascQ"]})
+        if not d.is_error and d.text and "UsesP" in d.text:
+            break
+        _time.sleep(2)
+    else:
+        raise AssertionError("setup failed: the planted E2ECascQ never became visible in the model")
+    wait_for_project_ready()
+
+    # The rename under test.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": p_fqn,
+        "properties": [{"name": "namespace", "value": new_ns}]})
+    assert_ok(r, "change the namespace of " + p_fqn)
+    msg = (r.structured or {}).get("message", "")
+    if "propagated" not in msg or "E2ECascQ" not in msg:
+        raise AssertionError("the result must report the propagation to E2ECascQ: %r" % msg)
+
+    # Ground truth on disk: Q import + property QName carry the NEW namespace only...
+    poll_diff_contains(new_ns, ctx="Q must be rewritten to the new namespace on disk")
+    q_text = read_disk("src/XDTOPackages/E2ECascQ/Package.xdto")
+    assert_contains(q_text, "import namespace=" + chr(34) + new_ns + chr(34),
+        "Q import must point at the NEW namespace")
+    if old_ns in q_text:
+        raise AssertionError("no trace of the OLD namespace may remain in Q: %r" % q_text)
+    # ...and P own content (targetNamespace + the self-reference QName) moved as one.
+    p_text = read_disk("src/XDTOPackages/E2ECascP/Package.xdto")
+    assert_contains(p_text, "targetNamespace=" + chr(34) + new_ns + chr(34),
+        "P own targetNamespace must move")
+    if old_ns in p_text:
+        raise AssertionError("P own self-reference must be rewritten too: %r" % p_text)

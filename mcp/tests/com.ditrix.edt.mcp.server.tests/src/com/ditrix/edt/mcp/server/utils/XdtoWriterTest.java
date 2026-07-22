@@ -327,6 +327,9 @@ public class XdtoWriterTest
     public void testPropertyTypeExplicitObjectFormOwnNamespaceNeedsNoImport()
     {
         Package pkg = newPackage();
+        // The referenced ObjectType must exist: the own-namespace object form now validates the local
+        // target (parity with the string shorthand), so the no-Import point is proven with a real one.
+        XdtoWriter.createObjectType(pkg, "Custom"); //$NON-NLS-1$
         Property property = XdtoWriter.createProperty(pkg.getProperties(), "MyProp"); //$NON-NLS-1$
         Result r = XdtoWriter.applyPropertyProperties(property, pkg,
             List.of(json("{\"name\":\"type\",\"value\":{\"nsUri\":\"" + pkg.getNsUri() + "\",\"name\":\"Custom\"}}")), //$NON-NLS-1$ //$NON-NLS-2$
@@ -1040,5 +1043,29 @@ public class XdtoWriterTest
         q.setNsUri(nsUri);
         q.setName(name);
         return q;
+    }
+
+    @Test
+    public void testObjectFormOwnNamespaceRequiresExistingObjectType()
+    {
+        // Parity with the bare-string shorthand: the explicit object form pointing at the package's
+        // OWN namespace must reference an ObjectType that actually exists - a typo must not silently
+        // persist a dangling same-package reference.
+        Package pkg = newPackage();
+        XdtoWriter.createObjectType(pkg, "Address"); //$NON-NLS-1$
+        Property property = XdtoWriter.createProperty(pkg.getProperties(), "MyProp"); //$NON-NLS-1$
+        Result bad = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{\"name\":\"type\",\"value\":{\"nsUri\":\"" + pkg.getNsUri() //$NON-NLS-1$
+                + "\",\"name\":\"Adress\"}}")), false); //$NON-NLS-1$
+        assertTrue("an own-namespace object-form name with no matching ObjectType must be rejected", //$NON-NLS-1$
+            bad.hasError());
+        assertTrue("the error must name the bad value: " + bad.error, bad.error.contains("Adress")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Result ok = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{\"name\":\"type\",\"value\":{\"nsUri\":\"" + pkg.getNsUri() //$NON-NLS-1$
+                + "\",\"name\":\"Address\"}}")), false); //$NON-NLS-1$
+        assertFalse("an own-namespace object-form name matching an ObjectType must be accepted: " //$NON-NLS-1$
+            + ok.error, ok.hasError());
+        assertEquals(pkg.getNsUri(), property.getType().getNsUri());
     }
 }
