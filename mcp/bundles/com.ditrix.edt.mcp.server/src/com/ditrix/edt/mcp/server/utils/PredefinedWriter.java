@@ -453,10 +453,29 @@ public final class PredefinedWriter
     }
 
     /**
-     * Finds a predefined item by EXACT (case-insensitive), recursive name match over the owner's
-     * items+content tree. No yo-fallback here (a create-time duplicate check must be exact - #291
-     * lesson); callers wanting the yo-fallback UX apply it to the OWNER resolution instead
-     * (see {@code MetadataNodeResolver#resolveExistingWithYoFallback}), not the item name.
+     * Locates a predefined item EXACT-first, then retries with the yo-normalized name ('ё'-&gt;'е') on
+     * a miss - the SAME addressing tolerance {@code MetadataNodeResolver#resolveExistingWithYoFallback}
+     * gives the generic mdclass and XDTO paths. Used by every READ/MODIFY/DELETE lookup: create_metadata
+     * normalizes a new item's Name (and its {@code parent} reference) by default, so a caller who later
+     * re-types the original 'ё' spelling ({@code ...Predefined.Мёд}) must still resolve the stored
+     * (normalized) item. The create-time DUPLICATE check deliberately does NOT use this (it stays exact,
+     * the #291 lesson: with normalizeYo=false a caller may author distinct yo-variant names).
+     */
+    private static Located locateYo(EObject owner, String name)
+    {
+        Located exact = locate(owner, name);
+        if (exact != null || name == null)
+        {
+            return exact;
+        }
+        String normalized = MdNameNormalizer.normalizeYo(name);
+        return normalized.equals(name) ? null : locate(owner, normalized);
+    }
+
+    /**
+     * Finds a predefined item by recursive name match over the owner's items+content tree, EXACT-first
+     * with a yo-normalized fallback (see {@link #locateYo}) - a read/modify/delete lookup, not the
+     * create-time duplicate check.
      *
      * @param owner the owner object ({@link Catalog} or {@link ChartOfCharacteristicTypes})
      * @param name the item's programmatic Name
@@ -464,7 +483,7 @@ public final class PredefinedWriter
      */
     public static PredefinedItem findByName(EObject owner, String name)
     {
-        Located l = locate(owner, name);
+        Located l = locateYo(owner, name);
         return l != null ? l.item : null;
     }
 
@@ -491,7 +510,7 @@ public final class PredefinedWriter
      */
     public static ItemLookup lookup(EObject owner, String name)
     {
-        Located l = locate(owner, name);
+        Located l = locateYo(owner, name);
         return l != null ? new ItemLookup(l.item, l.parentName) : null;
     }
 
@@ -672,7 +691,7 @@ public final class PredefinedWriter
         PredefinedItem parent = null;
         if (props.parentName != null && !props.parentName.trim().isEmpty())
         {
-            Located parentLoc = locate(owner, props.parentName);
+            Located parentLoc = locateYo(owner, props.parentName);
             if (parentLoc == null)
             {
                 return WriteResult.fail("Parent predefined item (folder) not found: '" + props.parentName //$NON-NLS-1$
@@ -731,7 +750,7 @@ public final class PredefinedWriter
      */
     public static WriteResult modify(EObject owner, String itemName, ItemProps props)
     {
-        Located found = locate(owner, itemName);
+        Located found = locateYo(owner, itemName);
         if (found == null)
         {
             return WriteResult.fail("Predefined item not found: '" + itemName + "' on " + ownerLabel(owner) //$NON-NLS-1$ //$NON-NLS-2$
@@ -797,7 +816,7 @@ public final class PredefinedWriter
      */
     public static DeletePreview preview(EObject owner, String itemName)
     {
-        Located found = locate(owner, itemName);
+        Located found = locateYo(owner, itemName);
         if (found == null)
         {
             return new DeletePreview(false, false, null, Collections.emptyList());
@@ -818,7 +837,7 @@ public final class PredefinedWriter
      */
     public static WriteResult delete(EObject owner, String itemName)
     {
-        Located found = locate(owner, itemName);
+        Located found = locateYo(owner, itemName);
         if (found == null)
         {
             return WriteResult.fail("Predefined item not found: '" + itemName + "' on " + ownerLabel(owner) //$NON-NLS-1$ //$NON-NLS-2$

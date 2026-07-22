@@ -999,4 +999,98 @@ public class PredefinedWriterTest
         assertFalse("an integer-valued zero must be accepted: " + result.error, result.isError()); //$NON-NLS-1$
         assertEquals("0", PredefinedWriter.displayCode(result.item)); //$NON-NLS-1$
     }
+
+    // ==================== yo-fallback lookup (codex round on #296) ====================
+    // create_metadata normalizes a new item's Name 'ё'->'е'; the writer's READ/MODIFY/DELETE lookups
+    // must then find the stored (normalized) item when a caller re-types the original 'ё' spelling.
+    // Fixtures store the NORMALIZED ('е') Name (as the tool would) and look it up with the 'ё' spelling.
+
+    /** findByName / lookup resolve a stored 'е'-name item when queried with the original 'ё' spelling. */
+    @Test
+    public void testLookupYoFallbackFindsNormalizedItem()
+    {
+        Catalog catalog = newStringCodeCatalog("Foods", 9); //$NON-NLS-1$
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // "Мед" - the stored, normalized Name
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // "Мёд" - the caller's original spelling
+        PredefinedWriter.create(catalog, ye, new PredefinedWriter.ItemProps(), false);
+
+        assertNotNull("exact spelling must resolve", PredefinedWriter.findByName(catalog, ye)); //$NON-NLS-1$
+        assertNotNull("the original 'yo' spelling must resolve via the fallback", //$NON-NLS-1$
+            PredefinedWriter.findByName(catalog, yo));
+        assertNotNull("lookup() must apply the same fallback", PredefinedWriter.lookup(catalog, yo)); //$NON-NLS-1$
+    }
+
+    /** modify addressed by the original 'ё' spelling mutates the stored 'е'-name item. */
+    @Test
+    public void testModifyYoFallbackHitsNormalizedItem()
+    {
+        Catalog catalog = newStringCodeCatalog("Foods", 9); //$NON-NLS-1$
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // "Мед"
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // "Мёд"
+        PredefinedWriter.create(catalog, ye, new PredefinedWriter.ItemProps(), false);
+
+        PredefinedWriter.ItemProps mod = new PredefinedWriter.ItemProps();
+        mod.description = "honey"; //$NON-NLS-1$
+        mod.descriptionSet = true;
+        PredefinedWriter.WriteResult result = PredefinedWriter.modify(catalog, yo, mod);
+        assertFalse("modify via the 'yo' spelling must hit the stored item, not fail not-found", //$NON-NLS-1$
+            result.isError());
+        assertEquals("honey", result.item.getDescription()); //$NON-NLS-1$
+        assertEquals("the item's Name is unchanged (identity)", ye, result.item.getName()); //$NON-NLS-1$
+    }
+
+    /** preview + delete addressed by the original 'ё' spelling target the stored 'е'-name item. */
+    @Test
+    public void testDeleteYoFallbackHitsNormalizedItem()
+    {
+        Catalog catalog = newStringCodeCatalog("Foods", 9); //$NON-NLS-1$
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // "Мед"
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // "Мёд"
+        PredefinedWriter.create(catalog, ye, new PredefinedWriter.ItemProps(), false);
+
+        assertTrue("preview via the 'yo' spelling must find the item", //$NON-NLS-1$
+            PredefinedWriter.preview(catalog, yo).found);
+        PredefinedWriter.WriteResult result = PredefinedWriter.delete(catalog, yo);
+        assertFalse("delete via the 'yo' spelling must remove the stored item", result.isError()); //$NON-NLS-1$
+        assertNull("the item is gone", PredefinedWriter.findByName(catalog, ye)); //$NON-NLS-1$
+    }
+
+    /** A create-time 'parent' given in the original 'ё' spelling resolves a stored 'е'-name folder. */
+    @Test
+    public void testCreateParentYoFallbackResolvesNormalizedFolder()
+    {
+        Catalog catalog = newStringCodeCatalog("Foods", 9); //$NON-NLS-1$
+        String yeFolder = fromCp(0x041c, 0x0435, 0x0434); // "Мед" - the stored, normalized folder Name
+        String yoFolder = fromCp(0x041c, 0x0451, 0x0434); // "Мёд" - the caller's original spelling
+        PredefinedWriter.ItemProps folderProps = new PredefinedWriter.ItemProps();
+        folderProps.isFolder = true;
+        folderProps.isFolderSet = true;
+        PredefinedWriter.create(catalog, yeFolder, folderProps, false);
+
+        PredefinedWriter.ItemProps child = new PredefinedWriter.ItemProps();
+        child.parentName = yoFolder; // the 'yo' spelling of the parent
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(catalog, "Honey", child, false); //$NON-NLS-1$
+        assertFalse("parent given in the 'yo' spelling must resolve the normalized folder", //$NON-NLS-1$
+            result.isError());
+        PredefinedWriter.ItemLookup lookup = PredefinedWriter.lookup(catalog, "Honey"); //$NON-NLS-1$
+        assertEquals("the child nests under the resolved folder", yeFolder, lookup.parentName); //$NON-NLS-1$
+    }
+
+    /** The create-time DUPLICATE check stays EXACT: the writer does NOT yo-fold it (the tool normalizes
+     *  the incoming Name first, so 'ё'/'е' collision is decided BEFORE the writer; with normalizeYo=false
+     *  a caller may author distinct yo-variant names - the #291 lesson). */
+    @Test
+    public void testCreateDuplicateCheckStaysExactAcrossYo()
+    {
+        Catalog catalog = newStringCodeCatalog("Foods", 9); //$NON-NLS-1$
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // "Мед"
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // "Мёд"
+        PredefinedWriter.create(catalog, ye, new PredefinedWriter.ItemProps(), false);
+        // Writer-level create with the 'yo' spelling is NOT rejected as a duplicate of the stored 'ye'
+        // item (exact check) - the tool's normalization, not the writer, is what makes them collide.
+        PredefinedWriter.WriteResult second =
+            PredefinedWriter.create(catalog, yo, new PredefinedWriter.ItemProps(), false);
+        assertFalse("the writer's duplicate check is exact - a yo-variant is not a duplicate", //$NON-NLS-1$
+            second.isError());
+    }
 }

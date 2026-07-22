@@ -24,7 +24,7 @@ Address a predefined item as `Catalog.X.Predefined.ItemName` or `ChartOfCharacte
 - `isFolder` (boolean) - marks the new item as a FOLDER that can hold children.
 - `parent` (string, create-time only) - the NAME of an existing predefined FOLDER on the SAME owner to nest the new item under; omitted -> a top-level item. A missing folder, or a parent that is not itself a folder, is rejected with an actionable error.
 
-A name that already resolves (EXACT, case-insensitive match, recursively over both top-level items and folder content) is rejected as a duplicate; uniqueness beyond that is NOT enforced here (EDT's own validation flags a real duplicate on save/build).
+A name that already resolves (EXACT, case-insensitive match, recursively over both top-level items and folder content) is rejected as a duplicate; uniqueness beyond that is NOT enforced here (EDT's own validation flags a real duplicate on save/build). The item Name and the `parent` reference are `ё`->`е` normalized on create (like every other name, unless `normalizeYo: false`), so the stored Name is standard-compliant; get_metadata_details / modify_metadata / delete_metadata then resolve it by EITHER the normalized or the original `ё` spelling (exact-first, then a yo-normalized retry).
 
 NOT YET SUPPORTED: a `ChartOfAccounts` / `ChartOfCalculationTypes` predefined item is rejected with an actionable error - their richer per-item model (account type / accounting flags / ext-dimension types for a chart of accounts, or base/displaced/leading arrays for a chart of calculation types) is not authored by this tool. Author those directly in EDT.
 

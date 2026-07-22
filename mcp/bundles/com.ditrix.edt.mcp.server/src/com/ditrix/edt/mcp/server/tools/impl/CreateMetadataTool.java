@@ -707,9 +707,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         PredefinedWriter.PredefinedRef ref, List<JsonObject> properties, boolean expectedNotExists,
         MdNameNormalizer.Report normReport)
     {
-        if (!isValidIdentifier(ref.itemName))
+        // This tool's normalizeYo contract normalizes 'ё'->'е' in the new node's NAME (the trailing
+        // FQN segment) - a predefined item's Name is exactly that, so normalize it here too (with
+        // normalizeYo=false the report is a no-op and the 'ё' is kept). The stored Name is thus
+        // standard-compliant (mdo-ru-name-unallowed-letter), and later read/modify/delete tolerate
+        // the original 'ё' spelling via PredefinedWriter's yo-fallback lookup.
+        String itemName = normReport.apply("name", ref.itemName); //$NON-NLS-1$
+        if (!isValidIdentifier(itemName))
         {
-            return ToolResult.error("Invalid name '" + ref.itemName + "'. A name must start with a " //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Invalid name '" + itemName + "'. A name must start with a " //$NON-NLS-1$ //$NON-NLS-2$
                 + "letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
         }
         String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
@@ -724,12 +730,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return propErr;
         }
-        // This tool's normalizeYo contract covers every supplied text value (name/synonym/comment),
-        // so a predefined item's description is normalized here too - on CREATE only; modify_metadata
-        // promises free text stays exactly as supplied. The policy lives in the tool, not the writer.
+        // Same normalizeYo policy for the description (free text) and the 'parent' folder reference
+        // (a Name the caller supplies, resolved against the already-normalized stored folder Names) -
+        // on CREATE only; modify_metadata promises free text stays exactly as supplied.
         if (props.descriptionSet && props.description != null)
         {
             props.description = normReport.apply("description", props.description); //$NON-NLS-1$
+        }
+        if (props.parentName != null)
+        {
+            props.parentName = normReport.apply("parent", props.parentName); //$NON-NLS-1$
         }
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
@@ -763,7 +773,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
-        final String itemName = ref.itemName;
+        final String createItemName = itemName;
         final String[] createdKindHolder = new String[1];
         // The force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
         // caller's spelling (ownerResolved.fqn echoes the input) - a case/spelling variant that
@@ -781,7 +791,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 }
                 canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
                 PredefinedWriter.WriteResult result =
-                    PredefinedWriter.create(txOwner, itemName, props, expectedNotExists);
+                    PredefinedWriter.create(txOwner, createItemName, props, expectedNotExists);
                 if (result.isError())
                 {
                     throw new IllegalStateException(result.error);
