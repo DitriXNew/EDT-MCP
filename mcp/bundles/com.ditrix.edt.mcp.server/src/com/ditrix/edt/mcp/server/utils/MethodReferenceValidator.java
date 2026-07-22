@@ -236,10 +236,10 @@ public final class MethodReferenceValidator
         int declLine = findDeclarationLine(lines, found);
         for (int i = declLine; i <= found.endLine && i < lines.size(); i++)
         {
-            // Strip a trailing inline comment BEFORE matching: a signature such as
-            // `Procedure Foo() // TODO: Export` must NOT count as exported (the keyword lives in the
-            // comment, not the modifier position).
-            String line = stripInlineComment(lines.get(i));
+            // Mask string literals and strip a trailing inline comment BEFORE matching: neither a
+            // signature comment (`Procedure Foo() // TODO: Export`) nor a parameter default carrying
+            // the word (`Procedure Foo(P = "Export")`) may count as the Export modifier.
+            String line = maskStringsAndStripComment(lines.get(i));
             if (EXPORT_KEYWORD_PATTERN.matcher(line).find())
             {
                 return true;
@@ -256,12 +256,16 @@ public final class MethodReferenceValidator
     }
 
     /**
-     * Truncates {@code line} at the first {@code //} that is OUTSIDE a double-quoted string literal
-     * (a {@code //} inside a parameter's default string value stays). Quote tracking is the minimal
-     * intra-line kind a declaration header needs; it does not attempt multi-line literals.
+     * MASKS double-quoted string-literal content (each in-string char becomes a space, so a parameter
+     * default like {@code P = "Export"} can never look like the Export modifier, and a {@code ")"}
+     * inside a string cannot fake the header's end) and truncates at the first {@code //} that is
+     * OUTSIDE a string (a {@code //} inside a default string value stays masked, not treated as a
+     * comment). Quote tracking is the minimal intra-line kind a declaration header needs; it does not
+     * attempt multi-line literals.
      */
-    static String stripInlineComment(String line)
+    static String maskStringsAndStripComment(String line)
     {
+        StringBuilder masked = new StringBuilder(line.length());
         boolean inString = false;
         for (int i = 0; i < line.length(); i++)
         {
@@ -269,13 +273,21 @@ public final class MethodReferenceValidator
             if (c == '"')
             {
                 inString = !inString;
+                masked.append(' ');
+                continue;
             }
-            else if (!inString && c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/')
+            if (inString)
             {
-                return line.substring(0, i);
+                masked.append(' ');
+                continue;
             }
+            if (c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/')
+            {
+                break;
+            }
+            masked.append(c);
         }
-        return line;
+        return masked.toString();
     }
 
     private static int findDeclarationLine(List<String> lines, BslModuleUtils.TextMethod found)

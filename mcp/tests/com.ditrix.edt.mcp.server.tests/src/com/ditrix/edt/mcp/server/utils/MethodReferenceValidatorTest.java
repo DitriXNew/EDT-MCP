@@ -307,12 +307,30 @@ public class MethodReferenceValidatorTest
     }
 
     @Test
-    public void testStripInlineCommentKeepsSlashesInsideStrings()
+    public void testMaskStringsAndStripComment()
     {
-        assertEquals("Procedure Foo(A = \"http://x\") Export ", //$NON-NLS-1$
-            MethodReferenceValidator.stripInlineComment("Procedure Foo(A = \"http://x\") Export // note")); //$NON-NLS-1$
+        // String content is MASKED (spaces), a // inside a string is NOT a comment start, and a real
+        // trailing // comment is cut. Structure (quotes' positions, parens) survives for the header scan.
+        assertEquals("Procedure Foo(A =           ) Export ", //$NON-NLS-1$
+            MethodReferenceValidator.maskStringsAndStripComment(
+                "Procedure Foo(A = \"http://x\") Export // note")); //$NON-NLS-1$
         assertEquals("Procedure Foo() ", //$NON-NLS-1$
-            MethodReferenceValidator.stripInlineComment("Procedure Foo() // Export")); //$NON-NLS-1$
+            MethodReferenceValidator.maskStringsAndStripComment("Procedure Foo() // Export")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExportInsideParameterDefaultStringIsNotExported()
+    {
+        // `Procedure Foo(P = "Export")` - the keyword lives INSIDE a string default, not the
+        // modifier position, and must NOT count as exported.
+        List<String> lines = List.of(
+            "Procedure Foo(P = \"Export\")", //$NON-NLS-1$
+            "  Return;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+        BslModuleUtils.TextMethod found = BslModuleUtils.findMethodViaText(lines, "Foo"); //$NON-NLS-1$
+        assertTrue(found.found);
+        assertFalse("Export inside a string default must NOT count as the modifier", //$NON-NLS-1$
+            MethodReferenceValidator.isExported(lines, found));
     }
 
     @Test

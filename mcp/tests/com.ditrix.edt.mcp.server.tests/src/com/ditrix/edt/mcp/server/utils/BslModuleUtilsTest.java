@@ -737,4 +737,18 @@ public class BslModuleUtilsTest
         BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Bar"); //$NON-NLS-1$
         assertTrue("an async (Russian) Function declaration must be discoverable", tm.found); //$NON-NLS-1$
     }
+
+    @Test
+    public void testFuncKeywordPatternAcceptsAsyncPrefix()
+    {
+        // The classifier must agree with METHOD_START_PATTERN on async declarations, or an
+        // `Async Function` found by the text fallback would be reported as a procedure.
+        assertTrue(BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher("Async Function Foo(") //$NON-NLS-1$
+            .find());
+        assertTrue(BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher(
+            "\u0410\u0441\u0438\u043D\u0445 \u0424\u0443\u043D\u043A\u0446\u0438\u044F Bar(") //$NON-NLS-1$
+            .find());
+        assertFalse("a procedure must still not classify as a function", //$NON-NLS-1$
+            BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher("Async Procedure Baz(").find()); //$NON-NLS-1$
+    }
 }
