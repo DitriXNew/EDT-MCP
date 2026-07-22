@@ -474,12 +474,24 @@ public final class XdtoWriter
         {
             return objectType;
         }
-        String yoNormalized = MdNameNormalizer.normalizeYo(name);
+        // Exact pass FIRST, yo fallback second (mirrors findObjectType): a yo-normalized match
+        // earlier in the list must never shadow an exact match later in it.
         for (ValueType valueType : pkg.getTypes())
         {
-            if (name.equals(valueType.getName()) || yoNormalized.equals(valueType.getName()))
+            if (name.equals(valueType.getName()))
             {
                 return valueType;
+            }
+        }
+        String yoNormalized = MdNameNormalizer.normalizeYo(name);
+        if (!name.equals(yoNormalized))
+        {
+            for (ValueType valueType : pkg.getTypes())
+            {
+                if (yoNormalized.equals(valueType.getName()))
+                {
+                    return valueType;
+                }
             }
         }
         return null;
@@ -1116,6 +1128,14 @@ public final class XdtoWriter
                 + "'name', e.g. {nsUri:'http://www.w3.org/2001/XMLSchema', name:'string'}.").toJson()); //$NON-NLS-1$
         }
         String nsUri = stringMember(obj, "nsUri"); //$NON-NLS-1$
+        if (nsUri == null && obj.has("nsUri") && !obj.get("nsUri").isJsonNull()) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            // A PRESENT but non-string nsUri is malformed input - treating it like an omitted one
+            // would silently default to the XSD namespace and persist a different reference than
+            // the caller supplied.
+            return QNameResult.failed(ToolResult.error(fieldLabel
+                + " 'nsUri' must be a string when present.").toJson()); //$NON-NLS-1$
+        }
         String resolvedNsUri = nsUri != null && !nsUri.isEmpty() ? nsUri : XSD_NS;
         String importError = validateNamespaceReachable(resolvedNsUri, pkg, fieldLabel);
         if (importError != null)

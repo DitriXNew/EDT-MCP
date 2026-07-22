@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
@@ -1116,5 +1117,35 @@ public class XdtoWriterTest
     private static String q(String v)
     {
         return '"' + v + '"';
+    }
+
+    @Test
+    public void testObjectFormNonStringNsUriIsRejectedNotDefaulted()
+    {
+        // {nsUri: 123, name: "string"} must be REJECTED - a present-but-non-string nsUri treated as
+        // "omitted" would silently default to the XSD namespace (codex finding).
+        Package pkg = newPackage();
+        Property property = XdtoWriter.createProperty(pkg.getProperties(), "MyProp"); //$NON-NLS-1$
+        Result r = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{" + q("name") + ":" + q("type") + "," + q("value") + ":{"
+                + q("nsUri") + ":123," + q("name") + ":" + q("string") + "}}")), false); //$NON-NLS-1$
+        assertTrue("a non-string nsUri must be rejected, not defaulted to XSD", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name nsUri: " + r.error, r.error.contains("nsUri")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFindLocalTypeExactValueTypeBeatsYoFallback()
+    {
+        // Two local value types differing only by yo: the EXACT match must win even when the
+        // yo-normalized one sits earlier in the list (mirrors findObjectType, codex finding).
+        Package pkg = newPackage();
+        com._1c.g5.v8.dt.xdto.model.ValueType ye = com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createValueType();
+        ye.setName("\u0415\u043B\u043A\u0430"); //$NON-NLS-1$
+        pkg.getTypes().add(ye);
+        com._1c.g5.v8.dt.xdto.model.ValueType yoT = com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createValueType();
+        yoT.setName("\u0401\u043B\u043A\u0430"); //$NON-NLS-1$
+        pkg.getTypes().add(yoT);
+        assertSame("the exact yo-spelled ValueType must win over the earlier normalized one", //$NON-NLS-1$
+            yoT, XdtoWriter.findLocalType(pkg, "\u0401\u043B\u043A\u0430")); //$NON-NLS-1$
     }
 }
