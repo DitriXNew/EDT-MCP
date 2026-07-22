@@ -139,13 +139,39 @@ public class PredefinedWriterTest
     @Test
     public void testParseRefAcceptsRussianPredefinedToken()
     {
-        // "Предопределенные" - the Russian term for the predefined-items node.
+        // "Предопределенные" - the yo-normalized ('е') spelling of the predefined-items node.
         String ruPredefined = fromCp(0x041f, 0x0440, 0x0435, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435, 0x0434,
             0x0435, 0x043b, 0x0435, 0x043d, 0x043d, 0x044b, 0x0435);
         PredefinedWriter.PredefinedRef ref =
             PredefinedWriter.parseRef("Catalog.Products." + ruPredefined + ".Blue"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("the Russian Predefined token must be recognized", ref); //$NON-NLS-1$
         assertEquals("Blue", ref.itemName); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseRefAcceptsYoSpelledRussianPredefinedToken()
+    {
+        // "Предопределённые" - the NATURAL 'ё' spelling a Russian caller types (index 11 is 'ё',
+        // U+0451, where the normalized constant carries 'е'). It must be recognized too - otherwise
+        // parseRef returns null and the predefined branch is silently skipped.
+        String ruPredefinedYo = fromCp(0x041f, 0x0440, 0x0435, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435,
+            0x0434, 0x0435, 0x043b, 0x0451, 0x043d, 0x043d, 0x044b, 0x0435);
+        PredefinedWriter.PredefinedRef ref =
+            PredefinedWriter.parseRef("Catalog.Products." + ruPredefinedYo + ".Blue"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("the 'yo'-spelled Russian Predefined token must be recognized", ref); //$NON-NLS-1$
+        assertEquals("Blue", ref.itemName); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseRefRejectsMisplacedYoInRussianToken()
+    {
+        // "Прёдопределенные" - a MISSPELLING with 'ё' at index 2 (not the valid index 11). Only the two
+        // real spellings are accepted; a blanket yo-normalization would wrongly classify this as the
+        // predefined kind token and route the FQN into the predefined dispatch branch.
+        String misplaced = fromCp(0x041f, 0x0440, 0x0451, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435, 0x0434,
+            0x0435, 0x043b, 0x0435, 0x043d, 0x043d, 0x044b, 0x0435);
+        assertNull("a 'ё' misplaced onto a different 'е' position must NOT be recognized", //$NON-NLS-1$
+            PredefinedWriter.parseRef("Catalog.Products." + misplaced + ".Blue")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

@@ -97,9 +97,16 @@ public final class PredefinedWriter
 
     // The Russian equivalent of the 'Predefined' FQN kind token - built from lowercase Unicode
     // code points so the string LITERAL stays ASCII (the same non-UTF-8 Tycho-build guard
-    // FormElementWriter/MetadataNodeResolver use for their Russian kind tokens).
+    // FormElementWriter/MetadataNodeResolver use for their Russian kind tokens). Both accepted
+    // spellings are enumerated EXPLICITLY (not via a blanket yo-normalization of the incoming
+    // token, which would over-accept a misplaced 'ё' - e.g. "прёдопределенные"):
+    //   RU_PREDEFINED    = "предопределенные" (the yo-normalized 'е' spelling)
+    //   RU_PREDEFINED_YO = "предопределённые" (the natural 'ё' spelling; only index 11 differs)
     private static final String RU_PREDEFINED = MetadataLanguageUtils.cp(0x043f, 0x0440, 0x0435, 0x0434,
         0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b, 0x0435, 0x043d, 0x043d, 0x044b, 0x0435);
+
+    private static final String RU_PREDEFINED_YO = MetadataLanguageUtils.cp(0x043f, 0x0440, 0x0435, 0x0434,
+        0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b, 0x0451, 0x043d, 0x043d, 0x044b, 0x0435);
 
     private PredefinedWriter()
     {
@@ -168,7 +175,10 @@ public final class PredefinedWriter
             return false;
         }
         String t = token.trim().toLowerCase(Locale.ROOT);
-        return "predefined".equals(t) || RU_PREDEFINED.equals(t); //$NON-NLS-1$
+        // Accept English "predefined" and EXACTLY the two valid Russian spellings (the 'е' and the
+        // natural 'ё' form). A blanket yo-normalization of the token would be too loose - it would
+        // also accept a 'ё' misplaced onto any of RU_PREDEFINED's five 'е' positions.
+        return "predefined".equals(t) || RU_PREDEFINED.equals(t) || RU_PREDEFINED_YO.equals(t); //$NON-NLS-1$
     }
 
     // ============================================================================================
