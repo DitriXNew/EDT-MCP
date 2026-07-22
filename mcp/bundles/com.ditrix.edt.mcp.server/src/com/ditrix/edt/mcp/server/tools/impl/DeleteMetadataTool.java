@@ -175,12 +175,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         Configuration config = ctx.config;
 
-        IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
-        if (refactoringService == null)
-        {
-            return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
-        }
-
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
 
         // A FQN addressing a FORM member (item / attribute / command / handler) is handled by a
@@ -212,6 +206,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if (xdtoRef != null)
         {
             return deleteXdtoMember(ctx, normFqn, xdtoRef, confirm);
+        }
+
+        // The md-refactoring service is needed ONLY by the generic mdclass path below - the
+        // form-member / form-object / XDTO-member branches above delete directly through their
+        // own content models, so its unavailability (e.g. during startup) must not block them.
+        IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
+        if (refactoringService == null)
+        {
+            return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes

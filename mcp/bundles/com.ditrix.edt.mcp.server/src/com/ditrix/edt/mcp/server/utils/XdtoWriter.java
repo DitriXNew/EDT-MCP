@@ -469,13 +469,19 @@ public final class XdtoWriter
      */
     public static Type findLocalType(Package pkg, String name)
     {
-        ObjectType objectType = findObjectType(pkg, name);
-        if (objectType != null || pkg == null || name == null)
+        if (pkg == null || name == null)
         {
-            return objectType;
+            return null;
         }
-        // Exact pass FIRST, yo fallback second (mirrors findObjectType): a yo-normalized match
-        // earlier in the list must never shadow an exact match later in it.
+        // ALL exact passes precede ANY yo fallback: an ObjectType yo-match must not shadow a
+        // ValueType stored under the exact requested spelling (and vice versa).
+        for (ObjectType type : pkg.getObjects())
+        {
+            if (name.equals(type.getName()))
+            {
+                return type;
+            }
+        }
         for (ValueType valueType : pkg.getTypes())
         {
             if (name.equals(valueType.getName()))
@@ -486,6 +492,13 @@ public final class XdtoWriter
         String yoNormalized = MdNameNormalizer.normalizeYo(name);
         if (!name.equals(yoNormalized))
         {
+            for (ObjectType type : pkg.getObjects())
+            {
+                if (yoNormalized.equals(type.getName()))
+                {
+                    return type;
+                }
+            }
             for (ValueType valueType : pkg.getTypes())
             {
                 if (yoNormalized.equals(valueType.getName()))
@@ -1169,11 +1182,44 @@ public final class XdtoWriter
             }
             name = localTarget.getName();
         }
+        // An IMPORTED-namespace name is free text so far - the XSD branch has its whitelist and
+        // the own-namespace branch resolves a real local type, but an imported name like
+        // "123 bad" would persist an invalid XML local name.
+        if (!isNcNameLite(name))
+        {
+            return QNameResult.failed(ToolResult.error(fieldLabel + " name " + QUOTE + name + QUOTE + " is not a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "valid XML type name (must start with a letter or underscore and contain only " //$NON-NLS-1$
+                + "letters, digits, underscores, dots or hyphens).").toJson()); //$NON-NLS-1$
+        }
         QName qname = McoreFactory.eINSTANCE.createQName();
         qname.setNsUri(resolvedNsUri);
         qname.setName(name);
         return QNameResult.of(qname);
     }
+
+    /** XML NCName-lite: letter/underscore start; letters, digits, underscore, dot, hyphen after. */
+    private static boolean isNcNameLite(String name)
+    {
+        if (name == null || name.isEmpty()
+            || (!Character.isLetter(name.charAt(0)) && name.charAt(0) != UNDERSCORE))
+        {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++)
+        {
+            char c = name.charAt(i);
+            if (!Character.isLetterOrDigit(c) && c != UNDERSCORE && c != DOT && c != HYPHEN)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static final String QUOTE = String.valueOf((char)39); // apostrophe, kept out of the literal
+    private static final char UNDERSCORE = 95;   // underscore
+    private static final char DOT = 46;          // .
+    private static final char HYPHEN = 45;       // -
 
     /**
      * Validates that {@code nsUri} is REACHABLE from {@code pkg}: the XSD namespace and the package's
@@ -1310,7 +1356,9 @@ public final class XdtoWriter
     private static Integer intProp(Map<String, JsonElement> values, String key)
     {
         JsonElement element = values.get(key);
-        if (element == null || !element.isJsonPrimitive())
+        // Strict NUMERIC primitive: a stringified bound ("2") is malformed input, not something to
+        // coerce - the contract documents these as integers (mirrors the strict string fields).
+        if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber())
         {
             return null;
         }
