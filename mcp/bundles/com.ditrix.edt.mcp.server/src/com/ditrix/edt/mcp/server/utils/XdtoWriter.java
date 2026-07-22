@@ -1097,12 +1097,18 @@ public final class XdtoWriter
         // Same parity for the package's OWN namespace: the bare-string shorthand only resolves to an
         // ObjectType that actually exists, so the object form must not silently persist a dangling
         // same-package reference (e.g. {nsUri: <own ns>, name: 'Adress'} with no such ObjectType).
-        if (pkg != null && !XSD_NS.equals(resolvedNsUri) && resolvedNsUri.equals(pkg.getNsUri())
-            && findObjectType(pkg, name) == null)
+        // The persisted name is the RESOLVED ObjectType's stored name: findObjectType tolerates a yo
+        // spelling variant, and serializing the raw input would dangle against the stored name.
+        if (pkg != null && !XSD_NS.equals(resolvedNsUri) && resolvedNsUri.equals(pkg.getNsUri()))
         {
-            return QNameResult.failed(ToolResult.error(fieldLabel + " name '" + name + "' does not match " //$NON-NLS-1$ //$NON-NLS-2$
-                + "any ObjectType in this package (its own namespace '" + resolvedNsUri + "'). Create " //$NON-NLS-1$ //$NON-NLS-2$
-                + "the ObjectType first, or reference an imported / XSD type.").toJson()); //$NON-NLS-1$
+            ObjectType localTarget = findObjectType(pkg, name);
+            if (localTarget == null)
+            {
+                return QNameResult.failed(ToolResult.error(fieldLabel + " name '" + name + "' does not match " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "any ObjectType in this package (its own namespace '" + resolvedNsUri + "'). Create " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the ObjectType first, or reference an imported / XSD type.").toJson()); //$NON-NLS-1$
+            }
+            name = localTarget.getName();
         }
         QName qname = McoreFactory.eINSTANCE.createQName();
         qname.setNsUri(resolvedNsUri);

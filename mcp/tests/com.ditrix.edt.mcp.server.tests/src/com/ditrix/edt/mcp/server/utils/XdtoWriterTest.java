@@ -1068,4 +1068,27 @@ public class XdtoWriterTest
             + ok.error, ok.hasError());
         assertEquals(pkg.getNsUri(), property.getType().getNsUri());
     }
+
+    @Test
+    public void testObjectFormOwnNamespacePersistsTheStoredNameOnYoVariant()
+    {
+        // findObjectType tolerates the yo spelling, but the persisted QName must carry the STORED
+        // ObjectType name - serializing the raw input would dangle against the stored spelling.
+        Package pkg = newPackage();
+        XdtoWriter.createObjectType(pkg, "\u0415\u043B\u043A\u0430"); //$NON-NLS-1$
+        Property property = XdtoWriter.createProperty(pkg.getProperties(), "MyProp"); //$NON-NLS-1$
+        Result r = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{" + q("name") + ":" + q("type") + "," + q("value") + ":{"
+                + q("nsUri") + ":" + q(pkg.getNsUri()) + "," + q("name") + ":" + q("\u0401\u043B\u043A\u0430") + "}}")), //$NON-NLS-1$
+            false);
+        assertFalse("the yo spelling must resolve via the shared fallback: " + r.error, r.hasError()); //$NON-NLS-1$
+        assertEquals("the persisted QName must carry the STORED name, not the raw input", //$NON-NLS-1$
+            "\u0415\u043B\u043A\u0430", property.getType().getName()); //$NON-NLS-1$
+    }
+
+    /** Tiny JSON-string quoting helper for tests that interpolate values. */
+    private static String q(String v)
+    {
+        return '"' + v + '"';
+    }
 }

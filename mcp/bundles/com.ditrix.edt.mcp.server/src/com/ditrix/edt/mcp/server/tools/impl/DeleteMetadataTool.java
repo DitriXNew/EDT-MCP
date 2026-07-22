@@ -946,7 +946,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean confirm)
     {
         MetadataNodeResolver.MetadataNode pkgNode =
-            MetadataNodeResolver.resolveExisting(ctx.config, ref.packageFqn);
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
         if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
             || !(pkgNode.object instanceof IBmObject))
         {
@@ -969,8 +969,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("BM model not available for project: " + ctx.project.getName()).toJson(); //$NON-NLS-1$
         }
         final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        // The RESOLVED package's canonical FQN: with the yo fallback the caller-typed spelling may
+        // differ from the stored name, and force-export must target the stored top object.
+        final String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
         return confirm
-            ? performXdtoMemberDelete(ctx, normFqn, ref, bmModel, pkgBmId, fqnGenerator)
+            ? performXdtoMemberDelete(ctx, normFqn, ref, bmModel, pkgBmId, fqnGenerator, pkgExportFqn)
             : buildXdtoMemberDeletePreview(normFqn, ref, bmModel, pkgBmId);
     }
 
@@ -1011,7 +1014,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Delete behind the destructive-consent gate, then a write transaction; force-exports the package. */
     private String performXdtoMemberDelete(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
-        IBmModel bmModel, long pkgBmId, ITopObjectFqnGenerator fqnGenerator)
+        IBmModel bmModel, long pkgBmId, ITopObjectFqnGenerator fqnGenerator,
+        String pkgExportFqn)
     {
         ConsentPreview preview = new ConsentPreview("Delete metadata node", //$NON-NLS-1$
             "This deletes '" + normFqn + "'" //$NON-NLS-1$ //$NON-NLS-2$
@@ -1046,8 +1050,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // .xdto) - exporting the package FQN alone would leave the deleted member on disk (a
         // #239-class silent false "persisted").
         List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(ref.packageFqn);
-        if (!result.contentFqn.equals(ref.packageFqn))
+        exportFqns.add(pkgExportFqn);
+        if (!result.contentFqn.equals(pkgExportFqn))
         {
             exportFqns.add(result.contentFqn);
         }

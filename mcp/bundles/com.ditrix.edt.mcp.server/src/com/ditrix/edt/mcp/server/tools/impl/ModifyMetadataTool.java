@@ -702,7 +702,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties)
     {
         MetadataNodeResolver.MetadataNode pkgNode =
-            MetadataNodeResolver.resolveExisting(ctx.config, ref.packageFqn);
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
         if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
             || !(pkgNode.object instanceof IBmObject))
         {
@@ -740,9 +740,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         List<String> exportFqns = new ArrayList<>();
-        exportFqns.add(ref.packageFqn);
+        // Export by the RESOLVED package's canonical FQN: with the yo (ё->е) fallback the
+        // caller-typed ref.packageFqn may differ from the stored name, and force-export must
+        // target the stored top object (never the caller-supplied spelling).
+        String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        exportFqns.add(pkgExportFqn);
         String contentFqn = contentFqnHolder[0];
-        if (contentFqn != null && !contentFqn.equals(ref.packageFqn))
+        if (contentFqn != null && !contentFqn.equals(pkgExportFqn))
         {
             exportFqns.add(contentFqn);
         }
