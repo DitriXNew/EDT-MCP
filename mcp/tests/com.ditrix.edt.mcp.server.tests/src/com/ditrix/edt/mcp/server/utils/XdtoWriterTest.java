@@ -1148,4 +1148,20 @@ public class XdtoWriterTest
         assertSame("the exact yo-spelled ValueType must win over the earlier normalized one", //$NON-NLS-1$
             yoT, XdtoWriter.findLocalType(pkg, "\u0401\u043B\u043A\u0430")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testExactLookupsDoNotYoFallback()
+    {
+        // Create-time duplicate checks must be character-sensitive: with normalizeYo=false a caller
+        // may legitimately create a distinct name differing only by yo (codex finding).
+        Package pkg = newPackage();
+        XdtoWriter.createObjectType(pkg, "\u0415\u043B\u043A\u0430"); //$NON-NLS-1$
+        assertNull("the yo spelling is NOT an exact duplicate of the ye-stored ObjectType", //$NON-NLS-1$
+            XdtoWriter.findObjectTypeExact(pkg, "\u0401\u043B\u043A\u0430")); //$NON-NLS-1$
+        Property property = XdtoWriter.createProperty(pkg.getProperties(), "\u0415\u043B\u043A\u0430"); //$NON-NLS-1$
+        assertNull("the yo spelling is NOT an exact duplicate of the ye-stored Property", //$NON-NLS-1$
+            XdtoWriter.findPropertyExact(pkg.getProperties(), "\u0401\u043B\u043A\u0430")); //$NON-NLS-1$
+        assertSame("the exact spelling still matches", property, //$NON-NLS-1$
+            XdtoWriter.findPropertyExact(pkg.getProperties(), "\u0415\u043B\u043A\u0430")); //$NON-NLS-1$
+    }
 }

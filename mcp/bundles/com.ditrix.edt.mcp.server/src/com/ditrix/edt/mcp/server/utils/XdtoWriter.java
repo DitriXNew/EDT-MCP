@@ -467,6 +467,44 @@ public final class XdtoWriter
      *
      * @return the matching type, or {@code null}
      */
+    /**
+     * EXACT-name ObjectType lookup, NO yo fallback: used by create-time duplicate checks, where the
+     * yo-tolerant {@link #findObjectType} would wrongly flag a distinct name differing only by yo as
+     * a duplicate (XDTO local names are character-sensitive).
+     */
+    public static ObjectType findObjectTypeExact(Package pkg, String name)
+    {
+        if (pkg == null || name == null)
+        {
+            return null;
+        }
+        for (ObjectType type : pkg.getObjects())
+        {
+            if (name.equals(type.getName()))
+            {
+                return type;
+            }
+        }
+        return null;
+    }
+
+    /** EXACT-name Property lookup, NO yo fallback (see {@link #findObjectTypeExact}). */
+    public static Property findPropertyExact(EList<Property> owner, String name)
+    {
+        if (owner == null || name == null)
+        {
+            return null;
+        }
+        for (Property property : owner)
+        {
+            if (name.equals(property.getName()))
+            {
+                return property;
+            }
+        }
+        return null;
+    }
+
     public static Type findLocalType(Package pkg, String name)
     {
         if (pkg == null || name == null)

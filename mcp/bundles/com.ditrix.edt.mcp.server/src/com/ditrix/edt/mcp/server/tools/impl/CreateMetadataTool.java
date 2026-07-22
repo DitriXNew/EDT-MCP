@@ -601,7 +601,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static XdtoCreateResult createObjectTypeInTx(Package content, XdtoWriter.MemberRef ref,
         List<JsonObject> properties)
     {
-        if (XdtoWriter.findObjectType(content, ref.objectTypeName) != null)
+        // EXACT duplicate check (no yo fallback): with normalizeYo=false a caller may legitimately
+        // create a distinct name differing only by yo from an existing one.
+        if (XdtoWriter.findObjectTypeExact(content, ref.objectTypeName) != null)
         {
             throw new XdtoWriteException(ToolResult.error("ObjectType already exists: '" + ref.objectTypeName //$NON-NLS-1$
                 + "' in package " + ref.packageFqn).toJson()); //$NON-NLS-1$
@@ -622,7 +624,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         XdtoWriter.MemberRef ref, List<JsonObject> properties)
     {
         String name = ref.propertyName;
-        if (XdtoWriter.findProperty(owner, name) != null)
+        // EXACT duplicate check (no yo fallback) - see createObjectTypeInTx.
+        if (XdtoWriter.findPropertyExact(owner, name) != null)
         {
             throw new XdtoWriteException(ToolResult.error("Property already exists: '" + name + "' on " //$NON-NLS-1$ //$NON-NLS-2$
                 + normFqnOfProperty(ref)).toJson());

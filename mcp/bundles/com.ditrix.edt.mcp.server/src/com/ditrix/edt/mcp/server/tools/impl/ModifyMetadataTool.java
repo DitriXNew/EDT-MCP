@@ -2164,6 +2164,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
                     XDTOPackage changedPkg = (XDTOPackage)applyTo;
+                    // Captured BEFORE resolvePackageContent: ensureNamespace re-syncs a STALE content
+                    // targetNamespace to the owner, and QNames still carrying that stale value must be
+                    // rewritten too (not only the old mdclass namespace).
+                    com._1c.g5.v8.dt.xdto.model.Package preContent = changedPkg.getPackage();
+                    String preContentNs = (preContent instanceof IBmObject
+                        && ((IBmObject)preContent).bmIsTop()) ? preContent.getNsUri() : null;
                     XdtoWriter.ContentResolution resolved =
                         XdtoWriter.resolvePackageContent(changedPkg, tx, fqnGenerator);
                     if (resolved.error != null)
@@ -2183,6 +2189,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         // rewrite those too, or the package would dangle against ITSELF right after the
                         // rename. Its content FQN is already force-exported via contentFqnHolder.
                         XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+                        if (preContentNs != null && !preContentNs.equals(oldNamespace)
+                            && !preContentNs.equals(newNamespace))
+                        {
+                            // The content targetNamespace was stale before this edit: QNames written
+                            // under THAT value would otherwise stay dangling after the rename.
+                            XdtoWriter.rewriteNamespaceReferences(resolved.content, preContentNs, newNamespace);
+                        }
                         cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
                             fqnGenerator, cascadedPackageNames, cascadedExportFqns);
                     }
@@ -2268,6 +2281,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 continue;
             }
+            // resolvePackageContent may REPAIR this sibling as a side effect (ensureNamespace
+            // re-syncs a stale content targetNamespace to its own owner) - capture the pre-state so
+            // a repaired-but-not-rewritten sibling is still force-exported (an in-memory change that
+            // never reaches disk would leave BM and Package.xdto inconsistent).
+            String siblingPreNs = existingContent.getNsUri();
             XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(other, tx, fqnGenerator);
             if (resolved.error != null)
             {
@@ -2275,7 +2293,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // yet) is skipped, not a failure of THIS modify.
                 continue;
             }
-            if (!XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace))
+            boolean rewritten = XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+            boolean repaired = siblingPreNs == null || !siblingPreNs.equals(other.getNamespace());
+            if (!rewritten && !repaired)
             {
                 continue;
             }
@@ -2284,7 +2304,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 exportFqnsOut.add(resolved.contentFqn);
             }
-            cascadedNamesOut.add(other.getName());
+            if (rewritten)
+            {
+                cascadedNamesOut.add(other.getName());
+            }
         }
     }
 
