@@ -638,6 +638,31 @@ public class XdtoWriterTest
     }
 
     @Test
+    public void testNonStringDefaultIsRejectedAndDoesNotClearExisting()
+    {
+        // A present-but-non-string 'default' (object/array) must be REJECTED like the sibling
+        // properties (lowerBound/nillable/fixed), not silently applied as setDefault(null) -
+        // which would clear an existing default while still reporting it as applied.
+        Package pkg = newPackage();
+        ObjectType owner = XdtoWriter.createObjectType(pkg, "Owner"); //$NON-NLS-1$
+        Property property = XdtoWriter.createProperty(owner.getProperties(), "MyProp"); //$NON-NLS-1$
+        Result seed = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{\"name\":\"type\",\"value\":\"string\"}"), //$NON-NLS-1$
+                json("{\"name\":\"default\",\"value\":\"N/A\"}")), //$NON-NLS-1$
+            true);
+        assertFalse(seed.error, seed.hasError());
+        assertEquals("N/A", property.getDefault()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Result bad = XdtoWriter.applyPropertyProperties(property, pkg,
+            List.of(json("{\"name\":\"default\",\"value\":{\"oops\":1}}")), false); //$NON-NLS-1$
+        assertTrue("a non-string 'default' must be rejected", bad.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the property and the expected type: " + bad.error, //$NON-NLS-1$
+            bad.error.contains("'default'") && bad.error.contains("string")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the existing default must be untouched after the rejected edit", //$NON-NLS-1$
+            "N/A", property.getDefault()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testPropertyRejectsUnassignableAttribute()
     {
         Package pkg = newPackage();

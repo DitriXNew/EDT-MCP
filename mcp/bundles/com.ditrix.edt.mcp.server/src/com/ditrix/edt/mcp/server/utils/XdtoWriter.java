@@ -677,7 +677,19 @@ public final class XdtoWriter
                     ToolResult.error("Property 'fixed' must be a boolean (true/false).").toJson()); //$NON-NLS-1$
             }
         }
-        String default_ = values.containsKey("default") ? stringProp(values, "default") : null; //$NON-NLS-1$ //$NON-NLS-2$
+        String default_ = null;
+        if (values.containsKey("default")) //$NON-NLS-1$
+        {
+            default_ = stringProp(values, "default"); //$NON-NLS-1$
+            if (default_ == null)
+            {
+                // Present but not a string primitive (object/array/JSON null): reject like the sibling
+                // properties above - silently applying would call setDefault(null) and CLEAR an existing
+                // default while reporting the property as applied.
+                return Result.failed(
+                    ToolResult.error("Property 'default' must be a string.").toJson()); //$NON-NLS-1$
+            }
+        }
 
         // Validate the EFFECTIVE post-change state (this call's new values layered over whatever the
         // property already carries) BEFORE any mutation - a bad combination must leave the property
