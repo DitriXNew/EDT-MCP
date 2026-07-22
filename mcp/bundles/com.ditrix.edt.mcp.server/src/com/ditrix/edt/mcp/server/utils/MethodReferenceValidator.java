@@ -236,7 +236,10 @@ public final class MethodReferenceValidator
         int declLine = findDeclarationLine(lines, found);
         for (int i = declLine; i <= found.endLine && i < lines.size(); i++)
         {
-            String line = lines.get(i);
+            // Strip a trailing inline comment BEFORE matching: a signature such as
+            // `Procedure Foo() // TODO: Export` must NOT count as exported (the keyword lives in the
+            // comment, not the modifier position).
+            String line = stripInlineComment(lines.get(i));
             if (EXPORT_KEYWORD_PATTERN.matcher(line).find())
             {
                 return true;
@@ -250,6 +253,29 @@ public final class MethodReferenceValidator
             }
         }
         return false;
+    }
+
+    /**
+     * Truncates {@code line} at the first {@code //} that is OUTSIDE a double-quoted string literal
+     * (a {@code //} inside a parameter's default string value stays). Quote tracking is the minimal
+     * intra-line kind a declaration header needs; it does not attempt multi-line literals.
+     */
+    static String stripInlineComment(String line)
+    {
+        boolean inString = false;
+        for (int i = 0; i < line.length(); i++)
+        {
+            char c = line.charAt(i);
+            if (c == '"')
+            {
+                inString = !inString;
+            }
+            else if (!inString && c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/')
+            {
+                return line.substring(0, i);
+            }
+        }
+        return line;
     }
 
     private static int findDeclarationLine(List<String> lines, BslModuleUtils.TextMethod found)
@@ -298,8 +324,41 @@ public final class MethodReferenceValidator
         }
         CommonModule module = (CommonModule)moduleObj;
 
-        List<String> lines = readModuleLines(project, parsed.moduleName);
+        // Read the source by the RESOLVED metadata name, not the raw input: findObject resolves the
+        // module tolerantly (e.g. a case difference), but the folder on disk carries the metadata
+        // name's exact casing - building the path from the raw input would miss the file on a
+        // case-sensitive filesystem and mis-report the method as missing.
+        List<String> lines = readModuleLines(project, module.getName());
         return decide(module, parsed.moduleName, lines, parsed.methodName, propertyLabel);
+    }
+
+    /**
+     * Returns the CANONICAL stored form of a VALID reference, or {@code null} when the value does not
+     * parse/resolve (callers run {@link #validate} first, so {@code null} is only a defensive fallback -
+     * they then keep the raw value). The canonical form uses the RESOLVED module's exact metadata name
+     * (so a tolerated case/prefix variant is not serialized verbatim into the model, where the
+     * platform's own resolution would then miss it):
+     * <ul>
+     * <li>{@code withTypePrefix == false} (a ScheduledJob's {@code methodName}):
+     * {@code <ModuleName>.<MethodName>};</li>
+     * <li>{@code withTypePrefix == true} (an EventSubscription's {@code handler}):
+     * {@code CommonModule.<ModuleName>.<MethodName>}.</li>
+     * </ul>
+     */
+    public static String canonicalReference(Configuration config, String rawValue, boolean withTypePrefix)
+    {
+        ParsedReference parsed = parse(rawValue, "", "", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (parsed.error != null)
+        {
+            return null;
+        }
+        MdObject moduleObj = MetadataTypeUtils.findObject(config, COMMON_MODULE_TYPE, parsed.moduleName);
+        if (!(moduleObj instanceof CommonModule))
+        {
+            return null;
+        }
+        String base = moduleObj.getName() + "." + parsed.methodName; //$NON-NLS-1$
+        return withTypePrefix ? COMMON_MODULE_TYPE + "." + base : base; //$NON-NLS-1$
     }
 
     /**

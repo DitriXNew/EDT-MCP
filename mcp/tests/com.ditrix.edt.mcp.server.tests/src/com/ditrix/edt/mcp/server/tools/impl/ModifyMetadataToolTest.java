@@ -32,6 +32,7 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorForm;
@@ -1201,5 +1202,22 @@ public class ModifyMetadataToolTest
             ModifyMetadataTool.validateMethodReference(null, config, job, "methodName", "NoSuchModule.Foo"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull("a reference to a non-existent module must be rejected", err); //$NON-NLS-1$
         assertTrue("the refusal must name the missing module", err.contains("NoSuchModule")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCanonicalMethodReferenceNormalizesGuardedCombos()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setName("Calc"); //$NON-NLS-1$
+        config.getCommonModules().add(module);
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertEquals("a validated methodName must serialize WITHOUT the type prefix", //$NON-NLS-1$
+            "Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
+        assertEquals("a validated handler must serialize WITH the English CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Unguarded combo: value passes through unchanged.
+        assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 }

@@ -17,6 +17,7 @@ import java.util.List;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com.google.gson.JsonParser;
 
@@ -286,5 +287,49 @@ public class MethodReferenceValidatorTest
         List<String> lines = List.of("Function Add(A, B)", "  Return A + B;", "EndFunction"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         String json = MethodReferenceValidator.decide(moduleWithServerFlag(false), "Calc", lines, "Add", LABEL); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(errorOf(json).contains("Export")); //$NON-NLS-1$
+    }
+
+    // ---- review round: comment-stripping + canonical form ---------------------------------------
+
+    @Test
+    public void testTrailingCommentExportIsNotExported()
+    {
+        // `Procedure Foo() // TODO: Export` - the keyword lives in a trailing comment, not the
+        // modifier position, and must NOT count as exported.
+        List<String> lines = List.of(
+            "Procedure Foo() // TODO: Export", //$NON-NLS-1$
+            "  Return;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+        BslModuleUtils.TextMethod found = BslModuleUtils.findMethodViaText(lines, "Foo"); //$NON-NLS-1$
+        assertTrue(found.found);
+        assertFalse("Export inside a trailing comment must NOT count as the modifier", //$NON-NLS-1$
+            MethodReferenceValidator.isExported(lines, found));
+    }
+
+    @Test
+    public void testStripInlineCommentKeepsSlashesInsideStrings()
+    {
+        assertEquals("Procedure Foo(A = \"http://x\") Export ", //$NON-NLS-1$
+            MethodReferenceValidator.stripInlineComment("Procedure Foo(A = \"http://x\") Export // note")); //$NON-NLS-1$
+        assertEquals("Procedure Foo() ", //$NON-NLS-1$
+            MethodReferenceValidator.stripInlineComment("Procedure Foo() // Export")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCanonicalReferenceResolvedCasingAndPrefixes()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setName("Calc"); //$NON-NLS-1$
+        config.getCommonModules().add(module);
+        // methodName form: no type prefix, resolved metadata casing (findObject is case-insensitive).
+        assertEquals("Calc.Add", MethodReferenceValidator.canonicalReference(config, "CommonModule.Calc.Add", false)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Calc.Add", MethodReferenceValidator.canonicalReference(config, "calc.Add", false)); //$NON-NLS-1$ //$NON-NLS-2$
+        // handler form: English CommonModule prefix restored regardless of the input variant.
+        assertEquals("CommonModule.Calc.Add", MethodReferenceValidator.canonicalReference(config, "Calc.Add", true)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonModule.Calc.Add", //$NON-NLS-1$
+            MethodReferenceValidator.canonicalReference(config, "\u041E\u0431\u0449\u0438\u0439\u041C\u043E\u0434\u0443\u043B\u044C.Calc.Add", true)); //$NON-NLS-1$
+        // Defensive: an unresolvable module yields null (caller keeps the raw value).
+        assertNull(MethodReferenceValidator.canonicalReference(config, "NoSuch.Add", false)); //$NON-NLS-1$
     }
 }
