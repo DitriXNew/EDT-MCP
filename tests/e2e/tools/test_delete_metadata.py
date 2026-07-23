@@ -31,6 +31,7 @@ from harness import (
     assert_not_contains,
     assert_no_diff,
     assert_tree_unchanged,
+    assert_diff_contains,
     poll_disk_path_gone,
     poll_disk_lacks,
     tree_snapshot,
@@ -591,3 +592,56 @@ def test_bare_token_without_dot_is_error():
     e = assert_error(r, "malformed FQN (no dot)")
     assert_error_quality(e, names=[bad], suggests=["Type.Name"])
     assert_no_diff("a rejected call must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# XDTO PACKAGE MEMBER delete (issue #183 stream 1) — a Property nested in an
+# ObjectType is deleted by its own FQN; its SIBLING property + the owning (now
+# emptied) ObjectType both survive. Confirmed live: after the delete, the owner
+# collapses to a self-closed <objectType name="Row"/> once its last remaining
+# property is also gone, but here ONE sibling survives, so the ObjectType stays
+# non-empty. On disk the change lands in the package's own Package.xdto.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_xdto_member():
+    pkg, obj = "E2EXdtoDel", "Row"
+    pkg_fqn = "XDTOPackage." + pkg
+    xdto_path = "src/XDTOPackages/%s/Package.xdto" % pkg
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn}), "seed the XDTO package")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType." + obj}),
+              "seed the ObjectType " + obj)
+    wait_for_project_ready()
+    gone_fqn = pkg_fqn + ".ObjectType.%s.Property.Gone" % obj
+    kept_fqn = pkg_fqn + ".ObjectType.%s.Property.Kept" % obj
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": gone_fqn,
+        "properties": [{"name": "type", "value": "string"}]}), "seed Property Gone")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": kept_fqn,
+        "properties": [{"name": "type", "value": "string"}]}), "seed Property Kept")
+    wait_for_project_ready()
+
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": gone_fqn, "confirm": True})
+    assert_ok(r, "delete the Gone property (confirm=true)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    assert r.structured.get("fqn") == gone_fqn, "must echo the target fqn"
+
+    # Package.xdto is a brand-new UNTRACKED file (this test creates the whole package), so a plain
+    # `git diff` (tracked files only) would never see it -- assert_diff_contains covers untracked
+    # files too (the same reason poll_disk_lacks / poll_disk_path_gone read the actual file for
+    # "gone" checks rather than relying on git diff).
+    poll_disk_lacks(xdto_path, 'name="Gone"',
+                    ctx="the deleted property must be gone from Package.xdto on disk")
+    assert_diff_contains('name="Kept"',
+                         ctx="the surviving sibling property must remain in Package.xdto on disk")
+    assert_diff_contains('name="%s"' % obj,
+                         ctx="the owning ObjectType must survive a member-only delete")
+
+    # MODEL read-back: get_metadata_details on the package no longer lists Gone, still lists Kept.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [pkg_fqn]})
+    assert_ok(d, "get_metadata_details read-back on the package")
+    assert_not_contains(d.text, "| Gone |", "the deleted property must be GONE from the model read-back")
+    assert_contains(d.text, "| Kept |", "the surviving property must remain in the model read-back")

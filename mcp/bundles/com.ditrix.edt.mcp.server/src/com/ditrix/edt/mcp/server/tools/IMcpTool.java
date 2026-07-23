@@ -123,6 +123,30 @@ public interface IMcpTool
     }
 
     /**
+     * Opt-in marker for tools whose execution — synchronously or via an asynchronous
+     * read-back {@link org.eclipse.core.runtime.jobs.Job Job} it launches — may open an
+     * infobase connection and thus raise EDT's blocking "Configure Infobase access
+     * Settings" credentials dialog. Gates whether the dispatch brackets the call with
+     * {@link com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor#markActivityStart()}
+     * / {@code markActivityEnd()} (issue #270): only a tool flagged here arms the
+     * suppressor's activity window, so continuous MCP polling by a tool that never
+     * touches a connection (e.g. {@code list_projects}, {@code get_metadata_details})
+     * no longer keeps the window permanently hot and blocking a human's manual dialog.
+     * <p>
+     * The default is {@code false}: a tool reads/writes EDT workspace or metadata state
+     * without reaching a live infobase connection. This is a behavioral default only — it
+     * is NOT part of the {@code tools/list} surface (not serialized into {@code ToolInfo}),
+     * so overriding it never changes the tools/list golden.
+     *
+     * @return {@code true} if the tool may open an infobase connection and raise the
+     *         access-settings dialog
+     */
+    default boolean connectsToInfobase()
+    {
+        return false;
+    }
+
+    /**
      * Returns the result file name for EmbeddedResource URI.
      * Used when response type is MARKDOWN.
      * Default returns tool name with .md extension.

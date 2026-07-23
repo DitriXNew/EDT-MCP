@@ -615,4 +615,243 @@ public class BslSyntaxCheckerTest
         assertFalse(result.isValid());
         assertTrue(result.getErrors().get(0).contains("Unexpected")); //$NON-NLS-1$
     }
+
+    // ==================== Async procedures/functions (#287) ====================
+
+    @Test
+    public void testAsyncProcedureRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u0410\u0441\u0438\u043D\u0445 \u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0424(\u041A\u043E\u043C\u0430\u043D\u0434\u0430)", //$NON-NLS-1$
+            "    \u0445 = 1;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testAsyncFunctionRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u0410\u0441\u0438\u043D\u0445 \u0424\u0443\u043D\u043A\u0446\u0438\u044F \u0424(\u041A\u043E\u043C\u0430\u043D\u0434\u0430)", //$NON-NLS-1$
+            "    \u0412\u043E\u0437\u0432\u0440\u0430\u0442 1;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testAsyncProcedureEnglish()
+    {
+        List<String> lines = Arrays.asList(
+            "Async Procedure DoSomethingAsync(Command)", //$NON-NLS-1$
+            "    x = 1;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testAsyncFunctionEnglish()
+    {
+        List<String> lines = Arrays.asList(
+            "Async Function GetValueAsync()", //$NON-NLS-1$
+            "    Return 1;", //$NON-NLS-1$
+            "EndFunction" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testAsyncProcedureWithAwaitInBody()
+    {
+        List<String> lines = Arrays.asList(
+            "\u0410\u0441\u0438\u043D\u0445 \u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C(\u041A\u043E\u043C\u0430\u043D\u0434\u0430)", //$NON-NLS-1$
+            "    \u0420\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 = \u0416\u0434\u0430\u0442\u044C \u041F\u043E\u043B\u0443\u0447\u0438\u0442\u044C\u0414\u0430\u043D\u043D\u044B\u0435\u0410\u0441\u0438\u043D\u0445();", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testAsyncProcedureWithClientAnnotation()
+    {
+        List<String> lines = Arrays.asList(
+            "&\u041D\u0430\u041A\u043B\u0438\u0435\u043D\u0442\u0435", //$NON-NLS-1$
+            "\u0410\u0441\u0438\u043D\u0445 \u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u041E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u0442\u044C(\u041A\u043E\u043C\u0430\u043D\u0434\u0430)", //$NON-NLS-1$
+            "    \u0416\u0434\u0430\u0442\u044C \u041F\u0430\u0443\u0437\u0430(1000);", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testUnclosedAsyncProcedureStillInvalid()
+    {
+        List<String> lines = Arrays.asList(
+            "\u0410\u0441\u0438\u043D\u0445 \u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0424()", //$NON-NLS-1$
+            "    \u0445 = 1;" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse(result.isValid());
+        assertTrue(result.getErrors().get(0).contains("Unclosed")); //$NON-NLS-1$
+    }
+
+    // ==================== Multi-line string literals (#286) ====================
+
+    @Test
+    public void testMultilineStringWithCodeAfterClosingQuote()
+    {
+        // The reported trigger: a multi-line string's LAST continuation line also
+        // carries post-string code with a block keyword (If). The old blunt "skip
+        // any line starting with |" logic dropped this whole line - including the
+        // If opener - while its EndIf on a later non-| line was still matched.
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    Text = \"start", //$NON-NLS-1$
+            "    |end\"; If X Then", //$NON-NLS-1$
+            "        Return;", //$NON-NLS-1$
+            "    EndIf;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testMultilineNStrLiteralInsideTryBlock()
+    {
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    Try", //$NON-NLS-1$
+            "        Message = NStr(\"ru = '\u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u0435\u0440\u0432\u0430\u044F", //$NON-NLS-1$
+            "        |\u0421\u0442\u0440\u043E\u043A\u0430 \u0432\u0442\u043E\u0440\u0430\u044F'; en = 'Line one", //$NON-NLS-1$
+            "        |Line two'\");", //$NON-NLS-1$
+            "        If Message <> \"\" Then", //$NON-NLS-1$
+            "            Return;", //$NON-NLS-1$
+            "        EndIf;", //$NON-NLS-1$
+            "    Except", //$NON-NLS-1$
+            "        Raise;", //$NON-NLS-1$
+            "    EndTry;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testMultilineQueryTextWithPipeLines()
+    {
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    Query = New Query;", //$NON-NLS-1$
+            "    Query.Text =", //$NON-NLS-1$
+            "        \"SELECT", //$NON-NLS-1$
+            "        |    Ref", //$NON-NLS-1$
+            "        |FROM", //$NON-NLS-1$
+            "        |    Catalog.Items", //$NON-NLS-1$
+            "        |WHERE", //$NON-NLS-1$
+            "        |    Ref.Code = &Code\";", //$NON-NLS-1$
+            "    Result = Query.Execute();", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testDoubleSlashInsideMultilineStringIsNotTreatedAsComment()
+    {
+        // The "//" inside the URL (opened on the first line, still inside the
+        // string on the continuation line) must not be mistaken for a comment
+        // start, and the trailing If on the closing continuation line must still
+        // be recognized.
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    Url = \"https://example.com/", //$NON-NLS-1$
+            "    |path\"; If Url <> \"\" Then", //$NON-NLS-1$
+            "        Return;", //$NON-NLS-1$
+            "    EndIf;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testGenuinelyUnbalancedModuleWithMultilineStringStillInvalid()
+    {
+        // A correctly-masked multi-line string must not hide a REAL imbalance
+        // elsewhere in the module (the If below is genuinely never closed).
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    Text = \"start", //$NON-NLS-1$
+            "    |end\";", //$NON-NLS-1$
+            "    If X Then", //$NON-NLS-1$
+            "        Return;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse(result.isValid());
+    }
+
+    @Test
+    public void testDoubledQuoteInsideStringIsEscapedNotClosing()
+    {
+        // A doubled "" inside an already-open string is an escaped quote and must
+        // NOT close the literal early; keyword-looking words inside the string
+        // ("If", "EndIf") must stay masked so they cannot be mistaken for the real
+        // If/EndIf block that follows on later lines.
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    Text = \"say \"\"hello\"\" to If EndIf\";", //$NON-NLS-1$
+            "    If X Then", //$NON-NLS-1$
+            "        Return;", //$NON-NLS-1$
+            "    EndIf;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testDoubleQuoteInsideSingleQuoteDateLiteralDoesNotOpenAString()
+    {
+        // A single-quote '...' date/token literal that happens to contain a double quote must
+        // NOT flip the string state (otherwise the unmatched " sticks and masks the whole rest
+        // of the module, hiding EndIf/EndProcedure and yielding a false "unclosed" - codex #286).
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    D = '2024\"0101';", //$NON-NLS-1$
+            "    If X Then", //$NON-NLS-1$
+            "        Return;", //$NON-NLS-1$
+            "    EndIf;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testUnclosedStringNotFollowedByContinuationDoesNotSwallowRealCode()
+    {
+        // An unclosed " opens a string, but the NEXT line is real code (not a '|' continuation),
+        // so the literal was not a valid multi-line string. The checker must NOT keep masking:
+        // the following (genuinely unclosed) If block must still be detected (codex #286 - without
+        // the reset the sticky string masks the If and the module is wrongly reported valid).
+        List<String> lines = Arrays.asList(
+            "x = \"broken", //$NON-NLS-1$
+            "If X Then", //$NON-NLS-1$
+            "    Return;" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("an unclosed If after a broken (non-continued) string must still be caught", //$NON-NLS-1$
+            result.isValid());
+    }
 }

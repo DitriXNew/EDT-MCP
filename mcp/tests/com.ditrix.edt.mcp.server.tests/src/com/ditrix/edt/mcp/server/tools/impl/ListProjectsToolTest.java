@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -48,6 +49,15 @@ public class ListProjectsToolTest
     public void testResponseTypeMarkdown()
     {
         assertEquals(ResponseType.MARKDOWN, new ListProjectsTool().getResponseType());
+    }
+
+    @Test
+    public void testConnectsToInfobaseIsFalse()
+    {
+        // #270: list_projects is a pure workspace-metadata read — it must NOT arm the
+        // auth-dialog suppressor's activity window, so constant polling by this tool
+        // no longer keeps a human's manual credentials dialog fought back.
+        assertFalse(new ListProjectsTool().connectsToInfobase());
     }
 
     @Test

@@ -7,9 +7,14 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -277,8 +282,10 @@ public class CreateInfobaseToolTest
     @Test
     public void testStandaloneServerWithCredentialsIsError()
     {
-        // Credentials apply only to a file infobase; pairing them with standaloneServer is rejected
-        // (not silently dropped). Validated before any platform/service lookup (headless-safe).
+        // #275: credentials remain rejected for a newly created standalone server (mode='create',
+        // the default) — pairing them with standaloneServer+create is rejected (not silently
+        // dropped). Validated before any platform/service lookup (headless-safe). The message must
+        // steer to BOTH supported alternatives: applicationKind='infobase', or mode='register'.
         Map<String, String> params = new HashMap<>();
         params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
         params.put("infobaseFile", "C:/infobases/Any"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -286,9 +293,417 @@ public class CreateInfobaseToolTest
         params.put("user", "Admin"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new CreateInfobaseTool().execute(params);
         assertNotNull(result);
-        assertTrue("credentials with standaloneServer must be an error", //$NON-NLS-1$
+        assertTrue("credentials with standaloneServer+create must be an error", //$NON-NLS-1$
             result.contains("\"success\":false")); //$NON-NLS-1$
         assertTrue("error must steer to applicationKind='infobase'", //$NON-NLS-1$
             result.contains("infobase")); //$NON-NLS-1$
+        assertTrue("error must steer to mode='register' as the supported standalone-server alternative", //$NON-NLS-1$
+            result.contains("register")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRegisterWithCredentialsPassesValidation()
+    {
+        // #275: standaloneServer + mode='register' + credentials must NOT be rejected by the
+        // credentials guard (that guard now fires only for standaloneServer+create). Execution
+        // proceeds into the register-path validation instead, which fails on the missing 1Cv8.1CD at
+        // this fake path — proving the credentials guard let it through rather than blocking it.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/edt_mcp_no_such_ib_zzz2"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("user", "Admin"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("password", "secret"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("must still be an error (no 1Cv8.1CD at the fake path)", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("must NOT be the credentials-rejected error", //$NON-NLS-1$
+            !result.contains("are supported only with")); //$NON-NLS-1$
+        assertTrue("must be the register-path 'no file infobase found' error instead", //$NON-NLS-1$
+            result.contains("1Cv8.1CD")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRegisterIsNoLongerRejected()
+    {
+        // #271: applicationKind='standaloneServer' + mode='register' is now SUPPORTED (it wraps an
+        // EXISTING file infobase with a standalone server). The old "mode='register' is not supported
+        // with applicationKind='standaloneServer'" routing rejection must be GONE — a register call now
+        // flows into the register-path validation instead. Headless-safe: with a path that has no
+        // 1Cv8.1CD the validation fires before any workspace/service lookup.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/edt_mcp_no_such_ib_zzz"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("standaloneServer+register must no longer be rejected as 'not supported'", //$NON-NLS-1$
+            !result.contains("not supported")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRegisterMissingDatabaseNamesPath()
+    {
+        // #271: registering a standalone server over a path that holds no 1Cv8.1CD must fail fast with an
+        // actionable error that NAMES the path and steers to mode='create' — the SAME check the plain
+        // register path uses. Validated before any workspace/service lookup (headless-safe).
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "C:/infobases/edt_mcp_no_such_ib_zzz"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertNotNull(result);
+        assertTrue("missing existing infobase must be an error", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("error must name the path", //$NON-NLS-1$
+            result.contains("edt_mcp_no_such_ib_zzz")); //$NON-NLS-1$
+        assertTrue("error must mention the expected 1Cv8.1CD file", //$NON-NLS-1$
+            result.contains("1Cv8.1CD")); //$NON-NLS-1$
+        assertTrue("error must steer to mode='create'", result.contains("create")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== #273: version-tolerant create-flag resolution ====================
+    // StandaloneServerInfobase's create-new-infobase flag setter was RENAMED, with no back-compat
+    // alias, between EDT 2025.2 (setCreate) and 2026.1 (setCreateNewInfobase). ssMethodAny/
+    // ssSetCreateFlag resolve it version-tolerantly; both are package-private test seams (mirrors
+    // StandaloneServerSupport's convention of package-visible statics for testability), exercised
+    // here with plain stub classes exposing one name, the other, or neither — no live EDT needed.
+
+    @Test
+    public void testSsMethodAnyResolves2025ShapeWhenOnlySetCreatePresent()
+    {
+        Method m = CreateInfobaseTool.ssMethodAny(StubOnlySetCreate.class, 1, "setCreate", //$NON-NLS-1$
+            "setCreateNewInfobase"); //$NON-NLS-1$
+        assertNotNull("setCreate must resolve when present", m); //$NON-NLS-1$
+        assertEquals("setCreate", m.getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsMethodAnyResolves2026ShapeWhenOnlySetCreateNewInfobasePresent()
+    {
+        Method m = CreateInfobaseTool.ssMethodAny(StubOnlySetCreateNewInfobase.class, 1, "setCreate", //$NON-NLS-1$
+            "setCreateNewInfobase"); //$NON-NLS-1$
+        assertNotNull("setCreateNewInfobase must resolve when present", m); //$NON-NLS-1$
+        assertEquals("setCreateNewInfobase", m.getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsMethodAnyReturnsNullWhenNeitherNamePresent()
+    {
+        assertNull(CreateInfobaseTool.ssMethodAny(StubNeitherSetter.class, 1, "setCreate", //$NON-NLS-1$
+            "setCreateNewInfobase")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsSetCreateFlagInvokesSetCreateOn2025Shape() throws Exception
+    {
+        StubOnlySetCreate stub = new StubOnlySetCreate();
+        CreateInfobaseTool.ssSetCreateFlag(stub, true);
+        assertTrue("setCreate(true) must have been invoked", stub.created); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsSetCreateFlagInvokesSetCreateNewInfobaseOn2026Shape() throws Exception
+    {
+        StubOnlySetCreateNewInfobase stub = new StubOnlySetCreateNewInfobase();
+        CreateInfobaseTool.ssSetCreateFlag(stub, true);
+        assertTrue("setCreateNewInfobase(true) must have been invoked", stub.created); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsSetCreateFlagThrowsNamingBothTriedMethodsWhenNeitherPresent()
+    {
+        try
+        {
+            CreateInfobaseTool.ssSetCreateFlag(new StubNeitherSetter(), true);
+            fail("must throw when neither setCreate nor setCreateNewInfobase resolves"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            assertTrue("failure message must name setCreate", //$NON-NLS-1$
+                e.getMessage().contains("setCreate")); //$NON-NLS-1$
+            assertTrue("failure message must name setCreateNewInfobase", //$NON-NLS-1$
+                e.getMessage().contains("setCreateNewInfobase")); //$NON-NLS-1$
+        }
+    }
+
+    // ==================== #273: create-template database ensure (2026.1 second drift layer) ====================
+    // On 2026.1 the behaviour delegate CASTS the module config's database to ICreateTemplateDatabase,
+    // but createServerWithInfobase builds it with a plain FileDatabase -> live ClassCastException.
+    // ssEnsureCreateTemplateDatabase swaps in a FileCreateTemplateDatabase; the DECISION logic
+    // (needs-replacement check + directory copy across the getConfigDirectory/getPath rename) is
+    // headless-testable below; the bundle class-LOADING step needs the real EDT bundle and stays
+    // live-verified (here it degrades best-effort, which is itself asserted).
+
+    @Test
+    public void testSsIsCreateTemplateDatabaseTrueForDirectImplementor()
+    {
+        assertTrue(CreateInfobaseTool.ssIsCreateTemplateDatabase(StubTemplateCapableDatabase.class));
+    }
+
+    @Test
+    public void testSsIsCreateTemplateDatabaseTrueViaSuperclass()
+    {
+        // The marker interface arrives through the superclass -> the hierarchy walk must find it.
+        assertTrue(CreateInfobaseTool.ssIsCreateTemplateDatabase(StubTemplateCapableSubclass.class));
+    }
+
+    @Test
+    public void testSsIsCreateTemplateDatabaseTrueViaSuperinterface()
+    {
+        // The marker interface arrives as a SUPERinterface of an implemented interface.
+        assertTrue(CreateInfobaseTool.ssIsCreateTemplateDatabase(StubExtendedTemplateDatabase.class));
+    }
+
+    @Test
+    public void testSsIsCreateTemplateDatabaseFalseForPlainClass()
+    {
+        assertFalse(CreateInfobaseTool.ssIsCreateTemplateDatabase(StubFileDatabase2025.class));
+        assertFalse(CreateInfobaseTool.ssIsCreateTemplateDatabase(Object.class));
+    }
+
+    @Test
+    public void testSsIsCreateTemplateDatabaseFalseForNull()
+    {
+        assertFalse(CreateInfobaseTool.ssIsCreateTemplateDatabase(null));
+    }
+
+    @Test
+    public void testSsCopyDatabaseDirectoryFrom2025To2026Shape() throws Exception
+    {
+        // Read via getConfigDirectory (2025.2), write via setPath (2026.1) — the cross-rename copy.
+        StubFileDatabase2025 from = new StubFileDatabase2025("C:/data/ib"); //$NON-NLS-1$
+        StubFileDatabase2026 to = new StubFileDatabase2026(null);
+        CreateInfobaseTool.ssCopyDatabaseDirectory(from, to);
+        assertEquals("C:/data/ib", to.getPath()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsCopyDatabaseDirectoryFrom2026To2025Shape() throws Exception
+    {
+        // Read via getPath (2026.1), write via setConfigDirectory (2025.2).
+        StubFileDatabase2026 from = new StubFileDatabase2026("C:/data/ib2026"); //$NON-NLS-1$
+        StubFileDatabase2025 to = new StubFileDatabase2025(null);
+        CreateInfobaseTool.ssCopyDatabaseDirectory(from, to);
+        assertEquals("C:/data/ib2026", to.getConfigDirectory()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsCopyDatabaseDirectoryNoOpWhenSourceHasNoAccessor() throws Exception
+    {
+        // The source exposes neither getConfigDirectory nor getPath -> no-op, no throw.
+        StubFileDatabase2026 to = new StubFileDatabase2026("keep"); //$NON-NLS-1$
+        CreateInfobaseTool.ssCopyDatabaseDirectory(new Object(), to);
+        assertEquals("keep", to.getPath()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsCopyDatabaseDirectoryNoOpWhenTargetHasNoSetter() throws Exception
+    {
+        // The target exposes neither setConfigDirectory nor setPath -> no-op, no throw.
+        CreateInfobaseTool.ssCopyDatabaseDirectory(new StubFileDatabase2025("C:/data/ib"), //$NON-NLS-1$
+            new Object());
+    }
+
+    @Test
+    public void testSsCopyDatabaseDirectorySkipsNullDirectory() throws Exception
+    {
+        // A null source directory is not written (the target keeps its value).
+        StubFileDatabase2026 to = new StubFileDatabase2026("keep"); //$NON-NLS-1$
+        CreateInfobaseTool.ssCopyDatabaseDirectory(new StubFileDatabase2025(null), to);
+        assertEquals("keep", to.getPath()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSsEnsureCreateTemplateDatabaseLeavesTemplateCapableDatabaseUntouched()
+    {
+        // The database already implements an ICreateTemplateDatabase-named interface -> untouched
+        // (the 2025.2-compatible / future-proof path): same instance, setDatabase never called.
+        StubTemplateCapableDatabase db = new StubTemplateCapableDatabase();
+        StubServerConfig cfg = new StubServerConfig(db);
+        CreateInfobaseTool.ssEnsureCreateTemplateDatabase(new StubInfobaseWithConfig(cfg));
+        assertFalse("setDatabase must not be called for a template-capable database", //$NON-NLS-1$
+            cfg.setDatabaseCalled);
+        assertSame(db, cfg.getDatabase());
+    }
+
+    @Test
+    public void testSsEnsureCreateTemplateDatabaseLeavesNullDatabaseAsIs()
+    {
+        // A null database is left as-is (the delegate then fails with its own honest error).
+        StubServerConfig cfg = new StubServerConfig(null);
+        CreateInfobaseTool.ssEnsureCreateTemplateDatabase(new StubInfobaseWithConfig(cfg));
+        assertFalse(cfg.setDatabaseCalled);
+        assertNull(cfg.getDatabase());
+    }
+
+    @Test
+    public void testSsEnsureCreateTemplateDatabaseToleratesNullConfiguration()
+    {
+        // getStandaloneServerConfiguration() returning null must be a silent no-op, never a throw.
+        CreateInfobaseTool.ssEnsureCreateTemplateDatabase(new StubInfobaseWithConfig(null));
+    }
+
+    @Test
+    public void testSsEnsureCreateTemplateDatabaseIsBestEffortWhenBundleClassUnavailable()
+    {
+        // A plain (non-template) database triggers the replacement branch, whose bundle class-load
+        // (FileCreateTemplateDatabase via the db's own classloader) cannot succeed headlessly. The
+        // whole ensure is BEST-EFFORT: no throw, database left unchanged, setDatabase never called
+        // (on 2025.2 a plain FileDatabase still materializes fine — that path must never regress).
+        StubFileDatabase2025 db = new StubFileDatabase2025("C:/data/ib"); //$NON-NLS-1$
+        StubServerConfig cfg = new StubServerConfig(db);
+        CreateInfobaseTool.ssEnsureCreateTemplateDatabase(new StubInfobaseWithConfig(cfg));
+        assertFalse("a failed swap must leave the original database in place", //$NON-NLS-1$
+            cfg.setDatabaseCalled);
+        assertSame(db, cfg.getDatabase());
+    }
+
+    // ==================== Stubs (plain classes ssMethodAny/ssSetCreateFlag introspect) ====================
+
+    /** A 2025.2-shaped {@code StandaloneServerInfobase} stub: only {@code setCreate(boolean)}. */
+    public static final class StubOnlySetCreate
+    {
+        boolean created;
+
+        public void setCreate(boolean value)
+        {
+            created = value;
+        }
+    }
+
+    /** A 2026.1-shaped {@code StandaloneServerInfobase} stub: only {@code setCreateNewInfobase(boolean)}. */
+    public static final class StubOnlySetCreateNewInfobase
+    {
+        boolean created;
+
+        public void setCreateNewInfobase(boolean value)
+        {
+            created = value;
+        }
+    }
+
+    /** A stub exposing NEITHER create-flag setter name (the both-names error path). */
+    public static final class StubNeitherSetter
+    {
+        // deliberately no setCreate / setCreateNewInfobase
+    }
+
+    /**
+     * #273: stands in for the platform's create-template marker interface — matched by SIMPLE name
+     * (the live one is {@code com.e1c...standaloneserver.core.config.ICreateTemplateDatabase}).
+     */
+    public interface ICreateTemplateDatabase
+    {
+        // marker
+    }
+
+    /** #273: an interface EXTENDING the marker (the superinterface-walk branch). */
+    public interface IExtendedTemplateDatabase extends ICreateTemplateDatabase
+    {
+        // marker
+    }
+
+    /** #273: a database that implements the marker interface DIRECTLY (needs no replacement). */
+    public static class StubTemplateCapableDatabase implements ICreateTemplateDatabase
+    {
+        // marker only
+    }
+
+    /** #273: a database inheriting the marker via its SUPERCLASS (the hierarchy-walk branch). */
+    public static final class StubTemplateCapableSubclass extends StubTemplateCapableDatabase
+    {
+        // marker only, via the superclass
+    }
+
+    /** #273: a database reaching the marker via a superINTERFACE of an implemented interface. */
+    public static final class StubExtendedTemplateDatabase implements IExtendedTemplateDatabase
+    {
+        // marker only, via the extended interface
+    }
+
+    /** #273: a 2025.2-shaped plain file database — getConfigDirectory/setConfigDirectory accessors. */
+    public static final class StubFileDatabase2025
+    {
+        private String dir;
+
+        StubFileDatabase2025(String dir)
+        {
+            this.dir = dir;
+        }
+
+        public String getConfigDirectory()
+        {
+            return dir;
+        }
+
+        public void setConfigDirectory(String dir)
+        {
+            this.dir = dir;
+        }
+    }
+
+    /** #273: a 2026.1-shaped plain file database — the accessors were RENAMED to getPath/setPath. */
+    public static final class StubFileDatabase2026
+    {
+        private String path;
+
+        StubFileDatabase2026(String path)
+        {
+            this.path = path;
+        }
+
+        public String getPath()
+        {
+            return path;
+        }
+
+        public void setPath(String path)
+        {
+            this.path = path;
+        }
+    }
+
+    /** #273: the module config stand-in — getDatabase/setDatabase (setDatabase call is recorded). */
+    public static final class StubServerConfig
+    {
+        private Object database;
+        boolean setDatabaseCalled;
+
+        StubServerConfig(Object database)
+        {
+            this.database = database;
+        }
+
+        public Object getDatabase()
+        {
+            return database;
+        }
+
+        public void setDatabase(Object database)
+        {
+            this.database = database;
+            setDatabaseCalled = true;
+        }
+    }
+
+    /** #273: the StandaloneServerInfobase stand-in exposing its module configuration. */
+    public static final class StubInfobaseWithConfig
+    {
+        private final Object configuration;
+
+        StubInfobaseWithConfig(Object configuration)
+        {
+            this.configuration = configuration;
+        }
+
+        public Object getStandaloneServerConfiguration()
+        {
+            return configuration;
+        }
     }
 }

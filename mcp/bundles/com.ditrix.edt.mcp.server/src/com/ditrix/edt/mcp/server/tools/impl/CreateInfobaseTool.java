@@ -112,6 +112,15 @@ public class CreateInfobaseTool implements IMcpTool
     /** Input key: authentication kind (INFOBASE / OS) for the stored credentials (#194). */
     private static final String KEY_ACCESS = "access"; //$NON-NLS-1$
 
+    /** Common prefix of a standalone-server create/register failure message. */
+    private static final String STANDALONE_SERVER_MSG_PREFIX = "Standalone-server "; //$NON-NLS-1$
+
+    /** mode='register' word used in standalone-server failure/timeout messages. */
+    private static final String VERB_REGISTRATION = "registration"; //$NON-NLS-1$
+
+    /** mode='create' word used in standalone-server failure/timeout messages. */
+    private static final String VERB_CREATION = "creation"; //$NON-NLS-1$
+
     /**
      * Port HINT passed to {@code createServerWithInfobase} for a standalone server. For a FILE-backed
      * standalone server EDT does NOT honour a requested port: {@code generateDefaultConfig} uses this
@@ -139,6 +148,24 @@ public class CreateInfobaseTool implements IMcpTool
     private static final String STANDALONE_SERVER_INFOBASE_CLASS =
         "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core.StandaloneServerInfobase"; //$NON-NLS-1$
 
+    /**
+     * FQN of the create-template file database ({@code FileCreateTemplateDatabase extends FileDatabase
+     * implements ICreateTemplateDatabase}; javap-verified IDENTICAL on EDT 2025.2 and 2026.1, bundle
+     * {@code com.e1c.g5.v8.dt.platform.standaloneserver.core}). Loaded via the LIVE database object's
+     * own classloader (same bundle) — never {@code Class.forName}: this plugin has no dependency on
+     * that bundle. See {@link #ssEnsureCreateTemplateDatabase}.
+     */
+    private static final String CREATE_TEMPLATE_DATABASE_CLASS =
+        "com.e1c.g5.v8.dt.platform.standaloneserver.core.config.FileCreateTemplateDatabase"; //$NON-NLS-1$
+
+    /**
+     * SIMPLE name of the create-template marker interface
+     * ({@code com.e1c.g5.v8.dt.platform.standaloneserver.core.config.ICreateTemplateDatabase}).
+     * {@link #ssIsCreateTemplateDatabase} matches it by simple name so the decision logic is
+     * unit-testable with headless stub interfaces (the platform ships no other type with this name).
+     */
+    private static final String CREATE_TEMPLATE_DATABASE_INTERFACE = "ICreateTemplateDatabase"; //$NON-NLS-1$
+
     /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
     private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
         "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
@@ -161,10 +188,14 @@ public class CreateInfobaseTool implements IMcpTool
             + "makes a new database (requires a registered 1C platform runtime); mode='register' " //$NON-NLS-1$
             + "adds an already-existing infobase at the given path without launching the platform. " //$NON-NLS-1$
             + "applicationKind='infobase' (default) makes a plain file infobase; " //$NON-NLS-1$
-            + "applicationKind='standaloneServer' creates an autonomous (standalone) server that also " //$NON-NLS-1$
-            + "exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
+            + "applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING " //$NON-NLS-1$
+            + "file infobase with) an autonomous (standalone) server that also exposes a web URL for " //$NON-NLS-1$
+            + "HTTP testing (requires a registered 1C standalone-server runtime, " //$NON-NLS-1$
             + "platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job " //$NON-NLS-1$
-            + "(up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
+            + "(up to 120 s). user/password/access store connection credentials for " //$NON-NLS-1$
+            + "applicationKind='infobase', and for applicationKind='standaloneServer' with " //$NON-NLS-1$
+            + "mode='register' — rejected for a newly created standalone server " //$NON-NLS-1$
+            + "(mode='create'). Full parameters and examples: call get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
 
     @Override
@@ -176,7 +207,9 @@ public class CreateInfobaseTool implements IMcpTool
             .enumProperty("mode", //$NON-NLS-1$
                 "'create' (default) = make a new file infobase at infobaseFile (launches the 1C " //$NON-NLS-1$
                 + "platform); 'register' = add an EXISTING infobase already present at infobaseFile " //$NON-NLS-1$
-                + "(no platform launch).", //$NON-NLS-1$
+                + "(no platform launch). With applicationKind='standaloneServer', mode='register' " //$NON-NLS-1$
+                + "wraps an EXISTING file infobase (a 1Cv8.1CD must be present) with a standalone " //$NON-NLS-1$
+                + "server instead of creating a new one.", //$NON-NLS-1$
                 "create", "register") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_INFOBASE_FILE,
                 "Absolute path to the infobase directory (required). For mode='create' the directory " //$NON-NLS-1$
@@ -195,20 +228,28 @@ public class CreateInfobaseTool implements IMcpTool
                 "'infobase' (default) = a plain file infobase via the configurator; " //$NON-NLS-1$
                 + "'standaloneServer' = an autonomous (standalone) server that creates and serves a " //$NON-NLS-1$
                 + "new file infobase and exposes a web URL for HTTP testing (requires a registered 1C " //$NON-NLS-1$
-                + "standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by " //$NON-NLS-1$
+                + "standalone-server runtime, platform >= 8.3.23). With mode='register' the server " //$NON-NLS-1$
+                + "instead wraps an EXISTING file infobase (a 1Cv8.1CD must be present at infobaseFile) " //$NON-NLS-1$
+                + "rather than creating a new one. The web port is auto-allocated by " //$NON-NLS-1$
                 + "EDT and reported back as 'port'/'webUrl' in the result.", //$NON-NLS-1$
                 KIND_INFOBASE, KIND_STANDALONE_SERVER)
             .stringProperty(KEY_USER,
                 "Infobase connection user to store so update_database / debug_launch can authenticate " //$NON-NLS-1$
                 + "the update agent (issue #194). Selects an EXISTING user; most useful with " //$NON-NLS-1$
-                + "mode='register' (the existing base already has users). Omit to store no credentials.") //$NON-NLS-1$
+                + "mode='register' (the existing base already has users). Omit to store no credentials. " //$NON-NLS-1$
+                + "Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' " //$NON-NLS-1$
+                + "with mode='register'; rejected for a newly created standalone server " //$NON-NLS-1$
+                + "(mode='create').") //$NON-NLS-1$
             .stringProperty("password", //$NON-NLS-1$
-                "Password for 'user'. Optional; default empty (demo bases use an empty password).") //$NON-NLS-1$
+                "Password for 'user'. Optional; default empty (demo bases use an empty password). " //$NON-NLS-1$
+                + "Same applicationKind/mode restriction as 'user'.") //$NON-NLS-1$
             .enumProperty(KEY_ACCESS,
                 "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) " //$NON-NLS-1$
                 + "or 'OS'. Credentials are stored when ANY of user/password/access is given; " //$NON-NLS-1$
                 + "access='OS' on its own stores OS-authentication settings (no 1C user/password). " //$NON-NLS-1$
-                + "Applies only to applicationKind='infobase' (a file infobase).", //$NON-NLS-1$
+                + "Applies to applicationKind='infobase' (a file infobase), and to " //$NON-NLS-1$
+                + "applicationKind='standaloneServer' with mode='register'; rejected for " //$NON-NLS-1$
+                + "a newly created standalone server (mode='create').", //$NON-NLS-1$
                 "INFOBASE", "OS") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -243,6 +284,17 @@ public class CreateInfobaseTool implements IMcpTool
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;
+    }
+
+    /**
+     * {@code create_infobase} launches the 1C platform / standalone-server runtime and reads the
+     * project's applications back, either of which can open an infobase connection and raise EDT's
+     * access-settings dialog — so it opts into the auth-dialog-suppressor scope (issue #270).
+     */
+    @Override
+    public boolean connectsToInfobase()
+    {
+        return true;
     }
 
     @Override
@@ -288,23 +340,32 @@ public class CreateInfobaseTool implements IMcpTool
         }
         boolean standaloneServer = kind.value;
 
-        // Credentials (#194) target a FILE infobase's access settings; the standalone-server path
-        // manages its own infobase/auth and would silently drop them. Reject up front (before any
-        // workspace/service access) rather than no-op so the caller is not misled.
-        if (standaloneServer && credentials.any())
-        {
-            return ToolResult.error("user/password/access are supported only with " //$NON-NLS-1$
-                + "applicationKind='infobase' (a file infobase). A standalone server manages its " //$NON-NLS-1$
-                + "own infobase and authentication — omit these parameters.").toJson(); //$NON-NLS-1$
-        }
-
-        // Validate mode (default 'create').
+        // Validate mode (default 'create'). Parsed BEFORE the credentials guard below (issue #275
+        // needs to know register to decide whether standaloneServer+credentials is allowed).
         FlagResult mode = parseMode(modeStr);
         if (mode.error != null)
         {
             return mode.error;
         }
         boolean register = mode.value;
+
+        // Credentials (#194) always apply to a FILE infobase's access settings. A newly created
+        // standalone server (mode='create') has no existing infobase reference to store them
+        // against at this point and would silently drop them — reject up front (before any
+        // workspace/service access) rather than no-op. mode='register' wraps an EXISTING file
+        // infobase that already has users, so credentials DO apply there (issue #275): the
+        // read-back wst-server application is adapted to an InfobaseReference via the widened
+        // InfobaseAccessSupport.storeCredentials(IApplication, ...), which is exactly what EDT's
+        // own launch path (ServerApplicationBehaviourDelegate) resolves against later.
+        if (standaloneServer && !register && credentials.any())
+        {
+            return ToolResult.error("user/password/access are supported only with " //$NON-NLS-1$
+                + "applicationKind='infobase' (a file infobase), or with applicationKind=" //$NON-NLS-1$
+                + "'standaloneServer' AND mode='register' (a standalone server wrapping an existing, " //$NON-NLS-1$
+                + "already-registered infobase). A newly created standalone server " //$NON-NLS-1$
+                + "(mode='create') has no existing infobase users yet — omit these parameters or " //$NON-NLS-1$
+                + "use mode='register'.").toJson(); //$NON-NLS-1$
+        }
 
         // Validate and normalize the infobase path early (before acquiring services)
         Path infobaseDir;
@@ -318,6 +379,19 @@ public class CreateInfobaseTool implements IMcpTool
                 + "': " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
 
+        // Standalone server + mode='register': the served infobase must ALREADY exist on disk. Validate
+        // the 1Cv8.1CD up front — the SAME check the plain register path uses — BEFORE the (workspace-
+        // touching) building-state check and before any service lookup or Job, so a wrong path fails
+        // fast and cleanly. (The plain register path runs this same check later, inside createInfobase.)
+        if (standaloneServer && register)
+        {
+            String registerError = validateRegisterPath(infobaseDir);
+            if (registerError != null)
+            {
+                return registerError;
+            }
+        }
+
         // Refuse only the transient BUILDING state; missing/closed project falls through below.
         String building = ProjectStateChecker.buildingErrorOrNull(projectName);
         if (building != null)
@@ -327,16 +401,12 @@ public class CreateInfobaseTool implements IMcpTool
 
         if (standaloneServer)
         {
-            // The standalone-server path always CREATES a new infobase (served by the server); it has
-            // no register analogue, so reject mode='register' for clarity.
-            if (register)
-            {
-                return ToolResult.error("mode='register' is not supported with " //$NON-NLS-1$
-                    + "applicationKind='standaloneServer'. A standalone server creates and serves a " //$NON-NLS-1$
-                    + "new infobase; omit mode (or use mode='create').").toJson(); //$NON-NLS-1$
-            }
+            // mode='create' creates and serves a NEW infobase; mode='register' wraps an EXISTING file
+            // infobase (1Cv8.1CD already on disk) with a standalone server — same registration, minus
+            // the database materialization. credentials (issue #275) are only ever non-empty here
+            // when register==true — the guard above already rejected mode='create'+credentials.
             return createStandaloneServer(projectName, infobaseDir, infobaseName, platform,
-                setDefault);
+                setDefault, register, credentials);
         }
 
         return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register,
@@ -896,17 +966,30 @@ public class CreateInfobaseTool implements IMcpTool
      * the Job so "no runtime" fails instantly; the {@code ibcmd} shell-out runs entirely inside a
      * bounded background Job — never on the UI thread, no modal.
      *
+     * <p>With {@code register == true} the served file infobase already exists on disk: the WST
+     * server registration is performed exactly as for the create path but the database materialization
+     * ({@link #ssMaterializeInfobase}) is SKIPPED (a best-effort {@code setExist(true)} marks the module
+     * as existing instead). The presence of a {@code 1Cv8.1CD} at {@code infobaseDir} is validated by
+     * {@link #execute(Map)} up front (fail fast, before this method) using the same check the plain
+     * register path uses.
+     *
      * @param projectName the configuration project to bind the new server to
      * @param infobaseDir the infobase / server working directory
      * @param infobaseName the display name (auto-generated from the directory if absent)
      * @param platform the platform version mask (may be {@code null}/empty = any)
      * @param setDefault set the new server as the project's default application after creation
+     * @param register {@code true} to wrap an EXISTING file infobase (mode='register'); {@code false} to
+     *            create and serve a new one (mode='create')
+     * @param credentials connection credentials to store against the read-back wst-server application
+     *            (issue #275); non-empty only when {@code register} is {@code true} — {@link #execute}
+     *            already rejects credentials with mode='create'
      * @return the tool result JSON
      */
     private String createStandaloneServer(String projectName, Path infobaseDir,
-            String infobaseName, String platform, boolean setDefault)
+            String infobaseName, String platform, boolean setDefault, boolean register,
+            Credentials credentials)
     {
-        // --- 1-2. Resolve project + services ---
+        // --- 1-2. Resolve project + services --- (register-path validation ran in execute() already)
         StandaloneContext sctx = resolveStandaloneContext(projectName);
         if (sctx.error != null)
         {
@@ -962,13 +1045,24 @@ public class CreateInfobaseTool implements IMcpTool
                 {
                     Object pair = ssCreateServerWithInfobase(finalService, createArgs, monitor);
                     // createServerWithInfobase registers the server with the module's create flag = false,
-                    // so the served file infobase (1Cv8.1CD) is never physically written — the server then
-                    // fails to start ("Информационная база не обнаружена"). Materialize it now (same step
-                    // the EDT new-server wizard performs).
+                    // so the served file infobase (1Cv8.1CD) is never physically written.
                     if (pair instanceof Pair)
                     {
-                        ssMaterializeInfobase(finalService, ((Pair<?, ?>)pair).getFirst(),
-                            ((Pair<?, ?>)pair).getSecond(), monitor);
+                        if (register)
+                        {
+                            // mode='register': the 1Cv8.1CD already exists on disk (validated up front),
+                            // so do NOT materialize a new DB — that would fail / overwrite. Best-effort
+                            // mark the module as existing (mirrors the EDT wizard's existing-infobase
+                            // branch; a no-op if the API lacks setExist). Never call setCreate(true).
+                            markInfobaseExisting(((Pair<?, ?>)pair).getSecond());
+                        }
+                        else
+                        {
+                            // mode='create': the server would otherwise fail to start ("Информационная база
+                            // не обнаружена"), so materialize the DB now (same step the EDT wizard performs).
+                            ssMaterializeInfobase(finalService, ((Pair<?, ?>)pair).getFirst(),
+                                ((Pair<?, ?>)pair).getSecond(), monitor);
+                        }
                     }
                     jobResult.set(pair);
                 }
@@ -983,7 +1077,7 @@ public class CreateInfobaseTool implements IMcpTool
         createJob.setSystem(true);
         createJob.schedule();
 
-        String waitError = awaitStandaloneJob(createJob, infobaseDir);
+        String waitError = awaitStandaloneJob(createJob, infobaseDir, register);
         if (waitError != null)
         {
             return waitError;
@@ -994,11 +1088,7 @@ public class CreateInfobaseTool implements IMcpTool
             Exception ex = jobError.get();
             Activator.logError("create_infobase: standalone-server creation failed for " //$NON-NLS-1$
                 + infobaseDir, ex);
-            return ToolResult.error("Standalone-server creation failed: " + ex.getMessage() //$NON-NLS-1$
-                + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
-                + "registered and that the directory '" + infobaseDir + "' is accessible. The server may " //$NON-NLS-1$ //$NON-NLS-2$
-                + "have been registered without its database; if so, use delete_infobase to remove it.") //$NON-NLS-1$
-                .toJson();
+            return ToolResult.error(standaloneJobErrorMessage(ex, infobaseDir, register)).toJson();
         }
 
         Pair<?, ?> pair = asPair(jobResult.get());
@@ -1027,7 +1117,62 @@ public class CreateInfobaseTool implements IMcpTool
 
         // --- 9. Read back applications and return ---
         ResultContext rc = new ResultContext(projectName, infobaseDir, effectiveName, appManager, project);
-        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault);
+        return buildStandaloneServerResult(rc, actualPort, webUrl, setDefault, register, credentials);
+    }
+
+    /**
+     * Best-effort marks a just-registered {@code StandaloneServerInfobase} module as ALREADY existing
+     * for mode='register' — {@code setExist(true)} (mirrors the EDT wizard's existing-infobase branch).
+     * Never called with the create-flag setter ({@link #ssSetCreateFlag}): the served {@code 1Cv8.1CD}
+     * already exists on disk, so no database is materialized. {@code setExist} exists only on EDT
+     * 2025.2 — it was REMOVED on 2026.1 with no replacement, so there the reflective {@link #ssInvoke}
+     * call below resolves to a silent no-op (method not found -> returns {@code null}, no exception, no
+     * log) and this method degrades to a harmless no-op. Any OTHER reflective failure (e.g. an actual
+     * invocation error on 2025.2) is logged and swallowed — the WST server registration already
+     * succeeded and must not be failed by a best-effort flag.
+     *
+     * @param standaloneServerInfobase the module returned by {@link #ssCreateServerWithInfobase}
+     */
+    private static void markInfobaseExisting(Object standaloneServerInfobase)
+    {
+        if (standaloneServerInfobase == null)
+        {
+            return;
+        }
+        try
+        {
+            ssInvoke(standaloneServerInfobase, "setExist", 1, Boolean.TRUE); //$NON-NLS-1$
+        }
+        catch (Exception e) // NOSONAR best-effort: the server is registered; the flag is non-fatal
+        {
+            Activator.logError("create_infobase: best-effort setExist(true) failed for the " //$NON-NLS-1$
+                + "registered standalone server (non-fatal — the server is registered)", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Builds the "standalone-server creation failed" error message, honestly worded for the mode. For
+     * mode='create' it notes the server may have been registered WITHOUT its database; for
+     * mode='register' the database already existed (validated up front), so it must NOT suggest the DB
+     * may have been created — it points at the existing-infobase wrap instead.
+     *
+     * @param ex the failure cause
+     * @param infobaseDir the served infobase / working directory
+     * @param register {@code true} for mode='register', {@code false} for mode='create'
+     * @return the error message
+     */
+    private static String standaloneJobErrorMessage(Exception ex, Path infobaseDir, boolean register)
+    {
+        String prefix = STANDALONE_SERVER_MSG_PREFIX + (register ? VERB_REGISTRATION : VERB_CREATION)
+            + " failed: " + ex.getMessage() //$NON-NLS-1$
+            + ". Verify that a compatible 1C standalone-server runtime (platform >= 8.3.23) is " //$NON-NLS-1$
+            + "registered and that the directory '" + infobaseDir + "' is accessible."; //$NON-NLS-1$ //$NON-NLS-2$
+        String tail = register
+            ? " The server may have been registered over the existing infobase; if so, use " //$NON-NLS-1$
+                + "delete_infobase to remove the server registration (the database is left in place)." //$NON-NLS-1$
+            : " The server may have been registered without its database; if so, use delete_infobase " //$NON-NLS-1$
+                + "to remove it."; //$NON-NLS-1$
+        return prefix + tail;
     }
 
     /**
@@ -1077,9 +1222,10 @@ public class CreateInfobaseTool implements IMcpTool
      * message (Job cancelled) when it did not finish, or an interrupted message (interrupt flag
      * restored) when the join threw. Returns {@code null} when the Job finished within the budget. The
      * {@code InterruptedException} from {@code join} is handled inline here (not propagated) exactly as
-     * before.
+     * before. The wording is register-aware: mode='register' materializes no database, so the timeout
+     * must not imply a partial DB was written.
      */
-    private static String awaitStandaloneJob(Job createJob, Path infobaseDir)
+    private static String awaitStandaloneJob(Job createJob, Path infobaseDir, boolean register)
     {
         try
         {
@@ -1088,16 +1234,21 @@ public class CreateInfobaseTool implements IMcpTool
             if (!finished)
             {
                 createJob.cancel();
-                return ToolResult.error("Standalone-server creation timed out after " //$NON-NLS-1$
-                    + CREATE_TIMEOUT_SECONDS + " seconds. The ibcmd process may still be running. " //$NON-NLS-1$
+                String verb = register ? VERB_REGISTRATION : VERB_CREATION;
+                String proc = register
+                    ? "The server-registration step may still be running. " //$NON-NLS-1$
+                    : "The ibcmd process may still be running. "; //$NON-NLS-1$
+                return ToolResult.error(STANDALONE_SERVER_MSG_PREFIX + verb + " timed out after " //$NON-NLS-1$
+                    + CREATE_TIMEOUT_SECONDS + " seconds. " + proc //$NON-NLS-1$
                     + "Check the EDT log and the directory '" + infobaseDir //$NON-NLS-1$
-                    + "' for partial results.").toJson(); //$NON-NLS-1$
+                    + "'.").toJson(); //$NON-NLS-1$
             }
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            return ToolResult.error("Standalone-server creation was interrupted.").toJson(); //$NON-NLS-1$
+            String verb = register ? VERB_REGISTRATION : VERB_CREATION;
+            return ToolResult.error(STANDALONE_SERVER_MSG_PREFIX + verb + " was interrupted.").toJson(); //$NON-NLS-1$
         }
         return null;
     }
@@ -1282,12 +1433,22 @@ public class CreateInfobaseTool implements IMcpTool
     /**
      * Physically creates the served file infobase for a standalone server that
      * {@link #ssCreateServerWithInfobase} just registered. That call builds the {@code StandaloneServerInfobase}
-     * with {@code create=false}, so {@code ibcmd infobase create} (which writes {@code 1Cv8.1CD}) never runs and
-     * the server fails to start with "Информационная база не обнаружена". This flips {@code create=true} on the
-     * returned LIVE module — the same flag the EDT new-server wizard sets — and invokes the WST behaviour
-     * delegate's {@code createStandaloneServerInfobase} DIRECTLY (the only place that runs the create, gated by
-     * {@code isCreate()}; verified against EDT 2025.2 bytecode — no start/publish path creates the DB, and
-     * re-adding the module via {@code modifyModules} is blocked by an "already have module" guard).
+     * with the create-new-infobase flag {@code false}, so {@code ibcmd infobase create} (which writes
+     * {@code 1Cv8.1CD}) never runs and the server fails to start with "Информационная база не обнаружена". This
+     * flips that flag to {@code true} on the returned LIVE module — the same flag the EDT new-server wizard sets,
+     * named {@code setCreate} on EDT 2025.2 and renamed (no back-compat alias) to {@code setCreateNewInfobase} on
+     * 2026.1, resolved version-tolerantly by {@link #ssSetCreateFlag} — and invokes the WST behaviour delegate's
+     * {@code createStandaloneServerInfobase} DIRECTLY (the only place that runs the create, gated by the flag's
+     * getter; verified against EDT 2025.2 bytecode — no start/publish path creates the DB, and re-adding the
+     * module via {@code modifyModules} is blocked by an "already have module" guard).
+     *
+     * <p>On 2026.1 there is a SECOND drift layer past the setter rename: {@code createServerWithInfobase}
+     * builds the module config with a PLAIN {@code FileDatabase}, but the behaviour delegate's
+     * {@code createStandaloneServerInfobase} now CASTS the config's database to
+     * {@code ICreateTemplateDatabase} (live error: "FileDatabase cannot be cast to class
+     * ...ICreateTemplateDatabase"). {@link #ssEnsureCreateTemplateDatabase} swaps in a
+     * {@code FileCreateTemplateDatabase} (identical on both versions, harmless on 2025.2 — it IS a
+     * {@code FileDatabase}) before the delegate runs.
      *
      * <p>Runs inside the create Job (with its monitor). Throws on failure so the caller reports an honest
      * error (the server is then registered without a DB; {@code delete_infobase} can clean it up).
@@ -1300,15 +1461,18 @@ public class CreateInfobaseTool implements IMcpTool
             throw new IllegalStateException("createServerWithInfobase returned no infobase handle; " //$NON-NLS-1$
                 + "the served infobase could not be created."); //$NON-NLS-1$
         }
-        // Flip create=true (the flag that gates the physical creation) on the live module. setExist=false
-        // mirrors the EDT wizard's "new infobase" branch and is optional (a no-op if the API lacks it).
-        if (ssMethod(infobase.getClass(), "setCreate", 1) == null) //$NON-NLS-1$
-        {
-            throw new IllegalStateException("StandaloneServerInfobase.setCreate not found — the standalone-" //$NON-NLS-1$
-                + "server API may have changed; the served infobase could not be created."); //$NON-NLS-1$
-        }
-        ssInvoke(infobase, "setCreate", 1, Boolean.TRUE); //$NON-NLS-1$
+        // Flip the create-new-infobase flag to true (the flag that gates the physical creation) on the
+        // live module — version-tolerant name resolution, see ssSetCreateFlag. setExist=false mirrors the
+        // EDT wizard's "new infobase" branch on 2025.2 and stays best-effort/optional: setExist was
+        // REMOVED on 2026.1 with no replacement, and ssInvoke resolves a missing method to a silent
+        // no-op (returns null, no exception, no log) — matching the clean log observed on a live 2026.1
+        // register run.
+        ssSetCreateFlag(infobase, true);
         ssInvoke(infobase, "setExist", 1, Boolean.FALSE); //$NON-NLS-1$
+
+        // 2026.1's behaviour delegate casts the config's database to ICreateTemplateDatabase — make sure
+        // it is one BEFORE invoking the delegate (a no-op when it already is; safe on 2025.2 too).
+        ssEnsureCreateTemplateDatabase(infobase);
 
         // Resolve the WST behaviour delegate for this server and run the (otherwise publish-time) create now.
         Object delegate = ssInvoke(service, "findBehaviourDelegate", 1, server); //$NON-NLS-1$
@@ -1373,6 +1537,188 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
         return null;
+    }
+
+    /**
+     * First public method on {@code cls} (incl. inherited) matching any of {@code names} (tried in
+     * order) and the given parameter count — a version-tolerant lookup for an API whose method name was
+     * RENAMED across EDT platform versions with no back-compat alias (e.g. {@code setCreate} on 2025.2 /
+     * {@code setCreateNewInfobase} on 2026.1). Returns the first match by name-priority order, or
+     * {@code null} when none of {@code names} resolve. Package-private for direct unit testing with stub
+     * classes exposing one name, the other, or neither.
+     */
+    static Method ssMethodAny(Class<?> cls, int paramCount, String... names)
+    {
+        for (String name : names)
+        {
+            Method m = ssMethod(cls, name, paramCount);
+            if (m != null)
+            {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves and invokes the version-tolerant "create a new infobase" flag setter on the live
+     * {@code StandaloneServerInfobase} module: {@code setCreate(boolean)} on EDT 2025.2, renamed with no
+     * back-compat alias to {@code setCreateNewInfobase(boolean)} on EDT 2026.1 ({@code isCreate}/
+     * {@code getInfobaseId} renames are the sibling cases of the same 2026.1 API drift — see
+     * {@link StandaloneServerSupport#infobaseIdOf}). Package-private for direct unit testing with stub
+     * classes exposing one name, the other, or neither.
+     *
+     * @param infobase the live {@code StandaloneServerInfobase} module returned by
+     *            {@link #ssCreateServerWithInfobase}
+     * @param value the flag value to set (always {@code true} from {@link #ssMaterializeInfobase})
+     * @throws IllegalStateException when NEITHER setter name resolves — names both tried methods so the
+     *             failure is diagnosable without a javap session
+     */
+    static void ssSetCreateFlag(Object infobase, boolean value)
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    {
+        Method setter = ssMethodAny(infobase.getClass(), 1, "setCreate", "setCreateNewInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (setter == null)
+        {
+            throw new IllegalStateException(
+                "Neither StandaloneServerInfobase.setCreate nor setCreateNewInfobase was found — " //$NON-NLS-1$
+                    + "the standalone-server API may have changed; the served infobase could not be " //$NON-NLS-1$
+                    + "created."); //$NON-NLS-1$
+        }
+        try
+        {
+            setter.invoke(infobase, Boolean.valueOf(value));
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /**
+     * Ensures the module config's database IS a create-template one before the behaviour delegate runs
+     * the physical create. On EDT 2026.1 {@code createServerWithInfobase} builds the config with a PLAIN
+     * {@code FileDatabase}, but the delegate's {@code createStandaloneServerInfobase} casts the config's
+     * database to {@code ICreateTemplateDatabase} — a live {@code ClassCastException} without this swap.
+     * When needed, a {@code FileCreateTemplateDatabase} (javap-verified identical on 2025.2 and 2026.1;
+     * it {@code extends FileDatabase}, so the swap is harmless on 2025.2 too) is instantiated via the
+     * live database object's OWN classloader (same bundle — never {@code Class.forName}), the directory
+     * is copied across the {@code getConfigDirectory}/{@code getPath} rename
+     * ({@link #ssCopyDatabaseDirectory}), and {@code Config.setDatabase} (present on both versions)
+     * installs it. ONLY the mode='create' materialization path calls this — the register path must
+     * NEVER get a create-template database.
+     *
+     * <p>Decision logic ({@code null} database untouched — the delegate then fails with its own honest
+     * error; already-a-create-template database untouched — the 2025.2-compatible/future-proof path) is
+     * split into the headless-testable {@link #ssIsCreateTemplateDatabase}/{@link #ssCopyDatabaseDirectory};
+     * the bundle class-loading step itself is live-verified only. BEST-EFFORT: any failure is logged and
+     * swallowed — on 2025.2 a plain {@code FileDatabase} still materializes fine (never regress that),
+     * and on 2026.1 the delegate then surfaces its own cast error.
+     *
+     * @param infobase the live {@code StandaloneServerInfobase} module returned by
+     *            {@link #ssCreateServerWithInfobase}
+     */
+    static void ssEnsureCreateTemplateDatabase(Object infobase)
+    {
+        try
+        {
+            Object cfg = ssInvoke(infobase, "getStandaloneServerConfiguration", 0); //$NON-NLS-1$
+            if (cfg == null)
+            {
+                return;
+            }
+            Object db = ssInvoke(cfg, "getDatabase", 0); //$NON-NLS-1$
+            if (db == null)
+            {
+                // Leave as-is: the behaviour delegate fails with its own honest error on a missing DB.
+                return;
+            }
+            if (ssIsCreateTemplateDatabase(db.getClass()))
+            {
+                // Already create-template capable — nothing to do (also future-proof).
+                return;
+            }
+            Class<?> templateClass =
+                db.getClass().getClassLoader().loadClass(CREATE_TEMPLATE_DATABASE_CLASS);
+            Object templateDb = templateClass.getDeclaredConstructor().newInstance();
+            ssCopyDatabaseDirectory(db, templateDb);
+            ssInvoke(cfg, "setDatabase", 1, templateDb); //$NON-NLS-1$
+        }
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        {
+            Activator.logError("create_infobase: could not swap the standalone-server database to a " //$NON-NLS-1$
+                + "FileCreateTemplateDatabase (best-effort; on 2026.1 the create may fail with an " //$NON-NLS-1$
+                + "ICreateTemplateDatabase cast error)", t); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Whether {@code cls} (or any superclass / (super)interface of it) is the create-template marker
+     * interface {@code ICreateTemplateDatabase} — matched by SIMPLE name (the live FQN is
+     * {@code com.e1c.g5.v8.dt.platform.standaloneserver.core.config.ICreateTemplateDatabase}; the type
+     * is intentionally not imported, so {@code instanceof} is impossible, and the simple-name match
+     * keeps the check unit-testable with stub interfaces). Package-private for direct unit testing.
+     */
+    static boolean ssIsCreateTemplateDatabase(Class<?> cls)
+    {
+        if (cls == null)
+        {
+            return false;
+        }
+        if (cls.isInterface() && CREATE_TEMPLATE_DATABASE_INTERFACE.equals(cls.getSimpleName()))
+        {
+            return true;
+        }
+        for (Class<?> iface : cls.getInterfaces())
+        {
+            if (ssIsCreateTemplateDatabase(iface))
+            {
+                return true;
+            }
+        }
+        return ssIsCreateTemplateDatabase(cls.getSuperclass());
+    }
+
+    /**
+     * Copies the file database's on-disk directory from {@code from} to {@code to}, version-tolerant
+     * across the {@code FileDatabase} 2025.2 -> 2026.1 accessor rename: read via
+     * {@code getConfigDirectory()} (2025.2) OR {@code getPath()} (2026.1), write via
+     * {@code setConfigDirectory(String)} OR {@code setPath(String)} — each side resolved independently
+     * with {@link #ssMethodAny}. A missing accessor on either side, or a {@code null} directory value,
+     * degrades to a no-op (best-effort — the caller already treats the whole swap as best-effort).
+     * Package-private for direct unit testing with stubs exposing either accessor generation.
+     */
+    static void ssCopyDatabaseDirectory(Object from, Object to)
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    {
+        Method read = ssMethodAny(from.getClass(), 0, "getConfigDirectory", "getPath"); //$NON-NLS-1$ //$NON-NLS-2$
+        Method write = ssMethodAny(to.getClass(), 1, "setConfigDirectory", "setPath"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (read == null || write == null)
+        {
+            return;
+        }
+        try
+        {
+            Object dir = read.invoke(from);
+            if (dir != null)
+            {
+                write.invoke(to, dir);
+            }
+        }
+        catch (java.lang.reflect.InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
     }
 
     /**
@@ -1556,7 +1902,7 @@ public class CreateInfobaseTool implements IMcpTool
      * the file path to absorb the provision-delegate listener race.
      */
     private static String buildStandaloneServerResult(ResultContext rc, int actualPort, String webUrl,
-            boolean setDefault)
+            boolean setDefault, boolean register, Credentials credentials)
     {
         // Read back the applications (bounded re-poll) and locate the just-created wst-server.
         ServerReadBack readBack =
@@ -1593,8 +1939,15 @@ public class CreateInfobaseTool implements IMcpTool
             }
         }
 
+        // Optionally store infobase connection credentials (issue #275): standaloneServer +
+        // mode='register' ONLY — execute() already rejects credentials with mode='create'. Targets
+        // the READ-BACK wst-server IApplication (not the FILE ibRef built earlier for the create
+        // call) — InfobaseAccessSupport.storeCredentials(IApplication, ...) adapts IT to the
+        // InfobaseReference that EDT's own launch path (ServerApplicationBehaviourDelegate) resolves.
+        String credNote = register ? storeStandaloneCredentialsIfRequested(newApp, credentials) : null;
+
         ToolResult result = ToolResult.success()
-            .put(McpKeys.ACTION, "created") //$NON-NLS-1$
+            .put(McpKeys.ACTION, register ? "registered" : "created") //$NON-NLS-1$ //$NON-NLS-2$
             .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER)
             .put(McpKeys.PROJECT, rc.projectName)
             .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
@@ -1616,10 +1969,50 @@ public class CreateInfobaseTool implements IMcpTool
             result.put(McpKeys.APPLICATION_ID, newAppId);
         }
 
+        String combinedNote = (setDefaultNote != null ? setDefaultNote : "") //$NON-NLS-1$
+            + (credNote != null ? credNote : ""); //$NON-NLS-1$
         result.put(McpKeys.MESSAGE, buildStandaloneServerMessage(rc.projectName, rc.infobaseDir,
-            rc.infobaseName, actualPort, webUrl, setDefaultNote));
+            rc.infobaseName, actualPort, webUrl, combinedNote.isEmpty() ? null : combinedNote, register));
 
         return result.toJson();
+    }
+
+    /**
+     * Stores infobase connection credentials against the READ-BACK wst-server application (issue
+     * #275) when the caller supplied any of {@code user}/{@code password}/{@code access}, returning
+     * a note to append to the result message — a success note, a non-fatal WARNING when the store
+     * failed (or the application was not visible yet within the read-back poll budget), or
+     * {@code null} when no credentials were requested. Credential storage never fails the
+     * standalone-server registration itself (the server is already registered and bound). Mirrors
+     * {@link #storeCredentialsIfRequested(InfobaseReference, Credentials, boolean)}, the plain
+     * file-infobase equivalent.
+     *
+     * @param application the read-back wst-server application ({@code null} if not found within the
+     *            poll budget)
+     * @param credentials the requested connection credentials (any field may be {@code null}/empty)
+     * @return a message note, or {@code null} when no credentials were requested
+     */
+    private static String storeStandaloneCredentialsIfRequested(IApplication application,
+            Credentials credentials)
+    {
+        if (!credentials.any())
+        {
+            return null;
+        }
+        if (application == null)
+        {
+            return " WARNING: connection credentials were NOT stored: the new standalone-server " //$NON-NLS-1$
+                + "application was not visible yet within the read-back poll budget - retry with " //$NON-NLS-1$
+                + "set_infobase_credentials once it appears in get_applications."; //$NON-NLS-1$
+        }
+        String error = InfobaseAccessSupport.storeCredentials(application, credentials.user, credentials.password,
+            InfobaseAccessSupport.parseAccess(credentials.access));
+        if (error != null)
+        {
+            return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
+        }
+        return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
+            + "' (change them later with set_infobase_credentials)."; //$NON-NLS-1$
     }
 
     /**
@@ -1724,15 +2117,21 @@ public class CreateInfobaseTool implements IMcpTool
 
     /**
      * Builds the human-readable status message for the standalone-server success result (read-only
-     * string assembly). Byte-for-byte identical to the inline message; appends {@code setDefaultNote}
-     * when non-null.
+     * string assembly). For mode='create' it says the server CREATED a new infobase; for mode='register'
+     * it says the server was REGISTERED over the EXISTING infobase (no new database was written).
+     * Appends {@code setDefaultNote} when non-null.
      */
     private static String buildStandaloneServerMessage(String projectName, Path infobaseDir,
-            String infobaseName, int actualPort, String webUrl, String setDefaultNote)
+            String infobaseName, int actualPort, String webUrl, String setDefaultNote, boolean register)
     {
-        return "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
-            + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
-            + "' and bound to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+        String lead = register
+            ? "Registered a standalone server over the existing infobase '" + infobaseName //$NON-NLS-1$
+                + "' at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
+                + "' and bound it to project '" + projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            : "Standalone server for infobase '" + infobaseName //$NON-NLS-1$
+                + "' created at '" + infobaseDir.toAbsolutePath() //$NON-NLS-1$
+                + "' and bound to project '" + projectName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        return lead
             + (actualPort > 0 ? " (web port " + actualPort + ")" : "") + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + (webUrl != null ? " Web URL for HTTP testing: " + webUrl + "." : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " To load the configuration, use the coordinated launch flow (debug_launch or " //$NON-NLS-1$

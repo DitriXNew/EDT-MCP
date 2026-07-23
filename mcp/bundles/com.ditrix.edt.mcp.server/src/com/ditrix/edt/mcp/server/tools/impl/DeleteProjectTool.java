@@ -138,10 +138,11 @@ public class DeleteProjectTool implements IMcpTool
                 : "This removes project '" + projectName //$NON-NLS-1$
                     + "' from the workspace (files kept on disk).", //$NON-NLS-1$
             1, java.util.Collections.singletonList(projectName));
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
-            == DestructiveConsentGate.ConsentDecision.REJECT)
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
 
         try

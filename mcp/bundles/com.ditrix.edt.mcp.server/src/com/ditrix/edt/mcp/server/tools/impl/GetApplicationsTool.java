@@ -84,7 +84,16 @@ public class GetApplicationsTool implements IMcpTool
     {
         return ResponseType.JSON;
     }
-    
+
+    @Override
+    public boolean connectsToInfobase()
+    {
+        // addUpdateState()'s appManager.getUpdateState(app) read-back is the async
+        // background recompute that historically raised the auth dialog (issue #230's
+        // history); gate on it here too (issue #270).
+        return true;
+    }
+
     @Override
     public String execute(Map<String, String> params)
     {

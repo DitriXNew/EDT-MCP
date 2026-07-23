@@ -10,13 +10,17 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import static org.junit.Assert.assertNull;
+
 import java.util.Set;
 
+import org.eclipse.jface.dialogs.IDialogConstants;
 import org.junit.After;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.preferences.ConsentSettingsService;
 import com.ditrix.edt.mcp.server.protocol.ToolAnnotationClassifier;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentArbiter;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.Outcome;
 
@@ -201,5 +205,159 @@ public class DestructiveConsentGateTest
                 ToolAnnotationClassifier.classify("delete_launch_config").getDestructiveHint())); //$NON-NLS-1$
         assertFalse("delete_launch_config must NOT be gated", //$NON-NLS-1$
             DestructiveConsentGate.GATED_TOOLS.contains("delete_launch_config")); //$NON-NLS-1$
+    }
+
+    // =====================================================================
+    // Issue #277 — the bounded-wait ConsentArbiter (first-wins, both orders)
+    // =====================================================================
+
+    @Test
+    public void arbiterFirstDecisionWinsWhenTheRealAnswerComesFirst() throws InterruptedException
+    {
+        ConsentArbiter arbiter = new ConsentArbiter();
+        assertTrue("the first tryDecide call must win the race", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.ALLOW));
+        assertFalse("a later tryDecide call must be ignored (already decided)", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.TIMEOUT));
+        assertEquals("the winning decision must stick", ConsentDecision.ALLOW, arbiter.peek()); //$NON-NLS-1$
+        assertTrue("await must observe the already-recorded decision without waiting", //$NON-NLS-1$
+            arbiter.await(0));
+    }
+
+    @Test
+    public void arbiterFirstDecisionWinsWhenTheTimeoutComesFirst() throws InterruptedException
+    {
+        ConsentArbiter arbiter = new ConsentArbiter();
+        assertTrue("the worker's timeout must win when it decides first", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.TIMEOUT));
+        assertFalse("a late dialog answer arriving after the timeout must be ignored", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.REJECT));
+        assertEquals("TIMEOUT must stick, not the late REJECT", //$NON-NLS-1$
+            ConsentDecision.TIMEOUT, arbiter.peek());
+    }
+
+    @Test
+    public void arbiterAwaitTimesOutWhenNobodyHasDecidedYet() throws InterruptedException
+    {
+        ConsentArbiter arbiter = new ConsentArbiter();
+        assertFalse("await must time out (return false) with no decision recorded", //$NON-NLS-1$
+            arbiter.await(0));
+        assertNull("peek must stay null until a decision is recorded", arbiter.peek()); //$NON-NLS-1$
+    }
+
+    // =====================================================================
+    // Issue #277 — recordDialogAnswer: late "Allow for session" is remembered
+    // =====================================================================
+
+    @Test
+    public void lateAllowForSessionIsRecordedEvenAfterTheTimeoutWonTheRace()
+    {
+        DestructiveConsentGate gate = DestructiveConsentGate.getInstance();
+        ConsentArbiter arbiter = new ConsentArbiter();
+        // The worker's timeout already won the race before the human's answer arrives.
+        assertTrue(arbiter.tryDecide(ConsentDecision.TIMEOUT));
+
+        gate.recordDialogAnswer(arbiter, TOOL, DestructiveConsentGate.ALLOW_FOR_SESSION_ID);
+
+        assertEquals("a late answer must NOT overturn the already-decided TIMEOUT", //$NON-NLS-1$
+            ConsentDecision.TIMEOUT, arbiter.peek());
+        assertTrue("a late 'Allow for session' must still be recorded so the tool is not " //$NON-NLS-1$
+            + "re-prompted next time", gate.isSessionAllowed(TOOL)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void dialogAnswerInTimeWinsTheArbiterAndTheLateTimeoutIsIgnored()
+    {
+        ConsentArbiter arbiter = new ConsentArbiter();
+        DestructiveConsentGate.getInstance().recordDialogAnswer(arbiter, TOOL, IDialogConstants.OK_ID);
+
+        assertEquals(ConsentDecision.ALLOW, arbiter.peek());
+        assertFalse("the worker's timeout must lose once the dialog already answered", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.TIMEOUT));
+        assertEquals(ConsentDecision.ALLOW, arbiter.peek());
+    }
+
+    @Test
+    public void recordDialogAnswerMapsRejectAndDoesNotTouchSessionAllow()
+    {
+        DestructiveConsentGate gate = DestructiveConsentGate.getInstance();
+        ConsentArbiter arbiter = new ConsentArbiter();
+
+        gate.recordDialogAnswer(arbiter, TOOL, IDialogConstants.CANCEL_ID);
+
+        assertEquals(ConsentDecision.REJECT, arbiter.peek());
+        assertFalse("a plain Reject must not add the tool to the session-allow set", //$NON-NLS-1$
+            gate.isSessionAllowed(TOOL));
+    }
+
+    // =====================================================================
+    // Issue #277 — the UI-thread (timerExec) path orderings through the same seams
+    // =====================================================================
+
+    @Test
+    public void uiThreadTimerWinMapsToTimeoutDespiteTheDefaultOkReturnCode()
+    {
+        // The UI-thread path's timeout sequence: the timerExec closer wins (TIMEOUT)
+        // and force-closes the dialog. A forced Dialog.close() does NOT set a CANCEL
+        // return code — JFace Window.returnCode defaults to OK — so open() hands the
+        // post-open mapping an OK code. The arbiter, not the code, must carry the
+        // verdict: the OK-derived ALLOW candidate loses and nothing enters the
+        // session set.
+        DestructiveConsentGate gate = DestructiveConsentGate.getInstance();
+        ConsentArbiter arbiter = new ConsentArbiter();
+        assertTrue("the timer closer must win when nobody answered yet", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.TIMEOUT));
+
+        gate.recordDialogAnswer(arbiter, TOOL, IDialogConstants.OK_ID);
+
+        assertEquals("the default-OK code after a forced close must NOT overturn TIMEOUT", //$NON-NLS-1$
+            ConsentDecision.TIMEOUT, arbiter.peek());
+        assertFalse("a forced close must not session-allow the tool", //$NON-NLS-1$
+            gate.isSessionAllowed(TOOL));
+    }
+
+    @Test
+    public void uiThreadHumanRejectFirstBeatsTheLateTimer()
+    {
+        // The UI-thread path's human-first sequence: the human answers Reject inside
+        // open(), the answer is mapped first, and the (cancelled-or-late) timer
+        // closer must be a harmless no-op.
+        DestructiveConsentGate gate = DestructiveConsentGate.getInstance();
+        ConsentArbiter arbiter = new ConsentArbiter();
+
+        gate.recordDialogAnswer(arbiter, TOOL, IDialogConstants.CANCEL_ID);
+
+        assertEquals(ConsentDecision.REJECT, arbiter.peek());
+        assertFalse("a late timer closer must lose to the human's answer", //$NON-NLS-1$
+            arbiter.tryDecide(ConsentDecision.TIMEOUT));
+        assertEquals("REJECT must stick, not the late TIMEOUT", //$NON-NLS-1$
+            ConsentDecision.REJECT, arbiter.peek());
+    }
+
+    // =====================================================================
+    // Issue #277 — consentDeniedMessage: REJECT text unchanged, TIMEOUT text actionable
+    // =====================================================================
+
+    @Test
+    public void consentDeniedMessageKeepsTheOriginalRejectText()
+    {
+        assertEquals("Operation declined by user", //$NON-NLS-1$
+            DestructiveConsentGate.consentDeniedMessage(ConsentDecision.REJECT, TOOL));
+    }
+
+    @Test
+    public void consentDeniedMessageForTimeoutNamesToolSecondsAndAllThreeRemedies()
+    {
+        String message = DestructiveConsentGate.consentDeniedMessage(ConsentDecision.TIMEOUT, TOOL);
+
+        assertTrue("must name the tool", message.contains(TOOL)); //$NON-NLS-1$
+        assertTrue("must mention the timeout seconds", //$NON-NLS-1$
+            message.contains("120")); //$NON-NLS-1$
+        assertTrue("must mention the Preferences remedy", //$NON-NLS-1$
+            message.contains("Preferences")); //$NON-NLS-1$
+        assertTrue("must mention the env-bypass remedy", //$NON-NLS-1$
+            message.contains("EDT_MCP_DESTRUCTIVE_CONSENT")); //$NON-NLS-1$
+        assertTrue("must mention re-running / answering promptly as the third remedy", //$NON-NLS-1$
+            message.contains("re-run")); //$NON-NLS-1$
     }
 }

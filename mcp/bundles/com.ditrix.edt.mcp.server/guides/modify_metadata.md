@@ -3,6 +3,14 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 ## Validation (errors are help)
 - A property that is NOT assignable on this node is rejected with the list of assignable properties - discover them with get_metadata_details(assignable:true).
 - An ENUM value that is not one of the allowed literals is rejected WITH the allowed values; a non-boolean for a boolean property, or a non-integer for an integer property, is rejected too. Nothing is written unless EVERY property validates.
+- A ScheduledJob's `methodName` and an EventSubscription's `handler` are VALIDATED against the target CommonModule method - see [Binding a ScheduledJob / EventSubscription to a method](#binding-a-scheduledjob--eventsubscription-to-a-method-methodname--handler).
+
+## Binding a ScheduledJob / EventSubscription to a method (methodName / handler)
+Setting a ScheduledJob's `methodName` or an EventSubscription's `handler` is VALIDATED against the target CommonModule method BEFORE it is accepted - the referenced method must already EXIST, be `Export`ed, and live in a module with the Server flag (a scheduled job / event-subscription handler always runs server-side). This catches the "bound the job/subscription to a method BEFORE writing it" mistake at validation time, with an actionable error naming the fix, instead of only surfacing it later at update_database as an opaque "no such function" failure.
+- A ScheduledJob's `methodName` takes `<CommonModuleName>.<MethodName>` (e.g. `Calc.Add`); an EventSubscription's `handler` takes `CommonModule.<ModuleName>.<MethodName>` (e.g. `CommonModule.Calc.Add`, matching how mdclass stores it). Both forms also accept an optional leading `CommonModule` / `ОбщийМодуль` type-token prefix (stripped before resolving the module), and a value with no dot is rejected with the expected `Module.Method` shape.
+- Checks run in order, failing fast on the first that does not hold: the value parses (a module part + a method name); the CommonModule exists (`get_metadata_objects` lists the available ones); the method exists in that module's source (create it first with `write_module_source` - an `Export`ed SERVER procedure/function - then set `methodName` / `handler`); the method is marked `Export` (`Экспорт`); the module has the Server property.
+- An EMPTY value is NOT validated by this guard (it falls through to the standard "a property needs a non-empty value" rejection - modify_metadata never clears a property on an empty value).
+- Scoped to exactly these two properties (`ScheduledJob.methodName`, `EventSubscription.handler`) - every other property on every other FQN is unaffected.
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
@@ -17,7 +25,7 @@ Sets one or more properties of a metadata node addressed by a 1C full-name FQN (
 - `name` (rename): refused - use rename_metadata_object, which cascades the rename across BSL code, forms and metadata.
 
 ## Setting the data type
-The `type` property takes a STRUCTURED value `{types:[{kind, ...}]}`. Primitive kinds String / Number / Boolean / Date carry inline qualifiers (length; precision / scale / nonNegative; fractions = DateTime | Date | Time). A reference is `{kind:'Ref', ref:'Type.Name'}` (or `{kind:'CatalogRef', ref:'Name'}`). The list may mix several (a composite type). If a `Ref` target cannot be resolved AND the project being modified is a configuration EXTENSION, the error additionally suggests adopting the target object from the base configuration first with adopt_metadata_object - a base-configuration object is invisible to an extension's own model until it is adopted.
+The `type` property takes a STRUCTURED value `{types:[{kind, ...}]}`. Primitive kinds String / Number / Boolean / Date carry inline qualifiers (length; precision / scale / nonNegative; fractions = DateTime | Date | Time). ValueStorage and UUID are platform simple types with no qualifiers (`{kind:'ValueStorage'}` / `{kind:'UUID'}`). A reference is `{kind:'Ref', ref:'Type.Name'}` (or `{kind:'CatalogRef', ref:'Name'}`). The list may mix several (a composite type). If a `Ref` target cannot be resolved AND the project being modified is a configuration EXTENSION, the error additionally suggests adopting the target object from the base configuration first with adopt_metadata_object - a base-configuration object is invisible to an extension's own model until it is adopted.
 
 ## Setting an object reference
 A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister, or a command's `group`) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). Most targets are a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. Two kinds of reference are member-addressed rather than top-level:
@@ -148,6 +156,8 @@ A malformed entry (a missing dataset `name` / `query`, a missing calculated fiel
 - Set a comment: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'comment', value:'Goods'}]}`
 - Set a synonym: `{projectName:'P', fqn:'Catalog.Products', properties:[{name:'synonym', value:'Goods', language:'en'}]}`
 - Set an enum on an attribute: `{projectName:'P', fqn:'Catalog.Products.Attribute.Weight', properties:[{name:'indexing', value:'Index'}]}`
+- Bind a scheduled job to an existing Exported server method (validated): `{projectName:'P', fqn:'ScheduledJob.NightlyRecalc', properties:[{name:'methodName', value:'Calc.Add'}]}`
+- Bind an event-subscription handler (validated, `CommonModule.` prefix form): `{projectName:'P', fqn:'EventSubscription.OnWrite', properties:[{name:'handler', value:'CommonModule.Calc.Add'}]}`
 - Set a type: `{projectName:'P', fqn:'Catalog.Products.Attribute.Weight', properties:[{name:'type', value:{types:[{kind:'Number', precision:10, scale:2}]}}]}`
 - Set a list reference: `{projectName:'P', fqn:'Subsystem.Sales', properties:[{name:'content', value:['Catalog.Products', 'Document.Order']}]}`
 - Set a DataProcessor's default form by the full member FQN: `{projectName:'P', fqn:'DataProcessor.Invoices', properties:[{name:'defaultForm', value:'DataProcessor.Invoices.Form.ItemForm'}]}`

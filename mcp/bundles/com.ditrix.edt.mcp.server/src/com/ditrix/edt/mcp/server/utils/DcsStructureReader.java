@@ -69,6 +69,15 @@ import com._1c.g5.v8.dt.mcore.Value;
  */
 public final class DcsStructureReader
 {
+    /** Shared Markdown table column header: the DCS {@code dataPath}. */
+    private static final String COLUMN_DATA_PATH = "Data path"; //$NON-NLS-1$
+
+    /** Shared Markdown table column header: a localized presentation title. */
+    private static final String COLUMN_TITLE = "Title"; //$NON-NLS-1$
+
+    /** Suffix appended to a disabled ({@code use == false}) selection/filter/order item. */
+    private static final String SUFFIX_NOT_USED = " [not used]"; //$NON-NLS-1$
+
     private DcsStructureReader()
     {
         // utility class
@@ -204,7 +213,7 @@ public final class DcsStructureReader
             return;
         }
         sb.append("**Fields:**\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Data path", "Field", "Title", "Role")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        sb.append(MarkdownUtils.tableHeader(COLUMN_DATA_PATH, "Field", COLUMN_TITLE, "Role")); //$NON-NLS-1$ //$NON-NLS-2$
         for (DataSetField field : fields)
         {
             if (field instanceof DataCompositionSchemaDataSetField)
@@ -254,7 +263,7 @@ public final class DcsStructureReader
             return;
         }
         sb.append("## Calculated fields\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Data path", "Title", "Expression")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(MarkdownUtils.tableHeader(COLUMN_DATA_PATH, COLUMN_TITLE, "Expression")); //$NON-NLS-1$
         for (DataCompositionSchemaCalculatedField field : fields)
         {
             sb.append(MarkdownUtils.tableRow(field.getDataPath(), presentationText(field.getTitle(), language),
@@ -271,7 +280,7 @@ public final class DcsStructureReader
             return;
         }
         sb.append("## Total fields\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Data path", "Expression", "Groups")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        sb.append(MarkdownUtils.tableHeader(COLUMN_DATA_PATH, "Expression", "Groups")); //$NON-NLS-1$ //$NON-NLS-2$
         for (DataCompositionSchemaTotalField field : fields)
         {
             sb.append(MarkdownUtils.tableRow(field.getDataPath(), field.getExpression(),
@@ -290,7 +299,7 @@ public final class DcsStructureReader
             return;
         }
         sb.append("## Parameters\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Name", "Title", "Value type", "Value", "Use")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        sb.append(MarkdownUtils.tableHeader("Name", COLUMN_TITLE, "Value type", "Value", "Use")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (DataCompositionSchemaParameter parameter : parameters)
         {
             sb.append(MarkdownUtils.tableRow(parameter.getName(), presentationText(parameter.getTitle(), language),
@@ -385,7 +394,7 @@ public final class DcsStructureReader
             }
             if (!isUsed(item))
             {
-                sb.append(" [not used]"); //$NON-NLS-1$
+                sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
             for (EObject child : getReferenceList(item, FEATURE_ITEMS))
@@ -439,7 +448,7 @@ public final class DcsStructureReader
             }
             if (!isUsed(item))
             {
-                sb.append(" [not used]"); //$NON-NLS-1$
+                sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
         }
@@ -449,7 +458,7 @@ public final class DcsStructureReader
             sb.append("- ").append(groupType.isEmpty() ? "group" : groupType + " group"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             if (!isUsed(item))
             {
-                sb.append(" [not used]"); //$NON-NLS-1$
+                sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
             for (EObject child : getReferenceList(item, FEATURE_ITEMS))
@@ -493,7 +502,7 @@ public final class DcsStructureReader
             }
             if (!isUsed(item))
             {
-                sb.append(" [not used]"); //$NON-NLS-1$
+                sb.append(SUFFIX_NOT_USED);
             }
             sb.append('\n');
         }
@@ -643,6 +652,27 @@ public final class DcsStructureReader
         {
             return emptyIfNull(((DataCompositionField)value).getValue());
         }
+        String simple = describeSimpleValue(value);
+        if (simple != null)
+        {
+            return simple;
+        }
+        String typed = describeTypedValue(value);
+        if (typed != null)
+        {
+            return typed;
+        }
+        return value.eClass().getName();
+    }
+
+    /**
+     * Describes a primitive {@code mcore} value wrapper (String / Number / Boolean / Date) - the leaf
+     * case of {@link #describeValue}, split out to keep that method's cognitive complexity low.
+     *
+     * @return the described value, or {@code null} when {@code value} is none of the primitive wrappers
+     */
+    private static String describeSimpleValue(Value value)
+    {
         if (value instanceof StringValue)
         {
             return "\"" + emptyIfNull(((StringValue)value).getValue()) + "\""; //$NON-NLS-1$ //$NON-NLS-2$
@@ -661,11 +691,22 @@ public final class DcsStructureReader
             Object date = ((DateValue)value).getValue();
             return date != null ? date.toString() : ""; //$NON-NLS-1$
         }
+        return null;
+    }
+
+    /**
+     * Describes a typed-reference {@code mcore} value (Enum / Type / Reference / design-time value) -
+     * the other leaf case of {@link #describeValue}, split out to keep that method's cognitive
+     * complexity low.
+     *
+     * @return the described value, or {@code null} when {@code value} is none of these typed-reference
+     *         kinds
+     */
+    private static String describeTypedValue(Value value)
+    {
         if (value instanceof EnumValue)
         {
-            Object literal = ((EnumValue)value).getValue();
-            return literal instanceof Enumerator ? ((Enumerator)literal).getName()
-                : (literal != null ? literal.toString() : ""); //$NON-NLS-1$
+            return describeEnumLiteral(((EnumValue)value).getValue());
         }
         if (value instanceof TypeValue)
         {
@@ -682,7 +723,17 @@ public final class DcsStructureReader
             DesignTimeValue designTimeValue = ((DesignTimeValueValue)value).getValue();
             return designTimeValue != null ? emptyIfNull(designTimeValue.getValue()) : ""; //$NON-NLS-1$
         }
-        return value.eClass().getName();
+        return null;
+    }
+
+    /** An {@link EnumValue}'s literal: the {@link Enumerator} name, or its raw {@code toString()}. */
+    private static String describeEnumLiteral(Object literal)
+    {
+        if (literal instanceof Enumerator)
+        {
+            return ((Enumerator)literal).getName();
+        }
+        return literal != null ? literal.toString() : ""; //$NON-NLS-1$
     }
 
     private static String joinValues(List<Value> values)

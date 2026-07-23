@@ -47,7 +47,8 @@ import com.google.gson.JsonObject;
  *              {"kind":"Ref", "ref":"Catalog.Goods"} ] }
  * </pre>
  *
- * Primitive kinds: String / Number / Boolean / Date (qualifiers given inline). A reference is
+ * Primitive kinds: String / Number / Boolean / Date (qualifiers given inline); ValueStorage / UUID
+ * are platform simple types that carry no qualifiers. A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
  * {@code {"kind":"CatalogRef", "ref":"Name"}}. The {@code types} list may mix several (a composite
  * type). The shape is validated before any platform call, so a malformed spec fails fast.
@@ -350,19 +351,67 @@ public final class MetadataTypeBuilder
         }
 
         String primitive = normalizePrimitive(kind);
-        if (primitive == null)
+        if (primitive != null)
         {
-            return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date, or a " //$NON-NLS-1$ //$NON-NLS-2$
-                + "reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+            EObject proxy = provider.createProxy(primitive);
+            if (!(proxy instanceof TypeItem))
+            {
+                return "Could not create the platform type '" + primitive + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            td.getTypes().add((TypeItem)proxy);
+            applyQualifiers(td, item, primitive);
+            return null;
         }
-        EObject proxy = provider.createProxy(primitive);
-        if (!(proxy instanceof TypeItem))
+
+        String[] simpleTypeCandidates = platformSimpleTypeCandidates(kind);
+        if (simpleTypeCandidates.length > 0)
         {
-            return "Could not create the platform type '" + primitive + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            return addSimplePlatformType(td, provider, simpleTypeCandidates);
         }
-        td.getTypes().add((TypeItem)proxy);
-        applyQualifiers(td, item, primitive);
-        return null;
+
+        return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$ //$NON-NLS-2$
+            + "UUID, or a reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves a NO-QUALIFIER platform simple type (ValueStorage / UUID) by trying each candidate
+     * proxy name in order and adding the first one that resolves to a real {@link TypeItem}.
+     * {@code createProxy} THROWS for a name the provider does not know (verified in issue #262), so
+     * each attempt is guarded; this tolerates a platform-version rename of the same type (the
+     * candidate list is name-tolerance, never a retry of a DIFFERENT type). Mirrors the try/catch
+     * idiom {@link FormElementWriter#resolveType} already uses for the same reason.
+     *
+     * @param td the type description to append the resolved type to
+     * @param provider the platform type provider
+     * @param candidates the proxy names to try, in resolution order
+     * @return {@code null} on success, or an actionable error naming every tried candidate name
+     */
+    private static String addSimplePlatformType(TypeDescription td, IEObjectProvider provider, String[] candidates)
+    {
+        for (String candidate : candidates)
+        {
+            TypeItem resolved = tryCreateTypeItem(provider, candidate);
+            if (resolved != null)
+            {
+                td.getTypes().add(resolved);
+                return null;
+            }
+        }
+        return "Could not create the platform type. Tried: " + String.join(", ", candidates) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any failure. */
+    private static TypeItem tryCreateTypeItem(IEObjectProvider provider, String name)
+    {
+        try
+        {
+            EObject proxy = provider.createProxy(name);
+            return (proxy instanceof TypeItem) ? (TypeItem)proxy : null;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
     }
 
     private static void applyQualifiers(TypeDescription td, JsonObject item, String primitive)
@@ -465,6 +514,38 @@ public final class MetadataTypeBuilder
                 return "Date"; //$NON-NLS-1$
             default:
                 return null;
+        }
+    }
+
+    /**
+     * Maps a NO-QUALIFIER platform simple type kind (ValueStorage / UUID, bilingual, case-insensitive)
+     * to its candidate platform proxy NAMES, in resolution order, or {@code null} when {@code kind} is
+     * neither. Unlike {@link #normalizePrimitive}, a kind here may carry MORE THAN ONE candidate name:
+     * some platform versions expose the type under a different proxy name (issue #279), and
+     * {@code createProxy} throws for a name it does not know, so the caller tries each name in turn -
+     * {@link #addSimplePlatformType} does the trying. These kinds take no inline qualifiers
+     * ({@link #applyQualifiers} is never invoked for them).
+     *
+     * @param kind the raw {@code kind} token from the spec
+     * @return the candidate proxy names, or an empty array when {@code kind} is not ValueStorage/UUID
+     */
+    static String[] platformSimpleTypeCandidates(String kind)
+    {
+        if (kind == null)
+        {
+            return new String[0];
+        }
+        switch (kind.trim().toLowerCase())
+        {
+            case "valuestorage": //$NON-NLS-1$
+            case "хранилищезначения": //$NON-NLS-1$
+                return new String[] { "ValueStorage" }; //$NON-NLS-1$
+            case "uuid": //$NON-NLS-1$
+            case "uniqueidentifier": //$NON-NLS-1$
+            case "уникальныйидентификатор": //$NON-NLS-1$
+                return new String[] { "UUID", "UniqueIdentifier" }; //$NON-NLS-1$ //$NON-NLS-2$
+            default:
+                return new String[0];
         }
     }
 

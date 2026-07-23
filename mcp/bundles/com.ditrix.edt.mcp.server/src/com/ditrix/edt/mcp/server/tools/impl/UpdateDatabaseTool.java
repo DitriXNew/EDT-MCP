@@ -133,6 +133,14 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     @Override
+    public boolean connectsToInfobase()
+    {
+        // getUpdateState()/update() open a live connection to run the database update
+        // (issue #270) — the classic case #194 introduced the auth dialog for.
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
@@ -293,10 +301,11 @@ public class UpdateDatabaseTool implements IMcpTool
                     + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
                     + "' (project " + projectName + "). This mutates the infobase and is irreversible.", //$NON-NLS-1$ //$NON-NLS-2$
                 1, java.util.Collections.singletonList(application.getName()));
-            if (DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview)
-                == DestructiveConsentGate.ConsentDecision.REJECT)
+            DestructiveConsentGate.ConsentDecision consentDecision =
+                DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview);
+            if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
             {
-                return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+                return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
             }
 
             // Create execution context with the active Shell so EDT can parent

@@ -63,6 +63,29 @@ NONEXISTENT_PROJECT = "NoSuchProject_ci_zzz"
 _LIVE_IB_DIR = os.path.join(tempfile.gettempdir(), "edt_create_ib_e2e")
 _LIVE_IB_NAME = "CreateInfobase_e2e"
 
+# #271: a directory that exists but holds NO 1Cv8.1CD — for the CI-safe standalone register
+# negative test (the register precondition fires before any platform/runtime lookup).
+_NO_DB_DIR = os.path.join(tempfile.gettempdir(), "edt_standalone_register_no_db_e2e")
+
+# #271: temp dir / name for the live "wrap an existing infobase with a standalone server" round-trip.
+_SRV_IB_DIR = os.path.join(tempfile.gettempdir(), "edt_standalone_register_e2e")
+_SRV_IB_NAME = "StandaloneRegister_e2e"
+
+
+def _ensure_standalone_register_absent():
+    """Best-effort pre/post clean for the standalone-register round-trip: remove any leftover
+    wst-server registration AND the plain infobase registration for a prior crashed run, then the
+    temp directory. Ignores the results."""
+    # Remove the standalone-server registration (keeps the database untouched — no deleteDatabaseFiles).
+    call("delete_infobase",
+         {"projectName": PROJECT, "infobaseName": _SRV_IB_NAME,
+          "deleteRegistration": True, "confirm": True})
+    # Remove the plain infobase registration bound over the same directory.
+    call("delete_infobase",
+         {"projectName": PROJECT, "infobaseName": _SRV_IB_NAME,
+          "deleteRegistration": True, "confirm": True})
+    shutil.rmtree(_SRV_IB_DIR, ignore_errors=True)
+
 
 def _ensure_infobase_absent():
     """Best-effort pre/post clean: dissociate + delete a leftover infobase from a
@@ -142,6 +165,53 @@ def test_no_platform_runtime_errors_actionably():
     # to do about it ("Register" / "Preferences" / "platform").
     assert_error_quality(err, names=["platform"],
                          ctx="no-platform error must name 'platform' so the user knows what is missing")
+    assert_no_diff("a rejected call must not touch the fixture")
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_standalone_create_with_credentials_errors_steering_to_register():
+    """#275 negative (CI-safe): applicationKind='standaloneServer' with the default mode='create'
+    plus any of user/password/access must still be rejected -- a brand-new standalone server has no
+    existing infobase reference to store credentials against yet. Unlike the OLD blanket rejection
+    (any standaloneServer + credentials), the error must now steer to BOTH supported alternatives:
+    applicationKind='infobase', or applicationKind='standaloneServer' + mode='register' (which DOES
+    accept credentials -- see test_live_standalone_register_over_existing_infobase below). Validated
+    before any platform/service lookup (headless-safe)."""
+    r = call("create_infobase",
+             {"projectName": PROJECT,
+              "infobaseFile": "C:\\infobases\\ci_probe_credentials_test",
+              "applicationKind": "standaloneServer",
+              "user": "Admin"})
+    err = assert_error(r, "standaloneServer+create with credentials")
+    assert_error_quality(err, names=["infobase"], suggests=["register"],
+                         ctx="standaloneServer+create+credentials must steer to mode='register'")
+    assert_no_diff("a rejected call must not touch the fixture")
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_standalone_register_without_database_errors_naming_path():
+    """#271 negative (CI-safe): applicationKind='standaloneServer' + mode='register' pointed at a
+    directory that holds NO 1Cv8.1CD must fail FAST — before any platform/standalone-runtime lookup —
+    with an actionable error that NAMES the path and steers to mode='create'. This is the register
+    precondition (the same check the plain register path uses), so CI exercises it without a runtime.
+
+    It also proves the old routing rejection is gone: standaloneServer+register is now a supported
+    combination, so the error must NOT be the former 'not supported' message."""
+    os.makedirs(_NO_DB_DIR, exist_ok=True)
+    try:
+        r = call("create_infobase",
+                 {"projectName": PROJECT,
+                  "infobaseFile": _NO_DB_DIR,
+                  "applicationKind": "standaloneServer",
+                  "mode": "register"})
+        err = assert_error(r, "standalone register without 1Cv8.1CD")
+        assert_error_quality(
+            err, names=["edt_standalone_register_no_db_e2e"], suggests=["create"],
+            ctx="standalone register must name the path and steer to mode='create'")
+        assert "not supported" not in err, \
+            ("standaloneServer+register must no longer be rejected as 'not supported': %r" % err)
+    finally:
+        shutil.rmtree(_NO_DB_DIR, ignore_errors=True)
     assert_no_diff("a rejected call must not touch the fixture")
 
 
@@ -234,5 +304,94 @@ def test_live_create_verify_delete_roundtrip():
 
     finally:
         _ensure_infobase_absent()
+
+    assert_no_diff("the round-trip must not touch the committed fixture (TestConfiguration)")
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_live_standalone_register_over_existing_infobase():
+    """#271 happy path: wrap an EXISTING file infobase with a standalone server via
+    applicationKind='standaloneServer' + mode='register'.
+
+    REQUIRES: EDT_MCP_LIVE_INFOBASE=1 (a live EDT stand with BOTH a 1C platform runtime and a 1C
+    standalone-server runtime (platform >= 8.3.23) registered, and TestConfiguration open).
+
+    This test:
+    1. Creates a plain FILE infobase (mode='create') at a temp directory — this writes the 1Cv8.1CD.
+    2. Registers a standalone server OVER that SAME directory (mode='register'); the existing database
+       must be reused (no new DB materialized), so action=='registered' and webUrl/port are reported.
+       #275: also passes user/password -- standaloneServer+register is the ONE standalone-server
+       combination that accepts connection credentials -- and asserts the result acknowledges they
+       were stored (the message notes it; storing does not require the user to actually exist in the
+       infobase, only actual authentication would).
+    3. Verifies get_applications lists a wst-server application for the directory.
+    4. Cleans up: delete the standalone-server registration (keeping the database), then delete the
+       plain infobase registration, then the temp directory.
+    """
+    requires_live_infobase("create_infobase standalone-register round-trip")
+
+    _ensure_standalone_register_absent()
+    try:
+        # 1. Seed an existing FILE infobase (writes 1Cv8.1CD on disk).
+        r_seed = call("create_infobase",
+                      {"projectName": PROJECT,
+                       "infobaseFile": _SRV_IB_DIR,
+                       "infobaseName": _SRV_IB_NAME})
+        assert_ok(r_seed, "seed plain infobase for standalone-register")
+        assert os.path.isfile(os.path.join(_SRV_IB_DIR, "1Cv8.1CD")), \
+            "the seed step must write a 1Cv8.1CD into %s" % _SRV_IB_DIR
+
+        # 2. Register a standalone server OVER the existing infobase, ALSO passing connection
+        #    credentials (#275): standaloneServer+register is the one standalone-server combination
+        #    that accepts them.
+        r_reg = call("create_infobase",
+                     {"projectName": PROJECT,
+                      "infobaseFile": _SRV_IB_DIR,
+                      "infobaseName": _SRV_IB_NAME,
+                      "applicationKind": "standaloneServer",
+                      "mode": "register",
+                      "user": "Admin",
+                      "password": ""})
+        assert_ok(r_reg, "standalone register over existing infobase")
+        sc = r_reg.structured
+        assert isinstance(sc, dict), "structured must be a dict: %r" % sc
+        assert sc.get("action") == "registered", \
+            "standalone register must report action='registered': %r" % sc
+        assert sc.get("applicationKind") == "standaloneServer", \
+            "result must echo applicationKind='standaloneServer': %r" % sc
+        assert sc.get("webUrl"), "a registered standalone server must expose a webUrl: %r" % sc
+        assert sc.get("port"), "a registered standalone server must report its web port: %r" % sc
+        # The existing database must still be on disk (register must not have removed/rewritten it).
+        assert os.path.isfile(os.path.join(_SRV_IB_DIR, "1Cv8.1CD")), \
+            "the existing 1Cv8.1CD must remain after register: %s" % _SRV_IB_DIR
+        # #275: the result must acknowledge the stored connection credentials (a success note, or --
+        # non-fatally -- a WARNING naming why storage failed; either way NOT silently dropped).
+        message = sc.get("message") or ""
+        assert ("stored connection credentials" in message.lower()
+                or "connection credentials were not stored" in message.lower()), \
+            "message must acknowledge the credentials request (stored or an explicit WARNING): %r" % sc
+
+        # 3. Verify a wst-server application now exists for the directory.
+        r_apps = call("get_applications", {"projectName": PROJECT})
+        assert_ok(r_apps, "get_applications after standalone register")
+        apps = r_apps.structured.get("applications", [])
+        srv_type = "com.e1c.g5.dt.applications.type.wst-server"
+        found = [a for a in apps if a.get("name") == _SRV_IB_NAME
+                 and a.get("type") == srv_type]
+        assert found, \
+            ("registered standalone server '%s' must appear in get_applications with type %s; got: %r"
+             % (_SRV_IB_NAME, srv_type, apps))
+
+        # 4. Clean up: remove the server registration (keep the DB), then the plain registration.
+        srv_app_id = found[0].get("id")
+        if srv_app_id:
+            r_del_srv = call("delete_infobase",
+                             {"projectName": PROJECT, "applicationId": srv_app_id, "confirm": True})
+            assert_ok(r_del_srv, "delete standalone-server registration")
+            # The database directory must survive (we did NOT ask to delete the database files).
+            assert os.path.isfile(os.path.join(_SRV_IB_DIR, "1Cv8.1CD")), \
+                "deleting only the server registration must keep the database on disk"
+    finally:
+        _ensure_standalone_register_absent()
 
     assert_no_diff("the round-trip must not touch the committed fixture (TestConfiguration)")

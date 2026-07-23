@@ -47,9 +47,9 @@ A 1C client launched from this EDT that is running against the target infobase h
 
 Pass `terminateRunningClients=false` to keep the client running; then the old manual flow applies — check `list_configurations` for `running: true` and call `terminate_launch` yourself before retrying. Externally launched clients (Designer, ad-hoc 1cv8c.exe) are invisible to both this sweep and `terminate_launch`, and must be closed by hand.
 
-## Database restructure (not controllable here)
+## Database restructure (auto-confirmed)
 
-When the update requires a database restructure (table/index changes), EDT itself decides how to confirm it: it shows its own confirmation dialog in the EDT window, or — if confirmation cannot happen — the update returns with the infobase still requiring an update. The EDT update API offers no per-call switch to auto-confirm a restructure, so this tool intentionally has no parameter for it. If the result reports a state other than `UPDATED`, confirm the restructure in the EDT UI (or use `fullUpdate=true`, which may avoid the incremental restructure path) and re-run.
+When the update changes the DB structure (new/changed objects), EDT pops a blocking **"Restructure data" / «Реорганизация информации»** confirmation dialog listing the structural changes. Because `confirm=true` has already approved this irreversible update, the tool **auto-presses that dialog's default "Accept" button** so the unattended call completes without a human click — otherwise the MCP call would hang on the modal. The EDT update API offers no per-call switch for this, so it is handled by intercepting the dialog only for the duration of this update; the auto-press is written to the EDT log. A structural restructure can include data-deleting changes (dropped attributes/objects) — that is part of applying the configuration you confirmed. Applies to both file infobases and standalone servers.
 
 ## Examples
 
@@ -59,6 +59,24 @@ When the update requires a database restructure (table/index changes), EDT itsel
 ## Result
 
 JSON with `project`, `applicationId`, `applicationName`, `updateType` (FULL/INCREMENTAL), `stateBefore`, `stateAfter` and a `message`. `terminatedClient: true` is present ONLY when a running client was actually terminated to free the infobase (absent on a preview, on opt-out, or when no client was running). A successful run reports `stateAfter = UPDATED`. If the application is already BEING_UPDATED the tool returns an error and you should wait.
+
+## Long-running updates and client timeouts
+
+On a large configuration (thousands of objects) `update_database` can run **5–25 minutes**. Many MCP clients apply their own call timeout (e.g. 120 s) well short of that — the client gives up waiting, but that is purely a client-side timeout: it does **not** cancel the underlying EDT update job, which keeps running in EDT to completion (success or failure) regardless of whether anyone is still listening for the response.
+
+If your client times out before the response arrives, do not assume the update failed or retry blindly (a retry while the first update is still running fails with "Application is currently being updated" or races the exclusive lock). Instead, retrieve the real outcome afterwards with `get_mcp_history`:
+
+```
+get_mcp_history(tool="update_database", limit=1)
+```
+
+This returns the recorded call, including its final `status` and `durationMs`, once the update has actually finished — even though the original call's own response was lost to the client-side timeout. Prefer raising the client's call timeout for this tool (well above the 5–25 minute range) over polling `get_mcp_history` in a loop.
+
+## Known EDT limitation: missing InternalInfo node
+
+On some projects the platform's load pipeline rejects the configuration XML that EDT itself generated for the update, with an error mentioning a missing `InternalInfo` node (Russian EDT message: "Отсутствует внутренняя информация (узел InternalInfo) для объекта Configuration"). This is an **EDT-platform pipeline limitation**, not a bug in this tool or in the MCP call — the EDT GUI's "Update database configuration" fails identically on the same project.
+
+Workaround: update via the platform CLI instead — `export_configuration_to_xml` to export the configuration to files, then run `1cv8 DESIGNER /LoadConfigFromFiles <dir> /UpdateDBCfg` — or try a newer EDT release, which may not have the limitation.
 
 ## Gotchas
 

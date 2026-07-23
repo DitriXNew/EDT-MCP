@@ -408,3 +408,198 @@ def test_non_dcs_template_fqn_renders_basic_info_unchanged():
         "a non-DCS template must NOT render the DCS structure heading")
     assert_contains(r.text, "PrintForm", "the template's own name must still appear")
     assert_no_diff("a non-DCS template read must not change the project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TYPE-SPECIFIC PROPERTIES (issue #288) — a ScheduledJob / CommonModule / an
+# InformationRegister dimension's Indexing render in the DEFAULT (non-full) view.
+# modify_metadata already WRITES these; before this fix, get_metadata_details rendered
+# only Name/Synonym for the first two and never showed a dimension's Indexing at all -
+# reading them back was impossible. The fixture ships no ScheduledJob and no
+# InformationRegister, and its CommonModules (Calc/Error/OK) are reused by many other
+# e2e tests, so - mirroring the DCS-template test's "seed a FRESH object rather than
+# perturb a shared fixture" pattern - each test here seeds its OWN top object via
+# create_metadata (kind="write-metadata" resets the tree afterward).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_scheduled_job_properties_rendered_in_basic_view():
+    job = "GMDJob"
+    fqn = "ScheduledJob." + job
+    r0 = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r0, "seed " + fqn)
+    wait_for_project_ready()
+
+    r1 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [
+            {"name": "methodName", "value": "Calc.Add"},
+            {"name": "use", "value": True},
+            {"name": "restartCountOnFailure", "value": 3},
+            {"name": "restartIntervalOnFailure", "value": 60},
+            {"name": "key", "value": "GMDJobKey"},
+        ],
+    })
+    assert_ok(r1, "set ScheduledJob execution properties")
+    wait_for_project_ready()
+
+    r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+    assert_ok(r, "get_metadata_details on the seeded ScheduledJob")
+    if "## Errors" in r.text:
+        raise AssertionError(fqn + " should resolve, but a ## Errors section was emitted:\n" + r.text[:400])
+    # The type-specific Properties table (issue #288) - the details view used to show only
+    # Name/Synonym for a ScheduledJob; modify_metadata already wrote these back.
+    assert_contains(r.text, "### Properties", "must render the type-specific Properties section")
+    assert_contains(r.text, "Method Name", "the Method Name property must be labeled")
+    assert_contains(r.text, "Calc.Add", "the written methodName value must round-trip")
+    assert_contains(r.text, "| Use | Yes |", "use=true must render as Yes")
+    assert_contains(r.text, "| Restart Count On Failure | 3 |", "the written restart count must round-trip")
+    assert_contains(r.text, "| Restart Interval On Failure | 60 |",
+        "the written restart interval must round-trip")
+    assert_contains(r.text, "| Key | GMDJobKey |", "the written key must round-trip")
+    # Schedule is rendered as presence ("set"/"-") via eIsSet, never a raw dump. Whether a
+    # create_metadata-seeded job counts as having an explicitly-set schedule is platform-dependent,
+    # so assert only that the row is present with one of the two presence tokens (never an object dump).
+    assert_contains(r.text, "| Schedule |", "the Schedule row (presence) must be rendered")
+    assert_not_contains(r.text, "@", "the Schedule cell must never be a raw object dump")
+    # Full mode must ALSO keep the type-specific table (the universal reflective dump omits the
+    # transient Schedule reference, so full mode would otherwise lose information - see issue #288).
+    r_full = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "full": True})
+    assert_ok(r_full, "get_metadata_details on the seeded ScheduledJob (full)")
+    assert_contains(r_full.text, "### Properties",
+        "full mode must still render the type-specific Properties table (no info loss)")
+
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_common_module_properties_rendered_in_basic_view():
+    # A FRESH module (not the shared CommonModule.Calc/Error/OK fixture many other tests depend on).
+    module = "GMDMod"
+    fqn = "CommonModule." + module
+    r0 = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r0, "seed " + fqn)
+    wait_for_project_ready()
+
+    r1 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [
+            {"name": "server", "value": True},
+            {"name": "serverCall", "value": False},
+            {"name": "global", "value": True},
+            # The EMF enum LITERAL (as modify_metadata's validator reports: "Allowed: DontUse,
+            # DuringRequest, DuringSession") - NOT the Java constant name DURING_SESSION.
+            {"name": "returnValuesReuse", "value": "DuringSession"},
+        ],
+    })
+    assert_ok(r1, "set CommonModule context-availability flags")
+    wait_for_project_ready()
+
+    r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+    assert_ok(r, "get_metadata_details on the seeded CommonModule")
+    if "## Errors" in r.text:
+        raise AssertionError(fqn + " should resolve, but a ## Errors section was emitted:\n" + r.text[:400])
+    assert_contains(r.text, "### Properties", "must render the type-specific Properties section")
+    assert_contains(r.text, "| Server | Yes |", "server=true must round-trip as Yes")
+    # false is a real, meaningful value here - it must render as No, never be omitted from the table.
+    assert_contains(r.text, "| Server Call | No |", "serverCall=false must round-trip as No, not be omitted")
+    assert_contains(r.text, "| Global | Yes |", "global=true must round-trip as Yes")
+    assert_contains(r.text, "Return Values Reuse", "the enum property must be labeled")
+    # Never a raw Java object dump of the enum (would contain '@' + a hashcode).
+    assert_not_contains(r.text, "@", "the enum cell must never be a raw object dump")
+    # Full mode must ALSO render the type-specific table (no information loss vs basic - issue #288).
+    r_full = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn], "full": True})
+    assert_ok(r_full, "get_metadata_details on the seeded CommonModule (full)")
+    assert_contains(r_full.text, "### Properties",
+        "full mode must still render the type-specific Properties table (no info loss)")
+
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_information_register_dimension_indexing_rendered():
+    # No InformationRegister ships in the baseline fixture (test_create_metadata.py's
+    # test_create_register_then_resource_member: "No register in the baseline") -> seed one + a
+    # Dimension member, mirroring test_create_dimension_member_on_register.
+    reg = "GMDReg"
+    reg_fqn = "InformationRegister." + reg
+    r0 = call("create_metadata", {"projectName": PROJECT, "fqn": reg_fqn})
+    assert_ok(r0, "seed " + reg_fqn)
+    wait_for_project_ready()
+
+    dim = "GMDDim"
+    r1 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "%s.Dimension.%s" % (reg_fqn, dim)})
+    assert_ok(r1, "seed Dimension member on the register")
+    wait_for_project_ready()
+
+    # Read BEFORE setting a non-default Indexing - the section must already render (dimensions
+    # exist), just with whatever the platform default is.
+    r_before = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [reg_fqn]})
+    assert_ok(r_before, "get_metadata_details on the register before setting Indexing")
+    assert_contains(r_before.text, "### Dimension Indexing",
+        "the Dimension Indexing section must render as soon as a dimension exists")
+    assert_contains(r_before.text, dim, "the seeded dimension must be listed by name")
+
+    r2 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "%s.Dimension.%s" % (reg_fqn, dim),
+        # The Java enum constant name (case-insensitive match against either the EMF literal or the
+        # constant name, per MetadataPropertyIntrospector.resolveEnumLiteral).
+        "properties": [{"name": "indexing", "value": "INDEX"}],
+    })
+    assert_ok(r2, "set the dimension's indexing")
+    wait_for_project_ready()
+
+    r_after = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [reg_fqn]})
+    assert_ok(r_after, "get_metadata_details on the register after setting Indexing")
+    assert_contains(r_after.text, "### Dimension Indexing", "the section must still render")
+    assert_contains(r_after.text, dim, "the seeded dimension must still be listed by name")
+    # The write must be OBSERVABLE: the rendered Indexing cell for this dimension must differ from
+    # its pre-write rendering (avoids hard-coding the exact enum literal string, which is an internal
+    # EMF codegen detail this test should not need to know).
+    if r_before.text == r_after.text:
+        raise AssertionError(
+            "setting the dimension's indexing must change the rendered details, but the "
+            "before/after output is byte-identical:\n" + r_after.text[:600])
+    # Indexing is emitted in BOTH modes (the shared attributes-table Indexing column never
+    # recognizes a register dimension in either mode, so this dedicated table always renders).
+    r_full = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [reg_fqn], "full": True})
+    assert_ok(r_full, "get_metadata_details on the register (full)")
+    assert_contains(r_full.text, "### Dimension Indexing", "the section must also render in full mode")
+    assert_contains(r_full.text, dim, "the seeded dimension must be listed in full mode too")
+
+
+# XDTO PACKAGE structure (issue #183 stream 1) — a package FQN renders its
+# ObjectTypes + their nested Properties (XdtoStructureReader, folded into the
+# generic render as a "## XDTO content" section, alongside the Basic Properties
+# section every top object gets). The fixture ships no XDTOPackage, so seed one.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_get_metadata_details_renders_xdto_structure():
+    pkg, obj, prop = "E2EXdtoDet", "Card", "Title"
+    pkg_fqn = "XDTOPackage." + pkg
+    r0 = call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn})
+    assert_ok(r0, "seed the XDTO package " + pkg)
+    wait_for_project_ready()
+    r1 = call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType." + obj})
+    assert_ok(r1, "seed the ObjectType " + obj)
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType.%s.Property.%s" % (obj, prop),
+        "properties": [{"name": "type", "value": "string"}]})
+    assert_ok(r2, "seed the Property " + prop)
+    wait_for_project_ready()
+
+    r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [pkg_fqn]})
+    assert_ok(r, "get_metadata_details on the XDTOPackage FQN")
+    if "## Errors" in r.text:
+        raise AssertionError(
+            "the freshly seeded XDTO package should resolve, but a ## Errors section was emitted:\n"
+            + r.text[:400])
+    assert_contains(r.text, "XDTO content", "the XDTO content section must render")
+    assert_contains(r.text, "#### " + obj, "the ObjectType must be enumerated as its own heading")
+    # The nested property must appear as its own table row under the ObjectType (not merely
+    # anywhere in the body -- a false match on the FQN heading would not prove enumeration).
+    row = next((ln for ln in r.text.splitlines() if ln.strip().startswith("| " + prop + " |")), None)
+    assert row is not None, \
+        "the nested property must be listed in the ObjectType's property table: %r" % (r.text[:800])
+    assert_contains(row, "string", "the property row must show its XSD string type")
+    # (No assert_no_diff: the test intentionally seeds a fresh XDTO package + members, so the tree
+    # is dirty by design -- kind="write-metadata" resets it after the test.)

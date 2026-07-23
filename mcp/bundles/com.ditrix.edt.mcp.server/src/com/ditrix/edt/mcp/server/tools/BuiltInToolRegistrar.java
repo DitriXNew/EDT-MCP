@@ -10,6 +10,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.CreateGitBranchTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateLaunchConfigTool;
@@ -60,6 +61,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListCommonPicturesTool;
+import com.ditrix.edt.mcp.server.tools.impl.ListGitBranchesTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListConfigurationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListProjectsTool;
@@ -74,16 +76,19 @@ import com.ditrix.edt.mcp.server.tools.impl.ResyncToDiskTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
+import com.ditrix.edt.mcp.server.tools.impl.SetBranchInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetVariableTool;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
 import com.ditrix.edt.mcp.server.tools.impl.StepTool;
 import com.ditrix.edt.mcp.server.tools.impl.StopProfilingTool;
+import com.ditrix.edt.mcp.server.tools.impl.SwitchGitBranchTool;
 import com.ditrix.edt.mcp.server.tools.impl.TerminateLaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.TranslateConfigurationTool;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.ValidateQueryTool;
+import com.ditrix.edt.mcp.server.tools.impl.ValidateXdtoPackageTool;
 import com.ditrix.edt.mcp.server.tools.impl.WaitForBreakTool;
 import com.ditrix.edt.mcp.server.tools.impl.WriteModuleSourceTool;
 
@@ -135,6 +140,10 @@ public final class BuiltInToolRegistrar
         registry.register(new GetMarkersTool());
         registry.register(new GetEventLogTool());
         registry.register(new GetMcpHistoryTool());
+        registry.register(new ListGitBranchesTool());
+        registry.register(new SwitchGitBranchTool());
+        registry.register(new SetBranchInfobaseTool());
+        registry.register(new CreateGitBranchTool());
         registry.register(new GetCheckDescriptionTool());
         registry.register(new GetContentAssistTool());
         registry.register(new GetPlatformDocumentationTool());
@@ -203,6 +212,7 @@ public final class BuiltInToolRegistrar
         registry.register(new CreateMetadataTool());
         registry.register(new ModifyMetadataTool());
         registry.register(new AdoptMetadataObjectTool());
+        registry.register(new ValidateXdtoPackageTool());
 
         // LanguageTool translation tools
         registry.register(new GenerateTranslationStringsTool());

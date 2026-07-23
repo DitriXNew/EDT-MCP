@@ -7,8 +7,11 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
@@ -44,6 +47,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
@@ -73,6 +77,20 @@ public class GetMetadataObjectsTool implements IMcpTool
     private static final String TYPE_EVENT_SUBSCRIPTIONS = "eventsubscriptions"; //$NON-NLS-1$
     private static final String TYPE_SCHEDULED_JOBS = "scheduledjobs"; //$NON-NLS-1$
 
+    /**
+     * The category tokens this tool actually collects (lowercase). Used both as the
+     * legacy vocabulary of {@code metadataType} and as the target of the type-name-token
+     * normalization in {@link #normalizeMetadataType(String)}: {@code MetadataTypeUtils}
+     * recognizes far more type names (e.g. Role, Subsystem, XDTOPackage) than this tool
+     * has collectors for, so a resolved type name is only accepted when its category is
+     * a member of this set.
+     */
+    private static final Set<String> SUPPORTED_CATEGORIES = new HashSet<>(Arrays.asList(
+        TYPE_DOCUMENTS, TYPE_CATALOGS, TYPE_INFORMATION_REGISTERS, TYPE_ACCUMULATION_REGISTERS,
+        TYPE_COMMON_MODULES, TYPE_ENUMS, TYPE_CONSTANTS, TYPE_REPORTS, TYPE_DATA_PROCESSORS,
+        TYPE_EXCHANGE_PLANS, TYPE_BUSINESS_PROCESSES, TYPE_TASKS, TYPE_COMMON_ATTRIBUTES,
+        TYPE_EVENT_SUBSCRIPTIONS, TYPE_SCHEDULED_JOBS));
+
     private static final String LIMIT = "limit"; //$NON-NLS-1$
 
     @Override
@@ -98,10 +116,13 @@ public class GetMetadataObjectsTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringProperty("metadataType", //$NON-NLS-1$
-                "Type filter (case-insensitive), default 'all'. One of: all, documents, catalogs, " + //$NON-NLS-1$
-                "informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, " + //$NON-NLS-1$
-                "dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, " + //$NON-NLS-1$
-                "eventSubscriptions, scheduledJobs") //$NON-NLS-1$
+                "Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, " + //$NON-NLS-1$
+                "documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, " + //$NON-NLS-1$
+                "constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, " + //$NON-NLS-1$
+                "commonAttributes, eventSubscriptions, scheduledJobs - OR a single standard metadata " + //$NON-NLS-1$
+                "type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', " + //$NON-NLS-1$
+                "'Document'). Single value only - not an array. An unrecognized value returns an error " + //$NON-NLS-1$
+                "listing the supported options.") //$NON-NLS-1$
             .stringProperty("nameFilter", //$NON-NLS-1$
                 "Case-insensitive substring matched against Name only (not Synonym)") //$NON-NLS-1$
             .integerProperty(LIMIT,
@@ -198,11 +219,27 @@ public class GetMetadataObjectsTool implements IMcpTool
         // e.g. "ru"/"en", not by the Language object's name). May be null when the
         // configuration has no languages; getSynonymForLanguage tolerates that.
         String effectiveLanguage = MetadataLanguageUtils.resolveLanguageCode(config, language);
-        
+
+        // Normalize metadataType to the internal category token: either it already IS
+        // one (legacy vocabulary, back-compat), or it is a standard type-name token
+        // (FQN form, English/Russian, singular/plural - e.g. "ScheduledJob") resolved
+        // via the shared MetadataTypeUtils resolver. See normalizeMetadataType javadoc.
+        String category = normalizeMetadataType(metadataType);
+        if (category == null)
+        {
+            return ToolResult.error("Unknown metadata type: " + metadataType + ". " + //$NON-NLS-1$ //$NON-NLS-2$
+                   "Supported categories (case-insensitive): all, documents, catalogs, informationRegisters, " + //$NON-NLS-1$
+                   "accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, " + //$NON-NLS-1$
+                   "exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, " + //$NON-NLS-1$
+                   "scheduledJobs. Also accepts a standard metadata type name (the FQN token, English " + //$NON-NLS-1$
+                   "or Russian, singular or plural, e.g. 'ScheduledJob', 'Document') for one of these " + //$NON-NLS-1$
+                   "categories.").toJson(); //$NON-NLS-1$
+        }
+
         // Collect metadata objects
         List<MetadataInfo> objects = new ArrayList<>();
-        
-        switch (metadataType.toLowerCase())
+
+        switch (category)
         {
             case TYPE_ALL:
                 collectDocuments(config, objects, nameFilter);
@@ -267,20 +304,84 @@ public class GetMetadataObjectsTool implements IMcpTool
                 collectScheduledJobs(config, objects, nameFilter);
                 break;
             default:
-                return ToolResult.error("Unknown metadata type: " + metadataType + ". " + //$NON-NLS-1$ //$NON-NLS-2$
-                       "Supported (case-insensitive): all, documents, catalogs, informationRegisters, accumulationRegisters, " + //$NON-NLS-1$
-                       "commonModules, enums, constants, reports, dataProcessors, exchangePlans, " + //$NON-NLS-1$
-                       "businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs").toJson(); //$NON-NLS-1$
+                // Unreachable: normalizeMetadataType only ever returns TYPE_ALL or a
+                // member of SUPPORTED_CATEGORIES, both fully covered above. Kept as a
+                // defensive net against the two enumerations drifting apart.
+                return ToolResult.error("Unknown metadata type: " + metadataType).toJson(); //$NON-NLS-1$
         }
-        
+
         // An object's ORIGIN (core vs extension-adopted vs extension-own) is only
         // meaningful for an EXTENSION project, where adopted base objects are listed
         // alongside the extension's own. Resolve the project type once and surface an
         // Origin column only then; a base configuration keeps its original columns.
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
 
-        // Format output
+        // Format output. Show the caller's ORIGINAL filter value in the "Filter:" line (what
+        // they typed - a category token, a type name, whatever casing), not the internal
+        // lowercased category token; the TYPE_ALL comparison in formatOutput is case-insensitive.
         return formatOutput(projectName, objects, limit, effectiveLanguage, metadataType, isExtensionProject);
+    }
+
+    /**
+     * Normalizes the {@code metadataType} filter value to the internal category token
+     * used by the collection switch above. Accepted forms, checked in this order:
+     * <ol>
+     *   <li>{@code "all"} (special, always wins);</li>
+     *   <li>an existing category token ({@code documents}, {@code catalogs}, ...,
+     *       {@code scheduledJobs}), case-insensitive - checked BEFORE type-name
+     *       resolution so a category token can never be shadowed by it;</li>
+     *   <li>a standard metadata type name in any form {@code MetadataTypeUtils}
+     *       recognizes (English/Russian, singular/plural, e.g. "ScheduledJob",
+     *       "РегламентноеЗадание"),
+     *       mapped to its category token via {@link MetadataTypeUtils.MetadataTypeInfo#getConfigReferenceName()}
+     *       IF that category is one this tool actually collects
+     *       ({@link #SUPPORTED_CATEGORIES}) - a type MetadataTypeUtils recognizes but
+     *       this tool has no collector for (e.g. Role, Subsystem, XDTOPackage) falls
+     *       through to "not recognized" here, same as an unknown value.</li>
+     * </ol>
+     * This reuses the shared bilingual resolver (do NOT hand-roll type resolution,
+     * see CLAUDE.md #4) rather than adding a second Russian-token table.
+     *
+     * Package-private (not {@code private}) so it can be unit-tested directly: unlike
+     * the rest of {@code getMetadataObjectsInternal}, this method touches neither the
+     * workbench nor a live {@code Configuration} - it is pure string/lookup logic
+     * against {@code MetadataTypeUtils}, which {@code MetadataTypeUtilsTest} already
+     * proves runs standalone.
+     *
+     * @param metadataType raw filter value as supplied by the caller
+     * @return the category token to switch on ({@link #TYPE_ALL} or a member of
+     *         {@link #SUPPORTED_CATEGORIES}), or {@code null} if not recognized in any form
+     */
+    String normalizeMetadataType(String metadataType)
+    {
+        if (metadataType == null || metadataType.isEmpty())
+        {
+            return null;
+        }
+
+        String lower = metadataType.toLowerCase();
+        if (TYPE_ALL.equals(lower) || SUPPORTED_CATEGORIES.contains(lower))
+        {
+            return lower;
+        }
+
+        // Not a category token - try resolving it as a standard metadata type name
+        // (FQN token, English or Russian, singular or plural) via the shared resolver.
+        MetadataTypeUtils.MetadataTypeInfo typeInfo = MetadataTypeUtils.resolve(metadataType);
+        if (typeInfo != null)
+        {
+            String configReferenceName = typeInfo.getConfigReferenceName();
+            if (configReferenceName != null)
+            {
+                String category = configReferenceName.toLowerCase();
+                if (SUPPORTED_CATEGORIES.contains(category))
+                {
+                    return category;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -296,7 +397,7 @@ public class GetMetadataObjectsTool implements IMcpTool
         int total = objects.size();
         int shown = Math.min(total, limit);
         
-        if (!TYPE_ALL.equals(metadataType))
+        if (!TYPE_ALL.equalsIgnoreCase(metadataType))
         {
             sb.append("**Filter:** ").append(metadataType).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }

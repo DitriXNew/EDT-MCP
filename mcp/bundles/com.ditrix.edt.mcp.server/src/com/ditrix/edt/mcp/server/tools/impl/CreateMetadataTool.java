@@ -35,6 +35,9 @@ import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.xdto.model.ObjectType;
+import com._1c.g5.v8.dt.xdto.model.Package;
+import com._1c.g5.v8.dt.xdto.model.Property;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -51,6 +54,8 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver.CreateTarget;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
+import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -98,6 +103,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Output key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
 
+    /** Output key: names of the optional attributes applied (XDTO member create only). */
+    private static final String KEY_APPLIED = "applied"; //$NON-NLS-1$
+
     /** Property / output key: the synonym display name. */
     private static final String KEY_SYNONYM = "synonym"; //$NON-NLS-1$
 
@@ -138,7 +146,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return "Create a metadata node addressed by a 1C full-name FQN: a top-level object " //$NON-NLS-1$
             + "(Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, " //$NON-NLS-1$
             + "InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind " //$NON-NLS-1$
-            + "is inferred from the FQN; type and kind tokens may be English or Russian. " //$NON-NLS-1$
+            + "is inferred from the FQN; type and kind tokens may be English or Russian. Also creates " //$NON-NLS-1$
+            + "an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), " //$NON-NLS-1$
+            + "'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or " //$NON-NLS-1$
+            + "'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an " //$NON-NLS-1$
+            + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
@@ -154,9 +166,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "(e.g. 'Catalog.Products.Attribute.Weight'). The trailing Name is the new node's " //$NON-NLS-1$
                 + "programmatic Name; type / kind tokens may be English or Russian.", true) //$NON-NLS-1$
             .objectArrayProperty("properties", //$NON-NLS-1$
-                "Optional properties to apply at creation, as [{name, value, language?}]. This " //$NON-NLS-1$
-                + "version applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata).") //$NON-NLS-1$
+                "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
+                + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
+                + "property names are rejected (set them via modify_metadata). XDTO PACKAGE MEMBERS " //$NON-NLS-1$
+                + "('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
+                + "'...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an " //$NON-NLS-1$
+                + "ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / " //$NON-NLS-1$
+                + "'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like " //$NON-NLS-1$
+                + "'string', the EXACT name of an ObjectType already in the same package for a " //$NON-NLS-1$
+                + "same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / " //$NON-NLS-1$
+                + "'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' " //$NON-NLS-1$
+                + "(booleans, 'fixed'=true needs a 'default') and 'default' (string).") //$NON-NLS-1$
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
@@ -235,6 +255,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
+            .stringArrayProperty(KEY_APPLIED,
+                "Names of the optional attributes actually applied (XDTO package member create only)") //$NON-NLS-1$
             .stringProperty(KEY_SYNONYM, "Display name written, when a synonym property was provided") //$NON-NLS-1$
             .stringProperty(KEY_LANGUAGE, "Language code the synonym was written for") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
@@ -296,6 +318,20 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (formResult != null)
         {
             return formResult;
+        }
+
+        // A FQN that addresses an XDTO PACKAGE MEMBER (an ObjectType or a Property - issue #183 stream 1)
+        // is handled by a dedicated branch: an ObjectType/Property lives on the package's editable
+        // xdto.model content (a cross-model hop, the same @ExternalProperty shape a report's DCS uses),
+        // not the mdclass tree, and is addressed by its own small FQN grammar (XdtoWriter.parseMemberRef)
+        // rather than MetadataNodeResolver (which does not know "ObjectType"/"Property" as mdclass child
+        // kinds). Dispatched BEFORE the generic 'properties' parse (synonym/comment only) because an XDTO
+        // member's assignable attributes (type/bounds/nillable/flags) are a completely different
+        // vocabulary reusing the SAME 'properties' parameter shape.
+        XdtoWriter.MemberRef xdtoRef = XdtoWriter.parseMemberRef(normFqn);
+        if (xdtoRef != null)
+        {
+            return createXdtoMember(projectName, normFqn, xdtoRef, properties);
         }
 
         // Parse the supported properties (synonym/comment); reject anything else early. The synonym /
@@ -409,6 +445,238 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
+    // ---- XDTO package member creation (issue #183 stream 1) --------------------------------------
+    //
+    // An ObjectType / Property lives on the package's lazily-materialized xdto.model content (a
+    // cross-model hop, the SAME transient @ExternalProperty shape a report's DCS uses), not the
+    // mdclass tree - MetadataNodeResolver cannot see it. The duplicate check runs INSIDE the write
+    // transaction (mirrors resolveMemberOwnerInTx's own "Member already exists" check for a generic
+    // mdclass member), because the package's content is lazy: only materializing it (inside the tx)
+    // proves whether a same-named member already exists on disk.
+
+    /** Groups a successfully created XDTO member's result fields for {@link #xdtoMemberSuccess}. */
+    private static final class XdtoCreateResult
+    {
+        final String eClassName;
+        final String name;
+        final List<String> applied;
+
+        XdtoCreateResult(String eClassName, String name, List<String> applied)
+        {
+            this.eClassName = eClassName;
+            this.name = name;
+            this.applied = applied;
+        }
+    }
+
+    /**
+     * Creates an XDTO PACKAGE MEMBER (an ObjectType or a Property, package-global or nested in an
+     * ObjectType) addressed by {@code ref}. Resolves the owning XDTOPackage top object, materializes +
+     * attaches its {@code Package} content inside ONE write transaction ({@link XdtoWriter#resolvePackageContent}),
+     * appends the new member after asserting no duplicate exists by name, and applies any optional
+     * {@code properties} (ObjectType flags, or a Property's REQUIRED {@code type} plus optional
+     * bounds/nillable/ref/fixed/default) via {@link XdtoWriter}. Force-exports the owning package's FQN
+     * (dual-export with the content's own resource FQN when it is a distinct top object, guarding the
+     * #239-class silent-false-success).
+     */
+    private String createXdtoMember(String projectName, String normFqn, XdtoWriter.MemberRef ref,
+        List<JsonObject> properties)
+    {
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
+        {
+            return ctx.error;
+        }
+        // The leaf name is written verbatim into Package.xdto as an XML name - validate it with the
+        // same identifier rule the mdclass member create enforces (a 1C identifier is a safe subset
+        // of an XML NCName), or 'ObjectType.123Bad' would succeed yet produce an invalid file.
+        String newMemberName = ref.kind == XdtoWriter.Kind.OBJECT_TYPE ? ref.objectTypeName : ref.propertyName;
+        if (!isValidIdentifier(newMemberName))
+        {
+            return ToolResult.error("Invalid XDTO member name '" + newMemberName + "': a name must start " //$NON-NLS-1$ //$NON-NLS-2$
+                + "with a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+        }
+        MetadataNodeResolver.MetadataNode pkgNode =
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
+        if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
+            || !(pkgNode.object instanceof IBmObject))
+        {
+            return ToolResult.error("XDTOPackage not found: " + ref.packageFqn + ". Create it first " //$NON-NLS-1$ //$NON-NLS-2$
+                + "with create_metadata on 'XDTOPackage.<Name>'.").toJson(); //$NON-NLS-1$
+        }
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (bmModelManager == null || fqnGenerator == null)
+        {
+            return ToolResult.error(ERR_SERVICES_UNAVAILABLE).toJson();
+        }
+        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        if (bmModel == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
+        }
+
+        final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        final String[] contentFqnHolder = { null };
+        XdtoCreateResult result;
+        try
+        {
+            result = BmTransactions.<XdtoCreateResult> write(bmModel, "CreateXdtoMember", (tx, pm) -> //$NON-NLS-1$
+                createXdtoMemberInTx(tx, pkgBmId, fqnGenerator, ref, properties, contentFqnHolder));
+        }
+        catch (Exception e)
+        {
+            String ready = XdtoWriteException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error creating XDTO member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to create XDTO member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        List<String> exportFqns = new java.util.ArrayList<>();
+        // Export by the RESOLVED package's canonical FQN: with the yo (ё->е) fallback the
+        // caller-typed ref.packageFqn may differ from the stored name, and force-export must
+        // target the stored top object (never the caller-supplied spelling).
+        String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        exportFqns.add(pkgExportFqn);
+        String contentFqn = contentFqnHolder[0];
+        if (contentFqn != null && !contentFqn.equals(pkgExportFqn))
+        {
+            exportFqns.add(contentFqn);
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+        return xdtoMemberSuccess(normFqn, result, persisted, VAL_CREATED, "Created "); //$NON-NLS-1$
+    }
+
+    /**
+     * The write-transaction body for {@link #createXdtoMember}: re-fetches the XDTOPackage, materializes
+     * its content, records the content's own export FQN (captured by {@link XdtoWriter#resolvePackageContent}
+     * itself - NEVER re-derived here via a post-attach {@code bmGetFqn()}, which throws on a just-attached,
+     * not-yet-settled object; a live-stand-caught regression) into {@code contentFqnHolder}, then
+     * dispatches to the ObjectType / Property creation by {@code ref.kind}. Throws
+     * {@link XdtoWriteException} (a ready JSON error) on a resolution / duplicate / validation failure,
+     * rolling the whole write back.
+     */
+    private static XdtoCreateResult createXdtoMemberInTx(IBmTransaction tx, long pkgBmId,
+        ITopObjectFqnGenerator fqnGenerator, XdtoWriter.MemberRef ref, List<JsonObject> properties,
+        String[] contentFqnHolder)
+    {
+        Object inTx = tx.getObjectById(pkgBmId);
+        if (!(inTx instanceof XDTOPackage))
+        {
+            throw new XdtoWriteException(ToolResult.error("The XDTO package could not be resolved " //$NON-NLS-1$
+                + "inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        XDTOPackage txPkg = (XDTOPackage)inTx;
+        XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(txPkg, tx, fqnGenerator);
+        if (resolved.error != null)
+        {
+            throw new XdtoWriteException(resolved.error);
+        }
+        Package content = resolved.content;
+        contentFqnHolder[0] = resolved.contentFqn;
+
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE)
+        {
+            return createObjectTypeInTx(content, ref, properties);
+        }
+        if (ref.kind == XdtoWriter.Kind.PACKAGE_PROPERTY)
+        {
+            return createPropertyInTx(content.getProperties(), content, ref, properties);
+        }
+        // OBJECT_TYPE_PROPERTY: the owning ObjectType must already exist (the parent must exist, like
+        // every other create_metadata member kind).
+        ObjectType owner = XdtoWriter.findObjectType(content, ref.objectTypeName);
+        if (owner == null)
+        {
+            throw new XdtoWriteException(ToolResult.error("ObjectType not found: '" + ref.objectTypeName //$NON-NLS-1$
+                + "' in package " + ref.packageFqn + ". Create it first with " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'" + ref.packageFqn + ".ObjectType." + ref.objectTypeName + "'.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        return createPropertyInTx(owner.getProperties(), content, ref, properties);
+    }
+
+    private static XdtoCreateResult createObjectTypeInTx(Package content, XdtoWriter.MemberRef ref,
+        List<JsonObject> properties)
+    {
+        // EXACT duplicate check (no yo fallback): with normalizeYo=false a caller may legitimately
+        // create a distinct name differing only by yo from an existing one.
+        if (XdtoWriter.findObjectTypeExact(content, ref.objectTypeName) != null)
+        {
+            throw new XdtoWriteException(ToolResult.error("ObjectType already exists: '" + ref.objectTypeName //$NON-NLS-1$
+                + "' in package " + ref.packageFqn).toJson()); //$NON-NLS-1$
+        }
+        // ObjectTypes and local ValueTypes share the package's TYPE namespace (the QName resolver
+        // treats both as local type targets), so an ObjectType may not reuse a ValueType's name -
+        // the serialized Package.xdto would carry two same-named local types.
+        if (XdtoWriter.findValueTypeExact(content, ref.objectTypeName) != null)
+        {
+            throw new XdtoWriteException(ToolResult.error("A local value type named '" + ref.objectTypeName //$NON-NLS-1$
+                + "' already exists in package " + ref.packageFqn //$NON-NLS-1$
+                + "; an ObjectType may not reuse a local type name.").toJson()); //$NON-NLS-1$
+        }
+        ObjectType type = XdtoWriter.createObjectType(content, ref.objectTypeName);
+        // The optional flags (open/abstract/mixed/ordered/sequenced) come from the SAME 'properties'
+        // array a Property's attributes do - applied here too, else a caller's open=true / etc. is
+        // silently dropped (codex review finding #7).
+        XdtoWriter.Result applied = XdtoWriter.applyObjectTypeProperties(type, properties);
+        if (applied.hasError())
+        {
+            throw new XdtoWriteException(applied.error);
+        }
+        return new XdtoCreateResult(type.eClass().getName(), ref.objectTypeName, applied.applied);
+    }
+
+    private static XdtoCreateResult createPropertyInTx(EList<Property> owner, Package content,
+        XdtoWriter.MemberRef ref, List<JsonObject> properties)
+    {
+        String name = ref.propertyName;
+        // EXACT duplicate check (no yo fallback) - see createObjectTypeInTx.
+        if (XdtoWriter.findPropertyExact(owner, name) != null)
+        {
+            throw new XdtoWriteException(ToolResult.error("Property already exists: '" + name + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + normFqnOfProperty(ref)).toJson());
+        }
+        Property property = XdtoWriter.createProperty(owner, name);
+        XdtoWriter.Result applied = XdtoWriter.applyPropertyProperties(property, content, properties, true);
+        if (applied.hasError())
+        {
+            throw new XdtoWriteException(applied.error);
+        }
+        return new XdtoCreateResult(property.eClass().getName(), name, applied.applied);
+    }
+
+    /** Describes where a Property member lives, for an actionable duplicate error. */
+    private static String normFqnOfProperty(XdtoWriter.MemberRef ref)
+    {
+        return ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY
+            ? ref.packageFqn + ".ObjectType." + ref.objectTypeName //$NON-NLS-1$
+            : ref.packageFqn;
+    }
+
+    /**
+     * Builds the success JSON for a created/modified XDTO member: {@code fqn} / {@code kind} /
+     * {@code name} / {@code persisted} / {@code applied} (the optional attributes actually set) plus a
+     * confirmation message. Shared by {@link #createXdtoMember} (this tool) and reusable verbatim by the
+     * modify path's own success builder shape.
+     */
+    private static String xdtoMemberSuccess(String normFqn, XdtoCreateResult result, boolean persisted,
+        String action, String verb)
+    {
+        return ToolResult.success()
+            .put(McpKeys.ACTION, action)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("kind", result.eClassName) //$NON-NLS-1$
+            .put("name", result.name) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted)
+            .put(KEY_APPLIED, result.applied)
+            .put(McpKeys.MESSAGE, verb + normFqn + (result.applied.isEmpty() ? "" //$NON-NLS-1$
+                : " (" + String.join(", ", result.applied) + ")")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .toJson();
+    }
+
     // ---- top-level creation (mirrors the former create_metadata_object) -------------------------
 
     /**
@@ -471,7 +739,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String configFeatureName = req.target.configFeatureName;
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
+        // Only needed for an XDTOPackage create (below); resolved up front like the rest of the BM
+        // services this method uses, not inside the transaction.
+        final ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
 
+        final String[] xdtoContentFqnHolder = { null };
         final EClass createdKind;
         try
         {
@@ -490,11 +762,31 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 }
                 newObject.setName(name);
                 applyScalarProps(newObject, req.props, req.synonymLanguage);
-                // Type-specific defaults applied on top of the factory's default content.
+                // Type-specific defaults applied on top of the factory's default content (sets the
+                // namespace for an XDTOPackage - always non-empty, defaulted when omitted).
                 req.typeSpecific.applyTo(newObject);
                 tx.attachTopObject((IBmObject)newObject, req.normFqn);
                 addToCollection(cfg, configFeatureName, newObject);
                 factory.fillDefaultReferences(newObject);
+                // An XDTOPackage's content (Package.xdto) is a lazy @ExternalProperty; a live-stand
+                // finding showed the platform does NOT durably serialize it when it is first
+                // materialized in a LATER, separate transaction (the first member-edit call) - each
+                // subsequent edit re-materialized an empty content, discarding the previous one.
+                // Materializing it HERE instead, in the SAME transaction that creates and attaches the
+                // owning XDTOPackage, makes Package.xdto exist from creation, so every later member
+                // edit hits the proven-working EXISTING-content path. Best-effort: a resolution
+                // failure here is NOT fatal to the top-object create itself (the content still
+                // materializes lazily on the first member edit, same as before this change) - it is
+                // just not force-exported in THIS commit.
+                if (newObject instanceof XDTOPackage && fqnGenerator != null)
+                {
+                    XdtoWriter.ContentResolution resolved =
+                        XdtoWriter.resolvePackageContent((XDTOPackage)newObject, tx, fqnGenerator);
+                    if (resolved.error == null)
+                    {
+                        xdtoContentFqnHolder[0] = resolved.contentFqn;
+                    }
+                }
                 return newObject.eClass();
             });
         }
@@ -504,8 +796,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        boolean persisted =
-            BmTransactions.forceExportToDisk(req.project, dirtyFqns(req.normFqn, configFqn));
+        List<String> exportFqns = dirtyFqns(req.normFqn, configFqn);
+        String xdtoContentFqn = xdtoContentFqnHolder[0];
+        if (xdtoContentFqn != null && !exportFqns.contains(xdtoContentFqn))
+        {
+            exportFqns.add(xdtoContentFqn);
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(req.project, exportFqns);
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
             req.synonymLanguage, req.typeSpecific, req.normReport));
     }

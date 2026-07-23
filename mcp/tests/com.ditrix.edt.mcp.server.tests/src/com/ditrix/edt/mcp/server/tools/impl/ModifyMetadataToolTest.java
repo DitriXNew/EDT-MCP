@@ -32,11 +32,14 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorForm;
+import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
@@ -1126,5 +1129,193 @@ public class ModifyMetadataToolTest
         assertNull("a well-formed 'dcs' arg carries no error", valid.error); //$NON-NLS-1$
         assertNotNull("a well-formed 'dcs' object must parse", valid.spec); //$NON-NLS-1$
         assertTrue("the parsed object must carry its members", valid.spec.has("dataSets")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ===== method-reference guard dispatch (a job/subscription must be bound to an EXISTING, Exported,
+    // Server method) =================================================================================
+    //
+    // validateMethodReference is scoped to exactly two type+property combos (ScheduledJob.methodName /
+    // EventSubscription.handler); the actual parse/resolve/decide logic lives in MethodReferenceValidator
+    // (covered by MethodReferenceValidatorTest) - these tests only prove the DISPATCH: which target/property
+    // combo triggers the guard, which is a no-op, and that an empty value (clearing) is never validated.
+
+    @Test
+    public void testMethodReferenceGuardTriggersOnScheduledJobMethodName()
+    {
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        String err = ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a methodName value with no dot must be rejected", err); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the bad value", err.contains("NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardTriggersOnEventSubscriptionHandler()
+    {
+        EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
+        String err = ModifyMetadataTool.validateMethodReference(null, null, sub, "handler", "NoDotHere"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a handler value with no dot must be rejected", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the bad value", err.contains("NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardIsNoOpForOtherTargetTypes()
+    {
+        // Even a garbage (no-dot) value on a 'methodName'-NAMED property must be IGNORED on a non
+        // -ScheduledJob target: the guard is scoped by TYPE first.
+        DataProcessor dp = MdClassFactory.eINSTANCE.createDataProcessor();
+        assertNull("the guard must not fire on a non-ScheduledJob/EventSubscription target", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, dp, "methodName", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardIsNoOpForOtherPropertyNames()
+    {
+        // A ScheduledJob's 'comment' (or any property other than methodName) is not the guarded one.
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertNull("the guard must only fire on 'methodName', not any other property", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, job, "comment", "NoDotHere")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodReferenceGuardSkipsEmptyOrNullValue()
+    {
+        // An empty/null value is NEVER validated by this guard - it falls through to the pre-existing
+        // generic-STRING policy (which itself rejects an empty value rather than "clearing" the
+        // property; modify_metadata never clears a property on an empty value).
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertNull("an empty methodName value must not be validated by this guard", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", "")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a null methodName value must not be validated by this guard", //$NON-NLS-1$
+            ModifyMetadataTool.validateMethodReference(null, null, job, "methodName", null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMethodReferenceGuardReportsMissingModule()
+    {
+        // A well-formed reference ("Module.Method") whose module does not exist in the (empty)
+        // configuration must be rejected naming the module - end-to-end through
+        // MethodReferenceValidator.validate, proving the dispatch threads project/config correctly.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        String err =
+            ModifyMetadataTool.validateMethodReference(null, config, job, "methodName", "NoSuchModule.Foo"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a reference to a non-existent module must be rejected", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing module", err.contains("NoSuchModule")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCanonicalMethodReferenceNormalizesGuardedCombos()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        CommonModule module = MdClassFactory.eINSTANCE.createCommonModule();
+        module.setName("Calc"); //$NON-NLS-1$
+        config.getCommonModules().add(module);
+        ScheduledJob job = MdClassFactory.eINSTANCE.createScheduledJob();
+        assertEquals("a validated methodName must serialize WITHOUT the type prefix", //$NON-NLS-1$
+            "Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, job, "methodName", "CommonModule.Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EventSubscription sub = MdClassFactory.eINSTANCE.createEventSubscription();
+        assertEquals("a validated handler must serialize WITH the English CommonModule prefix", //$NON-NLS-1$
+            "CommonModule.Calc.Add", ModifyMetadataTool.canonicalMethodReference(config, sub, "handler", "Calc.Add")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Unguarded combo: value passes through unchanged.
+        assertEquals("x.y", ModifyMetadataTool.canonicalMethodReference(config, module, "methodName", "x.y")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    // ===== XDTO package member payload dispatch guards (issue #183 stream 1) =========================
+    //
+    // An XDTO ObjectType/Property member is edited through the SAME 'properties' surface as an ordinary
+    // mdclass member (there is no dedicated 'xdto' payload key, unlike 'dcs'/'template'), so the guard is
+    // narrower: refuse a Role / membership content payload (neither applies to an XDTO member), then
+    // require a non-empty 'properties'. The pure guard (xdtoMemberPayloadError) and the "member not
+    // found" message builders are covered here; the live BM materialize + write + force-export is
+    // covered by the E2E suite.
+
+    @Test
+    public void testXdtoMemberPayloadRefusesRoleAndContentPayloads()
+    {
+        String roleMix = ModifyMetadataTool.xdtoMemberPayloadError("XDTOPackage.MyPackage.ObjectType.MyType", //$NON-NLS-1$
+            true, false, Collections.singletonList(prop("open", "true"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("an XDTO member FQN carrying a Role payload must be refused", roleMix); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", roleMix.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the offending FQN", //$NON-NLS-1$
+            roleMix.contains("XDTOPackage.MyPackage.ObjectType.MyType")); //$NON-NLS-1$
+        assertTrue("the refusal must point at 'properties'", roleMix.contains("properties")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String contentMix = ModifyMetadataTool.xdtoMemberPayloadError(
+            "XDTOPackage.MyPackage.Property.MyProp", false, true, //$NON-NLS-1$
+            Collections.singletonList(prop("type", "string"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("an XDTO member FQN carrying a membership content payload must be refused", //$NON-NLS-1$
+            contentMix);
+    }
+
+    @Test
+    public void testXdtoMemberPayloadRequiresNonEmptyProperties()
+    {
+        String empty = ModifyMetadataTool.xdtoMemberPayloadError("XDTOPackage.MyPackage.ObjectType.MyType", //$NON-NLS-1$
+            false, false, Collections.<JsonObject> emptyList());
+        assertNotNull("an XDTO member modify with no 'properties' must be refused", empty); //$NON-NLS-1$
+        assertTrue("the refusal must be a ToolResult error json", empty.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must mention the ObjectType flag vocabulary", empty.contains("open")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testXdtoMemberPayloadValidIsNotRefused()
+    {
+        String ok = ModifyMetadataTool.xdtoMemberPayloadError("XDTOPackage.MyPackage.ObjectType.MyType", //$NON-NLS-1$
+            false, false, Collections.singletonList(prop("open", "true"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a lone 'properties' payload on an XDTO member FQN is not refused", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testXdtoObjectTypeNotFoundErrorNamesTheType()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref =
+            com.ditrix.edt.mcp.server.utils.XdtoWriter.parseMemberRef("XDTOPackage.MyPackage.ObjectType.Missing"); //$NON-NLS-1$
+        assertNotNull(ref);
+        String err = ModifyMetadataTool.xdtoObjectTypeNotFoundError(ref);
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the missing ObjectType", err.contains("Missing")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the refusal must name the owning package", err.contains("XDTOPackage.MyPackage")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testXdtoPropertyNotFoundErrorDistinguishesPackageGlobalAndNested()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef packageGlobal =
+            com.ditrix.edt.mcp.server.utils.XdtoWriter.parseMemberRef("XDTOPackage.MyPackage.Property.Missing"); //$NON-NLS-1$
+        String globalErr = ModifyMetadataTool.xdtoPropertyNotFoundError(packageGlobal);
+        assertTrue("a package-global property error must name the package", //$NON-NLS-1$
+            globalErr.contains("XDTOPackage.MyPackage"));
+        assertFalse("a package-global property error must not mention an ObjectType owner", //$NON-NLS-1$
+            globalErr.contains("ObjectType.")); //$NON-NLS-1$
+
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef nested = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.MyType.Property.Missing"); //$NON-NLS-1$
+        String nestedErr = ModifyMetadataTool.xdtoPropertyNotFoundError(nested);
+        assertTrue("a nested property error must name its owning ObjectType", //$NON-NLS-1$
+            nestedErr.contains("ObjectType.MyType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testModifyMemberLookupToleratesYoSpelledObjectTypeName()
+    {
+        // issue #183 P2 #4: modifyXdtoMemberInTx resolves its target ObjectType/Property via
+        // XdtoWriter.findObjectType / findProperty - the SAME shared lookup create_metadata's owner
+        // lookup and delete_metadata's locateXdtoMember use. It now falls back to the yo-normalized
+        // stored name on an exact miss, so a modify_metadata FQN that still spells an ObjectType's name
+        // with the original "yo" (create_metadata normalizes 'yo'->'ye' in a member's own NAME by
+        // default) resolves it instead of reporting "not found" for a member that in fact exists.
+        com._1c.g5.v8.dt.xdto.model.Package pkg =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createPackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        type.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(type);
+
+        // The modify_metadata FQN's target segment, still spelled with the original "yo".
+        String yoSpelledName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        assertEquals("modifyXdtoMemberInTx's own target resolution must tolerate a yo-spelled FQN segment", //$NON-NLS-1$
+            type, com.ditrix.edt.mcp.server.utils.XdtoWriter.findObjectType(pkg, yoSpelledName));
     }
 }

@@ -16,6 +16,7 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -23,14 +24,22 @@ import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
+import com._1c.g5.v8.dt.xdto.model.ObjectType;
+import com._1c.g5.v8.dt.xdto.model.Package;
+import com._1c.g5.v8.dt.xdto.model.Property;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -46,6 +55,8 @@ import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
+import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
 /**
  * Deletes a metadata node (a top-level object or a subordinate member) addressed by a 1C full-name
@@ -88,8 +99,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     public String getDescription()
     {
         return "Delete a metadata node (object or member, including a FORM object " //$NON-NLS-1$
-            + "'Type.Object.Form.Name' or a FORM member - item / attribute / " //$NON-NLS-1$
-            + "command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
+            + "'Type.Object.Form.Name', a FORM member - item / attribute / " //$NON-NLS-1$
+            + "command / handler - or an XDTO package member 'XDTOPackage.<Package>.ObjectType.<Name>' " //$NON-NLS-1$
+            + "/ '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') addressed by a 1C " //$NON-NLS-1$
+            + "full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
             + "references in BSL code, forms and other metadata. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
             + "If the node is still referenced by metadata the refactoring cannot auto-clean, a " //$NON-NLS-1$
@@ -162,12 +175,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         Configuration config = ctx.config;
 
-        IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
-        if (refactoringService == null)
-        {
-            return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
-        }
-
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
 
         // A FQN addressing a FORM member (item / attribute / command / handler) is handled by a
@@ -188,6 +195,26 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if (formObjectRef != null)
         {
             return deleteFormObject(ctx, normFqn, formObjectRef, confirm);
+        }
+
+        // A FQN addressing an XDTO PACKAGE MEMBER (an ObjectType or a Property - issue #183 stream 1)
+        // is handled by a dedicated branch too: it lives on the package's lazily materialized
+        // xdto.model content (a cross-model hop), not the mdclass tree, so the md-refactoring service
+        // (mdclass-only) cannot see it - removed directly instead, mirroring the form-member delete's
+        // two-phase preview/confirm shape.
+        XdtoWriter.MemberRef xdtoRef = XdtoWriter.parseMemberRef(normFqn);
+        if (xdtoRef != null)
+        {
+            return deleteXdtoMember(ctx, normFqn, xdtoRef, confirm);
+        }
+
+        // The md-refactoring service is needed ONLY by the generic mdclass path below - the
+        // form-member / form-object / XDTO-member branches above delete directly through their
+        // own content models, so its unavailability (e.g. during startup) must not block them.
+        IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
+        if (refactoringService == null)
+        {
+            return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
@@ -303,10 +330,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview preview = new ConsentPreview(
             "Delete metadata node", //$NON-NLS-1$
             subtitle, 1, Collections.singletonList(fqn));
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview)
-            == DestructiveConsentGate.ConsentDecision.REJECT)
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
 
         try
@@ -903,6 +931,275 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 holder.eUnset(reference);
             }
         }
+    }
+
+    // ==================== XDTO package members (cross-model hop, issue #183 stream 1) ====================
+
+    /**
+     * Deletes an XDTO PACKAGE MEMBER (an ObjectType or a Property, package-global or nested in an
+     * ObjectType) addressed by {@code ref}. The md-refactoring service is mdclass-only, so the member is
+     * removed directly (EMF list removal - {@code ObjectType.getProperties()} is containment, so
+     * removing an ObjectType cascades its own properties). Two-phase like the rest of the tool:
+     * {@code confirm=false} previews (a rolled-back read, since the package's content is a lazy
+     * {@code @ExternalProperty}), {@code confirm=true} removes it (behind the SAME
+     * {@link DestructiveConsentGate} the generic mdclass delete path uses) and force-exports the owning
+     * package.
+     */
+    private String deleteXdtoMember(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
+        boolean confirm)
+    {
+        MetadataNodeResolver.MetadataNode pkgNode =
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
+        if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
+            || !(pkgNode.object instanceof IBmObject))
+        {
+            return ToolResult.error("XDTOPackage not found: " + ref.packageFqn //$NON-NLS-1$
+                + ". Use get_metadata_objects to find an FQN.").toJson(); //$NON-NLS-1$
+        }
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        // The generator is needed only on the confirm=true (write) path - to derive the content's own
+        // export FQN from the OWNER (never via bmGetFqn() on the content itself; see
+        // XdtoWriter.resolvePackageContent's javadoc for why that throws BmAssertionException even on
+        // content that looks "attached").
+        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (bmModelManager == null || (confirm && fqnGenerator == null))
+        {
+            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+        }
+        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        if (bmModel == null)
+        {
+            return ToolResult.error("BM model not available for project: " + ctx.project.getName()).toJson(); //$NON-NLS-1$
+        }
+        final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        // The RESOLVED package's canonical FQN: with the yo fallback the caller-typed spelling may
+        // differ from the stored name, and force-export must target the stored top object.
+        final String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        return confirm
+            ? performXdtoMemberDelete(ctx, normFqn, ref, bmModel, pkgBmId, fqnGenerator, pkgExportFqn)
+            : buildXdtoMemberDeletePreview(normFqn, ref, bmModel, pkgBmId);
+    }
+
+    /** Preview inside a rolled-back (read-with-materialize) transaction: locates the target, no mutation. */
+    private String buildXdtoMemberDeletePreview(String normFqn, XdtoWriter.MemberRef ref, IBmModel bmModel,
+        long pkgBmId)
+    {
+        String[] found = BmTransactions.executeAndRollback(bmModel, "DeleteXdtoMemberPreview", (tx, pm) -> //$NON-NLS-1$
+        {
+            Object inTx = tx.getObjectById(pkgBmId);
+            Package content = inTx instanceof XDTOPackage ? ((XDTOPackage)inTx).getPackage() : null;
+            return locateXdtoMember(content, ref);
+        });
+        if (found == null)
+        {
+            return xdtoMemberNotFoundError(ref);
+        }
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        items.add(formItem(ref.memberName(), found[0]));
+
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_PREVIEW)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put(KEY_REFACTORING_TITLE, "Delete XDTO member " + ref.memberName()) //$NON-NLS-1$
+            .put(KEY_ITEMS, items)
+            .put(KEY_BLOCKING, false);
+        return putBlockingReferences(result, Collections.emptyList())
+            .put(McpKeys.MESSAGE, "Preview: deleting '" + ref.memberName() + "' (" + found[0] + ") from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ref.packageFqn
+                + (ref.kind == XdtoWriter.Kind.OBJECT_TYPE ? " would remove it and all its own properties." //$NON-NLS-1$
+                    : ".") //$NON-NLS-1$
+                + " Cross-references to it (a Property whose type/ref points at this ObjectType) are " //$NON-NLS-1$
+                + "NOT rewritten - re-check with get_metadata_details afterwards. Call confirm=true to " //$NON-NLS-1$
+                + "apply.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /** Delete behind the destructive-consent gate, then a write transaction; force-exports the package. */
+    private String performXdtoMemberDelete(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
+        IBmModel bmModel, long pkgBmId, ITopObjectFqnGenerator fqnGenerator,
+        String pkgExportFqn)
+    {
+        ConsentPreview preview = new ConsentPreview("Delete metadata node", //$NON-NLS-1$
+            "This deletes '" + normFqn + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (ref.kind == XdtoWriter.Kind.OBJECT_TYPE ? " and all its own properties." : "."), //$NON-NLS-1$ //$NON-NLS-2$
+            1, Collections.singletonList(normFqn));
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+        }
+
+        XdtoDeleteResult result;
+        try
+        {
+            result = BmTransactions.<XdtoDeleteResult> write(bmModel, "DeleteXdtoMember", (tx, pm) -> //$NON-NLS-1$
+                deleteXdtoMemberInTx(tx, pkgBmId, ref, fqnGenerator));
+        }
+        catch (Exception e)
+        {
+            String ready = XdtoWriteException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error deleting XDTO member", e); //$NON-NLS-1$
+            return ToolResult.error("Delete failed: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        // DUAL force-export, mirroring create_metadata / modify_metadata exactly: the owning
+        // XDTOPackage's FQN (drains the .mdo) AND the content's OWN resource FQN (drains the sibling
+        // .xdto) - exporting the package FQN alone would leave the deleted member on disk (a
+        // #239-class silent false "persisted").
+        List<String> exportFqns = new ArrayList<>();
+        exportFqns.add(pkgExportFqn);
+        if (!result.contentFqn.equals(pkgExportFqn))
+        {
+            exportFqns.add(result.contentFqn);
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+        return ToolResult.success()
+            .put(McpKeys.ACTION, VAL_EXECUTED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("forced", false) //$NON-NLS-1$
+            .put(McpKeys.MESSAGE, "Deleted XDTO member '" + ref.memberName() + "' (" + result.kind //$NON-NLS-1$ //$NON-NLS-2$
+                + ") from " + ref.packageFqn //$NON-NLS-1$
+                + (persisted ? " and persisted to disk." //$NON-NLS-1$
+                    : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
+                        + "it).")) //$NON-NLS-1$
+            .toJson();
+    }
+
+    /** The write-transaction result for {@link #performXdtoMemberDelete}: the removed kind + the content's own export FQN. */
+    private static final class XdtoDeleteResult
+    {
+        final String kind;
+        final String contentFqn;
+
+        XdtoDeleteResult(String kind, String contentFqn)
+        {
+            this.kind = kind;
+            this.contentFqn = contentFqn;
+        }
+    }
+
+    /**
+     * The write-transaction body for {@link #performXdtoMemberDelete}: re-fetches the XDTOPackage,
+     * reads its (possibly {@code null} / never-materialized) content directly - no ATTACH needed for a
+     * delete of an EXISTING member, since a package that already has a member was necessarily
+     * materialized + attached by an earlier create/modify - derives the content's OWN export FQN (for
+     * the dual force-export) from the OWNER via the generator, locates the target and removes it.
+     * Deriving the content FQN from the owner (never via {@code bmGetFqn()} on the content itself) is
+     * REQUIRED, not a style choice: a live-stand regression proved {@code bmGetFqn()} throws
+     * {@code BmAssertionException} on this package's content even when it looks fully attached
+     * ({@code bmIsTop() == true}) - see {@link XdtoWriter#resolvePackageContent}'s javadoc for the full
+     * trail. Throws {@link XdtoWriteException} (a ready JSON error) when the package or the target
+     * member cannot be resolved, rolling the whole write back with no partial mutation.
+     */
+    private static XdtoDeleteResult deleteXdtoMemberInTx(IBmTransaction tx, long pkgBmId,
+        XdtoWriter.MemberRef ref, ITopObjectFqnGenerator fqnGenerator)
+    {
+        Object inTx = tx.getObjectById(pkgBmId);
+        if (!(inTx instanceof XDTOPackage))
+        {
+            throw new XdtoWriteException(ToolResult.error("The XDTO package could not be resolved " //$NON-NLS-1$
+                + "inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        XDTOPackage txPkg = (XDTOPackage)inTx;
+        Package content = txPkg.getPackage();
+        if (content == null)
+        {
+            throw new XdtoWriteException(xdtoMemberNotFoundError(ref));
+        }
+        // Derived from the OWNER, never from the content (see the method javadoc above) - the ONLY call
+        // proven safe regardless of which transaction attached the content.
+        String contentFqn =
+            fqnGenerator.generateExternalPropertyFqn(txPkg, MdClassPackage.Literals.XDTO_PACKAGE__PACKAGE);
+        if (contentFqn == null || contentFqn.isEmpty())
+        {
+            throw new XdtoWriteException(ToolResult.error("Cannot resolve the on-disk resource for the " //$NON-NLS-1$
+                + "XDTO package content; report it with the package FQN '" + ref.packageFqn + "'.") //$NON-NLS-1$ //$NON-NLS-2$
+                    .toJson());
+        }
+
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE)
+        {
+            ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+            if (type == null)
+            {
+                throw new XdtoWriteException(xdtoMemberNotFoundError(ref));
+            }
+            String kind = type.eClass().getName();
+            XdtoWriter.removeObjectType(content, type);
+            return new XdtoDeleteResult(kind, contentFqn);
+        }
+        EList<Property> owner = content.getProperties();
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY)
+        {
+            ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+            if (type == null)
+            {
+                throw new XdtoWriteException(xdtoMemberNotFoundError(ref));
+            }
+            owner = type.getProperties();
+        }
+        Property property = XdtoWriter.findProperty(owner, ref.propertyName);
+        if (property == null)
+        {
+            throw new XdtoWriteException(xdtoMemberNotFoundError(ref));
+        }
+        String kind = property.eClass().getName();
+        XdtoWriter.removeProperty(owner, property);
+        return new XdtoDeleteResult(kind, contentFqn);
+    }
+
+    /**
+     * Locates the target member (a pure read, used by the preview): {eClassName}, or {@code null}.
+     * Package-visible for tests.
+     */
+    static String[] locateXdtoMember(Package content, XdtoWriter.MemberRef ref)
+    {
+        if (content == null)
+        {
+            return null;
+        }
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE)
+        {
+            ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+            return type == null ? null : new String[] { type.eClass().getName() };
+        }
+        EList<Property> owner = content.getProperties();
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY)
+        {
+            ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+            if (type == null)
+            {
+                return null;
+            }
+            owner = type.getProperties();
+        }
+        Property property = XdtoWriter.findProperty(owner, ref.propertyName);
+        return property == null ? null : new String[] { property.eClass().getName() };
+    }
+
+    /**
+     * The actionable "member not found" error, naming the ObjectType/Property and its owner.
+     * Package-visible for tests.
+     */
+    static String xdtoMemberNotFoundError(XdtoWriter.MemberRef ref)
+    {
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE)
+        {
+            return ToolResult.error("ObjectType not found: '" + ref.objectTypeName + "' in package " //$NON-NLS-1$ //$NON-NLS-2$
+                + ref.packageFqn + ". Use get_metadata_details on the package FQN to list its object " //$NON-NLS-1$
+                + "types.").toJson(); //$NON-NLS-1$
+        }
+        String owner = ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY
+            ? ref.packageFqn + ".ObjectType." + ref.objectTypeName //$NON-NLS-1$
+            : ref.packageFqn;
+        return ToolResult.error("Property not found: '" + ref.propertyName + "' on " + owner //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Use get_metadata_details on the package FQN to list its properties.").toJson(); //$NON-NLS-1$
     }
 
     /**

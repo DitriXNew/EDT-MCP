@@ -45,6 +45,15 @@ public class DeleteInfobaseToolTest
     }
 
     @Test
+    public void testConnectsToInfobaseIsTrue()
+    {
+        // #270: stopping a standalone server / dissociating an infobase reaches the
+        // application/infobase connection layer — it must arm the auth-dialog
+        // suppressor's activity window.
+        assertTrue(new DeleteInfobaseTool().connectsToInfobase());
+    }
+
+    @Test
     public void testDescriptionNotEmptyAndMentionsConfirmPreview()
     {
         String desc = new DeleteInfobaseTool().getDescription();

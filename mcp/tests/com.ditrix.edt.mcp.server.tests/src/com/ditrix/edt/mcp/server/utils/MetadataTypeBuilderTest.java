@@ -6,21 +6,26 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import com._1c.g5.v8.dt.mcore.DateFractions;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -81,6 +86,146 @@ public class MetadataTypeBuilderTest
         assertNull(MetadataTypeBuilder.normalizePrimitive("CatalogRef")); //$NON-NLS-1$
         assertNull(MetadataTypeBuilder.normalizePrimitive("nonsense")); //$NON-NLS-1$
         assertNull(MetadataTypeBuilder.normalizePrimitive(null));
+        // ValueStorage/UUID are NOT legacy primitives - they go through platformSimpleTypeCandidates,
+        // never normalizePrimitive (issue #279); the two mechanisms must not overlap.
+        assertNull(MetadataTypeBuilder.normalizePrimitive("ValueStorage")); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.normalizePrimitive("UUID")); //$NON-NLS-1$
+    }
+
+    // ---- ValueStorage / UUID platform simple types (issue #279) -----------------------------------
+
+    @Test
+    public void testPlatformSimpleTypeCandidates()
+    {
+        assertArrayEquals(new String[] { "ValueStorage" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("ValueStorage")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "ValueStorage" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("valuestorage")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "ValueStorage" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("ХранилищеЗначения")); //$NON-NLS-1$
+
+        assertArrayEquals(new String[] { "UUID", "UniqueIdentifier" }, //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("uuid")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "UUID", "UniqueIdentifier" }, //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("UNIQUEIDENTIFIER")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "UUID", "UniqueIdentifier" }, //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("уникальныйидентификатор")); //$NON-NLS-1$
+
+        assertEquals(0, MetadataTypeBuilder.platformSimpleTypeCandidates("String").length); //$NON-NLS-1$
+        assertEquals(0, MetadataTypeBuilder.platformSimpleTypeCandidates("nonsense").length); //$NON-NLS-1$
+        assertEquals(0, MetadataTypeBuilder.platformSimpleTypeCandidates(null).length);
+    }
+
+    @Test
+    public void testAddTypeValueStorageResolvesSingleCandidate()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Type valueStorageType = McoreFactory.eINSTANCE.createType();
+        Mockito.doReturn(valueStorageType).when(provider).createProxy("ValueStorage"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"valuestorage\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "valuestorage", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false);
+
+        assertNull(err);
+        assertEquals(1, td.getTypes().size());
+        assertSame(valueStorageType, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testAddTypeUuidCandidateLoopFirstWins()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Type uuidType = McoreFactory.eINSTANCE.createType();
+        Mockito.doReturn(uuidType).when(provider).createProxy("UUID"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"UUID\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "UUID", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false);
+
+        assertNull(err);
+        assertEquals(1, td.getTypes().size());
+        assertSame(uuidType, td.getTypes().get(0));
+        // the first candidate resolved, so the second name must never even be tried
+        Mockito.verify(provider, Mockito.never()).createProxy("UniqueIdentifier"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddTypeUuidCandidateLoopFallsBackWhenFirstNameThrows()
+    {
+        // createProxy THROWS (not returns null) for a name the provider does not know (issue #262) -
+        // the loop must catch it and try the next candidate name.
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doThrow(new IllegalArgumentException("unknown name 'UUID'")) //$NON-NLS-1$
+            .when(provider).createProxy("UUID"); //$NON-NLS-1$
+        Type uniqueIdentifierType = McoreFactory.eINSTANCE.createType();
+        Mockito.doReturn(uniqueIdentifierType).when(provider).createProxy("UniqueIdentifier"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"uuid\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "uuid", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false);
+
+        assertNull(err);
+        assertEquals(1, td.getTypes().size());
+        assertSame(uniqueIdentifierType, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testAddTypeUuidAllCandidatesFailingIsActionableError()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doThrow(new IllegalArgumentException("unknown name")) //$NON-NLS-1$
+            .when(provider).createProxy("UUID"); //$NON-NLS-1$
+        Mockito.doThrow(new IllegalArgumentException("unknown name")) //$NON-NLS-1$
+            .when(provider).createProxy("UniqueIdentifier"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"uuid\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "uuid", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false);
+
+        assertNotNull(err);
+        assertTrue("the error must name every tried candidate", //$NON-NLS-1$
+            err.contains("UUID") && err.contains("UniqueIdentifier")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testAddTypeValueStorageIgnoresStrayQualifierFields()
+    {
+        // ValueStorage/UUID take NO qualifiers - a stray 'length' alongside the kind must not silently
+        // attach a StringQualifiers (applyQualifiers keys on the primitive name and is never called for
+        // these kinds at all).
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doReturn(McoreFactory.eINSTANCE.createType()).when(provider).createProxy("ValueStorage"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"ValueStorage\",\"length\":50}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "ValueStorage", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false);
+
+        assertNull(err);
+        assertNull("a stray 'length' must not attach a StringQualifiers to a no-qualifier kind", //$NON-NLS-1$
+            td.getStringQualifiers());
+    }
+
+    @Test
+    public void testUnknownKindErrorListsValueStorageAndUuid()
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"nonsense\"}").getAsJsonObject(); //$NON-NLS-1$
+        // the unknown-kind branch never touches `provider` (checked only after both normalizePrimitive
+        // returns null and platformSimpleTypeCandidates returns an empty array), so null is safe here.
+        String err = MetadataTypeBuilder.addType(td, item, "nonsense", null, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false);
+
+        assertNotNull(err);
+        assertTrue(err.contains("nonsense")); //$NON-NLS-1$
+        assertTrue(err.contains("ValueStorage")); //$NON-NLS-1$
+        assertTrue(err.contains("UUID")); //$NON-NLS-1$
     }
 
     @Test

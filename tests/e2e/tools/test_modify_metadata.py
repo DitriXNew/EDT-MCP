@@ -18,6 +18,9 @@ reset: kind="write-metadata" -> reset_model() after each test.
 Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc, ...
 """
 
+import os
+import uuid
+
 from harness import (
     call,
     assert_ok,
@@ -27,12 +30,15 @@ from harness import (
     assert_not_contains,
     assert_no_diff,
     assert_tree_unchanged,
+    assert_diff_contains,
     poll_diff_contains,
     tree_snapshot,
     wait_for_project_ready,
     diff,
+    read_disk,
     e2e_test,
     PROJECT,
+    PROJECT_DIR,
     TESTS_PROJECT,
 )
 
@@ -274,6 +280,40 @@ def test_set_typed_ref_shorthand():
     _seed_attr_and_set_type("E2ETypeRefShAttr", {"types": [{"kind": "CatalogRef", "ref": "Catalog"}]})
     poll_diff_contains("CatalogRef.Catalog",
                        ctx="the CatalogRef shorthand must resolve to the catalog ref on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_valuestorage_type():
+    # ValueStorage - a platform simple type with no qualifiers.
+    _seed_attr_and_set_type("E2ETypeVSAttr", {"types": [{"kind": "ValueStorage"}]})
+    poll_diff_contains("<types>ValueStorage</types>",
+                       ctx="the ValueStorage type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_uuid_type():
+    # UUID - a platform simple type with no qualifiers. The candidate list (UUID / UniqueIdentifier)
+    # tolerates a platform-version rename of the same type; UUID is the expected on-disk .mdo name.
+    _seed_attr_and_set_type("E2ETypeUuidAttr", {"types": [{"kind": "UUID"}]})
+    poll_diff_contains("<types>UUID</types>",
+                       ctx="the UUID type must land in the owner .mdo")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_type_unknown_kind_lists_valuestorage_and_uuid():
+    # An unrecognized kind is a clean error that now also names ValueStorage/UUID among the
+    # supported primitive kinds (issue #279).
+    attr = "E2ETypeUnknownKindAttr"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "NotAKind_zzz"}]}}],
+    })
+    e = assert_error(r, "unknown type kind")
+    assert_error_quality(e, names=["NotAKind_zzz"], suggests=["ValueStorage", "UUID"],
+                         ctx="the unknown-kind error must list ValueStorage/UUID among the supported kinds")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -960,6 +1000,85 @@ def test_rebind_button_command_mixed_with_other_property_rejected():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# XDTO PACKAGE MEMBER editing (issue #183 stream 1) — an ObjectType-nested Property
+# is addressed by 'XDTOPackage.<P>.ObjectType.<T>.Property.<N>' and takes the
+# XDTO-specific vocabulary (type/lowerBound/upperBound/nillable/fixed/default) via
+# XdtoWriter, not the generic mdclass reflection path. On disk the change lands in
+# the package's own Package.xdto (confirmed live: <property name="Amount"
+# type="xs:decimal" lowerBound="0" nillable="true"/>), sibling to the
+# XDTOPackage's own .mdo (which carries only <namespace>).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_xdto_object_type_property():
+    pkg, obj, prop = "E2EXdtoMod", "Doc", "Amount"
+    pkg_fqn = "XDTOPackage." + pkg
+    ns = "http://example.org/e2e/%s" % pkg
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": pkg_fqn, "targetNamespace": ns}), "seed the XDTO package")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": pkg_fqn + ".ObjectType." + obj}),
+              "seed the ObjectType " + obj)
+    wait_for_project_ready()
+    prop_fqn = pkg_fqn + ".ObjectType.%s.Property.%s" % (obj, prop)
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": prop_fqn,
+        "properties": [{"name": "type", "value": "string"}]}),
+        "seed the Property %s (type=string)" % prop)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": prop_fqn,
+        "properties": [
+            {"name": "type", "value": "decimal"},
+            {"name": "lowerBound", "value": 0},
+            {"name": "nillable", "value": True},
+        ],
+    })
+    assert_ok(r, "modify the ObjectType-nested Property's type/lowerBound/nillable")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    applied = r.structured.get("applied") or []
+    for f in ("type", "lowerBound", "nillable"):
+        assert f in applied, "%s must be in applied: %r" % (f, r.structured)
+    assert r.structured.get("persisted") is True, \
+        "the XDTO member change must force-export the package content to disk: %r" % (r.structured,)
+
+    # ON-DISK: Package.xdto now carries the changed type + the new nillable flag, and the stale
+    # xs:string type is gone (replaced, not left dangling alongside the new one). Package.xdto is a
+    # brand-new UNTRACKED file (this test creates the whole package), so a plain `git diff` (tracked
+    # files only) would never see it -- assert_diff_contains / poll_diff_contains cover untracked
+    # files too; the "must NOT contain" check reads the file directly (read_disk) for the same reason.
+    xdto_path = "src/XDTOPackages/%s/Package.xdto" % pkg
+    poll_diff_contains('type="xs:decimal"',
+                       ctx="the changed type must land as xs:decimal in Package.xdto on disk")
+    assert_diff_contains('name="%s"' % prop,
+                         ctx="the property's own name attribute must be present in the .xdto diff")
+    assert_diff_contains('nillable="true"',
+                         ctx="the nillable=true flag must land in Package.xdto on disk")
+    assert_not_contains(read_disk(xdto_path), 'type="xs:string"',
+                        "the old xs:string type must be replaced, not left dangling")
+
+    # MODEL read-back: the package structure render shows the Amount row with the new type/nillable.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [pkg_fqn]})
+    assert_ok(d, "get_metadata_details read-back on the package")
+    row = next((ln for ln in d.text.splitlines() if ln.strip().startswith("| " + prop + " |")), None)
+    assert row is not None, "the %s property row must be listed in the read-back: %r" % (prop, d.text[:800])
+    assert_contains(row, "decimal", "the read-back row must show the new decimal type")
+    assert_contains(row, "true", "the read-back row must show nillable=true")
+
+    # Negative: an unknown type token is neither an XSD builtin nor a same-package ObjectType name.
+    before_bad = tree_snapshot()
+    r2 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": prop_fqn,
+        "properties": [{"name": "type", "value": "NoSuchType_e2e"}],
+    })
+    e = assert_error(r2, "unknown XDTO type token")
+    assert_error_quality(e, names=["NoSuchType_e2e"], suggests=["ObjectType", "XSD"],
+                         ctx="an unrecognized type token names the bad value and explains the two valid forms")
+    assert_tree_unchanged(before_bad, "a rejected type set must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Happy — form GROUP layout props that live under <extInfo> (UsualGroupExtInfo):
 # the grouping `group` enum + the `united` flag are NOT on the group element but
 # on its nested UsualGroupExtInfo. modify_metadata resolves / creates that extInfo
@@ -1236,3 +1355,316 @@ def test_extension_unresolved_ref_gets_adopt_hint():
         e, names=["Cannot resolve the reference target"], suggests=["adopt_metadata_object"],
         ctx="an unresolved ref inside an extension must keep the sentinel AND hint at adopt_metadata_object")
     assert_tree_unchanged(before, "a rejected type set must change nothing on the base project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Method-reference guard — a ScheduledJob.methodName / an EventSubscription.handler must
+# reference an EXISTING, Exported, Server-side CommonModule method (maintainer report on PR
+# #292: an AI bound a job's methodName at a function it had not created yet; EDT accepted it
+# silently and update_database later failed with an opaque "no such function"). Fixture
+# CommonModule.Calc.Add ("Функция Add(A, B) Экспорт" in a <server>true</server> module) is the
+# live-verified happy-path target; each negative test seeds its own fresh module/job/subscription
+# so it never perturbs the shared Calc/OK/Error fixtures other tests depend on.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_accepts_existing_exported_server_method():
+    job = "E2EMrvJobOk"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "Calc.Add"}],
+    })
+    assert_ok(r, "bind methodName to the existing exported server method Calc.Add")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    assert "methodName" in (r.structured.get("applied") or []), \
+        "methodName must be applied: %r" % (r.structured,)
+    poll_diff_contains("Calc.Add", ctx="the methodName must land in the ScheduledJob .mdo on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_missing_module_is_error():
+    job = "E2EMrvJobNoMod"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "E2EMrvNoSuchModule.Foo"}],
+    })
+    e = assert_error(r, "methodName referencing a non-existent CommonModule")
+    assert_error_quality(e, names=["E2EMrvNoSuchModule"],
+                         suggests=["get_metadata_objects"],
+                         ctx="a missing module must be named with a discovery hint")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_missing_method_is_error():
+    job = "E2EMrvJobNoMethod"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "Calc.E2EMrvNoSuchMethod"}],
+    })
+    e = assert_error(r, "methodName referencing a method that does not exist in an existing module")
+    # The error must name the missing method + point at the fix: create it first, THEN bind it
+    # (the exact maintainer-requested order-forcing behaviour).
+    assert_error_quality(e, names=["E2EMrvNoSuchMethod", "Calc"],
+                         suggests=["write_module_source"],
+                         ctx="a missing method must be named with a create-it-first hint")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_not_exported_is_error():
+    module = "E2EMrvNoExpMod"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "CommonModule." + module}),
+              "seed a fresh (default Server-kind) CommonModule")
+    wait_for_project_ready()
+    assert_ok(call("write_module_source", {
+        "projectName": PROJECT, "modulePath": "CommonModules/%s/Module.bsl" % module,
+        "mode": "replace", "overwrite": True,
+        "source": "Procedure Foo()\nEndProcedure\n",
+    }), "seed a NON-exported procedure")
+    wait_for_project_ready()
+
+    job = "E2EMrvJobNoExp"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": module + ".Foo"}],
+    })
+    e = assert_error(r, "methodName referencing a non-exported method")
+    assert_error_quality(e, names=["Foo", module], suggests=["Export"],
+                         ctx="a non-exported method must be rejected naming the Export fix")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_non_server_module_is_error():
+    module = "E2EMrvNotSrvMod"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "CommonModule." + module,
+        "commonModuleKind": "ClientManaged",
+    }), "seed a CLIENT (non-server) CommonModule")
+    wait_for_project_ready()
+    assert_ok(call("write_module_source", {
+        "projectName": PROJECT, "modulePath": "CommonModules/%s/Module.bsl" % module,
+        "mode": "replace", "overwrite": True,
+        "source": "Procedure Foo() Export\nEndProcedure\n",
+    }), "seed an EXPORTED procedure on the non-server module")
+    wait_for_project_ready()
+
+    job = "E2EMrvJobNotSrv"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": module + ".Foo"}],
+    })
+    e = assert_error(r, "methodName referencing an exported method in a non-server module")
+    assert_error_quality(e, names=[module], suggests=["Server"],
+                         ctx="a non-server module must be rejected naming the Server fix")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_no_dot_is_error():
+    job = "E2EMrvJobNoDot"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": "JustAName"}],
+    })
+    e = assert_error(r, "methodName with no dot")
+    assert_error_quality(e, names=["JustAName"], suggests=["Module", "Method"],
+                         ctx="a value with no dot must explain the expected Module.Method shape")
+    assert_tree_unchanged(before, "a rejected methodName must not touch the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_scheduled_job_method_name_empty_value_skips_the_guard():
+    # An EMPTY value is NOT validated by the method-reference guard (it only fires for a
+    # non-empty binding) - modify_metadata's PRE-EXISTING, unrelated generic-STRING policy is
+    # that an empty value never "clears" a property (see requireValueError: "does not clear a
+    # property on an empty value"). So the call still errors, but it must be THAT generic
+    # error, never a method-reference one (no "Export"/"Server"/"not found in CommonModule"),
+    # proving the guard was skipped rather than firing on the empty value.
+    job = "E2EMrvJobEmpty"
+    fqn = "ScheduledJob." + job
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "methodName", "value": ""}],
+    })
+    e = assert_error(r, "an empty methodName value")
+    assert_error_quality(e, suggests=["non-empty"],
+                         ctx="an empty value must hit the generic non-empty-value error")
+    assert "CommonModule" not in e, \
+        "an empty value must NOT be routed through the method-reference guard: %r" % (e,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_handler_accepts_existing_exported_server_method():
+    sub = "E2EMrvSubOk"
+    fqn = "EventSubscription." + sub
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "handler", "value": "CommonModule.Calc.Add"}],
+    })
+    assert_ok(r, "bind handler to the existing exported server method CommonModule.Calc.Add")
+    assert "handler" in (r.structured.get("applied") or []), \
+        "handler must be applied: %r" % (r.structured,)
+    poll_diff_contains("Calc.Add", ctx="the handler must land in the EventSubscription .mdo on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_event_subscription_handler_missing_method_is_error():
+    sub = "E2EMrvSubNoMethod"
+    fqn = "EventSubscription." + sub
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed " + fqn)
+    wait_for_project_ready()
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "handler", "value": "CommonModule.Calc.E2EMrvSubNoSuchMethod"}],
+    })
+    e = assert_error(r, "handler referencing a method that does not exist")
+    assert_error_quality(e, names=["E2EMrvSubNoSuchMethod", "Calc"], suggests=["write_module_source"],
+                         ctx="a missing handler method must be named with a create-it-first hint")
+    assert_tree_unchanged(before, "a rejected handler must not touch the project")
+
+
+# ----------------------------------------------------------------------------
+# XDTO NAMESPACE CASCADE - changing a package namespace must rewrite every OTHER
+# package that references the old namespace (imports + QNames), or the rename
+# silently breaks the REFERENCING package, not the renamed one.
+# ----------------------------------------------------------------------------
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_xdto_namespace_change_cascades_into_referencing_package():
+    """The maintainer case, end-to-end: package P is authored via MCP; package Q -
+    planted straight on the fixture path, because imports are not authorable through
+    MCP - IMPORTS P namespace and types a property into it. Renaming P namespace
+    must (a) report the propagation, (b) rewrite Q import AND the property QName
+    on disk with no trace of the old namespace, and (c) rewrite P own same-package
+    references. kind=write-metadata reverts the fixture afterwards."""
+    old_ns = "http://e2e/casc-old"
+    new_ns = "http://e2e/casc-new"
+    p_fqn = "XDTOPackage.E2ECascP"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": p_fqn, "targetNamespace": old_ns})
+    assert_ok(r, "seed " + p_fqn)
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": p_fqn + ".ObjectType.Src"})
+    assert_ok(r, "seed ObjectType Src")
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": p_fqn + ".ObjectType.User"})
+    assert_ok(r, "seed ObjectType User")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": p_fqn + ".ObjectType.User.Property.Link",
+        "properties": [{"name": "type", "value": "Src"}]})
+    assert_ok(r, "seed the self-referencing property")
+    wait_for_project_ready()
+
+    # Plant the REFERENCING package Q on disk (mdo + content importing P namespace).
+    q_dir = os.path.join(PROJECT_DIR, "src", "XDTOPackages", "E2ECascQ")
+    os.makedirs(q_dir, exist_ok=True)
+    mdo_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<mdclass:XDTOPackage xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="%s">' % uuid.uuid4(),
+        '  <name>E2ECascQ</name>',
+        '  <namespace>http://e2e/casc-q</namespace>',
+        '</mdclass:XDTOPackage>',
+        "",
+    ]
+    with open(os.path.join(q_dir, "E2ECascQ.mdo"), "w", encoding="utf-8") as f:
+        f.write("\n".join(mdo_lines))
+    xdto_lines = [
+        '<package xmlns="http://v8.1c.ru/8.1/xdto" xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:d3p1="%s" targetNamespace="http://e2e/casc-q">' % old_ns,
+        '<import namespace="%s"/>' % old_ns,
+        '<objectType name="UsesP">',
+        '<property name="Link" type="d3p1:Src"/>',
+        '</objectType>',
+        '</package>',
+        "",
+    ]
+    with open(os.path.join(q_dir, "Package.xdto"), "w", encoding="utf-8") as f:
+        f.write("\n".join(xdto_lines))
+    cfg_path = os.path.join(PROJECT_DIR, "src", "Configuration", "Configuration.mdo")
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = f.read()
+    anchor = "<xDTOPackages>XDTOPackage.E2ECascP</xDTOPackages>"
+    if anchor not in cfg:
+        raise AssertionError("setup failed: %s not registered in Configuration.mdo" % p_fqn)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(cfg.replace(anchor,
+            anchor + "\n  <xDTOPackages>XDTOPackage.E2ECascQ</xDTOPackages>", 1))
+    # The planted files land OUTSIDE the Eclipse resource API. A Windows stand happens to pick
+    # them up via auto-refresh, but the Linux CI runner does NOT (no native refresh hooks), so the
+    # import must be DETERMINISTIC: clean_project re-imports the whole project from disk - the same
+    # mechanism the harness itself uses in reset_model(). The MCP-created P was force-exported to
+    # disk by its create, so it survives the re-import unchanged.
+    wait_for_project_ready()
+    r = call("clean_project", {"projectName": PROJECT})
+    assert_ok(r, "clean_project re-imports the planted referencing package from disk")
+    wait_for_project_ready()
+    # Belt-and-braces: POLL until Q's content is actually visible in the MODEL (the cascade walks
+    # the model, not the disk; renaming before the import completes would see no referencer).
+    import time as _time
+    for _ in range(60):
+        d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["XDTOPackage.E2ECascQ"]})
+        if not d.is_error and d.text and "UsesP" in d.text:
+            break
+        _time.sleep(2)
+    else:
+        raise AssertionError("setup failed: the planted E2ECascQ never became visible in the model")
+    wait_for_project_ready()
+
+    # The rename under test.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": p_fqn,
+        "properties": [{"name": "namespace", "value": new_ns}]})
+    assert_ok(r, "change the namespace of " + p_fqn)
+    msg = (r.structured or {}).get("message", "")
+    if "propagated" not in msg or "E2ECascQ" not in msg:
+        raise AssertionError("the result must report the propagation to E2ECascQ: %r" % msg)
+
+    # Ground truth on disk: Q import + property QName carry the NEW namespace only...
+    poll_diff_contains(new_ns, ctx="Q must be rewritten to the new namespace on disk")
+    q_text = read_disk("src/XDTOPackages/E2ECascQ/Package.xdto")
+    assert_contains(q_text, "import namespace=" + chr(34) + new_ns + chr(34),
+        "Q import must point at the NEW namespace")
+    if old_ns in q_text:
+        raise AssertionError("no trace of the OLD namespace may remain in Q: %r" % q_text)
+    # ...and P own content (targetNamespace + the self-reference QName) moved as one.
+    p_text = read_disk("src/XDTOPackages/E2ECascP/Package.xdto")
+    assert_contains(p_text, "targetNamespace=" + chr(34) + new_ns + chr(34),
+        "P own targetNamespace must move")
+    if old_ns in p_text:
+        raise AssertionError("P own self-reference must be rewritten too: %r" % p_text)

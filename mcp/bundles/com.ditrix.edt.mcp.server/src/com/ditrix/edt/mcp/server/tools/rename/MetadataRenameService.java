@@ -1692,10 +1692,13 @@ public class MetadataRenameService
         // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than
         // read from RenameMetadataObjectTool.NAME, so this domain service in tools.rename does not
         // take a reverse dependency on the tool adapter in tools.impl.
-        if (DestructiveConsentGate.getInstance().requireConsent("rename_metadata_object", preview) //$NON-NLS-1$
-            == DestructiveConsentGate.ConsentDecision.REJECT)
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent("rename_metadata_object", preview); //$NON-NLS-1$
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(
+                DestructiveConsentGate.consentDeniedMessage(consentDecision, "rename_metadata_object")) //$NON-NLS-1$
+                .toJson();
         }
 
         // Apply disableIndices by traversing items and their native changes

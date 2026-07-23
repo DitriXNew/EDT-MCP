@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
 
+import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 
@@ -91,40 +92,145 @@ public final class InfobaseAccessSupport
     }
 
     /**
-     * Stores the infobase connection credentials for an application's infobase.
+     * Stores the infobase connection credentials for an application.
      *
-     * @param application the target application (must be an {@link IInfobaseApplication})
+     * <p>Two shapes are supported:
+     * <ul>
+     *   <li>an {@link IInfobaseApplication} (a file/server infobase) — the direct fast path, via
+     *   its own {@link IInfobaseApplication#getInfobase()} (unchanged since issue #194);</li>
+     *   <li><b>issue #275:</b> any OTHER application that ADAPTS to an {@link InfobaseReference} —
+     *   most notably a standalone-server ({@code wst-server}) application wrapping a registered
+     *   infobase ({@code create_infobase}'s {@code applicationKind='standaloneServer'} +
+     *   {@code mode='register'}). EDT's own launch path for such an application
+     *   ({@code ServerApplicationBehaviourDelegate}) resolves the infobase to authenticate against
+     *   via {@code org.eclipse.core.runtime.Adapters.adapt(<the application/module>,
+     *   InfobaseReference.class)} — the platform's internal (unexported)
+     *   {@code StandaloneServerAdapterFactory} adapts a {@code StandaloneServerInfobase} module (or
+     *   the application itself) into a WEB {@link InfobaseReference} keyed by the config's
+     *   {@code Infobase.getId()}. Storing credentials against THAT SAME adapted reference is
+     *   exactly what the launch resolves later, so this method tries the adapter on the
+     *   application first, then — if that misses — on its module (see
+     *   {@link #moduleOfApplication(IApplication)}, a small local mirror of
+     *   {@code StandaloneServerSupport.moduleOfApplication}; that class is package-private in
+     *   {@code tools.impl}, so it is mirrored here rather than widened just for this one call).</li>
+     * </ul>
+     *
+     * @param application the target application
      * @param user the infobase user name (empty allowed — demo bases use an empty password user)
      * @param password the infobase user password (empty allowed)
      * @param access the access kind (INFOBASE = 1C user auth, OS = OS auth)
      * @return {@code null} on success, otherwise an actionable error message describing why the
-     *         credentials could not be stored (not an infobase application, infobase unresolved,
-     *         access manager unavailable, or the {@code updateSettings} call failed)
+     *         credentials could not be stored (no infobase reference could be resolved for this
+     *         application, access manager unavailable, or the {@code updateSettings} call failed)
      */
     public static String storeCredentials(IApplication application, String user, String password,
             InfobaseAccess access)
     {
-        if (!(application instanceof IInfobaseApplication))
+        InfobaseReference ref = resolveInfobaseReference(application);
+        if (ref != null)
         {
-            return "Application '" + application.getId() //$NON-NLS-1$
-                + "' is not a file/server infobase application — credentials apply only to infobases."; //$NON-NLS-1$
+            return storeCredentials(ref, user, password, access);
         }
-        InfobaseReference ref;
+        return "Application '" + application.getId() //$NON-NLS-1$
+            + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
+            + "servers wrapping a registered infobase (issue #275); this application is neither."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves the {@link InfobaseReference} an application binds to — the target the update/launch
+     * agent authenticates against ({@link #storeCredentials(IApplication, String, String,
+     * InfobaseAccess)}), and (issue #281 phase 2) the value {@code set_branch_infobase} /
+     * {@code create_git_branch} associate with a git branch context. Extracted from
+     * {@code storeCredentials} so there is ONE resolver; mirrors its exact resolution order:
+     * <ol>
+     *   <li>{@link IInfobaseApplication#getInfobase()} — the direct fast path for a file/server
+     *   infobase application (unchanged since issue #194);</li>
+     *   <li>otherwise, {@link #adaptToInfobaseReference(Object)} on the application itself, then — if
+     *   that misses — on its module ({@link #moduleOfApplication(IApplication)}) — the
+     *   standalone-server ({@code wst-server}) path (issue #275); see the field-level javadoc on the
+     *   original {@code storeCredentials} overload for the full rationale of this adapter path.</li>
+     * </ol>
+     * Never throws: a {@code getInfobase()} failure is logged and treated the same as "no reference" —
+     * the caller cannot distinguish a resolution error from a genuine absence, and for every current
+     * caller both mean "nothing to bind/authenticate against".
+     *
+     * @param application the target application (must not be {@code null})
+     * @return the resolved {@link InfobaseReference}, or {@code null} when none resolves
+     */
+    public static InfobaseReference resolveInfobaseReference(IApplication application)
+    {
+        if (application instanceof IInfobaseApplication)
+        {
+            try
+            {
+                return ((IInfobaseApplication)application).getInfobase();
+            }
+            catch (Exception e) // NOSONAR EDT model access — degrade to "no reference", never crash the caller
+            {
+                Activator.logError("resolve infobase reference: getInfobase() failed for " + application.getId(), //$NON-NLS-1$
+                    e);
+                return null;
+            }
+        }
+
+        // Not an IInfobaseApplication (issue #275): try the SAME adapter path EDT's own launch
+        // uses — first the application itself, then (if that misses) its module.
+        InfobaseReference adapted = adaptToInfobaseReference(application);
+        if (adapted == null)
+        {
+            Object module = moduleOfApplication(application);
+            if (module != null)
+            {
+                adapted = adaptToInfobaseReference(module);
+            }
+        }
+        return adapted;
+    }
+
+    /**
+     * Adapts {@code adaptable} (an {@link IApplication} or one of its modules) to an
+     * {@link InfobaseReference} via {@link Adapters#adapt(Object, Class)}, the same mechanism
+     * EDT's {@code ServerApplicationBehaviourDelegate} launch path uses to resolve the infobase to
+     * authenticate against (issue #275). Never throws — a probe failure (no adapter registered, or
+     * any adapter-manager error) degrades to {@code null}, which the caller treats as "no match".
+     *
+     * @param adaptable the object to adapt (application or module); may be {@code null}
+     * @return the adapted {@link InfobaseReference}, or {@code null} when none adapts
+     */
+    private static InfobaseReference adaptToInfobaseReference(Object adaptable)
+    {
         try
         {
-            ref = ((IInfobaseApplication)application).getInfobase();
+            return Adapters.adapt(adaptable, InfobaseReference.class);
         }
-        catch (Exception e) // NOSONAR EDT model access — report verbatim, never crash the tool
+        catch (Exception e) // NOSONAR the adapter-registry probe must never crash the tool
         {
-            Activator.logError("set credentials: getInfobase() failed for " + application.getId(), e); //$NON-NLS-1$
-            return "Could not resolve the infobase for application '" + application.getId() + "': " //$NON-NLS-1$ //$NON-NLS-2$
-                + e.getMessage();
+            return null;
         }
-        if (ref == null)
+    }
+
+    /**
+     * Reflective {@code IServerApplication.getModule()} — a small local mirror of
+     * {@code StandaloneServerSupport.moduleOfApplication} (tools.impl). That class (and the
+     * method) is package-private there; rather than widening its visibility for this one call
+     * (issue #275), the same tiny reflective probe is duplicated here. Returns {@code null} on any
+     * failure — in particular for a plain {@link IInfobaseApplication} (already handled by the fast
+     * path above) or any other application with no {@code getModule()}.
+     *
+     * @param application the target application
+     * @return the module object (typically a {@code StandaloneServerInfobase}), or {@code null}
+     */
+    static Object moduleOfApplication(IApplication application)
+    {
+        try
         {
-            return "Could not resolve the infobase for application '" + application.getId() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+            Method m = application.getClass().getMethod("getModule"); //$NON-NLS-1$
+            return m.invoke(application);
         }
-        return storeCredentials(ref, user, password, access);
+        catch (Exception e) // NOSONAR reflective probe — an application with no module returns null here
+        {
+            return null;
+        }
     }
 
     /**

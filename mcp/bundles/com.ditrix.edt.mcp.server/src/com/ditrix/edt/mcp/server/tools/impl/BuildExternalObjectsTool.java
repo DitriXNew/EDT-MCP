@@ -200,6 +200,14 @@ public class BuildExternalObjectsTool implements IMcpTool
     }
 
     @Override
+    public boolean connectsToInfobase()
+    {
+        // The background dump Job connects to the infobase to read external objects back
+        // (issue #270 — see the class javadoc's Unattended-safety section).
+        return true;
+    }
+
+    @Override
     public String execute(Map<String, String> params)
     {
         // 1. Required arguments (projectName + outputDir; objectName is optional).

@@ -26,6 +26,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
  * Lightweight contract tests for {@link DeleteMetadataTool}: tool metadata and JSON schema, without
@@ -429,5 +430,125 @@ public class DeleteMetadataToolTest
         ref.put("referencingObject", referencingObject); //$NON-NLS-1$
         ref.put("reference", feature); //$NON-NLS-1$
         return ref;
+    }
+
+    // ===== XDTO package member deletion (issue #183 stream 1) ========================================
+    //
+    // An XDTO ObjectType/Property member is removed directly (the md-refactoring service is mdclass-only),
+    // mirroring the form-member delete's two-phase shape. execute() needs a live workbench + BM model, so
+    // the write itself is E2E-covered; the pure locate / "not found" message builders (used by BOTH the
+    // rolled-back preview read and the write) are unit-tested here against an in-memory
+    // XdtoFactory-built Package fixture (mirrors XdtoWriterTest).
+
+    private static com._1c.g5.v8.dt.xdto.model.Package fixturePackage()
+    {
+        return com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createPackage();
+    }
+
+    @Test
+    public void testLocateXdtoMemberFindsObjectType()
+    {
+        com._1c.g5.v8.dt.xdto.model.Package pkg = fixturePackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        type.setName("MyType"); //$NON-NLS-1$
+        pkg.getObjects().add(type);
+
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.MyType"); //$NON-NLS-1$
+        String[] found = DeleteMetadataTool.locateXdtoMember(pkg, ref);
+        assertNotNull("an existing ObjectType must be located", found); //$NON-NLS-1$
+        assertEquals("ObjectType", found[0]); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testLocateXdtoMemberMissingReturnsNull()
+    {
+        com._1c.g5.v8.dt.xdto.model.Package pkg = fixturePackage();
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.Missing"); //$NON-NLS-1$
+        assertNull("a missing ObjectType must not be located", DeleteMetadataTool.locateXdtoMember(pkg, ref)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLocateXdtoMemberNullContentReturnsNull()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.Property.MyProp"); //$NON-NLS-1$
+        assertNull("a never-authored package (null content) must not locate a member", //$NON-NLS-1$
+            DeleteMetadataTool.locateXdtoMember(null, ref));
+    }
+
+    @Test
+    public void testLocateXdtoMemberFindsNestedProperty()
+    {
+        com._1c.g5.v8.dt.xdto.model.Package pkg = fixturePackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        type.setName("MyType"); //$NON-NLS-1$
+        pkg.getObjects().add(type);
+        com._1c.g5.v8.dt.xdto.model.Property property =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createProperty();
+        property.setName("MyProp"); //$NON-NLS-1$
+        type.getProperties().add(property);
+
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.MyType.Property.MyProp"); //$NON-NLS-1$
+        String[] found = DeleteMetadataTool.locateXdtoMember(pkg, ref);
+        assertNotNull("a nested Property must be located", found); //$NON-NLS-1$
+        assertEquals("Property", found[0]); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testLocateXdtoMemberToleratesYoSpelledLookup()
+    {
+        // issue #183 P2 #4: locateXdtoMember delegates to XdtoWriter.findObjectType, which now falls
+        // back to the yo-normalized stored name on an exact miss - so delete_metadata's own preview
+        // (and, by the SAME shared helper, the actual delete) resolves a member even when the request
+        // FQN still spells its name with the original "yo" that create_metadata normalized away.
+        com._1c.g5.v8.dt.xdto.model.Package pkg = fixturePackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType type =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        type.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(type);
+
+        // The SAME word, but spelled with the ORIGINAL "yo".
+        String yoSpelledName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType." + yoSpelledName); //$NON-NLS-1$
+        String[] found = DeleteMetadataTool.locateXdtoMember(pkg, ref);
+        assertNotNull("delete_metadata's own locate must tolerate a yo-spelled lookup FQN", found); //$NON-NLS-1$
+        assertEquals("ObjectType", found[0]); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testXdtoMemberNotFoundErrorNamesObjectTypeAndPackage()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.Missing"); //$NON-NLS-1$
+        String err = DeleteMetadataTool.xdtoMemberNotFoundError(ref);
+        assertTrue("the refusal must be a ToolResult error json", err.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(err.contains("Missing")); //$NON-NLS-1$
+        assertTrue(err.contains("XDTOPackage.MyPackage")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testXdtoMemberNotFoundErrorNamesNestedPropertyOwner()
+    {
+        com.ditrix.edt.mcp.server.utils.XdtoWriter.MemberRef ref = com.ditrix.edt.mcp.server.utils.XdtoWriter
+            .parseMemberRef("XDTOPackage.MyPackage.ObjectType.MyType.Property.Missing"); //$NON-NLS-1$
+        String err = DeleteMetadataTool.xdtoMemberNotFoundError(ref);
+        assertTrue("a nested property's not-found error must name its ObjectType owner", //$NON-NLS-1$
+            err.contains("ObjectType.MyType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionDocumentsXdtoPackageMembers()
+    {
+        String desc = new DeleteMetadataTool().getDescription();
+        assertTrue("description should mention the XDTO package member FQN shape", //$NON-NLS-1$
+            desc.contains("XDTOPackage")); //$NON-NLS-1$
+        assertTrue("description should mention the ObjectType member kind", desc.contains("ObjectType")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

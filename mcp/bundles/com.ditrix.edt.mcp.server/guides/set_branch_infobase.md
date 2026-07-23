@@ -1,0 +1,18 @@
+Attach or detach an EXISTING infobase (application) to/from a specific git branch **context**, so `list_git_branches`' "Application Bindings" section and `switch_git_branch`'s automatic binding follow that branch. This tool never creates an infobase - the application must already exist (`get_applications` / `create_infobase`).
+
+## Parameters
+- `branch` is the SHORT branch name (e.g. `feature/x`), never a full ref (`refs/heads/feature/x`). It does not need to be the currently checked-out branch, or even exist yet as a git branch - the "context" the association manager tracks is keyed purely by this string, independent of whether a branch of that name currently exists (useful with `create_git_branch`, which can attach a base to a branch's context in the same call it creates the branch).
+- `applicationId` comes from `get_applications`; the target application must expose an infobase reference (a plain infobase application, or a standalone-server application wrapping a registered infobase - see `set_infobase_credentials`' notes on the same resolution). An application with neither is rejected, naming the id.
+- `action`: `attach` (default) binds the application to the branch context; `detach` removes an existing binding.
+- `setDefault` (attach only, default false): also makes the application the branch context's DEFAULT infobase (the one `switch_git_branch`'s bindings read-back and `list_git_branches`' `Default` column report when the context has more than one bound base). Ignored for `detach` - detaching removes the binding regardless of whether it was the default.
+
+## Behavior
+- **attach** uses `InfobaseAssociationSettings.alreadySynchronized(...)`: this RECORDS the binding without triggering any synchronization flow. You are telling EDT "this base is already the right one for this branch", not asking it to run a heavy sync job - the unattended-safe choice (no background Job, no modal).
+- **detach** first checks the branch context actually has this application bound; if not, the call is rejected with an actionable "not bound" error rather than silently succeeding on a no-op, or leaving you to guess whether the detach did anything.
+- On success the result includes a `bound` read-back: `{infobases: [...], defaultInfobase}` for the branch context AFTER the change - proof the base is now bound (attach) or gone (detach).
+
+## Notes & gotchas
+- **Not gated by the destructive-consent dialog.** This is a pure EDT workspace-metadata write (an association record), not an infobase connection or a destructive model mutation; the binding is trivially reversible with another call.
+- **Never opens or authenticates against a 1C infobase.** No connection is made; this only records/removes an association entry.
+- The branch **context** and the git branch itself are independent: attaching a binding does not create the branch, and detaching does not delete it. Use `create_git_branch` / `switch_git_branch` for the git side.
+- `list_git_branches`' "Application Bindings" table and `switch_git_branch`'s `bindings` read-back are the read-only ways to inspect what this tool changed.

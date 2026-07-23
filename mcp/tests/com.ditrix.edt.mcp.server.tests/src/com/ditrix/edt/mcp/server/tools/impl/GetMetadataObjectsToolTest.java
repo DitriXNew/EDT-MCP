@@ -228,4 +228,65 @@ public class GetMetadataObjectsToolTest
         assertTrue("an invalid metadataType must NOT leak through before the projectName guard", //$NON-NLS-1$
             !result.contains("Unknown metadata type")); //$NON-NLS-1$
     }
+
+    // ==================== issue #289: metadataType normalization (pure logic, no ======
+    // ==================== EDT/workbench dependency - see normalizeMetadataType javadoc)
+
+    @Test
+    public void testNormalizeMetadataTypeAcceptsLegacyCategoryTokens()
+    {
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertEquals("all", tool.normalizeMetadataType("all")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("scheduledjobs", tool.normalizeMetadataType("scheduledJobs")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("catalogs", tool.normalizeMetadataType("Catalogs")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("commonmodules", tool.normalizeMetadataType("COMMONMODULES")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeAcceptsEnglishTypeNameToken()
+    {
+        // The core #289 fix: a standard FQN type-name token (singular, as an AI would
+        // naturally send it) now resolves to the same category as the legacy plural.
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertEquals("scheduledjobs", tool.normalizeMetadataType("ScheduledJob")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("scheduledjobs", tool.normalizeMetadataType("scheduledjob")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("documents", tool.normalizeMetadataType("Document")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("commonmodules", tool.normalizeMetadataType("CommonModule")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeAcceptsRussianTypeNameToken()
+    {
+        // Bilingual side of the resolver (MetadataTypeUtils), both singular forms.
+        // Escaped so the RU tokens survive a non-UTF-8 Tycho build (see CLAUDE.md hard
+        // don't #7); same escape sequences as MetadataTypeUtils.MetadataTypeInfo.
+        String ruScheduledJob = // РегламентноеЗадание (ScheduledJob)
+            "\u0420\u0435\u0433\u043B\u0430\u043C\u0435\u043D\u0442\u043D\u043E\u0435\u0417\u0430\u0434\u0430\u043D\u0438\u0435"; //$NON-NLS-1$
+        String ruCatalog = // Справочник (Catalog)
+            "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A"; //$NON-NLS-1$
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertEquals("scheduledjobs", tool.normalizeMetadataType(ruScheduledJob)); //$NON-NLS-1$
+        assertEquals("catalogs", tool.normalizeMetadataType(ruCatalog)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeRejectsRecognizedButUncollectedTypeName()
+    {
+        // MetadataTypeUtils recognizes far more type names than this tool has
+        // collectors for; a type it does NOT collect (Subsystem, XDTOPackage) must
+        // fall through to "not recognized" here rather than silently mis-mapping.
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertNull(tool.normalizeMetadataType("Subsystem")); //$NON-NLS-1$
+        assertNull(tool.normalizeMetadataType("XDTOPackage")); //$NON-NLS-1$
+        assertNull(tool.normalizeMetadataType("Role")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeRejectsUnrecognizedValue()
+    {
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertNull(tool.normalizeMetadataType("bogusType_e2e")); //$NON-NLS-1$
+        assertNull(tool.normalizeMetadataType("")); //$NON-NLS-1$
+        assertNull(tool.normalizeMetadataType(null));
+    }
 }

@@ -21,6 +21,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleFlags;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleKind;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
  * Lightweight contract tests for {@link CreateMetadataTool}: tool metadata and JSON schema,
@@ -383,5 +384,74 @@ public class CreateMetadataToolTest
         // nested-object members (e.g. a tabular-section attribute) are now supported and documented
         assertTrue("guide should document nested-object members", //$NON-NLS-1$
             guide.contains("tabular-section attribute")); //$NON-NLS-1$
+    }
+
+    // ===== XDTO package member creation (issue #183 stream 1) - schema/description contract ==========
+    //
+    // create_metadata's execute() needs a live workbench + BM model, so the ObjectType/Property write
+    // path itself (XdtoWriter.createObjectType / createProperty / applyObjectTypeProperties /
+    // applyPropertyProperties, the FQN grammar XdtoWriter.parseMemberRef) is unit-tested headlessly in
+    // XdtoWriterTest; the live materialize + attach + force-export is covered by the E2E suite. Here:
+    // the wire-contract surface (description / schema) documents the new FQN shapes and vocabulary.
+
+    @Test
+    public void testDescriptionDocumentsXdtoPackageMembers()
+    {
+        String desc = new CreateMetadataTool().getDescription();
+        assertTrue("description should mention the ObjectType member FQN shape", //$NON-NLS-1$
+            desc.contains("ObjectType")); //$NON-NLS-1$
+        assertTrue("description should mention a nested Property member FQN shape", //$NON-NLS-1$
+            desc.contains("XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPropertiesDescriptionDocumentsXdtoVocabulary()
+    {
+        String schema = new CreateMetadataTool().getInputSchema();
+        // The 'properties' array is reused (not a new payload key) for XDTO members - its description
+        // must document the different vocabulary (ObjectType flags, Property attributes incl. the
+        // REQUIRED 'type').
+        int propsIdx = schema.indexOf("\"properties\""); //$NON-NLS-1$
+        assertTrue(propsIdx >= 0);
+        String tail = schema.substring(propsIdx);
+        assertTrue("properties doc should mention the ObjectType 'open' flag", tail.contains("'open'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("properties doc should mention the REQUIRED Property 'type'", //$NON-NLS-1$
+            tail.contains("REQUIRES 'type'")); //$NON-NLS-1$
+        assertTrue("properties doc should mention 'lowerBound'/'upperBound'", //$NON-NLS-1$
+            tail.contains("lowerBound")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateMemberOwnerLookupToleratesYoSpelledObjectTypeName()
+    {
+        // issue #183 P2 #4: createXdtoMemberInTx's OBJECT_TYPE_PROPERTY branch (creating a nested
+        // Property) looks up its OWNER ObjectType via XdtoWriter.findObjectType, using the FQN's OWNER
+        // segment - which, unlike the FQN LEAF, is NEVER yo-normalized on the way in
+        // (CreateMetadataTool#normalizeLeafName only touches the trailing leaf segment). When the
+        // ObjectType itself was created earlier from a yo-spelled name (and is therefore stored
+        // yo-normalized), a LATER nested-Property create whose FQN still spells the OWNER segment with
+        // the original "yo" must still resolve it - findObjectType now falls back to the yo-normalized
+        // stored name on an exact miss.
+        com._1c.g5.v8.dt.xdto.model.Package pkg =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createPackage();
+        com._1c.g5.v8.dt.xdto.model.ObjectType owner =
+            com._1c.g5.v8.dt.xdto.model.XdtoFactory.eINSTANCE.createObjectType();
+        // "Zakaz-e" (a Russian word for "order"), yo-normalized - the spelling create_metadata stores.
+        owner.setName(MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0435));
+        pkg.getObjects().add(owner);
+
+        // The SAME word, but spelled with the ORIGINAL "yo" - as a later nested-Property create's FQN
+        // owner segment might still be.
+        String yoSpelledOwnerName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
+        assertEquals("the OBJECT_TYPE_PROPERTY owner lookup must tolerate a yo-spelled owner segment", //$NON-NLS-1$
+            owner, com.ditrix.edt.mcp.server.utils.XdtoWriter.findObjectType(pkg, yoSpelledOwnerName));
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresApplied()
+    {
+        String schema = new CreateMetadataTool().getOutputSchema();
+        assertTrue("output schema must declare 'applied' (XDTO member create counts)", //$NON-NLS-1$
+            schema.contains("\"applied\"")); //$NON-NLS-1$
     }
 }

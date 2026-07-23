@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
 import org.eclipse.emf.ecore.EClass;
@@ -39,17 +40,23 @@ import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Report;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
+import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleElementType;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.Template;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
+import com._1c.g5.v8.dt.xdto.model.ObjectType;
+import com._1c.g5.v8.dt.xdto.model.Package;
+import com._1c.g5.v8.dt.xdto.model.Property;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -75,11 +82,14 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.ReferenceMembershipWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
+import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -160,11 +170,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** The form attribute's value-type feature / property alias. */
     private static final String PROP_VALUE_TYPE = "valueType"; //$NON-NLS-1$
 
+    /** A ScheduledJob's method-reference property (guarded by {@link MethodReferenceValidator}). */
+    private static final String PROP_METHOD_NAME = "methodName"; //$NON-NLS-1$
+
     /** Confirmation-message prefix for a completed modify. */
     private static final String MSG_MODIFIED_PREFIX = "Modified "; //$NON-NLS-1$
 
     /** Error-message fragment between an FQN and its EClass name (e.g. "'X' is a Catalog"). */
     private static final String MSG_IS_A = "' is a "; //$NON-NLS-1$
+
+    /** Common prefix of every {@link #validateReferenceTarget} error. */
+    private static final String MSG_REFERENCE_TARGET = "Reference target '"; //$NON-NLS-1$
+
+    /** Common infix of every {@link #validateReferenceTarget} error, between the value and the property. */
+    private static final String MSG_FOR_PROP = "' for '"; //$NON-NLS-1$
 
     /** Confirmation-message fragment before a removed count. */
     private static final String MSG_REMOVED_COUNT = ", removed: "; //$NON-NLS-1$
@@ -225,6 +244,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the " //$NON-NLS-1$
             + "report's main schema (query data sets + fields + schema parameters), creating the DCS if " //$NON-NLS-1$
             + "the report has none. " //$NON-NLS-1$
+            + "Edit an XDTO package MEMBER through 'properties' on its own FQN " //$NON-NLS-1$
+            + "('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or " //$NON-NLS-1$
+            + "'...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / " //$NON-NLS-1$
+            + "'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD " //$NON-NLS-1$
+            + "type name, the EXACT name of an ObjectType already in the same package, or " //$NON-NLS-1$
+            + "{nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties " //$NON-NLS-1$
+            + "only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' " //$NON-NLS-1$
+            + "(string). " //$NON-NLS-1$
             + "Discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -372,6 +399,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (subsystemResult != null)
         {
             return subsystemResult;
+        }
+
+        // A FQN that addresses an XDTO PACKAGE MEMBER (an ObjectType or a Property - issue #183
+        // stream 1) is dispatched EARLY too: an ObjectType/Property lives on the package's lazily
+        // materialized xdto.model content (a cross-model hop, the SAME transient @ExternalProperty
+        // shape a report's DCS uses), not the mdclass tree, so the generic single-segment resolver
+        // below cannot see it (it does not know "ObjectType"/"Property" as mdclass child kinds).
+        String xdtoResult = dispatchXdtoMemberPayload(ctx, normFqn, args);
+        if (xdtoResult != null)
+        {
+            return xdtoResult;
         }
 
         // Exact-first resolve with the yo-addressing fallback: create_metadata normalizes
@@ -583,6 +621,220 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
             args.hasRolePayload);
+    }
+
+    // ===== XDTO package member editing (issue #183 stream 1) ==========================================
+    //
+    // An XDTOPackage member (an ObjectType or a Property, package-global or nested in an ObjectType) is
+    // modified through the SAME 'properties' surface as an ordinary mdclass member, but with an XDTO-
+    // specific vocabulary applied by XdtoWriter (open/abstract/mixed/ordered/sequenced for an ObjectType;
+    // type/ref/lowerBound/upperBound/nillable/fixed/default for a Property) - not the generic
+    // MetadataPropertyIntrospector reflection path (an XDTO Property/ObjectType is not an MdObject).
+    // Persistence mirrors the DCS content: the Package is a transient @ExternalProperty, materialized +
+    // attached via XdtoWriter.resolvePackageContent (shared with create_metadata / delete_metadata).
+
+    /**
+     * Dispatches an XDTO PACKAGE MEMBER FQN: refuses a role / content / template / dcs payload (an XDTO
+     * member is none of those - the same no-mixing policy every other cross-model-hop branch enforces,
+     * so a sibling payload is never silently dropped while this branch reports success), then requires a
+     * non-empty {@code properties} (the XDTO member's own change surface). Returns {@code null} when
+     * {@code normFqn} is not an XDTO member FQN, so the caller continues to the generic mdclass resolver.
+     */
+    private String dispatchXdtoMemberPayload(ProjectContext ctx, String normFqn, ModifyArgs args)
+    {
+        XdtoWriter.MemberRef ref = XdtoWriter.parseMemberRef(normFqn);
+        if (ref == null)
+        {
+            return null;
+        }
+        if (args.hasTemplatePayload)
+        {
+            return templateOnlyForTemplateFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
+        }
+        if (args.hasDcsPayload)
+        {
+            return dcsOnlyForReportFqnError(normFqn, "addresses an XDTO package member"); //$NON-NLS-1$
+        }
+        String payloadError =
+            xdtoMemberPayloadError(normFqn, args.hasRolePayload, args.hasContentPayload, args.properties);
+        if (payloadError != null)
+        {
+            return payloadError;
+        }
+        return modifyXdtoMember(ctx, normFqn, ref, args.properties);
+    }
+
+    /**
+     * The pure guard for an XDTO member FQN's payload: refuses a Role payload ({@code rights} /
+     * {@code templates} / {@code roleProperties}) or a membership {@code content} payload (an XDTO
+     * member is neither), then requires a non-empty {@code properties} (the XDTO member's own change
+     * surface - there is no dedicated {@code xdto} payload key, unlike {@code dcs}/{@code template}).
+     * Returns the ready JSON error, or {@code null} when the payload is valid. Package-visible for tests
+     * (mirrors {@link #dcsMixError} / {@link #templateMixError}).
+     */
+    static String xdtoMemberPayloadError(String normFqn, boolean hasRolePayload, boolean hasContentPayload,
+        List<JsonObject> properties)
+    {
+        if (hasRolePayload || hasContentPayload)
+        {
+            return ToolResult.error("'" + normFqn + "' addresses an XDTO package member, which cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                + "take a Role payload ('rights' / 'templates' / 'roleProperties') or a membership " //$NON-NLS-1$
+                + "'content' payload. Use 'properties' to change an XDTO ObjectType/Property.").toJson(); //$NON-NLS-1$
+        }
+        if (properties.isEmpty())
+        {
+            return ToolResult.error("'properties' is required to modify an XDTO package member ('" //$NON-NLS-1$
+                + normFqn + "'): an ObjectType takes the optional flags 'open' / 'abstract' / 'mixed' " //$NON-NLS-1$
+                + "/ 'ordered' / 'sequenced'; a Property takes 'type' / 'lowerBound' / 'upperBound' / " //$NON-NLS-1$
+                + "'nillable' / 'fixed' / 'default'.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Modifies an EXISTING XDTO ObjectType / Property's attributes via {@link XdtoWriter}. The owning
+     * XDTOPackage's content is materialized + attached exactly like create_metadata's own XDTO member
+     * write ({@link XdtoWriter#resolvePackageContent}, shared); the target member must ALREADY exist (a
+     * modify does not create one - use create_metadata first). Force-exports the owning package's FQN
+     * (dual-export with the content's own resource FQN when it is a distinct top object).
+     */
+    private String modifyXdtoMember(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
+        List<JsonObject> properties)
+    {
+        MetadataNodeResolver.MetadataNode pkgNode =
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.packageFqn).node;
+        if (pkgNode == null || !(pkgNode.object instanceof XDTOPackage)
+            || !(pkgNode.object instanceof IBmObject))
+        {
+            return ToolResult.error("XDTOPackage not found: " + ref.packageFqn + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        if (bmModelManager == null || fqnGenerator == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+        }
+        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        if (bmModel == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MODEL + ctx.project.getName()).toJson();
+        }
+
+        final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
+        final String[] contentFqnHolder = { null };
+        XdtoWriter.Result result;
+        try
+        {
+            result = BmTransactions.<XdtoWriter.Result> write(bmModel, "ModifyXdtoMember", (tx, pm) -> //$NON-NLS-1$
+                modifyXdtoMemberInTx(tx, pkgBmId, fqnGenerator, ref, properties, contentFqnHolder));
+        }
+        catch (Exception e)
+        {
+            String ready = XdtoWriteException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error modifying XDTO member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to modify XDTO member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        List<String> exportFqns = new ArrayList<>();
+        // Export by the RESOLVED package's canonical FQN: with the yo (ё->е) fallback the
+        // caller-typed ref.packageFqn may differ from the stored name, and force-export must
+        // target the stored top object (never the caller-supplied spelling).
+        String pkgExportFqn = "XDTOPackage." + ((XDTOPackage)pkgNode.object).getName(); //$NON-NLS-1$
+        exportFqns.add(pkgExportFqn);
+        String contentFqn = contentFqnHolder[0];
+        if (contentFqn != null && !contentFqn.equals(pkgExportFqn))
+        {
+            exportFqns.add(contentFqn);
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
+        return buildModifiedResult(normFqn, result.applied, persisted,
+            new MdNameNormalizer.Report(false));
+    }
+
+    /**
+     * The write-transaction body for {@link #modifyXdtoMember}: re-fetches the XDTOPackage, materializes
+     * its content, records the content's own export FQN (captured by {@link XdtoWriter#resolvePackageContent}
+     * itself - NEVER re-derived here via a post-attach {@code bmGetFqn()}, which throws on a just-attached,
+     * not-yet-settled object; a live-stand-caught regression) into {@code contentFqnHolder}, resolves the
+     * target ObjectType / Property (which must ALREADY exist), and applies {@code properties} via
+     * {@link XdtoWriter}. Throws {@link XdtoWriteException} (a ready JSON error) on a resolution /
+     * validation failure, rolling the whole write back.
+     */
+    private static XdtoWriter.Result modifyXdtoMemberInTx(IBmTransaction tx, long pkgBmId,
+        ITopObjectFqnGenerator fqnGenerator, XdtoWriter.MemberRef ref, List<JsonObject> properties,
+        String[] contentFqnHolder)
+    {
+        Object inTx = tx.getObjectById(pkgBmId);
+        if (!(inTx instanceof XDTOPackage))
+        {
+            throw new XdtoWriteException(ToolResult.error("The XDTO package could not be resolved " //$NON-NLS-1$
+                + "inside the transaction.").toJson()); //$NON-NLS-1$
+        }
+        XDTOPackage txPkg = (XDTOPackage)inTx;
+        XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(txPkg, tx, fqnGenerator);
+        if (resolved.error != null)
+        {
+            throw new XdtoWriteException(resolved.error);
+        }
+        Package content = resolved.content;
+        contentFqnHolder[0] = resolved.contentFqn;
+
+        XdtoWriter.Result applied;
+        if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE)
+        {
+            ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+            if (type == null)
+            {
+                throw new XdtoWriteException(xdtoObjectTypeNotFoundError(ref));
+            }
+            applied = XdtoWriter.applyObjectTypeProperties(type, properties);
+        }
+        else
+        {
+            EList<Property> owner = content.getProperties();
+            if (ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY)
+            {
+                ObjectType type = XdtoWriter.findObjectType(content, ref.objectTypeName);
+                if (type == null)
+                {
+                    throw new XdtoWriteException(xdtoObjectTypeNotFoundError(ref));
+                }
+                owner = type.getProperties();
+            }
+            Property property = XdtoWriter.findProperty(owner, ref.propertyName);
+            if (property == null)
+            {
+                throw new XdtoWriteException(xdtoPropertyNotFoundError(ref));
+            }
+            applied = XdtoWriter.applyPropertyProperties(property, content, properties, false);
+        }
+        if (applied.hasError())
+        {
+            throw new XdtoWriteException(applied.error);
+        }
+        return applied;
+    }
+
+    /** The actionable "ObjectType not found" error, shared by the modify/delete XDTO branches. */
+    static String xdtoObjectTypeNotFoundError(XdtoWriter.MemberRef ref)
+    {
+        return ToolResult.error("ObjectType not found: '" + ref.objectTypeName + "' in package " //$NON-NLS-1$ //$NON-NLS-2$
+            + ref.packageFqn + ". Use get_metadata_details on the package FQN to list its object types.") //$NON-NLS-1$
+                .toJson();
+    }
+
+    /** The actionable "Property not found" error, shared by the modify/delete XDTO branches. */
+    static String xdtoPropertyNotFoundError(XdtoWriter.MemberRef ref)
+    {
+        String owner = ref.kind == XdtoWriter.Kind.OBJECT_TYPE_PROPERTY
+            ? ref.packageFqn + ".ObjectType." + ref.objectTypeName //$NON-NLS-1$
+            : ref.packageFqn;
+        return ToolResult.error("Property not found: '" + ref.propertyName + "' on " + owner //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Use get_metadata_details on the package FQN to list its properties.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1835,8 +2087,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // once so an unresolved 'type' reference can append the extension-adopt hint (issue #262).
         boolean isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         List<PreparedChange> changes = new ArrayList<>();
-        String prepErr = validateAndPrepare(config, version, target, properties, changes, normReport,
-            isExtensionProject);
+        String prepErr = validateAndPrepare(ctx.project, config, version, target, properties, changes,
+            normReport, isExtensionProject);
         if (prepErr != null)
         {
             return prepErr;
@@ -1864,28 +2116,210 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(ERR_NO_BM_MODEL + projectName).toJson();
         }
 
+        final List<String> applied = appliedFeatureNames(changes);
+        // An XDTOPackage's target namespace lives in TWO synced places: the mdclass 'namespace' (this
+        // .mdo edit) and the content Package's targetNamespace (the sibling .xdto). The generic path
+        // exports only the .mdo, so when the namespace changes, re-sync the content (XdtoWriter treats
+        // the owner as the single source of truth) and force-export the .xdto too - else members would be
+        // authored under a stale namespace once the content is eagerly materialized at package-create (a
+        // live-stand-caught drift).
+        final boolean xdtoNamespaceChange =
+            applied.contains(MdClassPackage.Literals.XDTO_PACKAGE__NAMESPACE.getName());
+        final ITopObjectFqnGenerator fqnGenerator =
+            xdtoNamespaceChange ? Activator.getDefault().getTopObjectFqnGenerator() : null;
+        if (xdtoNamespaceChange && fqnGenerator == null)
+        {
+            // Fail BEFORE mutating: without the generator we cannot keep the content .xdto
+            // targetNamespace in sync, and committing only the .mdo would silently reintroduce the
+            // namespace drift while reporting success. Nothing is written here.
+            return ToolResult.error("Cannot change the XDTO package namespace right now: the " //$NON-NLS-1$
+                + "ITopObjectFqnGenerator service is unavailable, so the content resource (.xdto) " //$NON-NLS-1$
+                + "target namespace cannot be kept in sync. Retry once EDT has finished " //$NON-NLS-1$
+                + "initializing.").toJson(); //$NON-NLS-1$
+        }
+        // Needed only for the namespace CASCADE below (maintainer request: a namespace change on package
+        // P must not leave OTHER packages that import P's OLD namespace, or reference one of P's types via
+        // a QName carrying the OLD nsUri, dangling - renaming one package must not silently break a
+        // DIFFERENT, unrelated package). A Configuration BM id, captured OUTSIDE the write tx and
+        // re-fetched INSIDE it, mirrors CreateMetadataTool.createTopLevel's configBmId precedent.
+        final long configBmId =
+            xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L;
+        final String[] contentFqnHolder = { null };
+        final List<String> cascadedPackageNames = new ArrayList<>();
+        final List<String> cascadedExportFqns = new ArrayList<>();
+
         try
         {
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
                 EObject applyTo = resolveApplyTarget(tx, topBmId, memberFeature, memberName, parts);
+                // Captured BEFORE the prepared changes are applied (only meaningful for an XDTOPackage
+                // namespace change - null otherwise, so the cascade below never fires).
+                final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
+                    ? ((XDTOPackage)applyTo).getNamespace() : null;
                 for (PreparedChange change : changes)
                 {
                     change.applyTo(applyTo, tx);
+                }
+                if (fqnGenerator != null && applyTo instanceof XDTOPackage)
+                {
+                    XDTOPackage changedPkg = (XDTOPackage)applyTo;
+                    // Captured BEFORE resolvePackageContent: ensureNamespace re-syncs a STALE content
+                    // targetNamespace to the owner, and QNames still carrying that stale value must be
+                    // rewritten too (not only the old mdclass namespace).
+                    com._1c.g5.v8.dt.xdto.model.Package preContent = changedPkg.getPackage();
+                    String preContentNs = (preContent instanceof IBmObject
+                        && ((IBmObject)preContent).bmIsTop()) ? preContent.getNsUri() : null;
+                    XdtoWriter.ContentResolution resolved =
+                        XdtoWriter.resolvePackageContent(changedPkg, tx, fqnGenerator);
+                    if (resolved.error != null)
+                    {
+                        // Abort + roll back the whole modify rather than committing only the .mdo and
+                        // leaving the content .xdto target namespace stale (a silent partial success).
+                        // Mirrors modifyXdtoMemberInTx.
+                        throw new XdtoWriteException(resolved.error);
+                    }
+                    contentFqnHolder[0] = resolved.contentFqn;
+
+                    String newNamespace = changedPkg.getNamespace();
+                    if (oldNamespace != null && !oldNamespace.equals(newNamespace))
+                    {
+                        // The renamed package's OWN content can hold SAME-PACKAGE references (a property
+                        // typed at a sibling ObjectType carries a QName with the package's own nsUri) -
+                        // rewrite those too, or the package would dangle against ITSELF right after the
+                        // rename. Its content FQN is already force-exported via contentFqnHolder.
+                        XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+                        if (preContentNs != null && !preContentNs.equals(oldNamespace)
+                            && !preContentNs.equals(newNamespace))
+                        {
+                            // The content targetNamespace was stale before this edit: QNames written
+                            // under THAT value and naming THIS package's own local types would stay
+                            // dangling after the rename. Targeted rewrite only (a genuine reference
+                            // to a third package whose namespace equals the stale value is kept).
+                            XdtoWriter.rewriteStaleSelfReferences(resolved.content, preContentNs, newNamespace);
+                        }
+                        cascadeNamespaceChange(tx, configBmId, changedPkg, oldNamespace, newNamespace,
+                            fqnGenerator, cascadedPackageNames, cascadedExportFqns);
+                    }
                 }
                 return null;
             });
         }
         catch (Exception e)
         {
+            String ready = XdtoWriteException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
             Activator.logError("Error modifying metadata", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, topFqn);
+        List<String> exportFqns = new ArrayList<>();
+        exportFqns.add(topFqn);
+        String contentFqn = contentFqnHolder[0];
+        if (contentFqn != null && !contentFqn.equals(topFqn))
+        {
+            exportFqns.add(contentFqn);
+        }
+        for (String cascadedFqn : cascadedExportFqns)
+        {
+            if (!exportFqns.contains(cascadedFqn))
+            {
+                exportFqns.add(cascadedFqn);
+            }
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
-        List<String> applied = appliedFeatureNames(changes);
-        return buildModifiedResult(normFqn, applied, persisted, normReport);
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames);
+    }
+
+    /**
+     * Cascades an XDTOPackage namespace change to every OTHER XDTOPackage of the same configuration
+     * (maintainer request: changing package P's namespace must not silently break a SIBLING package that
+     * imports P's OLD namespace or references one of P's types via a QName carrying the OLD nsUri - the
+     * maintainer's exact complaint was that renaming one package breaks a DIFFERENT, unrelated package,
+     * not the one being renamed). Runs INSIDE the same write transaction that applied the target
+     * package's own namespace change, so the whole modify commits or rolls back together. A sibling
+     * package whose content cannot be resolved (e.g. it has no namespace of its own set yet - see
+     * {@link XdtoWriter#resolvePackageContent}) is SKIPPED, not treated as a failure of this modify: a
+     * sibling package's own unrelated problem is not this call's business. Appends the FQN of every
+     * REWRITTEN package (its own top-object FQN and its content's own resource FQN) to
+     * {@code exportFqnsOut}, and the package's Name to {@code cascadedNamesOut}, for the caller's
+     * force-export list and confirmation message.
+     *
+     * @param configBmId the Configuration's BM id, captured OUTSIDE this tx (-1 when unavailable, in
+     *            which case this is a no-op - the top-level guard above already required it whenever
+     *            {@code xdtoNamespaceChange} is true, so -1 here would mean the Configuration was not a
+     *            BM object at all)
+     */
+    private static void cascadeNamespaceChange(IBmTransaction tx, long configBmId, XDTOPackage changedPkg,
+        String oldNamespace, String newNamespace, ITopObjectFqnGenerator fqnGenerator,
+        List<String> cascadedNamesOut, List<String> exportFqnsOut)
+    {
+        if (configBmId < 0)
+        {
+            return;
+        }
+        Object cfgObj = tx.getObjectById(configBmId);
+        if (!(cfgObj instanceof Configuration))
+        {
+            return;
+        }
+        Configuration cfg = (Configuration)cfgObj;
+        long changedPkgBmId = ((IBmObject)changedPkg).bmGetId();
+        for (XDTOPackage other : cfg.getXDTOPackages())
+        {
+            if (!(other instanceof IBmObject) || ((IBmObject)other).bmGetId() == changedPkgBmId)
+            {
+                continue;
+            }
+            // A sibling with NO attached content cannot reference any namespace - skip it WITHOUT
+            // resolvePackageContent, which would otherwise MATERIALIZE + attach a fresh empty content
+            // for an unrelated package as a committed-but-unexported side effect of this modify.
+            com._1c.g5.v8.dt.xdto.model.Package existingContent = other.getPackage();
+            if (!(existingContent instanceof IBmObject) || !((IBmObject)existingContent).bmIsTop())
+            {
+                continue;
+            }
+            // resolvePackageContent may REPAIR this sibling as a side effect (ensureNamespace
+            // re-syncs a stale content targetNamespace to its own owner) - capture the pre-state so
+            // a repaired-but-not-rewritten sibling is still force-exported (an in-memory change that
+            // never reaches disk would leave BM and Package.xdto inconsistent).
+            String siblingPreNs = existingContent.getNsUri();
+            XdtoWriter.ContentResolution resolved = XdtoWriter.resolvePackageContent(other, tx, fqnGenerator);
+            if (resolved.error != null)
+            {
+                // Best-effort: a sibling package with no usable content of its own (e.g. no namespace set
+                // yet) is skipped, not a failure of THIS modify.
+                continue;
+            }
+            boolean repaired = siblingPreNs == null || !siblingPreNs.equals(other.getNamespace());
+            if (repaired && siblingPreNs != null)
+            {
+                // FIRST restore the repaired sibling's SELF-consistency - but ONLY for QNames whose
+                // local name matches one of the sibling's OWN local types (the disambiguation): a
+                // genuine reference into another package whose namespace equals the stale value
+                // (e.g. the renamed package's old namespace) must stay for the cascade rewrite
+                // below, and imports are never self-imports, so they are not touched here.
+                XdtoWriter.rewriteStaleSelfReferences(resolved.content, siblingPreNs, other.getNamespace());
+            }
+            boolean rewritten = XdtoWriter.rewriteNamespaceReferences(resolved.content, oldNamespace, newNamespace);
+            if (!rewritten && !repaired)
+            {
+                continue;
+            }
+            exportFqnsOut.add("XDTOPackage." + other.getName()); //$NON-NLS-1$
+            if (resolved.contentFqn != null)
+            {
+                exportFqnsOut.add(resolved.contentFqn);
+            }
+            if (rewritten)
+            {
+                cascadedNamesOut.add(other.getName());
+            }
+        }
     }
 
     /**
@@ -1955,8 +2389,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      *
      * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
      * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
-     * the preview. Returns a ready JSON error ({@code "Operation declined by user"}) when the human
-     * REJECTS - the caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
+     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
+     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
+     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
      */
     private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
     {
@@ -1976,9 +2411,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
             retyped.size(), retyped);
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
+        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
         return null;
     }
@@ -1988,8 +2424,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * when it retypes a form ATTRIBUTE (a {@code type} / {@code valueType} property on an Attribute ref).
      * Scoped to the ATTRIBUTE kind (like the dynamic-list-query branch) so a decoration's benign enum
      * {@code type} never prompts, and run here - not inside the tx callback - because the gate may block
-     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error
-     * ({@code "Operation declined by user"}) on REJECT, or {@code null} to proceed.
+     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error on
+     * REJECT or TIMEOUT (see {@link DestructiveConsentGate#consentDeniedMessage}), or {@code null} to
+     * proceed.
      */
     private static String consentForFormTypeChange(String normFqn, FormElementWriter.FormMemberRef ref,
         List<JsonObject> properties)
@@ -2016,9 +2453,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
             1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
-        if (DestructiveConsentGate.getInstance().requireConsent(NAME, preview) == ConsentDecision.REJECT)
+        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
         {
-            return ToolResult.error("Operation declined by user").toJson(); //$NON-NLS-1$
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
         }
         return null;
     }
@@ -2026,10 +2464,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Builds the success JSON for a completed modify (action / fqn / applied / persisted, the
      * normalization report and the confirmation message). Pure helper extracted from
-     * {@link #executeOnUiThread}; the same shape used by the form-member branch.
+     * {@link #executeOnUiThread}; the same shape used by the form-member branch and
+     * {@link #modifyXdtoMember} (neither of those ever cascades a namespace, so they use this overload).
      */
     private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
         MdNameNormalizer.Report normReport)
+    {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, List.of());
+    }
+
+    /**
+     * Same as the 4-arg overload, plus the namespace-CASCADE report (maintainer request): when the
+     * namespace change propagated to one or more OTHER XDTOPackages (see
+     * {@link #cascadeNamespaceChange}), their Names are appended to the confirmation MESSAGE text only -
+     * the output schema / description are deliberately untouched (zero golden churn) - as
+     * {@code "; namespace propagated to N referencing package(s): Q, R"}.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
@@ -2037,9 +2489,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
         normReport.addTo(result);
-        return result
-            .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .toJson();
+        String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!cascadedPackageNames.isEmpty())
+        {
+            message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
+                + " referencing package(s): " + String.join(", ", cascadedPackageNames); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return result.put(McpKeys.MESSAGE, message).toJson();
     }
 
     /**
@@ -2467,17 +2923,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * mutation), appending a {@link PreparedChange} for each. Returns the first property's JSON error,
      * or {@code null} when all validated. Side-effect-free apart from populating {@code changes};
      * extracted verbatim from {@link #executeOnUiThread} so a failure returns the SAME error in the
-     * SAME case, before the BM transaction runs.
+     * SAME case, before the BM transaction runs. {@code project} is threaded through only so
+     * {@link #validateMethodReference} can read a CommonModule's source when the target is a
+     * ScheduledJob / EventSubscription; every other property ignores it.
      */
-    private String validateAndPrepare(Configuration config, Version version, MdObject target,
+    private String validateAndPrepare(IProject project, Configuration config, Version version, MdObject target,
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
+        PrepareContext ctx = new PrepareContext(project, config, version);
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
             // object's own features, so this stays byte-identical to the pre-extInfo behaviour.
-            String pErr = prepare(config, version, target, null, prop, changes, normReport,
+            String pErr = prepare(ctx, target, null, prop, changes, normReport,
                 isExtensionProject);
             if (pErr != null)
             {
@@ -3048,9 +3507,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
         // (validateAndPrepare, which threads the project's extension status through); a form member's
         // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
-        // so there is no unresolved-reference case here to hint.
-        String pErr = prepare(config, version, member, holder.classifyExtInfo, normProp, built, normReport,
-            false);
+        // so there is no unresolved-reference case here to hint. `project` is null: a form member is
+        // never a ScheduledJob / EventSubscription, so validateMethodReference never dereferences it.
+        String pErr = prepare(new PrepareContext(null, config, version), member, holder.classifyExtInfo, normProp,
+            built, normReport, false);
         if (pErr != null)
         {
             throw new FormValidationException(pErr);
@@ -3155,7 +3615,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** The rebind property names. {@code procedure} (alias {@code handler}) rebinds a handler's BSL
-     * procedure; {@code command} (alias {@code commandName}) re-points a button at a form command. */
+     * procedure; {@code command} (alias {@code commandName}) re-points a button at a form command.
+     * {@code PROP_HANDLER} doubles as an EventSubscription's method-reference property (guarded by
+     * {@link MethodReferenceValidator} on the mdclass path). */
     private static final String PROP_PROCEDURE = "procedure"; //$NON-NLS-1$
     private static final String PROP_HANDLER = "handler"; //$NON-NLS-1$
     private static final String PROP_COMMAND = "command"; //$NON-NLS-1$
@@ -3538,7 +4000,31 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
      * it.</p>
      */
-    private String prepare(Configuration config, Version version, EObject target, EObject extInfo,
+    /**
+     * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
+     * model context every {@code ValueKind} branch resolves references / types against. Folded together
+     * purely to bring {@link #prepare}'s parameter count under the 7-parameter threshold (S107); no
+     * behaviour change. {@code project} is nullable: it is {@code null} on the form-member path (a form
+     * member is never a ScheduledJob / EventSubscription, so {@link #validateMethodReference} never
+     * dereferences it there) and only non-null on the mdclass path.
+     */
+    private static final class PrepareContext
+    {
+        final IProject project;
+
+        final Configuration config;
+
+        final Version version;
+
+        PrepareContext(IProject project, Configuration config, Version version)
+        {
+            this.project = project;
+            this.config = config;
+            this.version = version;
+        }
+    }
+
+    private String prepare(PrepareContext ctx, EObject target, EObject extInfo,
         JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
@@ -3554,6 +4040,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "metadata. modify_metadata only sets non-identity properties.").toJson(); //$NON-NLS-1$
         }
         String value = asString(prop.get(KEY_VALUE));
+
+        // Guard (scoped to exactly two type+property combos - a no-op for everything else, including
+        // every property on the form-member path where ctx.project is null): a ScheduledJob's
+        // methodName / an EventSubscription's handler must reference an EXISTING, Exported, Server-side
+        // CommonModule method BEFORE it is accepted, so binding a job/subscription at a function that
+        // does not exist yet fails HERE with an actionable error instead of only at update_database
+        // ("no such function"). An empty value is left to the pre-existing generic-STRING policy below
+        // (requireValueError: modify_metadata never "clears" a property on an empty value) rather than
+        // being reported as a method-reference failure.
+        String methodRefErr = validateMethodReference(ctx.project, ctx.config, target, name, value);
+        if (methodRefErr != null)
+        {
+            return methodRefErr;
+        }
+        // A VALID reference is re-written to its canonical stored form (resolved module casing;
+        // methodName without a type prefix, handler with the English CommonModule prefix) so a
+        // tolerated variant like 'CommonModule.Calc.Add' / 'ОбщийМодуль.Calc.Add' never serializes
+        // verbatim into the model where the platform's own resolution would miss it.
+        value = canonicalMethodReference(ctx.config, target, name, value);
 
         // findFeature classifies ONLY the matched feature and skips the current-value rendering
         // (eGet + proxy + type rendering) that the full introspect() performs for EVERY assignable
@@ -3577,7 +4082,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         switch (info.valueKind)
         {
             case LOCALIZED_STRING:
-                return prepareLocalized(config, name, value, prop, info, out, normReport);
+                return prepareLocalized(ctx.config, name, value, prop, info, out, normReport);
             case ENUM:
                 return prepareEnum(name, value, info, out);
             case BOOLEAN:
@@ -3585,17 +4090,73 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case INTEGER:
                 return prepareInteger(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(config, version, name, prop, info, out, isExtensionProject);
+                return prepareTypeDescription(ctx.config, ctx.version, name, prop, info, out, isExtensionProject);
             case REFERENCE:
-                return prepareReference(config, target, name, value, info, out);
+                return prepareReference(ctx.config, target, name, value, info, out);
             case MANY_REFERENCE:
-                return prepareManyReference(config, name, prop, info, out);
+                return prepareManyReference(ctx.config, name, prop, info, out);
             case STYLE_VALUE:
                 return prepareStyleValue(name, prop, target, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
         }
+    }
+
+    /**
+     * Dispatches the maintainer-requested method-reference guard (a job/subscription must be bound to a
+     * method that already EXISTS, is EXPORTED and lives in a SERVER module) to {@link
+     * MethodReferenceValidator}, scoped to exactly the two type+property combos it covers. Every other
+     * target/property - including any property on the form-member path, where {@code project} is
+     * {@code null} - returns {@code null} immediately without touching {@code project} / {@code config}.
+     * An empty value is NOT validated here (it falls through to the pre-existing generic-STRING policy,
+     * which itself rejects an empty value rather than "clearing" the property). Package-visible (takes
+     * the plain {@code project}/{@code config} pair rather than the private {@link PrepareContext}) so
+     * the dispatch is unit-testable headlessly, mirroring {@link #formTypeExtInfoComboError}.
+     */
+    static String validateMethodReference(IProject project, Configuration config, EObject target, String name,
+        String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return null;
+        }
+        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        {
+            return MethodReferenceValidator.validate(project, config, value, PROP_METHOD_NAME,
+                "'CommonModuleName.MethodName'", "Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
+        {
+            return MethodReferenceValidator.validate(project, config, value, PROP_HANDLER,
+                "'CommonModule.ModuleName.MethodName'", "CommonModule.Calc.Add"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
+    }
+
+    /**
+     * Canonicalizes an ALREADY-VALIDATED method reference for the two guarded combos (see
+     * {@link #validateMethodReference}): a ScheduledJob's {@code methodName} stores
+     * {@code Module.Method} (no type prefix), an EventSubscription's {@code handler} stores
+     * {@code CommonModule.Module.Method}, both with the RESOLVED module's exact metadata name.
+     * Any other target/property - or a defensive resolution failure - returns the value unchanged.
+     */
+    static String canonicalMethodReference(Configuration config, EObject target, String name, String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return value;
+        }
+        String canonical = null;
+        if (target instanceof ScheduledJob && PROP_METHOD_NAME.equalsIgnoreCase(name))
+        {
+            canonical = MethodReferenceValidator.canonicalReference(config, value, false);
+        }
+        else if (target instanceof EventSubscription && PROP_HANDLER.equalsIgnoreCase(name))
+        {
+            canonical = MethodReferenceValidator.canonicalReference(config, value, true);
+        }
+        return canonical != null ? canonical : value;
     }
 
     /**
@@ -3885,18 +4446,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         if (target == null)
         {
-            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' was not found. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' was not found. " //$NON-NLS-1$
                 + referenceNotFoundHint(feature)).toJson();
         }
         if (!(target instanceof IBmObject))
         {
-            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
                 + "top-level object; references to members are not supported.").toJson(); //$NON-NLS-1$
         }
         boolean isForm = MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(target.eClass());
         if (!((IBmObject)target).bmIsTop() && !isForm)
         {
-            return ToolResult.error("Reference target '" + fqn + "' for '" + prop + "' must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' must be a " //$NON-NLS-1$
                 + "top-level object; references to members are not supported (forms are the one " //$NON-NLS-1$
                 + "supported member reference).").toJson(); //$NON-NLS-1$
         }

@@ -190,11 +190,89 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('create_infobase').",
+    "description": "Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's context. Rejects a name that already exists (use switch_git_branch instead). Full parameters and examples: call get_tool_guide('create_git_branch').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "description": "Optional: application id from get_applications to attach to the new branch's context (the base is FOR this branch).",
+          "type": "string"
+        },
+        "branch": {
+          "description": "New branch's short name (required); must not already exist.",
+          "type": "string"
+        },
+        "checkout": {
+          "description": "Check out the new branch immediately after creating it (bounded background Job, up to 120 s). Default false.",
+          "type": "boolean"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to branch (required).",
+          "type": "string"
+        },
+        "setDefault": {
+          "description": "Only with applicationId: also make it the DEFAULT infobase for the new branch's context. Default false.",
+          "type": "boolean"
+        },
+        "startPoint": {
+          "description": "Existing branch, ref, or commit to start the new branch from. Optional; defaults to the current HEAD.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "create_git_branch",
+    "outputSchema": {
+      "properties": {
+        "bound": {
+          "description": "Branch-infobase binding read-back: {infobases: [...], defaultInfobase}. Present only when applicationId was given and the binding succeeded.",
+          "type": "object"
+        },
+        "branch": {
+          "description": "The new branch's short name.",
+          "type": "string"
+        },
+        "checkedOut": {
+          "description": "Whether the branch ended up checked out. False when checkout was not requested, or was requested but did not complete cleanly (see message).",
+          "type": "boolean"
+        },
+        "created": {
+          "description": "Always true on a non-error result.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Present only when checkout or the infobase binding did not fully succeed: a short warning. The branch itself was still created (success stays true).",
+          "type": "string"
+        },
+        "startPoint": {
+          "description": "The start point actually used ('HEAD' when none was given).",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the branch was created",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create' (default) makes a new database (requires a registered 1C platform runtime); mode='register' adds an already-existing infobase at the given path without launching the platform. applicationKind='infobase' (default) makes a plain file infobase; applicationKind='standaloneServer' creates (or, with mode='register', wraps an EXISTING file infobase with) an autonomous (standalone) server that also exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). FILE type only (server/web rejected). Runs in a background Job (up to 120 s). user/password/access store connection credentials for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register' — rejected for a newly created standalone server (mode='create'). Full parameters and examples: call get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
         "access": {
-          "description": "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies only to applicationKind='infobase' (a file infobase).",
+          "description": "Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies to applicationKind='infobase' (a file infobase), and to applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create').",
           "enum": [
             "INFOBASE",
             "OS"
@@ -202,7 +280,7 @@
           "type": "string"
         },
         "applicationKind": {
-          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result.",
+          "description": "'infobase' (default) = a plain file infobase via the configurator; 'standaloneServer' = an autonomous (standalone) server that creates and serves a new file infobase and exposes a web URL for HTTP testing (requires a registered 1C standalone-server runtime, platform >= 8.3.23). With mode='register' the server instead wraps an EXISTING file infobase (a 1Cv8.1CD must be present at infobaseFile) rather than creating a new one. The web port is auto-allocated by EDT and reported back as 'port'/'webUrl' in the result.",
           "enum": [
             "infobase",
             "standaloneServer"
@@ -218,7 +296,7 @@
           "type": "string"
         },
         "mode": {
-          "description": "'create' (default) = make a new file infobase at infobaseFile (launches the 1C platform); 'register' = add an EXISTING infobase already present at infobaseFile (no platform launch).",
+          "description": "'create' (default) = make a new file infobase at infobaseFile (launches the 1C platform); 'register' = add an EXISTING infobase already present at infobaseFile (no platform launch). With applicationKind='standaloneServer', mode='register' wraps an EXISTING file infobase (a 1Cv8.1CD must be present) with a standalone server instead of creating a new one.",
           "enum": [
             "create",
             "register"
@@ -226,7 +304,7 @@
           "type": "string"
         },
         "password": {
-          "description": "Password for 'user'. Optional; default empty (demo bases use an empty password).",
+          "description": "Password for 'user'. Optional; default empty (demo bases use an empty password). Same applicationKind/mode restriction as 'user'.",
           "type": "string"
         },
         "platform": {
@@ -242,7 +320,7 @@
           "type": "boolean"
         },
         "user": {
-          "description": "Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials.",
+          "description": "Infobase connection user to store so update_database / debug_launch can authenticate the update agent (issue #194). Selects an EXISTING user; most useful with mode='register' (the existing base already has users). Omit to store no credentials. Accepted for applicationKind='infobase', and for applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create').",
           "type": "string"
         }
       },
@@ -393,7 +471,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Full parameters and examples: call get_tool_guide('create_metadata').",
+    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Also creates an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), 'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or 'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
         "callType": {
@@ -449,7 +527,7 @@
           "type": "string"
         },
         "properties": {
-          "description": "Optional properties to apply at creation, as [{name, value, language?}]. This version applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata).",
+          "description": "Optional properties to apply at creation, as [{name, value, language?}]. For most kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other property names are rejected (set them via modify_metadata). XDTO PACKAGE MEMBERS ('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') use a DIFFERENT vocabulary instead: an ObjectType takes the optional boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property REQUIRES 'type' (a built-in XSD type name like 'string', the EXACT name of an ObjectType already in the same package for a same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string).",
           "items": {
             "type": "object"
           },
@@ -489,6 +567,13 @@
         "action": {
           "description": "'created' on success",
           "type": "string"
+        },
+        "applied": {
+          "description": "Names of the optional attributes actually applied (XDTO package member create only)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "callType": {
           "description": "Extension event call type written (Before/After/Instead), when an extension event handler (form:EventHandlerExtension) was created",
@@ -1056,7 +1141,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - or an XDTO package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -2090,7 +2175,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
+    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). In the default (non-full) view a ScheduledJob or CommonModule also renders a type-specific Properties table (e.g. methodName/schedule/use for a job; server/serverCall/global/returnValuesReuse for a module), and an InformationRegister's Dimensions additionally show their Indexing. Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "assignable": {
@@ -2148,7 +2233,7 @@
           "type": "integer"
         },
         "metadataType": {
-          "description": "Type filter (case-insensitive), default 'all'. One of: all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs",
+          "description": "Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs - OR a single standard metadata type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', 'Document'). Single value only - not an array. An unrecognized value returns an error listing the supported options.",
           "type": "string"
         },
         "nameFilter": {
@@ -3060,6 +3145,28 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "List a project's git branches: local and remote-tracking, with the CURRENT branch marked (detached HEAD flagged), plus the 1C application/infobase each branch context is bound to (best-effort). Precedes switch_git_branch. Full parameters and examples: call get_tool_guide('list_git_branches').",
+    "inputSchema": {
+      "properties": {
+        "projectName": {
+          "description": "EDT project to list git branches for (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "list_git_branches",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing code; filter by metadataType, objectName or nameFilter. Use this to enumerate a project's modules; for the methods/regions inside one module use get_module_structure. Full parameters and examples: call get_tool_guide('list_modules').",
     "inputSchema": {
       "properties": {
@@ -3214,7 +3321,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Edit a structured membership LIST with 'content' instead of 'properties', dispatched by the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or removes one by its metadata FQN; a CommonAttribute entry takes 'use' ('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and a Catalog owner / Document register record / Subsystem content object is a plain reference (no flag). AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' payload instead of 'properties' on a template FQN (a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): 'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the cells (text or a print-time parameter) with formatting, merged ranges, named areas and column / row sizes into the template's spreadsheet content; render the result with get_template_screenshot. AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of 'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the report's main schema (query data sets + fields + schema parameters), creating the DCS if the report has none. Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Edit a structured membership LIST with 'content' instead of 'properties', dispatched by the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or removes one by its metadata FQN; a CommonAttribute entry takes 'use' ('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and a Catalog owner / Document register record / Subsystem content object is a plain reference (no flag). AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' payload instead of 'properties' on a template FQN (a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): 'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the cells (text or a print-time parameter) with formatting, merged ranges, named areas and column / row sizes into the template's spreadsheet content; render the result with get_template_screenshot. AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of 'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the report's main schema (query data sets + fields + schema parameters), creating the DCS if the report has none. Edit an XDTO package MEMBER through 'properties' on its own FQN ('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or '...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD type name, the EXACT name of an ObjectType already in the same package, or {nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string). Discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
         "content": {
@@ -3846,6 +3953,77 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Attach or detach an EXISTING infobase (application) to/from a specific git branch context, so switch_git_branch's automatic binding follows that branch. Target the application via applicationId (from get_applications) - this tool never creates an infobase, only records the binding. Full parameters and examples: call get_tool_guide('set_branch_infobase').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "'attach' (default) binds the application to the branch context; 'detach' removes an existing binding.",
+          "enum": [
+            "attach",
+            "detach"
+          ],
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Application id from get_applications - the infobase to attach/detach (required).",
+          "type": "string"
+        },
+        "branch": {
+          "description": "Short branch name (e.g. 'feature/x') whose context to bind/unbind (required).",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project whose branch-infobase binding to change (required).",
+          "type": "string"
+        },
+        "setDefault": {
+          "description": "attach only: also make this the DEFAULT infobase for the branch context. Ignored (and documented as such) for detach. Default false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "projectName",
+        "branch",
+        "applicationId"
+      ],
+      "type": "object"
+    },
+    "name": "set_branch_infobase",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "description": "The action performed: 'attach' or 'detach'.",
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "The target application id.",
+          "type": "string"
+        },
+        "bound": {
+          "description": "Read-back of the branch context after the change: {infobases: [...], defaultInfobase}. Proves the base is now bound (attach) or gone (detach).",
+          "type": "object"
+        },
+        "branch": {
+          "description": "The branch context that was changed.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the binding change succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Set a line breakpoint on a 1C BSL module. Accepts either an EDT module-relative path (e.g. 'CommonModules/Foo/Module.bsl') or an absolute filesystem path. Use wait_for_break afterwards to block until the breakpoint is hit.",
     "inputSchema": {
       "properties": {
@@ -3919,7 +4097,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
+    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -4244,6 +4422,60 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/feature/x'); a remote-only branch is rejected (create a local branch first). Refuses to switch when the working tree has uncommitted changes (untracked files alone do not block) or when already on the target branch. The 1C application/infobase binding follows the checkout automatically; the result reports it. Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('switch_git_branch').",
+    "inputSchema": {
+      "properties": {
+        "branch": {
+          "description": "Branch to switch to (required): a short local name (e.g. 'feature/x') or a full ref ('refs/heads/feature/x'). A remote-tracking ref (e.g. 'origin/feature/x') is rejected - create a local branch first.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to switch (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "switch_git_branch",
+    "outputSchema": {
+      "properties": {
+        "bindings": {
+          "description": "Best-effort application-binding read-back for the new branch context: {infobases: [...], defaultInfobase}. Absent when unavailable.",
+          "type": "object"
+        },
+        "branch": {
+          "description": "The branch now checked out.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Present only when the post-checkout workspace refresh failed: a short warning noting the EDT model may be stale until a manual refresh. The switch itself still succeeded (success stays true).",
+          "type": "string"
+        },
+        "previousBranch": {
+          "description": "The branch (or detached-HEAD commit) checked out BEFORE the switch.",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the switch succeeded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Terminate one or more 1C launches started from THIS EDT instance; externally launched 1C clients are never touched. Select ONE target mode: launchConfigurationName, projectName+applicationId, or all=true (needs confirm=true). Full parameters and examples: call get_tool_guide('terminate_launch').",
     "inputSchema": {
       "properties": {
@@ -4483,6 +4715,37 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and return a pass/fail verdict plus any problems found (e.g. a dangling reference to a deleted ObjectType). It reflects the LATEST validation state already computed by EDT (reads existing markers) rather than forcing a fresh compile; run revalidate_objects first if you need up-to-the-second results. Does not implement any XDTO-specific rule itself - it is a scoped view over get_project_errors. Full parameters and examples: call get_tool_guide('validate_xdto_package').",
+    "inputSchema": {
+      "properties": {
+        "fqn": {
+          "description": "FQN of the XDTO package to validate, as 'XDTOPackage.<Name>' (required). Must already exist; check with get_metadata_objects.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max problem rows to report; default 100, max 1000 (optional)",
+          "type": "integer"
+        },
+        "projectName": {
+          "description": "EDT project name (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "fqn"
+      ],
+      "type": "object"
+    },
+    "name": "validate_xdto_package",
+    "outputSchema": null
   },
   {
     "annotations": {

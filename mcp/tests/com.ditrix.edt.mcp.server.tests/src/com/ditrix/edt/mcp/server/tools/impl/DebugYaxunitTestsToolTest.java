@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -40,6 +41,20 @@ public class DebugYaxunitTestsToolTest
         // a MARKDOWN tool, so the alias inherits the default MARKDOWN response type.
         DebugYaxunitTestsTool tool = new DebugYaxunitTestsTool();
         assertEquals(IMcpTool.ResponseType.MARKDOWN, tool.getResponseType());
+    }
+
+    @Test
+    public void testConnectsToInfobaseIsFalseByDefault()
+    {
+        // #270: this class stays on the IMcpTool default (false) rather than overriding
+        // connectsToInfobase(). This is intentional, not an oversight: execute() forwards
+        // synchronously to a RunYaxunitTestsTool instance whose OWN Job body already
+        // brackets InfobaseAuthDialogSuppressor.markActivityStart()/markActivityEnd()
+        // around the connection-reaching work (see RunYaxunitTestsTool.runPrepJobBody), so
+        // the auth-dialog suppression is covered by the delegate regardless of what this
+        // alias's own dispatch-level flag says.
+        DebugYaxunitTestsTool tool = new DebugYaxunitTestsTool();
+        assertFalse(tool.connectsToInfobase());
     }
 
     @Test

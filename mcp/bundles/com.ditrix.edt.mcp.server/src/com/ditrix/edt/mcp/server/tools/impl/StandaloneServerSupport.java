@@ -11,8 +11,10 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
@@ -69,6 +71,9 @@ final class StandaloneServerSupport
 
     /** Plugin id used for synthesized error statuses. */
     private static final String PLUGIN_ID = "com.ditrix.edt.mcp.server"; //$NON-NLS-1$
+
+    /** Reflective method name: {@code getId()}, used across several unrelated reflected types. */
+    private static final String METHOD_GET_ID = "getId"; //$NON-NLS-1$
 
     /** Outcome of the best-effort infobases.yaml registry cleanup. */
     enum RegistryCleanup
@@ -222,8 +227,17 @@ final class StandaloneServerSupport
     }
 
     /**
-     * Reflective {@code StandaloneServerInfobase.getInfobaseId().toString()} — the key under which the
-     * entry is stored in infobases.yaml. Returns {@code null} on failure.
+     * Reflective infobase-id read, version-tolerant across the {@code StandaloneServerInfobase}
+     * 2025.2 -> 2026.1 API rename — the key under which the entry is stored in infobases.yaml (a raw
+     * id STRING on both shapes):
+     * <ul>
+     *   <li>2025.2: {@code getInfobaseId(): UUID} — read directly, then {@code toString()}'d.</li>
+     *   <li>2026.1: {@code getInfobaseId()} was REMOVED with no replacement; the raw id instead lives
+     *   at {@code getStandaloneServerConfiguration().getInfobase().getId(): String}, resolved
+     *   null-safely at each hop.</li>
+     * </ul>
+     * Returns {@code null} on failure/absence of BOTH shapes, never throwing; an error is logged only
+     * when neither shape resolved (so a single-shape EDT version never logs spuriously).
      */
     static String infobaseIdOf(Object standaloneServerInfobaseModule)
     {
@@ -233,6 +247,19 @@ final class StandaloneServerSupport
                 .invoke(standaloneServerInfobaseModule);
             return id != null ? id.toString() : null;
         }
+        catch (NoSuchMethodException e)
+        {
+            // 2025.2 shape absent -> try the 2026.1 shape (getInfobaseId() was removed with no
+            // direct replacement; the raw id moved under the standalone-server configuration).
+            String id = infobaseIdViaConfiguration(standaloneServerInfobaseModule);
+            if (id == null)
+            {
+                Activator.logError("delete_infobase: could not read standalone-server infobaseId " //$NON-NLS-1$
+                    + "(neither getInfobaseId() nor getStandaloneServerConfiguration()." //$NON-NLS-1$
+                    + "getInfobase().getId() resolved)", null); //$NON-NLS-1$
+            }
+            return id;
+        }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("delete_infobase: could not read standalone-server infobaseId", t); //$NON-NLS-1$
@@ -241,9 +268,40 @@ final class StandaloneServerSupport
     }
 
     /**
+     * 2026.1 fallback shape for {@link #infobaseIdOf}:
+     * {@code getStandaloneServerConfiguration().getInfobase().getId(): String}. Null-safe at each hop;
+     * returns {@code null} on any missing hop or reflective failure (never throws — the caller decides
+     * whether to log).
+     */
+    private static String infobaseIdViaConfiguration(Object standaloneServerInfobaseModule)
+    {
+        try
+        {
+            Object cfg = standaloneServerInfobaseModule.getClass()
+                .getMethod("getStandaloneServerConfiguration").invoke(standaloneServerInfobaseModule); //$NON-NLS-1$
+            if (cfg == null)
+            {
+                return null;
+            }
+            Object infobase = cfg.getClass().getMethod("getInfobase").invoke(cfg); //$NON-NLS-1$
+            if (infobase == null)
+            {
+                return null;
+            }
+            Object id = infobase.getClass().getMethod(METHOD_GET_ID).invoke(infobase);
+            return (id instanceof String) ? (String)id : null;
+        }
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        {
+            return null;
+        }
+    }
+
+    /**
      * Reflective {@code StandaloneServerInfobase.getStandaloneServerConfiguration().getDatabase()} →, for a
-     * FILE-backed standalone server, {@code FileDatabase.getConfigDirectory()} — the on-disk directory of
-     * the served database (= {@code database.path} in config.yaml = the {@code infobaseFile} that was
+     * FILE-backed standalone server, the on-disk directory of the served database — read via
+     * {@code FileDatabase.getConfigDirectory()} (2025.2) or {@code getPath()} (the 2026.1 rename of the
+     * same accessor) — (= {@code database.path} in config.yaml = the {@code infobaseFile} that was
      * passed to {@code create_infobase}). This is SEPARATE from the {@code Серверы/…-config} folder that
      * {@code deleteServer} removes — {@code deleteServer} never deletes the served database, so this is how
      * {@code deleteDatabaseFiles=true} finds the directory to remove. Must be read BEFORE {@code deleteServer}
@@ -266,20 +324,22 @@ final class StandaloneServerSupport
                 return null;
             }
             // A FILE database (and its create-template subclass FileCreateTemplateDatabase) carries the
-            // on-disk directory in getConfigDirectory(); an RDBMS database has neither that method nor a
-            // local directory. Detect the file kind by the PRESENCE of getConfigDirectory() rather than
-            // by the class name: the type is platform-internal and intentionally not imported (no
-            // Require-Bundle), so instanceof is impossible, and a name match would be fragile.
-            Object dir;
-            try // NOSONAR nested try is intentional (distinct resource/exception scopes)
+            // on-disk directory in getConfigDirectory() (2025.2), renamed to getPath() on 2026.1; an
+            // RDBMS database has neither accessor nor a local directory. Detect the file kind by the
+            // PRESENCE of either accessor rather than by the class name: the type is platform-internal
+            // and intentionally not imported (no Require-Bundle), so instanceof is impossible, and a
+            // name match would be fragile.
+            Method dirGetter = findMethod(db.getClass(), "getConfigDirectory", 0); //$NON-NLS-1$
+            if (dirGetter == null)
             {
-                dir = db.getClass().getMethod("getConfigDirectory").invoke(db); //$NON-NLS-1$
+                dirGetter = findMethod(db.getClass(), "getPath", 0); //$NON-NLS-1$
             }
-            catch (NoSuchMethodException e)
+            if (dirGetter == null)
             {
                 // Not a file-backed database — nothing on the local disk to resolve.
                 return null;
             }
+            Object dir = dirGetter.invoke(db);
             return (dir instanceof String) ? (String)dir : null;
         }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
@@ -340,23 +400,40 @@ final class StandaloneServerSupport
      * Best-effort removal of the orphaned infobases.yaml entry that {@code deleteServer} leaves behind
      * (EDT never removes it — a confirmed platform gap). Reflectively reaches the
      * {@code StandaloneServerInfobaseModuleFactoryDelegate} via the WST module-factory registry, removes
-     * the entry from its in-memory {@code modules} map by {@code infobaseId}, and re-serializes the
-     * remaining entries to infobases.yaml exactly as the delegate's own {@code saveModule} does.
+     * the entry from its in-memory {@code modules} map, and re-serializes the remaining entries to
+     * infobases.yaml exactly as the delegate's own {@code saveModule} does.
+     *
+     * <p><strong>Version-proof removal (issue #273):</strong> the delegate's map KEY scheme differs per
+     * EDT version — 2025.2 keys by the raw {@code getInfobaseId().toString()} uuid (proven live when
+     * this cleanup shipped), while 2026.1 keys by {@code StandaloneServerInfobase.getId()}, a PREFIXED
+     * module-id string built over the raw config id — so a key-based remove by the raw id silently
+     * misses on 2026.1. Guessing key schemes per version is fragile; the primary strategy is therefore
+     * removal BY VALUE ({@link #removeModuleEntries}): (1) reference identity with the passed live
+     * {@code module} (the map holds the same instance), (2) reflective {@code getId()} String equality,
+     * (3) only then the raw-id key fallback that preserves the proven 2025.2 behavior even when the
+     * instance differs.
      *
      * <p>NON-FATAL: any failure is logged and ignored — the server itself is already deleted, the app is
      * gone from {@code get_applications}, and the orphan self-heals on the next workbench start (the
      * delegate's {@code initialize()} drops config-less entries from its map).
      *
+     * @param module the live {@code StandaloneServerInfobase} module of the deleted server (from
+     *            {@link #moduleOfApplication}, read BEFORE deletion); may be {@code null}
+     * @param infobaseId the raw infobase id string (from {@link #infobaseIdOf}) — the 2025.2 map key,
+     *            kept as the final fallback; may be {@code null}
      * @return {@link RegistryCleanup#REMOVED} if a stale entry was removed, {@link RegistryCleanup#NOT_PRESENT}
-     *         when there was nothing to clean (no infobaseId / no matching entry), or
-     *         {@link RegistryCleanup#FAILED} on a reflective failure
+     *         when there was nothing to clean (no matching entry), or {@link RegistryCleanup#FAILED} on
+     *         a reflective failure / when both {@code module} and {@code infobaseId} are {@code null}
+     *         (nothing to target)
      */
-    static RegistryCleanup removeFromInfobaseRegistry(String infobaseId, IProgressMonitor monitor)
+    static RegistryCleanup removeFromInfobaseRegistry(Object module, String infobaseId,
+        IProgressMonitor monitor)
     {
-        if (infobaseId == null)
+        if (module == null && infobaseId == null)
         {
-            // We could not read the infobaseId, so we cannot target the entry — report FAILED (honest:
-            // "could not clean, self-heals on restart") rather than implying there was nothing to clean.
+            // We could resolve neither the module nor its raw id, so we cannot target the entry —
+            // report FAILED (honest: "could not clean, self-heals on restart") rather than implying
+            // there was nothing to clean.
             return RegistryCleanup.FAILED;
         }
         try
@@ -371,7 +448,7 @@ final class StandaloneServerSupport
             Object factory = null;
             for (Object f : factories)
             {
-                Object id = f.getClass().getMethod("getId").invoke(f); //$NON-NLS-1$
+                Object id = f.getClass().getMethod(METHOD_GET_ID).invoke(f);
                 if (MODULE_FACTORY_ID.equals(id))
                 {
                     factory = f;
@@ -410,7 +487,7 @@ final class StandaloneServerSupport
             {
                 return RegistryCleanup.FAILED;
             }
-            if (modules.remove(infobaseId) == null)
+            if (removeModuleEntries(modules, module, infobaseId) == 0)
             {
                 // Already gone (e.g. the delegate's initialize() self-healed it) — not an error.
                 return RegistryCleanup.NOT_PRESENT;
@@ -429,6 +506,91 @@ final class StandaloneServerSupport
             Activator.logError("delete_infobase: best-effort infobases.yaml cleanup failed " //$NON-NLS-1$
                 + "(non-fatal — the server is deleted; the orphan self-heals on restart)", t); //$NON-NLS-1$
             return RegistryCleanup.FAILED;
+        }
+    }
+
+    /**
+     * The map surgery of {@link #removeFromInfobaseRegistry}, extracted as a pure (headless-testable)
+     * decision: removes the deleted server's entry/entries from the delegate's {@code modules} map and
+     * returns how many were removed. Three strategies, tried in order (each only when the previous
+     * removed nothing) because the map's KEY scheme differs per EDT version (2025.2 = raw uuid string,
+     * 2026.1 = the prefixed {@code getId()} module-id string):
+     * <ol>
+     *   <li>VALUE reference identity with {@code module} — version-proof: the live map holds the very
+     *   instance {@link #moduleOfApplication} returned, whatever the key scheme;</li>
+     *   <li>value {@code getId()} String equality with {@code module}'s own reflective {@code getId()}
+     *   — catches a re-created (non-identical) instance for the same module id;</li>
+     *   <li>key-based {@code remove(infobaseId)} — the original raw-id removal, preserving the proven
+     *   2025.2 behavior even when the instance differs and {@code getId()} is unavailable.</li>
+     * </ol>
+     *
+     * @param modules the delegate's live modules map (never {@code null})
+     * @param module the deleted server's module instance; may be {@code null} (strategies 1-2 skipped)
+     * @param infobaseId the raw infobase id (the 2025.2 key); may be {@code null} (strategy 3 skipped)
+     * @return the number of entries removed (0 = nothing matched)
+     */
+    static int removeModuleEntries(Map<Object, Object> modules, Object module, String infobaseId)
+    {
+        int removed = 0;
+        if (module != null)
+        {
+            removed = removeByValue(modules, value -> value == module);
+        }
+        if (removed == 0 && module != null)
+        {
+            String moduleId = idOf(module);
+            if (moduleId != null)
+            {
+                removed = removeByValue(modules, value -> moduleId.equals(idOf(value)));
+            }
+        }
+        if (removed == 0 && infobaseId != null && modules.remove(infobaseId) != null)
+        {
+            removed = 1;
+        }
+        return removed;
+    }
+
+    /** Removes every map entry whose VALUE matches the predicate; returns the removed count. */
+    private static int removeByValue(Map<Object, Object> modules, Predicate<Object> valueMatches)
+    {
+        int removed = 0;
+        for (Iterator<Map.Entry<Object, Object>> it = modules.entrySet().iterator(); it.hasNext();)
+        {
+            if (valueMatches.test(it.next().getValue()))
+            {
+                it.remove();
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * Reflective {@code getId()} of a registry module as a String (on 2026.1 this is the delegate's
+     * map key — the prefixed module-id). Returns {@code null} when the object is {@code null}, the
+     * method is absent (possible on older versions) or the read fails — the caller then just skips the
+     * id-equality strategy.
+     */
+    private static String idOf(Object module)
+    {
+        if (module == null)
+        {
+            return null;
+        }
+        try
+        {
+            Method m = findMethod(module.getClass(), METHOD_GET_ID, 0);
+            if (m == null)
+            {
+                return null;
+            }
+            Object id = m.invoke(module);
+            return id != null ? id.toString() : null;
+        }
+        catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
+        {
+            return null;
         }
     }
 
