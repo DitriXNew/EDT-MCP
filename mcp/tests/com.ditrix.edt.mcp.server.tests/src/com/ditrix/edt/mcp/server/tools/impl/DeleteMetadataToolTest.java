@@ -11,19 +11,26 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.emf.ecore.EObject;
 import org.junit.Test;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -579,5 +586,239 @@ public class DeleteMetadataToolTest
     {
         String desc = new DeleteMetadataTool().getDescription();
         assertTrue("description should mention predefined items", desc.contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ===== predefined-item incoming-reference check helpers (issue #293 rework + fix-round) ===========
+    //
+    // The full scan (collectPredefinedItemBlockingReferences) needs a live BM model + workbench - it is
+    // E2E-covered - but it is now a thin wrapper around
+    // MetadataReferenceService.collectReferencesForObjectStrict (the SAME engine find_references uses,
+    // now also reporting whether its BSL step completed - fail-closed wiring is E2E-covered via
+    // test_predefined_items.py). It already owns the technical-noise filtering
+    // (isInternalReference/isInternalPath) that used to be duplicated here as isInternalPredefinedReference.
+    // What remains local to THIS delete safety check is the NARROWED owner-self exclusion
+    // (isOwnerSelfReference - same owner top-object AND the exact structural "source" feature; NOT
+    // applied by the shared service, since find_references intentionally shows self-references) and the
+    // ReferenceInfo -> wire-row mapping (describePredefinedReferenceInfo). All are plain functions over
+    // Mockito-mocked BM/EMF interfaces, runtime-free.
+
+    @Test
+    public void testIsOwnerSelfReferenceExcludesSameOwnerSourceFeatureReference()
+    {
+        // issue #293 P1 fix-round (narrowed, confirmed live): a pristine predefined item's own owner
+        // catalog showing up as a "reference" through the derived predefined-data-source linkage - the
+        // EXACT feature name "source" (PredefinedItem itself declares no such feature in
+        // MdClass.xcore) - must be excluded. It is not an external dependency and must never block the
+        // delete.
+        IBmObject source = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(source.bmIsTop()).thenReturn(true);
+        when(source.bmGetId()).thenReturn(42L);
+
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "Catalogs", "Catalog.Products - source", "source", source); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("a same-owner reference through the structural 'source' feature must be excluded", //$NON-NLS-1$
+            DeleteMetadataTool.isOwnerSelfReference(info, 42L));
+    }
+
+    /**
+     * issue #293 P1 fix-round (the actual bug being fixed): matching on same-owner ALONE was too broad
+     * and silently discarded a REAL same-owner reference (e.g. a Catalog attribute's fill value /
+     * ReferenceValue pointing at a predefined item of the SAME catalog, feature "value"; or a
+     * ChartOfCalculationTypesPredefinedItem's base/displaced/leading referring to a SIBLING predefined
+     * item). Such a reference must still BLOCK the delete even though its source's top container is the
+     * SAME owner - only the "source"-feature linkage is purely structural.
+     */
+    @Test
+    public void testIsOwnerSelfReferenceKeepsSameOwnerReferenceWithNonSourceFeature()
+    {
+        IBmObject source = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(source.bmIsTop()).thenReturn(true);
+        when(source.bmGetId()).thenReturn(42L);
+
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "Catalogs", "Catalog.Products - value", "value", source); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("a same-owner reference through a REAL feature (not the structural 'source' " //$NON-NLS-1$
+            + "linkage) must NOT be excluded - it must still block the delete", //$NON-NLS-1$
+            DeleteMetadataTool.isOwnerSelfReference(info, 42L));
+    }
+
+    @Test
+    public void testIsOwnerSelfReferenceKeepsReferenceFromADifferentTopObject()
+    {
+        // A REAL external dependency (e.g. another object's default value referencing this item) must
+        // never be excluded, even though it goes through the exact same check.
+        IBmObject source = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(source.bmIsTop()).thenReturn(true);
+        when(source.bmGetId()).thenReturn(99L);
+
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "Documents", "Document.Order - type", "type", source); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("a reference from a genuinely different top object must NOT be excluded", //$NON-NLS-1$
+            DeleteMetadataTool.isOwnerSelfReference(info, 42L));
+    }
+
+    /**
+     * The exclusion must climb a NESTED source's container chain to its own top object, not just match
+     * a direct top-level self-reference - e.g. a "source"-feature reference held on one of the owner's
+     * nested objects is still an owner-self reference. Uses the "source" feature (the narrowed
+     * exclusion's only match) so the container-walk behaviour is tested independently of the
+     * feature-name check.
+     */
+    @Test
+    public void testIsOwnerSelfReferenceWalksUpToNestedSourcesTopContainer()
+    {
+        IBmObject top = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(top.bmIsTop()).thenReturn(true);
+        when(top.bmGetId()).thenReturn(42L);
+
+        IBmObject nested = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(nested.bmIsTop()).thenReturn(false);
+        when(((EObject)nested).eContainer()).thenReturn((EObject)top);
+
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "Catalogs", "Catalog.Products - source", "source", nested); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("a nested source whose container chain reaches the owner top object must also be " //$NON-NLS-1$
+            + "excluded (feature 'source')", DeleteMetadataTool.isOwnerSelfReference(info, 42L)); //$NON-NLS-1$
+    }
+
+    /**
+     * A BSL reference never carries a live source object ({@link
+     * MetadataReferenceService.ReferenceInfo#sourceObject} is {@code null} - the Xtext finder hands
+     * back a URI, not a BM object) - it can never be treated as an owner-self reference: a BSL module is
+     * always a DIFFERENT top object from the predefined item's owner.
+     */
+    @Test
+    public void testIsOwnerSelfReferenceNeverExcludesABslReference()
+    {
+        MetadataReferenceService.ReferenceInfo bslInfo = new MetadataReferenceService.ReferenceInfo(
+            "BSL modules", "CommonModules/MyModule/Module.bsl", 10); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a BSL reference (no sourceObject) must never be excluded as an owner-self reference", //$NON-NLS-1$
+            DeleteMetadataTool.isOwnerSelfReference(bslInfo, 42L));
+    }
+
+    /**
+     * issue #293 P2 fix: a self-containing eContainer() cycle must never hang the delete's reference
+     * scan (it would otherwise hold the read transaction open forever). The bounded depth guard in
+     * findTopContainer must stop and return without throwing; the JUnit timeout below fails loudly if a
+     * regression reintroduces the infinite loop.
+     */
+    @Test(timeout = 10000)
+    public void testIsOwnerSelfReferenceTerminatesOnASelfContainingContainerCycle()
+    {
+        IBmObject source = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(source.bmIsTop()).thenReturn(false);
+        when(source.bmGetId()).thenReturn(7L); // deliberately != ownerTopId below
+        when(((EObject)source).eContainer()).thenReturn((EObject)source); // self-containing cycle
+
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "Catalogs", "Catalog.Products - source", "source", source); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        // The call must RETURN (not hang); a cyclic chain never reaches a real top object, so
+        // findTopContainer returns null and the reference is treated as NOT owner-self (kept/blocks).
+        assertFalse("a self-containing eContainer() cycle must terminate and must never be treated as " //$NON-NLS-1$
+            + "an owner-self match", DeleteMetadataTool.isOwnerSelfReference(info, 42L)); //$NON-NLS-1$
+    }
+
+    /**
+     * The SINGLE fail-closed block decision for a predefined-item delete: a non-forced delete blocks
+     * when the reference scan found references OR did not complete (UNVERIFIED state); force bypasses
+     * both. Both the confirm path and the preview's blocking flag route through this method, so
+     * pinning it guards against a regression that silently deletes on an unverified/referenced item.
+     */
+    @Test
+    public void testPredefinedDeleteWouldBlockFailClosedDecision()
+    {
+        List<Map<String, Object>> none = new ArrayList<>();
+        List<Map<String, Object>> some = new ArrayList<>();
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("referencingObject", "Document.Order"); //$NON-NLS-1$ //$NON-NLS-2$
+        some.add(row);
+
+        // completed scan, NO references, no force -> allow (not blocked)
+        assertFalse("a completed scan with no references must not block", //$NON-NLS-1$
+            DeleteMetadataTool.predefinedDeleteWouldBlock(
+                new DeleteMetadataTool.PredefinedRefScan(none, true), false));
+        // completed scan WITH references, no force -> block
+        assertTrue("a completed scan with references must block without force", //$NON-NLS-1$
+            DeleteMetadataTool.predefinedDeleteWouldBlock(
+                new DeleteMetadataTool.PredefinedRefScan(some, true), false));
+        // completed scan WITH references, force -> allow (force bypasses)
+        assertFalse("force must bypass a references block", //$NON-NLS-1$
+            DeleteMetadataTool.predefinedDeleteWouldBlock(
+                new DeleteMetadataTool.PredefinedRefScan(some, true), true));
+        // INCOMPLETE scan (unverified), nothing gathered, no force -> block (fail-closed)
+        assertTrue("an unverified (incomplete) scan must block without force", //$NON-NLS-1$
+            DeleteMetadataTool.predefinedDeleteWouldBlock(
+                new DeleteMetadataTool.PredefinedRefScan(none, false), false));
+        // incomplete scan, force -> allow
+        assertFalse("force must bypass an unverified-scan block", //$NON-NLS-1$
+            DeleteMetadataTool.predefinedDeleteWouldBlock(
+                new DeleteMetadataTool.PredefinedRefScan(none, false), true));
+        // incomplete scan that DID gather partial refs, no force -> block
+        assertTrue("a partial (incomplete but non-empty) scan must block without force", //$NON-NLS-1$
+            DeleteMetadataTool.predefinedDeleteWouldBlock(
+                new DeleteMetadataTool.PredefinedRefScan(some, false), false));
+    }
+
+    @Test
+    public void testDescribePredefinedReferenceInfoBuildsExpectedRowShapeForMetadataReference()
+    {
+        PredefinedItem item = mock(PredefinedItem.class);
+        when(item.getName()).thenReturn("Blue"); //$NON-NLS-1$
+
+        IBmObject sourceObject = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "Documents", "Document.Order - type", "type", sourceObject); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        Map<String, Object> row = DeleteMetadataTool.describePredefinedReferenceInfo(item, info);
+        assertEquals("Documents", row.get("problemType")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Document.Order - type", row.get("referencingObject")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("type", row.get("reference")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Blue", row.get("targetObject")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a metadata reference row carries no line number (a BSL-only field)", //$NON-NLS-1$
+            row.containsKey("line")); //$NON-NLS-1$
+    }
+
+    /**
+     * issue #293 P2 fix: a BSL reference (found only through the reused find_references engine's Xtext
+     * scan - the former hand-rolled collector never saw these) must convert into the SAME wire-row
+     * shape, with its line number surfaced.
+     */
+    @Test
+    public void testDescribePredefinedReferenceInfoBuildsExpectedRowShapeForBslReference()
+    {
+        PredefinedItem item = mock(PredefinedItem.class);
+        when(item.getName()).thenReturn("Blue"); //$NON-NLS-1$
+
+        MetadataReferenceService.ReferenceInfo info = new MetadataReferenceService.ReferenceInfo(
+            "BSL modules", "CommonModules/MyModule/Module.bsl", 17); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Map<String, Object> row = DeleteMetadataTool.describePredefinedReferenceInfo(item, info);
+        assertEquals("BSL modules", row.get("problemType")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("CommonModules/MyModule/Module.bsl", row.get("referencingObject")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("BSL code", row.get("reference")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(17, row.get("line")); //$NON-NLS-1$
+        assertEquals("Blue", row.get("targetObject")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDescribePredefinedReferenceInfoOmitsReferencingObjectWhenSourcePathBlank()
+    {
+        PredefinedItem item = mock(PredefinedItem.class);
+        when(item.getName()).thenReturn("Blue"); //$NON-NLS-1$
+
+        MetadataReferenceService.ReferenceInfo info =
+            new MetadataReferenceService.ReferenceInfo("Other", "", "someFeature", null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        Map<String, Object> row = DeleteMetadataTool.describePredefinedReferenceInfo(item, info);
+        assertFalse("no referencingObject key when the source path is blank", //$NON-NLS-1$
+            row.containsKey("referencingObject")); //$NON-NLS-1$
+        assertEquals("someFeature", row.get("reference")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Blue", row.get("targetObject")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

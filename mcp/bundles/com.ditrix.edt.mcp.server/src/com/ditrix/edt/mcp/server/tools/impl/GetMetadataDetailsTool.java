@@ -124,7 +124,8 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "is what modify_metadata can set; FQNs may address members (e.g. " + //$NON-NLS-1$
                 "'Catalog.Products.Attribute.Weight'), but NOT a predefined item " + //$NON-NLS-1$
                 "('...Predefined.<Item>' is not resolvable in this mode - its settable surface is " + //$NON-NLS-1$
-                "fixed: description / code / isFolder).") //$NON-NLS-1$
+                "fixed: description / code / isFolder, plus 'valueType' for a " + //$NON-NLS-1$
+                "ChartOfCharacteristicTypes item only).") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
@@ -456,7 +457,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     /**
      * The body of {@link #appendPredefinedItemView}: resolves the owner
      * (yo-fallback), finds the item (recursive, exact name match) and renders a Property/Value table
-     * (Name / Code / Description / Folder / Parent / nested-item count when it is a folder). Returns
+     * (Name / Code / Description / Value type / Folder / Parent / nested-item count when it is a
+     * folder). Returns
      * the Markdown, or {@code null} after adding a {fqn, reason} failure row when the owner TYPE is
      * unsupported, the owner does not exist, or the item is not found - never a silent wrong render.
      * Package-private: the unit tests exercise it directly against an in-memory {@code Configuration}.
@@ -498,6 +500,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         sb.append(MarkdownUtils.tableRow("Name", item.getName())); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableRow("Code", valueOrDash(PredefinedWriter.displayCode(item)))); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableRow("Description", valueOrDash(item.getDescription()))); //$NON-NLS-1$
+        // Value type (issue #296 P2): meaningful only for a ChartOfCharacteristicTypes item - dash for
+        // any other owner kind (a Catalog item has no such concept) or when unset.
+        sb.append(MarkdownUtils.tableRow("Value type", valueOrDash(PredefinedWriter.displayValueType(item)))); //$NON-NLS-1$
         boolean folder = PredefinedWriter.isFolder(item);
         sb.append(MarkdownUtils.tableRow("Folder", yesNo(folder))); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableRow("Parent", valueOrDash(lookup.parentName))); //$NON-NLS-1$
@@ -657,9 +662,10 @@ public class GetMetadataDetailsTool implements IMcpTool
 
     /**
      * Renders the owner's "Predefined items" section: one row per item (recursively, items + content),
-     * with Name / Code / Description / Folder / Parent columns - the Parent column shows nesting
-     * (top-level items carry {@link #DASH}). A no-op (no section at all) when the owner has no
-     * predefined content yet.
+     * with Name / Code / Description / Type / Folder / Parent columns - the Parent column shows nesting
+     * (top-level items carry {@link #DASH}); the Type column is populated only for a
+     * ChartOfCharacteristicTypes item's value type (issue #296 P2, dash for a Catalog item / an unset
+     * type). A no-op (no section at all) when the owner has no predefined content yet.
      */
     private static void appendPredefinedItems(StringBuilder sb, MdObject mdObject)
     {
@@ -669,11 +675,11 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
         sb.append("\n### Predefined items\n\n"); //$NON-NLS-1$
-        sb.append(MarkdownUtils.tableHeader("Name", "Code", "Description", "Folder", "Parent")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        sb.append(MarkdownUtils.tableHeader("Name", "Code", "Description", "Type", "Folder", "Parent")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         for (PredefinedWriter.ItemRow row : rows)
         {
             sb.append(MarkdownUtils.tableRow(row.name, valueOrDash(row.code), valueOrDash(row.description),
-                yesNo(row.isFolder), valueOrDash(row.parentName)));
+                valueOrDash(row.valueType), yesNo(row.isFolder), valueOrDash(row.parentName)));
         }
     }
 

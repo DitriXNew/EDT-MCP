@@ -16,14 +16,20 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import org.junit.Test;
+import org.mockito.Mockito;
 
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCodeType;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogPredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
@@ -110,6 +116,18 @@ public class PredefinedWriterTest
     private static String fromCp(int... cps)
     {
         return new String(cps, 0, cps.length);
+    }
+
+    /** A minimal {@code {types:[{kind}]}} value-type spec, the shape {@code valueType}/{@code type} takes. */
+    private static JsonObject typeSpec(String kind)
+    {
+        JsonObject item = new JsonObject();
+        item.addProperty("kind", kind); //$NON-NLS-1$
+        JsonArray types = new JsonArray();
+        types.add(item);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        return spec;
     }
 
     // ==================== parseRef (FQN grammar) ====================
@@ -818,7 +836,8 @@ public class PredefinedWriterTest
 
     // ==================== strict-value hardening (codex round 1) ====================
 
-    /** A 'code' entry with NO 'value' key is malformed - it must never be read as a clear. */
+    /** On CREATE, a 'code' entry with NO 'value' key is malformed - there is nothing to clear (a
+     *  missing/null value on MODIFY instead clears; see testModifyCodeMissingValueClearsIt). */
     @Test
     public void testParsePropertiesCodeWithoutValueRejected()
     {
@@ -1118,5 +1137,368 @@ public class PredefinedWriterTest
             PredefinedWriter.create(catalog, yo, new PredefinedWriter.ItemProps(), false);
         assertFalse("the writer's duplicate check is exact - a yo-variant is not a duplicate", //$NON-NLS-1$
             second.isError());
+    }
+
+    // ==================== descendants() (issue #296 P1: delete_metadata's reference cascade) ==========
+
+    @Test
+    public void testDescendantsOfLeafIsEmpty()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        PredefinedWriter.WriteResult leaf =
+            PredefinedWriter.create(catalog, "Blue", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+        assertTrue(PredefinedWriter.descendants(leaf.item).isEmpty());
+    }
+
+    @Test
+    public void testDescendantsOfFolderIncludesWholeSubtree()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        PredefinedWriter.ItemProps folderProps = new PredefinedWriter.ItemProps();
+        folderProps.isFolder = true;
+        folderProps.isFolderSet = true;
+        PredefinedWriter.WriteResult folder = PredefinedWriter.create(catalog, "Warm", folderProps, false); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps nestedFolderProps = new PredefinedWriter.ItemProps();
+        nestedFolderProps.isFolder = true;
+        nestedFolderProps.isFolderSet = true;
+        nestedFolderProps.parentName = "Warm"; //$NON-NLS-1$
+        PredefinedWriter.create(catalog, "Reds", nestedFolderProps, false); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps leafProps = new PredefinedWriter.ItemProps();
+        leafProps.parentName = "Reds"; //$NON-NLS-1$
+        PredefinedWriter.create(catalog, "Crimson", leafProps, false); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps directChildProps = new PredefinedWriter.ItemProps();
+        directChildProps.parentName = "Warm"; //$NON-NLS-1$
+        PredefinedWriter.create(catalog, "Orange", directChildProps, false); //$NON-NLS-1$
+
+        // Warm -> Reds -> Crimson, and Warm -> Orange: 3 descendant OBJECTS (mirrors
+        // testDeletePreviewFolderCountsAllDescendants's cascade shape, but returning the items
+        // themselves - what delete_metadata's reference scan needs - not just a count).
+        List<PredefinedItem> descendants = PredefinedWriter.descendants(folder.item);
+        assertEquals(3, descendants.size());
+        boolean hasReds = false;
+        boolean hasCrimson = false;
+        boolean hasOrange = false;
+        for (PredefinedItem d : descendants)
+        {
+            hasReds |= "Reds".equals(d.getName()); //$NON-NLS-1$
+            hasCrimson |= "Crimson".equals(d.getName()); //$NON-NLS-1$
+            hasOrange |= "Orange".equals(d.getName()); //$NON-NLS-1$
+        }
+        assertTrue("every nested descendant must be present", hasReds && hasCrimson && hasOrange); //$NON-NLS-1$
+    }
+
+    // ==================== valueType (issue #296 P2: CCT predefined items) ==============================
+    //
+    // The SUCCESSFUL build (a real TypeDescription resolved via the platform type provider) needs a
+    // live EDT platform and is E2E-covered (mirrors MetadataTypeBuilderTest's own documented split:
+    // "the build() happy path needs the platform type provider"). What IS unit-testable here: the
+    // owner-type gate (CCT only), the create-time-null / missing-context guards (all pure, before
+    // MetadataTypeBuilder is ever touched), the null-CLEARS-on-modify path (also pure - it short-circuits
+    // before touching Configuration/Version), and the render path (formatValueType/displayValueType)
+    // once a TypeDescription IS set (built directly here with McoreFactory, bypassing the platform
+    // resolver entirely - proving the getType()/setType() plumbing and the renderer, independent of how
+    // the TypeDescription was produced).
+
+    @Test
+    public void testParsePropertiesAcceptsValueTypeName()
+    {
+        PredefinedWriter.ItemProps out = parse(List.of(prop("valueType", typeSpec("String"))), false); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(out.valueTypeSet);
+        assertNotNull(out.valueType);
+    }
+
+    @Test
+    public void testParsePropertiesAcceptsTypeAlias()
+    {
+        PredefinedWriter.ItemProps out = parse(List.of(prop("type", typeSpec("String"))), false); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the 'type' alias must be accepted the same as 'valueType'", out.valueTypeSet); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParsePropertiesValueTypeWithoutValueRejected()
+    {
+        PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
+        String err = PredefinedWriter.parseProperties(List.of(prop("valueType", null)), false, out); //$NON-NLS-1$
+        assertNotNull("a 'valueType' entry with no 'value' must be rejected", err); //$NON-NLS-1$
+        assertTrue(err.contains("needs a 'value'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValueTypeRejectedForCatalogOwnerOnCreate()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.valueType = typeSpec("String"); //$NON-NLS-1$
+        props.valueTypeSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue("a Catalog item must reject valueType with an actionable error", //$NON-NLS-1$
+            result.error.contains("ChartOfCharacteristicTypes")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValueTypeRejectedForCatalogOwnerOnModify()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        PredefinedWriter.create(catalog, "Blue", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps mod = new PredefinedWriter.ItemProps();
+        mod.valueType = typeSpec("String"); //$NON-NLS-1$
+        mod.valueTypeSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.modify(catalog, "Blue", mod); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue(result.error.contains("ChartOfCharacteristicTypes")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValueTypeNullAtCreateRejected()
+    {
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.valueType = JsonNull.INSTANCE;
+        props.valueTypeSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(types, "Weight", props, false); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue(result.error.contains("cannot be JSON null at create")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValueTypeMissingContextRejected()
+    {
+        // config/version deliberately left unset - exactly what every EXISTING caller of create()/
+        // modify() (none of which touch valueType) leaves them at; PredefinedWriter must still fail
+        // ACTIONABLY (not NPE) when a caller DOES set valueTypeSet without supplying the context.
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.valueType = typeSpec("String"); //$NON-NLS-1$
+        props.valueTypeSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(types, "Weight", props, false); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue("a missing platform-version context must fail actionably, not NPE", //$NON-NLS-1$
+            result.error.contains("platform version")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValueTypeModifyNullClearsExistingType()
+    {
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.WriteResult created =
+            PredefinedWriter.create(types, "Weight", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+        ChartOfCharacteristicTypesPredefinedItem item =
+            (ChartOfCharacteristicTypesPredefinedItem)created.item;
+        // Set directly (bypassing the platform-resolving writer path) - this test targets the CLEAR,
+        // which never touches MetadataTypeBuilder either way.
+        item.setType(McoreFactory.eINSTANCE.createTypeDescription());
+        assertNotNull("precondition: a value type is set before the clear", item.getType()); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps mod = new PredefinedWriter.ItemProps();
+        mod.valueType = JsonNull.INSTANCE;
+        mod.valueTypeSet = true;
+        PredefinedWriter.WriteResult result = PredefinedWriter.modify(types, "Weight", mod); //$NON-NLS-1$
+        assertFalse(result.isError());
+        assertNull("an explicit JSON null must clear the value type", item.getType()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatValueTypeNullForNullOrEmptyDescription()
+    {
+        assertNull(PredefinedWriter.formatValueType(null));
+        TypeDescription empty = McoreFactory.eINSTANCE.createTypeDescription();
+        assertNull("no types in the list -> no rendered text", PredefinedWriter.formatValueType(empty)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDisplayValueTypeNullForCatalogItem()
+    {
+        // A Catalog item has NO value-type concept at all - dash-worthy null, not an error.
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        PredefinedWriter.WriteResult result =
+            PredefinedWriter.create(catalog, "Blue", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+        assertNull(PredefinedWriter.displayValueType(result.item));
+    }
+
+    @Test
+    public void testDisplayValueTypeRendersOnceSet()
+    {
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.WriteResult result =
+            PredefinedWriter.create(types, "Weight", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+        ChartOfCharacteristicTypesPredefinedItem item = (ChartOfCharacteristicTypesPredefinedItem)result.item;
+        assertNull("no value type until set", PredefinedWriter.displayValueType(item)); //$NON-NLS-1$
+
+        // A BARE (unstubbed) mock proves NOTHING here: formatValueType's fallback chain is
+        // McoreUtil.getTypeName -> McoreUtil.getTypeNameRu -> typeItem.getClass().getSimpleName(), and
+        // an unstubbed mock makes the first two return null - so the assertion would pass via the
+        // LAST-RESORT fallback (a Mockito-generated class name like "TypeItem$MockitoMock$..." is
+        // always non-null) regardless of whether the real renderer chain ever ran.
+        //
+        // A REAL, platform-RESOLVED TypeItem (the kind MetadataTypeBuilder builds via
+        // provider.createProxy(name)) needs the live platform type provider, not available in a bare
+        // unit test (see the class doc above) - so instead this stubs the mock's OWN dual-name
+        // accessors (getName()/getNameRu(), inherited from DuallyNamedElement/NamedElement - a REAL
+        // part of the TypeItem contract, not an artifact of mocking) with a sentinel that could only
+        // reach the output if McoreUtil.getTypeName/getTypeNameRu actually read it off the item. This
+        // makes the assertion depend on the renderer chain actually being invoked, not on the
+        // class-name fallback: the fallback branch would render the mock's proxy class name, which
+        // never contains the sentinel.
+        String sentinel = "ZZZ_SENTINEL_TYPE_NAME_296"; //$NON-NLS-1$
+        TypeItem stubbedTypeItem = Mockito.mock(TypeItem.class);
+        Mockito.when(stubbedTypeItem.getName()).thenReturn(sentinel);
+        Mockito.when(stubbedTypeItem.getNameRu()).thenReturn(sentinel);
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        td.getTypes().add(stubbedTypeItem);
+        item.setType(td);
+
+        assertNotNull("getType() is now set", item.getType()); //$NON-NLS-1$
+        String rendered = PredefinedWriter.displayValueType(item);
+        assertNotNull("a set value type must render as non-null text", rendered); //$NON-NLS-1$
+        assertTrue("rendered text must CONTAIN the stubbed type name, proving the renderer chain " //$NON-NLS-1$
+            + "actually ran (a bare unstubbed mock would satisfy a mere non-null check via its " //$NON-NLS-1$
+            + "class-name fallback, proving nothing) - got: " + rendered, //$NON-NLS-1$
+            rendered.contains(sentinel));
+    }
+
+    // ==================== descriptionLength (issue #296 addendum) ======================================
+
+    @Test
+    public void testDescriptionExactlyAtLimitAccepted()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        catalog.setDescriptionLength(5);
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.description = "Hello"; // 5 chars, exactly at the limit //$NON-NLS-1$
+        props.descriptionSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
+        assertFalse("exactly-at-limit must be accepted, not rejected", result.isError()); //$NON-NLS-1$
+        assertEquals("Hello", result.item.getDescription()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionOverLimitRejectedOnCreate()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        catalog.setDescriptionLength(4);
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.description = "Hello"; // 5 chars > 4 //$NON-NLS-1$
+        props.descriptionSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
+        assertTrue("an over-long description must be REJECTED, never silently truncated", //$NON-NLS-1$
+            result.isError());
+        assertTrue(result.error.contains("descriptionLength")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionOmittedDefaultsToNameAlsoValidated()
+    {
+        // An OMITTED description defaults to the item's Name (existing behaviour) - the length check
+        // must cover that default too, not just an explicitly supplied description.
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        catalog.setDescriptionLength(3);
+
+        PredefinedWriter.WriteResult result =
+            PredefinedWriter.create(catalog, "VeryLongName", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue(result.error.contains("descriptionLength")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionUnlimitedWhenLengthZeroAccepted()
+    {
+        // descriptionLength defaults to 0 on a bare MdClassFactory fixture - the SAME "0 = unlimited"
+        // convention codeLength already uses.
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.description = "A description far longer than any typical designer-authored limit, just " //$NON-NLS-1$
+            + "to be sure zero really means unlimited and nothing rejects it."; //$NON-NLS-1$
+        props.descriptionSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
+        assertFalse(result.isError());
+    }
+
+    @Test
+    public void testDescriptionOverLimitRejectedOnModify()
+    {
+        Catalog catalog = newCatalog("Colors"); //$NON-NLS-1$
+        catalog.setDescriptionLength(4);
+        PredefinedWriter.create(catalog, "Blue", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps mod = new PredefinedWriter.ItemProps();
+        mod.description = "TooLong"; //$NON-NLS-1$
+        mod.descriptionSet = true;
+        PredefinedWriter.WriteResult result = PredefinedWriter.modify(catalog, "Blue", mod); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue(result.error.contains("descriptionLength")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionOverLimitRejectedForCharacteristicTypesOwner()
+    {
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        types.setDescriptionLength(4);
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.description = "Hello"; // 5 chars > 4 //$NON-NLS-1$
+        props.descriptionSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(types, "Weight", props, false); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue(result.error.contains("descriptionLength")); //$NON-NLS-1$
+    }
+
+    // ==================== wire-robust clear (code / valueType) ====================
+    // The MCP wire drops a null-valued key on the way in, so an explicit `null` reaches the tool as a
+    // MISSING value. On MODIFY, a missing/null code or valueType therefore CLEARS it; on CREATE it is
+    // still malformed (nothing to clear).
+
+    /** modify: a `code` entry with a MISSING value clears the code (wire-stripped null). */
+    @Test
+    public void testModifyCodeMissingValueClearsIt()
+    {
+        PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
+        String err = PredefinedWriter.parseProperties(java.util.List.of(prop("code", null)), true, out); //$NON-NLS-1$
+        assertNull("a missing code value on modify must clear, not error: " + err, err); //$NON-NLS-1$
+        assertTrue(out.codeSet);
+        assertTrue("the cleared code is carried as JSON null", out.code != null && out.code.isJsonNull()); //$NON-NLS-1$
+    }
+
+    /** create: a `code` entry with a MISSING value is still rejected (nothing to clear). */
+    @Test
+    public void testCreateCodeMissingValueRejected()
+    {
+        PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
+        String err = PredefinedWriter.parseProperties(java.util.List.of(prop("code", null)), false, out); //$NON-NLS-1$
+        assertNotNull("a missing code value on create must be rejected", err); //$NON-NLS-1$
+        assertTrue(err.contains("needs a 'value'")); //$NON-NLS-1$
+    }
+
+    /** modify: a `valueType` entry with a MISSING value clears it (wire-stripped null). */
+    @Test
+    public void testModifyValueTypeMissingValueClearsIt()
+    {
+        PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
+        String err = PredefinedWriter.parseProperties(java.util.List.of(prop("valueType", null)), true, out); //$NON-NLS-1$
+        assertNull("a missing valueType value on modify must clear, not error: " + err, err); //$NON-NLS-1$
+        assertTrue(out.valueTypeSet);
+        assertTrue("the cleared value type is carried as JSON null", //$NON-NLS-1$
+            out.valueType != null && out.valueType.isJsonNull());
+    }
+
+    /** create: a `valueType` entry with a MISSING value is still rejected. */
+    @Test
+    public void testCreateValueTypeMissingValueRejected()
+    {
+        PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
+        String err = PredefinedWriter.parseProperties(java.util.List.of(prop("valueType", null)), false, out); //$NON-NLS-1$
+        assertNotNull("a missing valueType value on create must be rejected", err); //$NON-NLS-1$
+        assertTrue(err.contains("needs a 'value'")); //$NON-NLS-1$
     }
 }

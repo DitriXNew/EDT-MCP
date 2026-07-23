@@ -181,7 +181,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' " //$NON-NLS-1$
                 + "(booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED " //$NON-NLS-1$
                 + "item ('...Predefined.<Item>') uses yet another vocabulary: 'description', 'code', " //$NON-NLS-1$
-                + "'isFolder' and 'parent'.") //$NON-NLS-1$
+                + "'isFolder', 'parent' and, for a ChartOfCharacteristicTypes item only, 'valueType' " //$NON-NLS-1$
+                + "(alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; rejected " //$NON-NLS-1$
+                + "for a Catalog item).") //$NON-NLS-1$
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
@@ -771,6 +773,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return bm.error;
         }
+        // valueType (issue #296 P2) needs a resolution context (Configuration + platform Version)
+        // PredefinedWriter itself cannot reach - the SAME context resolveBmContext already resolved
+        // for the rest of this create path, stashed on props for PredefinedWriter#create to use.
+        // Harmless to set unconditionally (PredefinedWriter only touches it when valueTypeSet).
+        props.config = config;
+        props.version = bm.version;
+        props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String createItemName = itemName;

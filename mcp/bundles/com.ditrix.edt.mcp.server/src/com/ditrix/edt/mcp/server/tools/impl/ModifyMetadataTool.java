@@ -256,8 +256,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "Set a PREDEFINED item's properties with 'properties' on its own FQN " //$NON-NLS-1$
             + "('Catalog.X.Predefined.ItemName' or 'ChartOfCharacteristicTypes.X.Predefined.ItemName'): " //$NON-NLS-1$
             + "description / code / isFolder (folder->item with existing children is refused; moving to " //$NON-NLS-1$
-            + "a different 'parent' is not yet supported - delete and re-create; these three names ARE " //$NON-NLS-1$
-            + "the item's whole settable surface, no assignable-schema round-trip needed). " //$NON-NLS-1$
+            + "a different 'parent' is not yet supported - delete and re-create) and, for a " //$NON-NLS-1$
+            + "ChartOfCharacteristicTypes item only, 'valueType' (alias 'type'; same {types:[...]} " //$NON-NLS-1$
+            + "shape as an mdclass attribute's 'type'; rejected for a Catalog item; an explicit JSON " //$NON-NLS-1$
+            + "null clears it) - this is the item's whole settable surface, no assignable-schema " //$NON-NLS-1$
+            + "round-trip needed. " //$NON-NLS-1$
             + "For other nodes, discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -599,10 +602,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@code ChartOfCharacteristicTypes} owner ({@code Type.Owner.Predefined.ItemName}). Refuses the
      * sibling payloads (Role / membership {@code content} / {@code template} / {@code dcs}) up front
      * so they are never silently dropped, then validates the owner kind, parses the
-     * {@code description} / {@code code} / {@code isFolder} properties (via the SHARED
-     * {@link PredefinedWriter#parseProperties}, which also refuses {@code name} and {@code parent} -
-     * a move - on modify), resolves the owner (yo-fallback) and mutates it inside a BM write
-     * transaction. Like create, there is no separate top object to attach - only the owner's
+     * {@code description} / {@code code} / {@code isFolder} / {@code valueType} (CCT only) properties
+     * (via the SHARED {@link PredefinedWriter#parseProperties}, which also refuses {@code name} and
+     * {@code parent} - a move - on modify), resolves the owner (yo-fallback) and mutates it inside a
+     * BM write transaction. Like create, there is no separate top object to attach - only the owner's
      * canonical FQN is force-exported.
      */
     private String dispatchPredefinedItemFqn(ProjectContext ctx, String normFqn,
@@ -620,7 +623,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("'rights'/'templates'/'roleProperties'/'content' do not apply to " //$NON-NLS-1$
                 + "a predefined item; '" + normFqn + "' addresses a predefined item. Use 'properties' " //$NON-NLS-1$ //$NON-NLS-2$
-                + "(description / code / isFolder).").toJson(); //$NON-NLS-1$
+                + "(description / code / isFolder / valueType).").toJson(); //$NON-NLS-1$
         }
 
         String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
@@ -637,6 +640,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         Configuration config = ctx.config;
+        // valueType (issue #296 P2) needs a resolution context (Configuration + platform Version)
+        // PredefinedWriter itself cannot reach - the SAME context the generic attribute-type path
+        // (resolvePlatformVersion / ExtensionOriginUtils.isExtensionProject) resolves, stashed on
+        // props for PredefinedWriter#modify to use. Harmless to set unconditionally (PredefinedWriter
+        // only touches it when valueTypeSet).
+        props.config = config;
+        props.version = resolvePlatformVersion(ctx);
+        props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
         // Owner resolution uses the yo-fallback; force-export targets the RESOLVED owner's canonical FQN.
         MetadataNodeResolver.ResolvedNode ownerResolved =
             MetadataNodeResolver.resolveExistingWithYoFallback(config, ref.ownerFqn());
@@ -703,6 +714,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (props.codeSet)
         {
             applied.add("code"); //$NON-NLS-1$
+        }
+        if (props.valueTypeSet)
+        {
+            applied.add("valueType"); //$NON-NLS-1$
         }
         if (props.isFolderSet)
         {

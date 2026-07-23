@@ -374,3 +374,243 @@ def test_delete_nonexistent_predefined_item_is_rejected():
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.NoSuchItem"})
     err = assert_error(r, "deleting a non-existent predefined item must fail")
     assert_error_quality(err, names=["NoSuchItem"], suggests=["not found"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CCT valueType (issue #296 P2): a ChartOfCharacteristicTypesPredefinedItem's VALUE TYPE
+# (getType()/setType(TypeDescription)), built via the SAME {types:[{kind, ...}]} payload
+# shape an mdclass attribute's `type` property uses. CCT-only - rejected outright for a
+# Catalog predefined item.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_characteristic_types_value_type_create_details_modify():
+    types = "E2EPredefValueType"
+    owner = _seed_characteristic_types(types)
+    item_fqn = owner + ".Predefined.Weight"
+
+    # 1) Create with a String(50) value type.
+    rc = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": item_fqn,
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String", "length": 50}]}}],
+    })
+    assert_ok(rc, "create CCT predefined item with a valueType")
+    poll_diff_contains("Weight", ctx="the new item must land on disk")
+
+    # 2) The owner's "Predefined items" table renders a Type column carrying the value type.
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [owner]})
+    assert_ok(details, "get_metadata_details on the owner")
+    assert_contains(details.text, "Weight", "owner details must list the new item")
+    assert_contains(details.text, "String", "owner Predefined items table must show the value type")
+
+    # 3) The single-item view renders a "Value type" row.
+    item_details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [item_fqn]})
+    assert_ok(item_details, "get_metadata_details on the item FQN")
+    assert_contains(item_details.text, "Value type", "single-item view must render the Value type row")
+    assert_contains(item_details.text, "String", "single-item view must show the String value type")
+
+    # 4) modify_metadata re-sets it (alias 'type', same shape) to a different kind.
+    rm = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": item_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Boolean"}]}}],
+    })
+    assert_ok(rm, "modify predefined item valueType via the 'type' alias")
+    assert "valueType" in (rm.structured.get("applied") or []), \
+        "valueType must be reported applied: %r" % (rm.structured,)
+
+    item_details_after = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [item_fqn]})
+    assert_ok(item_details_after, "get_metadata_details after modify")
+    assert_contains(item_details_after.text, "Boolean", "the NEW value type must be visible")
+
+    # 5) An explicit JSON null CLEARS the value type.
+    r_clear = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": item_fqn,
+        "properties": [{"name": "valueType", "value": None}],
+    })
+    assert_ok(r_clear, "clear the value type with an explicit null")
+
+    item_details_cleared = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [item_fqn]})
+    assert_ok(item_details_cleared, "get_metadata_details after clearing valueType")
+    assert_not_contains(item_details_cleared.text, "Boolean",
+                        "the cleared value type must no longer be shown")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_value_type_rejected_for_catalog_item():
+    catalog = "E2EPredefValueTypeCatalog"
+    owner = _seed_catalog(catalog)
+
+    # The tree is already dirty from the seeded catalog - prove the refused create added
+    # nothing via a before/after snapshot (assert_no_diff would fail on the seed's own diff).
+    snap = tree_snapshot()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": owner + ".Predefined.Blue",
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String"}]}}],
+    })
+    err = assert_error(r, "valueType on a Catalog predefined item must be rejected")
+    assert_error_quality(err, suggests=["ChartOfCharacteristicTypes"])
+    assert_tree_unchanged(snap, "a refused create must not mutate the project")
+
+    # Same refusal on modify_metadata, against an already-existing plain item.
+    call("create_metadata", {"projectName": PROJECT, "fqn": owner + ".Predefined.Blue"})
+    rm = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": owner + ".Predefined.Blue",
+        "properties": [{"name": "valueType", "value": {"types": [{"kind": "String"}]}}],
+    })
+    err_mod = assert_error(rm, "valueType via modify_metadata on a Catalog item must be rejected too")
+    assert_error_quality(err_mod, suggests=["ChartOfCharacteristicTypes"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Incoming-reference check (fix-round on the #293 predefined-item delete safety check):
+# collectPredefinedItemBlockingReferences reuses MetadataReferenceService's metadata+BSL
+# reference-collection engine (the same one find_references uses). These tests cover:
+#   - a deterministic NEGATIVE: a pristine, unreferenced item deletes cleanly, blocking=false
+#     (the reference check must never false-positive on the item's own structural
+#     owner-source linkage - the narrowed isOwnerSelfReference exclusion).
+#   - a REAL incoming reference (a scratch CommonModule's BSL code reading the item via its
+#     owner's manager member, e.g. `Catalogs.X.Item`) must BLOCK a non-forced delete and be
+#     overridable with force=true. This capability is CONFIRMED on the live stand: the Xtext
+#     scope provider resolves the usage to the predefined item's own EMF URI, so the scan's
+#     collectBslReferences finds it (~5s). The test therefore FAILS (not skips) if the
+#     reference is not reported within the poll budget - a timeout is a real regression in the
+#     reference scan's BSL URI resolution / indexing, which would let a referenced item be deleted.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_unreferenced_predefined_item_deletes_without_blocking():
+    # Deterministic baseline: the reference check must never false-positive on a pristine
+    # item - it must report blocking=false and delete cleanly with no force needed.
+    catalog = "E2EPredefNoRef"
+    owner = _seed_catalog(catalog)
+    item_fqn = owner + ".Predefined.Lonely"
+
+    rc = call("create_metadata", {"projectName": PROJECT, "fqn": item_fqn})
+    assert_ok(rc, "seed an unreferenced predefined item")
+
+    preview = call("delete_metadata", {"projectName": PROJECT, "fqn": item_fqn})
+    assert_ok(preview, "preview delete of an unreferenced predefined item")
+    assert preview.structured.get("blocking") is False, \
+        "a pristine, unreferenced predefined item must never be reported as blocking: %r" % (preview.structured,)
+    assert not (preview.structured.get("blockingReferences") or []), \
+        "blockingReferences must be empty for an unreferenced item: %r" % (preview.structured,)
+
+    confirm = call("delete_metadata", {"projectName": PROJECT, "fqn": item_fqn, "confirm": True})
+    assert_ok(confirm, "confirm delete of an unreferenced predefined item")
+    assert confirm.structured.get("action") == "executed", \
+        "an unreferenced item's delete must execute cleanly (no force needed): %r" % (confirm.structured,)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_predefined_item_bsl_reference_blocks_delete_without_force():
+    catalog = "E2EPredefBslRef"
+    owner = _seed_catalog(catalog)
+    item_name = "Anchor"
+    item_fqn = owner + ".Predefined." + item_name
+    module_name = "E2EPredefBslRefModule"
+    module_fqn = "CommonModule." + module_name
+
+    rc = call("create_metadata", {"projectName": PROJECT, "fqn": item_fqn})
+    assert_ok(rc, "seed the predefined item " + item_name)
+
+    rm = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": module_fqn,
+        "commonModuleKind": "ServerCall",
+    })
+    assert_ok(rm, "seed a scratch CommonModule to hold the referencing BSL")
+    wait_for_project_ready()
+
+    try:
+        # A real incoming BSL reference: the module reads the predefined item via its
+        # owner's dynamic manager member (English dialect keeps the source ASCII).
+        source = (
+            "Function GetAnchor() Export\n"
+            "\tReturn Catalogs.%s.%s;\n"
+            "EndFunction\n" % (catalog, item_name)
+        )
+        rw = call("write_module_source", {
+            "projectName": PROJECT,
+            "objectName": module_fqn,
+            "moduleType": "Module",
+            "mode": "replace",
+            "overwrite": True,
+            "source": source,
+        })
+        assert_ok(rw, "write BSL referencing the predefined item")
+        poll_diff_contains("GetAnchor", ctx="the referencing module source must land on disk")
+        wait_for_project_ready()
+
+        # Poll with PREVIEW calls (confirm omitted) - NON-mutating - until the Xtext BSL index
+        # has (re)indexed the new module and the reference-collection engine reports blocking.
+        # Deliberately NOT polling with confirm=true: that call EXECUTES immediately whenever
+        # it is not (yet) blocked, which would delete the item for real on the very first
+        # attempt and defeat the whole point of waiting for the index to catch up.
+        timeout = 120
+        deadline = time.time() + timeout
+        found_blocking = False
+        while time.time() < deadline:
+            preview = call("delete_metadata", {"projectName": PROJECT, "fqn": item_fqn})
+            assert_ok(preview, "preview delete while polling for the BSL reference")
+            if preview.structured.get("blocking") is True:
+                found_blocking = True
+                break
+            time.sleep(3)
+
+        if not found_blocking:
+            # This capability is CONFIRMED on the live stand (the Xtext scope provider resolves
+            # `Catalogs.X.Item` to the predefined item's own EMF URI, so collectBslReferences on that
+            # URI finds the module reference in ~5s). A timeout here is therefore a real REGRESSION
+            # (a URI-resolution / indexing break that would let a referenced item be deleted), NOT a
+            # skip - fail hard so the pre-push suite catches it.
+            _fail(
+                "the BSL reference to the predefined item (Catalogs.%s.%s from CommonModule.%s) was "
+                "not reported as blocking within %ds. This capability is verified live, so a timeout "
+                "means a regression in the predefined-item reference scan (BSL URI resolution / index)."
+                % (catalog, item_name, module_name, timeout)
+            )
+
+        # Now prove the confirm=true (no force) path ALSO blocks - a single call, now that the
+        # preview above confirmed the index has caught the reference.
+        blocked = call("delete_metadata", {"projectName": PROJECT, "fqn": item_fqn, "confirm": True})
+        err = assert_error(blocked, "a BSL-referenced predefined item delete without force must be blocked")
+        assert_error_quality(err, names=[item_name], suggests=["force"],
+                             ctx="a blocked predefined-item delete names the target and points at force=true")
+        assert blocked.structured.get("action") == "blocked", \
+            "a BSL-referenced predefined item delete without force must be blocked: %r" % (blocked.structured,)
+        assert blocked.structured.get("blocking") is True, \
+            "a BSL-referenced predefined item delete must report blocking=true: %r" % (blocked.structured,)
+        assert (blocked.structured.get("blockingReferencesCount") or 0) >= 1, \
+            "the blocked delete must report at least one blocking reference: %r" % (blocked.structured,)
+        refs = blocked.structured.get("blockingReferences") or []
+        assert any(module_name in str(row) for row in refs), \
+            "the blocking reference list must name the referencing module %r: %r" % (module_name, refs)
+        # The item must survive an unforced, blocked delete.
+        details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [owner]})
+        assert_ok(details, "get_metadata_details after a blocked delete")
+        assert_contains(details.text, item_name,
+                        "a blocked delete must NOT remove the still-referenced predefined item")
+
+        # force=true must override the block and execute the delete.
+        rf = call("delete_metadata", {
+            "projectName": PROJECT, "fqn": item_fqn, "confirm": True, "force": True,
+        })
+        assert_ok(rf, "force=true must override the reference block")
+        assert rf.structured.get("action") == "executed", \
+            "force=true delete must execute despite the blocking reference: %r" % (rf.structured,)
+        assert rf.structured.get("forced") is True, "a forced delete must echo forced=true: %r" % (rf.structured,)
+
+        details_after_force = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [owner]})
+        assert_ok(details_after_force, "get_metadata_details after the forced delete")
+        assert_not_contains(details_after_force.text, item_name,
+                            "force=true must remove the predefined item")
+    finally:
+        # Clean up the scratch module (the seeded catalog is reverted by the write-metadata
+        # reset like every other seeded-object test in this file). Best-effort: the item/module
+        # may already be gone depending on which branch above ran.
+        call("delete_metadata", {"projectName": PROJECT, "fqn": module_fqn, "confirm": True})

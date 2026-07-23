@@ -14,12 +14,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCodeType;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogPredefined;
@@ -27,12 +31,15 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogPredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefined;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefinedItem;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Predefined;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 
 /**
@@ -84,6 +91,16 @@ public final class PredefinedWriter
 
     /** Supported property (create only): the name of an existing predefined FOLDER to nest under. */
     private static final String PROP_PARENT = "parent"; //$NON-NLS-1$
+
+    /**
+     * Supported property: a {@code ChartOfCharacteristicTypes} item's VALUE TYPE ({@code getType()}/
+     * {@code setType(TypeDescription)}), built via {@link MetadataTypeBuilder} from the SAME payload
+     * shape an attribute's {@code type} property uses. Rejected for any other owner (issue #296 P2).
+     */
+    private static final String PROP_VALUE_TYPE = "valuetype"; //$NON-NLS-1$
+
+    /** Alias of {@link #PROP_VALUE_TYPE} - the same name an mdclass attribute's type property uses. */
+    private static final String PROP_TYPE_ALIAS = "type"; //$NON-NLS-1$
 
     /** Refused property: identity is the FQN leaf, not a renamable property. */
     private static final String PROP_NAME = "name"; //$NON-NLS-1$
@@ -237,6 +254,25 @@ public final class PredefinedWriter
         public boolean isFolderSet;
         /** Create-only: the name of an existing predefined FOLDER to nest the new item under. */
         public String parentName;
+        /**
+         * The raw JSON value of a supplied {@code valueType} (alias {@code type}) property - a
+         * {@code ChartOfCharacteristicTypes} item's VALUE TYPE. Meaningless for any other owner (see
+         * {@link #applyValueType}). A JSON null clears an existing value type (modify only; create
+         * rejects it - mirrors {@link #code}).
+         */
+        public JsonElement valueType;
+        public boolean valueTypeSet;
+        /**
+         * Type-resolution CONTEXT the caller (create_metadata / modify_metadata) stashes here - NOT
+         * parsed from JSON - so {@link #applyValueType} can build the {@code TypeDescription} via
+         * {@link MetadataTypeBuilder}, the SAME platform machinery an attribute's {@code type}
+         * property uses. This is the one place this otherwise pure-EMF writer needs a resolution
+         * context; left {@code null}/{@code false} whenever {@code valueType} is never set (every
+         * existing create/modify test), so those callers never touch it.
+         */
+        public Configuration config;
+        public Version version;
+        public boolean isExtensionProject;
     }
 
     /**
@@ -291,17 +327,21 @@ public final class PredefinedWriter
             case PROP_DESCRIPTION:
                 return applyDescriptionProperty(prop, out);
             case PROP_CODE:
-                // A MISSING 'value' key is a malformed entry, NOT a clear: only an explicit JSON
-                // null clears an existing code (otherwise a typo'd entry would silently wipe it).
-                if (!prop.has(KEY_VALUE))
+            {
+                // CLEAR on modify: a JSON null value clears an existing code. The MCP wire drops a
+                // null-valued key on the way in, so a MISSING value on MODIFY is treated as that same
+                // clear. On CREATE there is nothing to clear, so a missing/null value is malformed.
+                boolean codeCleared = !prop.has(KEY_VALUE) || prop.get(KEY_VALUE).isJsonNull();
+                if (codeCleared && !isModify)
                 {
                     return ToolResult.error("The 'code' entry needs a 'value' (a JSON string or " //$NON-NLS-1$
-                        + "number matched to the owner's code type; an explicit JSON null clears an " //$NON-NLS-1$
-                        + "existing code).").toJson(); //$NON-NLS-1$
+                        + "number matched to the owner's code type; on modify_metadata, omit the value " //$NON-NLS-1$
+                        + "or pass null to clear an existing code).").toJson(); //$NON-NLS-1$
                 }
-                out.code = prop.get(KEY_VALUE);
+                out.code = codeCleared ? JsonNull.INSTANCE : prop.get(KEY_VALUE);
                 out.codeSet = true;
                 return null;
+            }
             case PROP_IS_FOLDER:
                 return applyIsFolderProperty(prop, out);
             case PROP_PARENT:
@@ -312,9 +352,13 @@ public final class PredefinedWriter
                         + "the new 'parent' (a create-time-only property).").toJson(); //$NON-NLS-1$
                 }
                 return applyParentProperty(prop, out);
+            case PROP_VALUE_TYPE:
+            case PROP_TYPE_ALIAS:
+                return applyValueTypeProperty(prop, out, isModify);
             default:
                 return ToolResult.error("Property '" + name + "' is not supported for a predefined item. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Supported: description, code, isFolder" //$NON-NLS-1$
+                    + "Supported: description, code, isFolder, valueType (alias 'type'; " //$NON-NLS-1$
+                    + "ChartOfCharacteristicTypes only)" //$NON-NLS-1$
                     + (isModify ? "" : ", parent (create only)") + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
@@ -350,6 +394,35 @@ public final class PredefinedWriter
                 + "entirely for a top-level item.").toJson(); //$NON-NLS-1$
         }
         out.parentName = v.getAsString();
+        return null;
+    }
+
+    /**
+     * {@code valueType} (alias {@code type}) - a {@code ChartOfCharacteristicTypes} item's VALUE TYPE,
+     * built from the SAME payload shape an attribute's {@code type} property uses (e.g.
+     * {@code {types:[{kind:'String', length:50}]}}). A MISSING or explicit-null {@code value} CLEARS
+     * the value type on MODIFY (the MCP wire drops a null-valued key, so a client's explicit null
+     * arrives as a missing value - both mean clear); on CREATE it is malformed (nothing to clear).
+     * The clear is carried as {@code JsonNull} to {@link #modify} / {@link #applyValueType}. The
+     * owner-type gate (CCT only) and the actual TypeDescription build
+     * run later, in {@link #applyValueType}, once the item's OWNER is known.
+     */
+    private static String applyValueTypeProperty(JsonObject prop, ItemProps out, boolean isModify)
+    {
+        // CLEAR on modify: a JSON null clears an existing value type. The MCP wire drops a null-valued
+        // key, so a MISSING value on MODIFY is treated as that same clear. On CREATE there is nothing
+        // to clear, so a missing/null value is malformed.
+        boolean cleared = !prop.has(KEY_VALUE) || prop.get(KEY_VALUE).isJsonNull();
+        if (cleared && !isModify)
+        {
+            return ToolResult.error("The 'valueType' entry needs a 'value' (a type spec object like " //$NON-NLS-1$
+                + "{types:[{kind:'String', length:50}]}, the SAME shape an attribute's 'type' " //$NON-NLS-1$
+                + "property uses; on modify_metadata, omit the value or pass null to clear an existing " //$NON-NLS-1$
+                + "value type). Applies only to a ChartOfCharacteristicTypes predefined item.") //$NON-NLS-1$
+                .toJson();
+        }
+        out.valueType = cleared ? JsonNull.INSTANCE : prop.get(KEY_VALUE);
+        out.valueTypeSet = true;
         return null;
     }
 
@@ -569,6 +642,30 @@ public final class PredefinedWriter
         return out;
     }
 
+    /**
+     * Every DESCENDANT {@link PredefinedItem} of {@code item} (its whole content tree), NOT including
+     * {@code item} itself - the OBJECT counterpart of {@link #descendantRows} (which flattens to
+     * display rows). Used by {@code delete_metadata}'s incoming-reference check (issue #296 P1): a
+     * FOLDER delete cascades its whole subtree, so the back-reference scan must cover every item the
+     * delete would actually remove, not just the folder itself. Order is irrelevant to that caller
+     * (a plain traversal, not the depth-tagged {@link #descendantRows} walk).
+     *
+     * @param item the folder whose content tree to flatten
+     * @return the descendant items (empty for a plain item)
+     */
+    public static List<PredefinedItem> descendants(PredefinedItem item)
+    {
+        List<PredefinedItem> out = new ArrayList<>();
+        ArrayDeque<PredefinedItem> stack = new ArrayDeque<>(childrenOf(item));
+        while (!stack.isEmpty())
+        {
+            PredefinedItem next = stack.pop();
+            out.add(next);
+            stack.addAll(childrenOf(next));
+        }
+        return out;
+    }
+
     // ============================================================================================
     // read-side: flat listing for get_metadata_details' owner-level "Predefined items" section
     // ============================================================================================
@@ -585,8 +682,15 @@ public final class PredefinedWriter
         public final String parentName;
         /** Nesting depth, 0 = top-level. */
         public final int depth;
+        /**
+         * The item's VALUE TYPE, already rendered as text (e.g. {@code "String, CatalogRef.Products"}),
+         * or {@code null} when unset / not applicable (only a {@code ChartOfCharacteristicTypes} item
+         * carries one - issue #296 P2).
+         */
+        public final String valueType;
 
-        ItemRow(String name, String code, String description, boolean isFolder, String parentName, int depth)
+        ItemRow(String name, String code, String description, boolean isFolder, String parentName, int depth,
+            String valueType)
         {
             this.name = name;
             this.code = code;
@@ -594,6 +698,7 @@ public final class PredefinedWriter
             this.isFolder = isFolder;
             this.parentName = parentName;
             this.depth = depth;
+            this.valueType = valueType;
         }
     }
 
@@ -625,7 +730,7 @@ public final class PredefinedWriter
             }
             PredefinedItem item = frame.list.get(frame.index++);
             rows.add(new ItemRow(item.getName(), displayCode(item), item.getDescription(), isFolder(item),
-                frame.parentName, frame.depth));
+                frame.parentName, frame.depth, displayValueType(item)));
             List<? extends PredefinedItem> children = childrenOf(item);
             if (!children.isEmpty())
             {
@@ -716,13 +821,31 @@ public final class PredefinedWriter
             parent = parentLoc.item;
         }
 
+        // An OMITTED description defaults to the Name (the designer's UX); a supplied one - even an
+        // explicit empty string - is honored as-is (parseProperties already guaranteed it's a string).
+        // Validated against the owner's descriptionLength BEFORE any mutation (fail fast, mirrors the
+        // codeLength check below) - an over-long description is REJECTED, never silently truncated.
+        String description = props.descriptionSet ? props.description : itemName;
+        String descriptionLengthErr = validateDescriptionLength(owner, description);
+        if (descriptionLengthErr != null)
+        {
+            return WriteResult.fail(descriptionLengthErr);
+        }
+        if (props.valueTypeSet && (props.valueType == null || props.valueType.isJsonNull()))
+        {
+            // A JSON-null valueType is a MODIFY concept (clearing an existing value); at create there
+            // is nothing to clear - omit the property to leave the value type unset. Checked up front
+            // (before any mutation), mirroring the code-null-at-create guard below.
+            return WriteResult.fail("'valueType' cannot be JSON null at create - omit the property to " //$NON-NLS-1$
+                + "leave the value type unset (an explicit null clears an existing value type via " //$NON-NLS-1$
+                + "modify_metadata)."); //$NON-NLS-1$
+        }
+
         Predefined predefined = getOrCreatePredefined(owner);
         PredefinedItem item = newItem(owner);
         item.setId(UUID.randomUUID());
         item.setName(itemName);
-        // An OMITTED description defaults to the Name (the designer's UX); a supplied one - even an
-        // explicit empty string - is honored as-is (parseProperties already guaranteed it's a string).
-        item.setDescription(props.descriptionSet ? props.description : itemName);
+        item.setDescription(description);
         if (props.isFolderSet && props.isFolder != null)
         {
             setFolder(item, props.isFolder);
@@ -741,6 +864,14 @@ public final class PredefinedWriter
             if (codeErr != null)
             {
                 return WriteResult.fail(codeErr);
+            }
+        }
+        if (props.valueTypeSet)
+        {
+            String valueTypeErr = applyValueType(owner, item, props);
+            if (valueTypeErr != null)
+            {
+                return WriteResult.fail(valueTypeErr);
             }
         }
         attach(predefined, parent, item);
@@ -769,6 +900,11 @@ public final class PredefinedWriter
         PredefinedItem item = found.item;
         if (props.descriptionSet)
         {
+            String descriptionLengthErr = validateDescriptionLength(owner, props.description);
+            if (descriptionLengthErr != null)
+            {
+                return WriteResult.fail(descriptionLengthErr);
+            }
             item.setDescription(props.description);
         }
         if (props.codeSet)
@@ -777,6 +913,14 @@ public final class PredefinedWriter
             if (codeErr != null)
             {
                 return WriteResult.fail(codeErr);
+            }
+        }
+        if (props.valueTypeSet)
+        {
+            String valueTypeErr = applyValueType(owner, item, props);
+            if (valueTypeErr != null)
+            {
+                return WriteResult.fail(valueTypeErr);
             }
         }
         if (props.isFolderSet)
@@ -1039,12 +1183,73 @@ public final class PredefinedWriter
     }
 
     /**
+     * The item's display VALUE TYPE (issue #296 P2): only a
+     * {@link ChartOfCharacteristicTypesPredefinedItem} carries one ({@code getType()}); rendered via
+     * {@link #formatValueType}. {@code null} for a {@link CatalogPredefinedItem} (no such concept) or
+     * when the CCT item's type is unset.
+     *
+     * @param item the predefined item
+     * @return the rendered value type, or {@code null}
+     */
+    public static String displayValueType(PredefinedItem item)
+    {
+        if (item instanceof ChartOfCharacteristicTypesPredefinedItem cctItem)
+        {
+            return formatValueType(cctItem.getType());
+        }
+        return null;
+    }
+
+    /**
+     * Renders a {@link TypeDescription}'s type list as a human-readable, comma-joined string (e.g.
+     * {@code "String, CatalogRef.Products"}) - the SAME {@link McoreUtil#getTypeName}/
+     * {@link McoreUtil#getTypeNameRu} fallback chain the plugin's other type renderers
+     * ({@code AbstractMetadataFormatter#formatType}, {@code MetadataPropertyIntrospector#renderType})
+     * already use, never a bespoke type-name derivation.
+     *
+     * @param typeDesc the value type (e.g. a CCT predefined item's {@code getType()}), or {@code null}
+     * @return the rendered type list, or {@code null} when unset/empty
+     */
+    public static String formatValueType(TypeDescription typeDesc)
+    {
+        if (typeDesc == null)
+        {
+            return null;
+        }
+        EList<TypeItem> types = typeDesc.getTypes();
+        if (types == null || types.isEmpty())
+        {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (TypeItem typeItem : types)
+        {
+            if (sb.length() > 0)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            String typeName = McoreUtil.getTypeName(typeItem);
+            if (typeName == null || typeName.isEmpty())
+            {
+                typeName = McoreUtil.getTypeNameRu(typeItem);
+            }
+            if (typeName == null || typeName.isEmpty())
+            {
+                typeName = typeItem.getClass().getSimpleName();
+            }
+            sb.append(typeName);
+        }
+        return sb.length() > 0 ? sb.toString() : null;
+    }
+
+    /**
      * Builds/validates the {@code code} value on {@code item}, matched to {@code owner}'s code type:
      * a {@link Catalog} needs an {@code mcore.Value} (a {@link StringValue} or {@link NumberValue},
      * chosen by {@code Catalog#getCodeType()}); a {@link ChartOfCharacteristicTypes} takes a plain
-     * {@code String}. An EXPLICIT JSON {@code null} value CLEARS the code (used by modify to unset a
-     * wrongly-set code; a MISSING value is rejected upstream in {@code parseProperties}, never
-     * conflated with a clear). Validates the JSON value's STRICT type (a string code must be a JSON
+     * {@code String}. A JSON {@code null} value CLEARS the code (used by modify to unset a wrongly-set
+     * code; {@code parseProperties} maps a MISSING value on MODIFY to this same clear, since the MCP
+     * wire strips a null-valued key - on CREATE a missing value is rejected there instead, nothing to
+     * clear). Validates the JSON value's STRICT type (a string code must be a JSON
      * string, a number code a JSON number - #291 lesson) and the owner's {@code codeLength} (0 =
      * unlimited, matching the rest of this plugin's convention), rejecting an over-long code.
      *
@@ -1169,6 +1374,96 @@ public final class PredefinedWriter
                 + "'s codeLength (" + codeLength + ")."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         item.setCode(s);
+        return null;
+    }
+
+    /**
+     * Builds/validates the {@code valueType} on {@code item} (issue #296 P2): meaningful ONLY for a
+     * {@link ChartOfCharacteristicTypesPredefinedItem} - a {@link CatalogPredefinedItem} has no such
+     * concept and is rejected outright. An EXPLICIT JSON {@code null} CLEARS an existing value type
+     * ({@link #create} rejects a null upstream, mirroring how {@link #applyCode} treats a code clear
+     * as a MODIFY concept in practice). Otherwise builds the {@link TypeDescription} via
+     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean)} - the SAME
+     * payload shape / platform-type resolution an attribute's {@code type} property uses - using the
+     * Configuration/Version/isExtensionProject context the caller stashed on {@code props}
+     * ({@link ItemProps#config}/{@link ItemProps#version}/{@link ItemProps#isExtensionProject}): this
+     * pure-EMF writer has no other way to reach the platform type-resolution machinery, so the caller
+     * (create_metadata / modify_metadata) supplies it - mirroring how the generic attribute-type path
+     * (e.g. {@code ModifyMetadataTool#prepareTypeDescription}) resolves the same context.
+     *
+     * @return {@code null} on success, or a ready, actionable error message
+     */
+    private static String applyValueType(EObject owner, PredefinedItem item, ItemProps props)
+    {
+        if (!(owner instanceof ChartOfCharacteristicTypes)
+            || !(item instanceof ChartOfCharacteristicTypesPredefinedItem cctItem))
+        {
+            return "'valueType' applies only to a ChartOfCharacteristicTypes predefined item; " //$NON-NLS-1$
+                + ownerLabel(owner) + " does not support it (use 'code'/'description'/'isFolder' " //$NON-NLS-1$
+                + "instead)."; //$NON-NLS-1$
+        }
+        JsonElement valueType = props.valueType;
+        if (valueType == null || valueType.isJsonNull())
+        {
+            cctItem.setType(null);
+            return null;
+        }
+        if (props.version == null)
+        {
+            return "Cannot resolve the platform version needed to build 'valueType'."; //$NON-NLS-1$
+        }
+        if (props.config == null)
+        {
+            return "Cannot build 'valueType': the configuration context is unavailable."; //$NON-NLS-1$
+        }
+        MetadataTypeBuilder.Result result =
+            MetadataTypeBuilder.build(valueType, props.config, props.version, props.isExtensionProject);
+        if (result.error != null)
+        {
+            return "Invalid 'valueType': " + result.error; //$NON-NLS-1$
+        }
+        cctItem.setType(result.typeDescription);
+        return null;
+    }
+
+    /**
+     * The owner's {@code descriptionLength} (issue #296 addendum): {@code Catalog} and
+     * {@code ChartOfCharacteristicTypes} both expose {@code getDescriptionLength()} (0 = unlimited,
+     * the SAME convention {@code getCodeLength()} uses). {@code 0} (unlimited) for any owner this
+     * writer does not yet author predefined items on.
+     */
+    private static int descriptionLengthOf(EObject owner)
+    {
+        if (owner instanceof Catalog)
+        {
+            return ((Catalog)owner).getDescriptionLength();
+        }
+        if (owner instanceof ChartOfCharacteristicTypes)
+        {
+            return ((ChartOfCharacteristicTypes)owner).getDescriptionLength();
+        }
+        return 0;
+    }
+
+    /**
+     * Validates {@code description}'s length against {@code owner}'s {@code descriptionLength} - the
+     * description-side counterpart of {@link #applyCatalogCode}/{@link #applyCharacteristicTypesCode}'s
+     * {@code codeLength} check: an over-long description is REJECTED with an actionable error, never
+     * silently truncated (0 = unlimited, never rejects).
+     *
+     * @param owner the predefined item's owner
+     * @param description the description text about to be stored (normally never {@code null} -
+     *     {@code null} is tolerated defensively and always accepted)
+     * @return {@code null} on success, or a ready, actionable error message
+     */
+    private static String validateDescriptionLength(EObject owner, String description)
+    {
+        int limit = descriptionLengthOf(owner);
+        if (description != null && limit > 0 && description.length() > limit)
+        {
+            return "'description' \"" + description + "\" (" + description.length() //$NON-NLS-1$ //$NON-NLS-2$
+                + " char(s)) exceeds " + ownerLabel(owner) + "'s descriptionLength (" + limit + ")."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
         return null;
     }
 
