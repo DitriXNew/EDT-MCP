@@ -1,0 +1,29 @@
+Report a project's git working-tree status: the current branch (with detached HEAD flagged), whether the tree is clean, and the porcelain change sets. Read-only - it never mutates the repository, the workspace, or the BM model.
+
+## When to use
+- Before `commit_git_changes`, to see exactly what would be committed and whether anything is staged.
+- After an edit (or a `pull_git_branch`), to confirm which files changed and whether there is a merge conflict to resolve.
+- To check whether the working tree is clean before a `switch_git_branch` (an unclean tree can block a checkout).
+
+## Parameter details
+- `projectName` (required) - the EDT project whose repository to inspect. Use `list_projects` to see the available project names.
+
+## How the repository is located
+Same as the other git tools, via the shared resolver:
+1. The EGit team-provider mapping for the project (`RepositoryMapping.getMapping`) - the normal case for a project inside a git working tree that has been **shared** with Git in EDT.
+2. A filesystem fallback: walks up from the project's location looking for a `.git` directory, so a project inside a git clone that was never explicitly EGit-shared still reports status.
+
+If neither resolves, the tool returns an actionable error naming the project and suggesting `Team -> Share Project`.
+
+## What you get
+A Markdown report:
+- **Current** - the checked-out branch's short name, or `(detached HEAD at <commit>)` when HEAD does not point at a branch tip.
+- **Clean** - `Yes` when every change set is empty (equivalent to `git status` reporting "nothing to commit, working tree clean"), otherwise `No`.
+- When clean: a `*Working tree clean - nothing to commit.*` note and no table.
+- When dirty: a **Changed entries** count and a `Path | State` table. `State` is one of the porcelain sets - `added` (staged new file), `changed` (staged content change), `modified` (unstaged content change), `missing` (tracked file deleted but not staged), `removed` (staged deletion), `untracked` (a file git is not tracking), `conflicting` (an unresolved merge conflict). Paths are relative to the repository root.
+
+## Notes & gotchas
+- The status is reported for the whole repository backing the project (paths are repository-root-relative), not only the project subfolder - a monorepo/multi-project repository shows every changed path.
+- A single path can appear under more than one state (e.g. `added` then `modified`, or `changed` then `modified`) exactly as `git status` reports it - staged and unstaged views of the same file are distinct sets.
+- Read-only: no authentication, no background job, no workspace refresh, no BM transaction. It is safe to poll.
+- `conflicting` entries mean a prior merge/pull left unresolved conflicts; resolve them (and stage the resolution) before `commit_git_changes`.

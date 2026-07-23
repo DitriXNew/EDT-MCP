@@ -1,6 +1,6 @@
 # delete_metadata
 
-Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').
+Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - or an XDTO package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') addressed by a 1C full-name FQN, cascading the cleanup of all references in BSL code, forms and other metadata. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). If the node is still referenced by metadata the refactoring cannot auto-clean, a confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true to delete anyway (those references are left dangling). Full parameters and examples: call get_tool_guide('delete_metadata').
 
 ## Parameters
 | Parameter | Required | Type | Description |

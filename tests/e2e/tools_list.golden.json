@@ -190,6 +190,67 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Commit a project's ON-DISK git changes: stage all tracked-modified files (all=true) and/or explicit paths[], then record a commit and return its SHA. Commits only what is written to disk - save/resync the EDT model first. 'Nothing to commit' is an error, not a silent no-op. Full parameters and examples: call get_tool_guide('commit_git_changes').",
+    "inputSchema": {
+      "properties": {
+        "all": {
+          "description": "Stage all TRACKED, modified or deleted files before committing (git commit -a for tracked files; new/untracked files are NOT added). Default false.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Commit message (required); must not be blank. Cyrillic is preserved.",
+          "type": "string"
+        },
+        "paths": {
+          "description": "Explicit repo-relative paths to stage before committing (new, modified, or deleted). Combine with all, or use instead of it. If neither all nor paths is given, only the already-staged index is committed.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to commit into (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "message"
+      ],
+      "type": "object"
+    },
+    "name": "commit_git_changes",
+    "outputSchema": {
+      "properties": {
+        "branch": {
+          "description": "The branch the commit landed on (the commit SHA when HEAD is detached).",
+          "type": "string"
+        },
+        "commitId": {
+          "description": "The full 40-hex SHA-1 of the new commit.",
+          "type": "string"
+        },
+        "stagedFiles": {
+          "description": "The number of index entries the commit recorded.",
+          "type": "integer"
+        },
+        "success": {
+          "description": "Whether the commit was recorded",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's context. Rejects a name that already exists (use switch_git_branch instead). Full parameters and examples: call get_tool_guide('create_git_branch').",
     "inputSchema": {
       "properties": {
@@ -253,6 +314,91 @@
         },
         "success": {
           "description": "Whether the branch was created",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Bootstrap a git repository for an EDT project. Without 'url': git init at an EXISTING open project's location and connect it to EGit (rejected if the project is already inside a git working tree). With 'url' + 'targetPath': clone the remote on a bounded background Job, then import and connect the project. SSH auth is transparent (ssh-agent / ~/.ssh); HTTPS uses optional username/token and never opens a login dialog. Full parameters and examples: call get_tool_guide('create_git_repository').",
+    "inputSchema": {
+      "properties": {
+        "initialBranch": {
+          "description": "Init mode only: the initial branch name for the new repository (e.g. 'main'). Optional; defaults to git's configured default.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "For init: the EXISTING open EDT project to initialize a repository at (required). For clone: the name to import the cloned project under when the cloned tree has no own .project (required).",
+          "type": "string"
+        },
+        "remoteName": {
+          "description": "Clone mode only: the git remote name to register. Optional; defaults to 'origin'.",
+          "type": "string"
+        },
+        "targetPath": {
+          "description": "Clone mode only (required there): an absolute local directory to clone into. It must not already exist as a non-empty directory.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Optional HTTPS token/password for the clone, paired with username. With neither given, an HTTPS remote that requires credentials fails fast (no interactive prompt).",
+          "type": "string"
+        },
+        "url": {
+          "description": "Remote repository URL to clone (SSH or HTTPS). When given, the tool runs in CLONE mode; when omitted, in INIT mode.",
+          "type": "string"
+        },
+        "username": {
+          "description": "Optional HTTPS username for the clone. Omit for SSH (handled transparently by the ssh-agent) or for anonymous/public HTTPS.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "create_git_repository",
+    "outputSchema": {
+      "properties": {
+        "imported": {
+          "description": "Clone mode: whether the cloned tree was imported as a workspace project. False (with a note in message, and no 'project' field) when a same-named project already exists at another location or the import failed - the repository is on disk but must be imported manually.",
+          "type": "boolean"
+        },
+        "message": {
+          "description": "Present only when a non-fatal step (EGit share, clone import, or workspace refresh) did not fully succeed: a short note. The repository itself was still created.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "The mode the call ran in: 'init' or 'clone'.",
+          "type": "string"
+        },
+        "project": {
+          "description": "The name of the project the repository is for. In clone mode it is present only when the clone was actually imported (see 'imported').",
+          "type": "string"
+        },
+        "remoteUrl": {
+          "description": "Echo of the cloned remote URL (clone mode only).",
+          "type": "string"
+        },
+        "repositoryPath": {
+          "description": "Absolute path of the created .git directory.",
+          "type": "string"
+        },
+        "shared": {
+          "description": "Whether the project was connected to the EGit team provider. Check 'imported' FIRST: when imported=true, shared=false means the share failed but the repository is on disk and usable (found via filesystem discovery); when imported=false (clone collision / import failure) shared is also false because sharing was never attempted and there is no usable project - see 'message'.",
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Whether the repository was created (init/clone succeeded)",
           "type": "boolean"
         }
       },
@@ -2031,6 +2177,28 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Report a project's git working-tree status: the current branch (detached HEAD flagged), whether the tree is clean, and the porcelain change sets (added/changed/modified/missing/removed/untracked/conflicting). Read-only; precedes commit_git_changes. Full parameters and examples: call get_tool_guide('get_git_status').",
+    "inputSchema": {
+      "properties": {
+        "projectName": {
+          "description": "EDT project to report git status for (required).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "get_git_status",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List workspace markers: bookmarks and/or task markers (TODO, FIXME, XXX, HACK). Filter by markerKind (bookmark | task; omit to list both), projectName, filePath substring, and - for task markers only - priority. Returns a markdown table of Kind, Type, Priority, Message, Path and Line.",
     "inputSchema": {
       "properties": {
@@ -3435,6 +3603,163 @@
         "template": {
           "description": "For a template content change: the applied counts object {cells, merges, areas, columnWidths, rowHeights}",
           "type": "object"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Fetch a branch from a remote and integrate it into the project's current branch (merge, or rebase when requested) - the non-UI 'Pull'. remote and branch are BOTH required and never defaulted. SSH auth is transparent (ssh-agent); HTTPS uses the optional username/token, and never opens a login dialog. A merge/rebase conflict is returned as an actionable error (with the conflicting paths), not a false success. Runs in a background Job (up to 120 s) and refreshes the project. Full parameters and examples: call get_tool_guide('pull_git_branch').",
+    "inputSchema": {
+      "properties": {
+        "branch": {
+          "description": "Remote branch name to fetch and integrate (required, e.g. 'main'). Never defaulted.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to pull into (required).",
+          "type": "string"
+        },
+        "rebase": {
+          "description": "Integrate by rebasing the current branch onto the fetched commits instead of merging. Default false (merge).",
+          "type": "boolean"
+        },
+        "remote": {
+          "description": "Remote to pull from (required): a configured remote name (e.g. 'origin') or a URL. Never defaulted.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Optional HTTPS token or password paired with username. When both are omitted for an HTTPS remote, the pull fails fast with an actionable error instead of prompting.",
+          "type": "string"
+        },
+        "username": {
+          "description": "Optional HTTPS username. Only used for an HTTPS remote; SSH remotes authenticate via ssh-agent and ignore it. Omit for SSH.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "remote",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "pull_git_branch",
+    "outputSchema": {
+      "properties": {
+        "branch": {
+          "description": "The remote branch that was integrated (echoed input).",
+          "type": "string"
+        },
+        "fetchedFrom": {
+          "description": "The remote name/URI actually fetched from.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Present only when the post-pull workspace refresh failed: a short warning noting the EDT model may be stale until a manual refresh. The pull itself still succeeded.",
+          "type": "string"
+        },
+        "rebase": {
+          "description": "Whether the integration used rebase (echoed input).",
+          "type": "boolean"
+        },
+        "remote": {
+          "description": "The remote that was pulled from (echoed input).",
+          "type": "string"
+        },
+        "status": {
+          "description": "The merge status (merge pull, e.g. FAST_FORWARD/ALREADY_UP_TO_DATE/MERGED) or the rebase status (rebase pull, e.g. UP_TO_DATE/FAST_FORWARD/OK).",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the pull integrated cleanly",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Push a project's git branch (or an explicit refspec) to a remote (headless JGit push). remote AND refspec are BOTH required with no defaulting (the no-autonomous-push guard); force is opt-in (default false). refspec accepts a short branch name (pushed to the same-named remote branch) or an explicit 'src:dst'. SSH auth is transparent (ssh-agent/~/.ssh); for HTTPS pass username/token or the push fails fast with an actionable error (never a login dialog). A non-fast-forward rejection is reported as an error, not success. Runs in a background Job (up to 120 s). Full parameters and examples: call get_tool_guide('push_git_branch').",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Force-push, overwriting the remote branch even on a non-fast-forward. Opt-in; default false.",
+          "type": "boolean"
+        },
+        "projectName": {
+          "description": "EDT project whose git repository to push from (required).",
+          "type": "string"
+        },
+        "refspec": {
+          "description": "Refspec to push (required): a short branch name (e.g. 'feature/x', pushed to the same-named remote branch) or an explicit 'src:dst' (e.g. 'refs/heads/feature/x:refs/heads/feature/x'). No defaulting - you must name it explicitly.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "Target remote (required): a configured remote name (e.g. 'origin') or a URL. No defaulting - you must name it explicitly (the no-autonomous-push guard).",
+          "type": "string"
+        },
+        "token": {
+          "description": "Optional git password or personal-access-token for an HTTPS remote. Without it an HTTPS remote that needs credentials fails fast (never a login dialog).",
+          "type": "string"
+        },
+        "username": {
+          "description": "Optional git username for an HTTPS remote. Omit for an SSH remote (ssh-agent/~/.ssh authenticate transparently).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "remote",
+        "refspec"
+      ],
+      "type": "object"
+    },
+    "name": "push_git_branch",
+    "outputSchema": {
+      "properties": {
+        "forced": {
+          "description": "Whether the push was forced.",
+          "type": "boolean"
+        },
+        "pushed": {
+          "description": "Always true on a non-error result (every ref update succeeded).",
+          "type": "boolean"
+        },
+        "remote": {
+          "description": "The remote pushed to.",
+          "type": "string"
+        },
+        "resolvedRefspec": {
+          "description": "The refspec actually pushed (a short branch name is expanded to 'refs/heads/<b>:refs/heads/<b>').",
+          "type": "string"
+        },
+        "success": {
+          "description": "Whether the push fully succeeded (every ref update OK).",
+          "type": "boolean"
+        },
+        "updates": {
+          "description": "Per-ref update records: {remoteName, status, message?}. status is the JGit RemoteRefUpdate.Status (OK / UP_TO_DATE on success).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         }
       },
       "required": [

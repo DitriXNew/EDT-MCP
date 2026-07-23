@@ -6,7 +6,7 @@ Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Ty
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name (required) |
-| metadataType | — | string | Type filter (case-insensitive), default 'all'. One of: all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs |
+| metadataType | — | string | Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, scheduledJobs - OR a single standard metadata type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', 'Document'). Single value only - not an array. An unrecognized value returns an error listing the supported options. |
 | nameFilter | — | string | Case-insensitive substring matched against Name only (not Synonym) |
 | limit | — | integer | Max rows (default from preferences: 100, max 1000) |
 | language | — | string | Synonym language code, e.g. 'en'/'ru' (default: configuration default) |
@@ -21,7 +21,11 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
-- `metadataType` - which kind to list; default `all`. Matching is case-insensitive. Supported values: `all`, `documents`, `catalogs`, `informationRegisters`, `accumulationRegisters`, `commonModules`, `enums`, `constants`, `reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `commonAttributes`, `eventSubscriptions`, `scheduledJobs`. An unknown value returns an error listing the supported types.
+- `metadataType` - which kind to list; default `all`. Matching is case-insensitive, and it's a single string, not an array. Accepts EITHER form:
+  - a category token: `all`, `documents`, `catalogs`, `informationRegisters`, `accumulationRegisters`, `commonModules`, `enums`, `constants`, `reports`, `dataProcessors`, `exchangePlans`, `businessProcesses`, `tasks`, `commonAttributes`, `eventSubscriptions`, `scheduledJobs`;
+  - OR a standard metadata type name - the same FQN token used elsewhere in the API, English or its Russian equivalent (e.g. `ScheduledJob`, `Document`, `Справочник`). This is the natural form to reach for; it maps onto the category above internally.
+
+  An unrecognized value (including a type name this tool has no collector for, e.g. `Subsystem`) returns an error naming the bad value and listing the supported categories. Note the parameter is `metadataType` (a single value) - there is no `types` array parameter.
 - `nameFilter` - case-insensitive substring matched against the object **Name only**, never the Synonym. Omit to list everything of the chosen type.
 - `limit` - max rows returned; default from preferences (100), clamped to 1000. A truncation notice is appended when results are capped, while **Total** still reports the full count.
 - `language` - language code for the Synonym column (e.g. `en`, `ru`). Defaults to the configuration's default language.
@@ -37,6 +41,7 @@ List the metadata objects of a 1C configuration as a flat Markdown table. Each r
 ## Examples
 - Everything: `{projectName: "MyProject"}`.
 - Only documents: `{projectName: "MyProject", metadataType: "documents"}`.
+- Only scheduled jobs, via the type-name token: `{projectName: "MyProject", metadataType: "ScheduledJob"}` (equivalent to `metadataType: "scheduledJobs"`).
 - Filter by name: `{projectName: "MyProject", nameFilter: "Order"}`.
 - Russian synonyms: `{projectName: "MyProject", language: "ru"}`.
 

@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ResourcesPlugin;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
@@ -62,9 +63,21 @@ public final class ProjectContext
      */
     public static ProjectContext of(String projectName)
     {
-        IProject resolved = (projectName == null || projectName.isEmpty())
-            ? null
-            : ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+        IProject resolved = null;
+        if (projectName != null && !projectName.isEmpty())
+        {
+            try
+            {
+                resolved = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+            }
+            catch (IllegalArgumentException e)
+            {
+                // An invalid project name (e.g. one containing '/') is not a valid workspace path
+                // segment - IWorkspaceRoot.getProject rejects it. Treat it as unresolved so callers
+                // return a clean not-found error rather than letting the exception escape the tool.
+                resolved = null;
+            }
+        }
         return new ProjectContext(projectName, resolved);
     }
 
@@ -85,6 +98,22 @@ public final class ProjectContext
     public static IProject[] allProjects()
     {
         return ResourcesPlugin.getWorkspace().getRoot().getProjects();
+    }
+
+    /**
+     * Returns the running {@link IWorkspace}. This is the sanctioned, shared choke
+     * point for tools that need the workspace itself (to load a project description,
+     * mint a new {@code IProjectDescription}, or reach {@code getRoot()}) rather than
+     * one already-resolved project handle. It replaces an inlined
+     * {@code ResourcesPlugin.getWorkspace()} in a {@code tools/impl} class, keeping the
+     * {@code ResourcesPlugin} reference on this utils choke point (see the rule-#4
+     * ratchet in {@code ProjectContextAdoptionRatchetTest}).
+     *
+     * @return the workspace (never {@code null})
+     */
+    public static IWorkspace workspace()
+    {
+        return ResourcesPlugin.getWorkspace();
     }
 
     /**
