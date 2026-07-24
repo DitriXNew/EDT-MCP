@@ -40,9 +40,20 @@ public class FanOutTest
         structured.addProperty("success", true); //$NON-NLS-1$
         structured.add("projects", projects); //$NON-NLS-1$
 
+        // The human content table a list_projects response also carries (the fan-out row-merges these).
+        StringBuilder table = new StringBuilder();
+        table.append("## Workspace Projects\n\n**Total:** ").append(projectNames.length) //$NON-NLS-1$
+            .append(" projects\n\n") //$NON-NLS-1$
+            .append("| Name | State | Path | Open | EDT Project | Natures |\n") //$NON-NLS-1$
+            .append("|------|-------|------|------|-------------|--------|\n"); //$NON-NLS-1$
+        for (String name : projectNames)
+        {
+            table.append("| ").append(name).append(" | ready | /ws/").append(name) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" | Yes | Yes | Nature |\n"); //$NON-NLS-1$
+        }
         JsonObject textItem = new JsonObject();
         textItem.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
-        textItem.addProperty("text", "projects listed"); //$NON-NLS-1$ //$NON-NLS-2$
+        textItem.addProperty("text", table.toString()); //$NON-NLS-1$
         JsonArray content = new JsonArray();
         content.add(textItem);
 
@@ -105,96 +116,46 @@ public class FanOutTest
 
     private static String contentTextOf(JsonObject response)
     {
-        JsonObject item = Json.obj(response, "result").getAsJsonArray("content") //$NON-NLS-1$ //$NON-NLS-2$
-            .get(0).getAsJsonObject();
+        JsonObject item = firstContentItemOf(response);
         JsonObject resource = Json.obj(item, "resource"); //$NON-NLS-1$
         return resource != null ? Json.str(resource, "text") : Json.str(item, "text"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    @Test
-    public void testContentOnlyBackendProjectsAreMergedAndItsContentPreserved()
+    private static JsonObject firstContentItemOf(JsonObject response)
     {
-        // A content-only (legacy) backend's projects must STILL appear in the merged
-        // structuredContent.projects (recovered from its Markdown table) so the proxy does not hide
-        // live projects the registry can already route to. Its richer human table is preserved - the
-        // content is NOT rebuilt (which would downgrade its columns to name-only).
-        String legacyTable = "## Workspace Projects\n\n**Total:** 1 projects\n\n" //$NON-NLS-1$
-            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
-            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
-            + "| LegacyProj | ready | /ws/Legacy | Yes | Yes | V8ConfigurationNature |\n"; //$NON-NLS-1$
-        String legacy = legacyContentOnlyResponse(1, legacyTable);
-        String structured = listProjectsResponse(2, "ProjectA"); //$NON-NLS-1$
-
-        String merged = FanOut.mergeListProjects(Arrays.asList(legacy, structured), 99);
-
-        JsonObject parsed = Json.parseObject(merged);
-        // The legacy backend's project is no longer hidden - it merges with the structured one.
-        assertEquals(List.of("LegacyProj", "ProjectA"), projectNamesOf(parsed)); //$NON-NLS-1$ //$NON-NLS-2$
-        // The legacy backend's OWN rich table (first content) is preserved, not rebuilt to name-only.
-        String content = contentTextOf(parsed);
-        assertTrue("legacy rich content preserved: " + content, content.contains("/ws/Legacy")); //$NON-NLS-1$ //$NON-NLS-2$
+        return Json.obj(response, "result").getAsJsonArray("content").get(0).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
-    public void testRebuildAttachesFreshResourceForIncompatibleContentItem()
+    public void testMergedContentKeepsPlainTextShapeForCursor()
     {
-        // When the first content item is incompatible (an image), the rebuild must NOT stamp a text
-        // property onto it; it attaches a fresh embedded resource instead.
-        String withImage = listProjectsResponseWithImageContent(7, "ProjectA"); //$NON-NLS-1$
+        // A backend in Cursor plain-text mode returns content as a type:"text" block. The merged
+        // content MUST stay a text block, not become a resource Cursor cannot consume.
+        String backend = listProjectsResponse(1, "ProjectA"); // content is a type:"text" block //$NON-NLS-1$
 
-        String merged = FanOut.mergeListProjects(List.of(withImage), 7);
+        JsonObject item = firstContentItemOf(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1)));
 
-        JsonObject item = Json.obj(Json.parseObject(merged), "result") //$NON-NLS-1$
-            .getAsJsonArray("content").get(0).getAsJsonObject(); //$NON-NLS-1$
+        assertEquals("text", Json.str(item, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the text block is rewritten from the merged projects", //$NON-NLS-1$
+            Json.str(item, "text").contains("| ProjectA |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMergedContentKeepsResourceShape()
+    {
+        // A backend whose content is a text/markdown embedded resource keeps the resource shape.
+        String backend = listProjectsResourceResponse(2, "ProjectB"); //$NON-NLS-1$
+
+        JsonObject item = firstContentItemOf(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 2)));
+
         assertEquals("resource", Json.str(item, "type")); //$NON-NLS-1$ //$NON-NLS-2$
-        JsonObject resource = Json.obj(item, "resource"); //$NON-NLS-1$
-        assertTrue("fresh resource must be attached", resource != null); //$NON-NLS-1$
-        assertTrue("rebuilt table must list the project", //$NON-NLS-1$
-            Json.str(resource, "text").contains("ProjectA")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the resource text is rewritten from the merged projects", //$NON-NLS-1$
+            Json.str(Json.obj(item, "resource"), "text").contains("| ProjectB |")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
-    /** A usable list_projects response with a human content table but NO structuredContent. */
-    private static String legacyContentOnlyResponse(Object id, String text)
+    /** A structured list_projects response whose content[0] is a text/markdown embedded resource. */
+    private static String listProjectsResourceResponse(Object id, String... projectNames)
     {
-        JsonObject textItem = new JsonObject();
-        textItem.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
-        textItem.addProperty("text", text); //$NON-NLS-1$
-        JsonArray content = new JsonArray();
-        content.add(textItem);
-        JsonObject result = new JsonObject();
-        result.add("content", content); //$NON-NLS-1$
-        result.addProperty("isError", false); //$NON-NLS-1$
-        JsonObject envelope = new JsonObject();
-        envelope.addProperty("jsonrpc", "2.0"); //$NON-NLS-1$ //$NON-NLS-2$
-        FanOut.writeId(envelope, id);
-        envelope.add("result", result); //$NON-NLS-1$
-        return Json.compact(envelope);
-    }
-
-    @Test
-    public void testRebuildAttachesFreshResourceForBlobResource()
-    {
-        // A BLOB embedded resource (type:"resource" with resource.blob + a binary mimeType) shares the
-        // resource shape but is NOT text-compatible; the rebuild must attach a fresh text resource,
-        // not stamp Markdown text onto the blob resource.
-        String withBlob = listProjectsResponseWithBlobResource(3, "ProjectA"); //$NON-NLS-1$
-
-        String merged = FanOut.mergeListProjects(List.of(withBlob), 3);
-
-        JsonObject item = Json.obj(Json.parseObject(merged), "result") //$NON-NLS-1$
-            .getAsJsonArray("content").get(0).getAsJsonObject(); //$NON-NLS-1$
-        JsonObject resource = Json.obj(item, "resource"); //$NON-NLS-1$
-        assertTrue("fresh resource must be attached", resource != null); //$NON-NLS-1$
-        assertTrue("rebuilt table must list the project", //$NON-NLS-1$
-            Json.str(resource, "text").contains("ProjectA")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("the image blob must not be reused/mixed in", //$NON-NLS-1$
-            !resource.has("blob")); //$NON-NLS-1$
-    }
-
-    /** A structured list_projects response whose content[0] is a BLOB (image) embedded resource. */
-    private static String listProjectsResponseWithBlobResource(Object id, String... projectNames)
-    {
-        JsonObject structured = new JsonObject();
         JsonArray projects = new JsonArray();
         for (String name : projectNames)
         {
@@ -202,12 +163,13 @@ public class FanOutTest
             project.addProperty("name", name); //$NON-NLS-1$
             projects.add(project);
         }
+        JsonObject structured = new JsonObject();
         structured.add("projects", projects); //$NON-NLS-1$
 
         JsonObject resource = new JsonObject();
-        resource.addProperty("uri", "embedded://chart.png"); //$NON-NLS-1$ //$NON-NLS-2$
-        resource.addProperty("mimeType", "image/png"); //$NON-NLS-1$ //$NON-NLS-2$
-        resource.addProperty("blob", "AAAA"); //$NON-NLS-1$ //$NON-NLS-2$
+        resource.addProperty("uri", "embedded://list-projects.md"); //$NON-NLS-1$ //$NON-NLS-2$
+        resource.addProperty("mimeType", "text/markdown"); //$NON-NLS-1$ //$NON-NLS-2$
+        resource.addProperty("text", "backend table"); //$NON-NLS-1$ //$NON-NLS-2$
         JsonObject item = new JsonObject();
         item.addProperty("type", "resource"); //$NON-NLS-1$ //$NON-NLS-2$
         item.add("resource", resource); //$NON-NLS-1$
@@ -226,31 +188,42 @@ public class FanOutTest
         return Json.compact(envelope);
     }
 
-    /** A structured list_projects response whose content[0] is an IMAGE (not text/resource). */
-    private static String listProjectsResponseWithImageContent(Object id, String... projectNames)
+    @Test
+    public void testMixedFleetContentCoversAllBackends()
     {
-        JsonArray projects = new JsonArray();
-        for (String name : projectNames)
-        {
-            JsonObject project = new JsonObject();
-            project.addProperty("name", name); //$NON-NLS-1$
-            projects.add(project);
-        }
-        JsonObject structured = new JsonObject();
-        structured.add("projects", projects); //$NON-NLS-1$
+        // A mixed fan-out (a content-only legacy backend + a structured one): BOTH backends' projects
+        // appear in structuredContent.projects (legacy recovered from its table) AND in the rebuilt
+        // human content table (the legacy one name-only - a content-only backend exposes no more), so
+        // nothing is hidden and the Total covers everyone.
+        String legacyTable = "## Workspace Projects\n\n**Total:** 1 projects\n\n" //$NON-NLS-1$
+            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
+            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
+            + "| LegacyProj | ready | /ws/Legacy | Yes | Yes | V8ConfigurationNature |\n"; //$NON-NLS-1$
+        String legacy = legacyContentOnlyResponse(1, legacyTable);
+        String structured = listProjectsResponse(2, "ProjectA"); //$NON-NLS-1$
 
-        JsonObject imageItem = new JsonObject();
-        imageItem.addProperty("type", "image"); //$NON-NLS-1$ //$NON-NLS-2$
-        imageItem.addProperty("data", "AAAA"); //$NON-NLS-1$ //$NON-NLS-2$
-        imageItem.addProperty("mimeType", "image/png"); //$NON-NLS-1$ //$NON-NLS-2$
+        String merged = FanOut.mergeListProjects(Arrays.asList(legacy, structured), 99);
+
+        JsonObject parsed = Json.parseObject(merged);
+        assertEquals(List.of("LegacyProj", "ProjectA"), projectNamesOf(parsed)); //$NON-NLS-1$ //$NON-NLS-2$
+        String content = contentTextOf(parsed);
+        assertTrue("content total must cover all backends: " + content, //$NON-NLS-1$
+            content.contains("**Total:** 2 projects")); //$NON-NLS-1$
+        assertTrue("legacy project listed: " + content, content.contains("| LegacyProj |")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("structured project listed: " + content, content.contains("| ProjectA |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A usable list_projects response with a human content table but NO structuredContent. */
+    private static String legacyContentOnlyResponse(Object id, String text)
+    {
+        JsonObject textItem = new JsonObject();
+        textItem.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
+        textItem.addProperty("text", text); //$NON-NLS-1$
         JsonArray content = new JsonArray();
-        content.add(imageItem);
-
+        content.add(textItem);
         JsonObject result = new JsonObject();
         result.add("content", content); //$NON-NLS-1$
         result.addProperty("isError", false); //$NON-NLS-1$
-        result.add("structuredContent", structured); //$NON-NLS-1$
-
         JsonObject envelope = new JsonObject();
         envelope.addProperty("jsonrpc", "2.0"); //$NON-NLS-1$ //$NON-NLS-2$
         FanOut.writeId(envelope, id);

@@ -43,7 +43,7 @@ public final class FanOut
     private static final String KEY_TEXT = "text"; //$NON-NLS-1$
     private static final String KEY_BLOB = "blob"; //$NON-NLS-1$
     private static final String KEY_TYPE = "type"; //$NON-NLS-1$
-    /** The {@code type} value of a plain text content item. */
+    /** The {@code type} value of a plain text content item (Cursor plain-text mode). */
     private static final String TYPE_TEXT = "text"; //$NON-NLS-1$
     private static final String KEY_URI = "uri"; //$NON-NLS-1$
     private static final String KEY_MIME_TYPE = "mimeType"; //$NON-NLS-1$
@@ -81,7 +81,6 @@ public final class FanOut
     {
         JsonArray mergedProjects = new JsonArray();
         JsonObject firstEnvelope = null;
-        boolean allStructured = true;
 
         if (backendResponses != null)
         {
@@ -102,10 +101,7 @@ public final class FanOut
                     // A content-only backend (legacy build / failed structured generation): recover its
                     // project NAMES from the Markdown table so its live projects are NOT hidden from the
                     // merged structuredContent.projects. The registry already discovers them via the same
-                    // fallback, so routed calls reach them - the proxy must not omit them here. The human
-                    // content is still rebuilt only when EVERY backend was structured (below), so a legacy
-                    // backend's richer table is not downgraded to name-only.
-                    allStructured = false;
+                    // fallback, so routed calls reach them - the proxy must not omit them here.
                     for (String name : BackendRegistry.namesFromMarkdownTable(result))
                     {
                         JsonObject project = new JsonObject();
@@ -129,53 +125,43 @@ public final class FanOut
             result.add(KEY_STRUCTURED_CONTENT, structured);
         }
         structured.add(KEY_PROJECTS, mergedProjects);
-        // Rebuild the human `content` channel from the MERGED projects so a client reading `content`
-        // sees ALL backends, consistent with the merged structuredContent (issue #302) - but ONLY
-        // when EVERY usable backend exposed a structuredContent.projects array, so the merged table is
-        // COMPLETE. If any backend was content-only (a legacy build, or one whose structured
-        // generation failed), its projects are not in mergedProjects, so keep the first backend's real
-        // content rather than replacing it with an incomplete/empty table.
-        if (allStructured)
-        {
-            rebuildContent(result, mergedProjects);
-        }
+        // Rebuild the human `content` from the COMPLETE merged projects (the uncapped structuredContent
+        // source, so a large table is not truncated mid-row like the transport-capped content markdown
+        // would be), always, so a client reading `content` sees ALL backends. A structured backend
+        // renders rich rows from its full objects; a legacy backend's projects render NAME-only (their
+        // only cross-fleet, cap-safe field) - the inherent limit of a content-only backend.
+        rebuildContent(result, renderProjectsTable(mergedProjects));
         writeId(firstEnvelope, requestId);
         return Json.compact(firstEnvelope);
     }
 
     /**
-     * Replaces {@code result.content} so its rendered text reflects ALL merged projects. The first
-     * content item's SHAPE is preserved (an embedded {@code resource.text} stays a resource, a plain
-     * {@code text} block stays text); when there is no usable content item a fresh embedded
-     * {@code text/markdown} resource is attached.
+     * Writes {@code markdown} into {@code result.content}, PRESERVING the first content item's SHAPE so
+     * a plain-text-mode backend (Cursor compatibility) keeps its {@code type:"text"} block and a
+     * {@code text/markdown} embedded resource stays a resource. Only a TEXT resource (has {@code text},
+     * no {@code blob}) or a {@code text} block is rewritten in place; a blob/image resource, an image
+     * item, or a missing/malformed item gets a fresh embedded {@code text/markdown} resource.
      *
      * @param result the merged JSON-RPC {@code result} object
-     * @param mergedProjects the concatenated projects array
+     * @param markdown the rebuilt table Markdown
      */
-    private static void rebuildContent(JsonObject result, JsonArray mergedProjects)
+    private static void rebuildContent(JsonObject result, String markdown)
     {
-        String markdown = renderProjectsTable(mergedProjects);
         JsonObject item = firstContentItem(result);
         if (item != null)
         {
             JsonObject resource = Json.obj(item, KEY_RESOURCE);
-            // Only a TEXT embedded resource (has `text`, no `blob`) can have its text rewritten. A
-            // BLOB resource (image/binary: `resource.blob` + a binary mimeType) uses the same
-            // type:"resource" shape, so stamping `text` onto it would produce a mixed text+blob
-            // resource - attach a fresh one instead.
             if (resource != null && resource.has(KEY_TEXT) && !resource.has(KEY_BLOB))
             {
-                resource.addProperty(KEY_TEXT, markdown);
+                resource.addProperty(KEY_TEXT, markdown); // a TEXT embedded resource
                 return;
             }
             if (resource == null && TYPE_TEXT.equals(Json.str(item, KEY_TYPE)))
             {
-                item.addProperty(KEY_TEXT, markdown); // a plain text block: rewrite its text
+                item.addProperty(KEY_TEXT, markdown); // a plain text block (Cursor plain-text mode)
                 return;
             }
         }
-        // A blob/image resource, an image item, a malformed/absent item -> attach a fresh embedded
-        // text/markdown resource rather than stamping a `text` field onto an incompatible item.
         result.add(KEY_CONTENT, freshResourceContent(markdown));
     }
 
@@ -191,26 +177,14 @@ public final class FanOut
         return null;
     }
 
-    /** A one-item {@code content} array carrying {@code markdown} as an embedded {@code text/markdown} resource. */
-    private static JsonArray freshResourceContent(String markdown)
-    {
-        JsonObject resource = new JsonObject();
-        resource.addProperty(KEY_URI, "embedded://list-projects.md"); //$NON-NLS-1$
-        resource.addProperty(KEY_MIME_TYPE, "text/markdown"); //$NON-NLS-1$
-        resource.addProperty(KEY_TEXT, markdown);
-        JsonObject item = new JsonObject();
-        item.addProperty(KEY_TYPE, KEY_RESOURCE);
-        item.add(KEY_RESOURCE, resource);
-        JsonArray content = new JsonArray();
-        content.add(item);
-        return content;
-    }
-
     /**
      * Renders the merged projects as the same Markdown table {@code list_projects} produces, so the
-     * aggregated human view mirrors a single backend's columns. Missing structured fields degrade to
-     * a {@code "-"} cell; an {@code edtProject} boolean renders Yes/No, and its ABSENCE renders
-     * {@code "-"} (not inspected).
+     * aggregated human view mirrors a single backend's columns. A missing structured field renders a
+     * {@code "-"} cell; {@code open} and {@code edtProject} render Yes/No, and an ABSENT {@code
+     * edtProject} renders {@code "-"} (a closed/uninspected, or legacy name-only, project).
+     *
+     * @param projects the merged projects array
+     * @return the table Markdown (the {@code *No projects found.*} body when empty)
      */
     private static String renderProjectsTable(JsonArray projects)
     {
@@ -263,10 +237,25 @@ public final class FanOut
         return el.getAsBoolean() ? "Yes" : "No"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** edtProject: Yes/No when present, {@code "-"} when ABSENT (a closed/uninspected project). */
+    /** edtProject: Yes/No when present, {@code "-"} when ABSENT (a closed/uninspected or legacy project). */
     private static String edtCell(JsonObject p)
     {
         return p.has(KEY_EDT_PROJECT) ? boolCell(p, KEY_EDT_PROJECT) : "-"; //$NON-NLS-1$
+    }
+
+    /** A one-item {@code content} array carrying {@code markdown} as an embedded {@code text/markdown} resource. */
+    private static JsonArray freshResourceContent(String markdown)
+    {
+        JsonObject resource = new JsonObject();
+        resource.addProperty(KEY_URI, "embedded://list-projects.md"); //$NON-NLS-1$
+        resource.addProperty(KEY_MIME_TYPE, "text/markdown"); //$NON-NLS-1$
+        resource.addProperty(KEY_TEXT, markdown);
+        JsonObject item = new JsonObject();
+        item.addProperty(KEY_TYPE, KEY_RESOURCE);
+        item.add(KEY_RESOURCE, resource);
+        JsonArray content = new JsonArray();
+        content.add(item);
+        return content;
     }
 
     /**

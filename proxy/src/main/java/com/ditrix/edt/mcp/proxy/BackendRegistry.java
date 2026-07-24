@@ -473,10 +473,22 @@ public final class BackendRegistry
      */
     static List<String> namesFromMarkdownTable(JsonObject result)
     {
+        return firstColumnOfMarkdownTable(contentMarkdown(result));
+    }
+
+    /**
+     * The concatenated {@code result.content[*]} text (each item read from {@code text} or
+     * {@code resource.text}), i.e. the human Markdown a {@code list_projects} response carries.
+     *
+     * @param result the JSON-RPC {@code result} object
+     * @return the concatenated content text; empty when there is none
+     */
+    static String contentMarkdown(JsonObject result)
+    {
         JsonElement content = result.get("content"); //$NON-NLS-1$
         if (content == null || !content.isJsonArray())
         {
-            return new ArrayList<>();
+            return ""; //$NON-NLS-1$
         }
         StringBuilder md = new StringBuilder();
         for (JsonElement item : content.getAsJsonArray())
@@ -500,7 +512,7 @@ public final class BackendRegistry
                 md.append(text).append('\n');
             }
         }
-        return firstColumnOfMarkdownTable(md.toString());
+        return md.toString();
     }
 
     /**
