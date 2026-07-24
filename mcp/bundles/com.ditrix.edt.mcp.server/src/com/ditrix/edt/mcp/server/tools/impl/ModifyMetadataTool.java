@@ -254,12 +254,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' " //$NON-NLS-1$
             + "(string). " //$NON-NLS-1$
             + "Set a PREDEFINED item's properties with 'properties' on its own FQN " //$NON-NLS-1$
-            + "('Catalog.X.Predefined.ItemName' or 'ChartOfCharacteristicTypes.X.Predefined.ItemName'): " //$NON-NLS-1$
-            + "description / code / isFolder (folder->item with existing children is refused; moving to " //$NON-NLS-1$
-            + "a different 'parent' is not yet supported - delete and re-create) and, for a " //$NON-NLS-1$
-            + "ChartOfCharacteristicTypes item only, 'valueType' (alias 'type'; same {types:[...]} " //$NON-NLS-1$
-            + "shape as an mdclass attribute's 'type'; rejected for a Catalog item; an explicit JSON " //$NON-NLS-1$
-            + "null clears it) - this is the item's whole settable surface, no assignable-schema " //$NON-NLS-1$
+            + "('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, " //$NON-NLS-1$
+            + "ChartOfAccounts or ChartOfCalculationTypes): common description / code / isFolder / " //$NON-NLS-1$
+            + "parent (folder->item with existing children is refused; moving to a different 'parent' " //$NON-NLS-1$
+            + "is not yet supported - delete and re-create) plus owner-specific properties - " //$NON-NLS-1$
+            + "'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; a " //$NON-NLS-1$
+            + "JSON null clears it) on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' " //$NON-NLS-1$
+            + "/ 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
+            + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see " //$NON-NLS-1$
+            + "the guide for which apply to each owner) - the documented set, no assignable-schema " //$NON-NLS-1$
             + "round-trip needed. " //$NON-NLS-1$
             + "For other nodes, discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
