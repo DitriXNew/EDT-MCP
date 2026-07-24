@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -49,6 +53,13 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
  * visibility, does not turn it on). Runs on a bounded ({@link #TIMEOUT_SECONDS}s) external process off the
  * UI thread; a timeout kills the process tree. It hardens against command-string injection but TRUSTS the
  * repository's own git config (hooks/filters/aliases) exactly like the developer's terminal.
+ * <p>
+ * GPG signing is neutralized in the executed COMMAND (the signing config is off and no usable
+ * {@code gpg.*program} remains), not by inspecting tokens: git accepts too many spellings of a signing
+ * flag for a scan to be reliable, and every attempt at one produced false rejections of legitimate
+ * values. A signing request therefore fails fast with a git error instead of opening pinentry - and,
+ * because git verifies with the same programs, signature VERIFICATION is unavailable here too (stated
+ * in the tool guide).
  */
 public class GitTool implements IMcpTool
 {
@@ -101,9 +112,40 @@ public class GitTool implements IMcpTool
         "--git-dir", "--work-tree", "--exec-path", "--namespace", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "--ext-diff", "--output", "--help", "--no-index"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
-    /** A {@code scheme://user:password@host} URL - rejected so a secret is never persisted or logged. */
+    /**
+     * A URL carrying USERINFO ({@code scheme://user@host}, with or without a {@code :password}) -
+     * rejected so a secret is never written into the repository. The bare {@code token@} form matters
+     * too: a token is commonly passed that way ({@code https://<token>@host/...}) and
+     * {@code remote add} / {@code set-url} would PERSIST it in the repo config. Matched ANYWHERE in a
+     * token (not only at its start), so an option-attached URL such as
+     * {@code --repo=https://t@host/r.git} is caught too; the authority match stops at {@code /},
+     * {@code ?} and {@code #} so an {@code @} inside a path or query is not a false positive.
+     * <p>
+     * NOTE: this keeps the secret out of git CONFIG; it does not scrub the rejected command from the
+     * MCP call history, which records the raw request body.
+     */
     private static final Pattern CREDENTIAL_URL =
-        Pattern.compile("^[a-zA-Z][a-zA-Z0-9+.\\-]*://[^/@\\s]*:[^/@\\s]*@"); //$NON-NLS-1$
+        Pattern.compile("[a-zA-Z][a-zA-Z0-9+.\\-]*://[^/?#@\\s]*@"); //$NON-NLS-1$
+
+    /**
+     * The sentinel "signing program": an ABSOLUTE path that cannot exist, so git fails to sign
+     * immediately instead of opening a pinentry dialog. Absolute (not a bare name) so it is never
+     * resolved through {@code PATH}, where an executable of that name could in principle exist.
+     */
+    private static final String SIGNING_DISABLED_PROGRAM =
+        "/nonexistent/edt-mcp-signing-disabled"; //$NON-NLS-1$
+
+    /** Subcommands that can turn a token into a REMOTE, i.e. where a credential URL is refused. */
+    private static final Set<String> REMOTE_SUBCOMMANDS =
+        Set.of("remote", "push", "fetch", "pull"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+    /**
+     * Subcommands that rewrite the WORKING TREE, after which the Eclipse workspace must be refreshed
+     * so the model sees the new file state (the branch-switch path refreshes for the same reason).
+     */
+    private static final Set<String> WORKTREE_CHANGING =
+        Set.of("checkout", "switch", "pull", "merge", "restore", "rebase", "reset", "stash", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
+            "clean", "apply", "cherry-pick", "revert"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /**
      * A transport-helper remote ({@code <helper>::<address>}, e.g. {@code ext::sh -c ...} / {@code fd::})
@@ -225,7 +267,18 @@ public class GitTool implements IMcpTool
             }
             Repository repo = resolution.repository();
             File workTree = repo.getWorkTree(); // NoWorkTreeException for a bare repo -> caught below
-            return runGit(argv, workTree);
+            String output = runGit(argv, workTree);
+            // A command that rewrites the working tree changed files behind Eclipse's back: refresh the
+            // project so the workspace - and the EDT model built on it - sees them. Refreshed on ANY
+            // outcome, not just success: a merge/cherry-pick/revert that hits conflicts, fails late
+            // (e.g. while signing) or times out has usually ALREADY updated the index and worktree, and
+            // leaving EDT stale after that is worse than a redundant refresh. Best-effort: a refresh
+            // failure is logged, never turned into a failed git result.
+            if (changesWorkTree(argv))
+            {
+                refreshProject(resolution.project());
+            }
+            return output;
         }
         catch (Exception e) // NOSONAR unattended-safety: no exception may escape the tool (CLAUDE.md #8)
         {
@@ -276,6 +329,10 @@ public class GitTool implements IMcpTool
         // consume a standalone "--" as the value of a preceding option (e.g. 'fetch --server-option --'),
         // leaving a later "--<blocked>" still parsed as an option. Over-rejecting a positional operand
         // that merely looks like a denied flag is the safe trade.
+        // A credential URL only matters where git can turn the token into a REMOTE. Restricting the
+        // scan to those subcommands is what keeps a legitimate value - a commit message or a
+        // 'log -S<text>' / '--grep=' search string that merely contains a URL - from being refused.
+        boolean scanUrls = REMOTE_SUBCOMMANDS.contains(tokens.get(0));
         for (String token : tokens)
         {
             if (isBlockedFlag(token))
@@ -297,7 +354,7 @@ public class GitTool implements IMcpTool
                     + "allowed: only lowercase http(s), ssh, git, ftp(s) and file remotes are accepted (git " //$NON-NLS-1$
                     + "treats any other/uppercase scheme as a remote-helper program). Use a normal remote URL."); //$NON-NLS-1$
             }
-            if (CREDENTIAL_URL.matcher(token).find())
+            if (scanUrls && hasCredentialUrl(token))
             {
                 throw new CommandRejectedException("A URL with an embedded 'username:password@' is not " //$NON-NLS-1$
                     + "accepted: git would persist it in the repository config and it would appear in the MCP " //$NON-NLS-1$
@@ -330,6 +387,37 @@ public class GitTool implements IMcpTool
      *         {@code --} long options are inspected (the dangerous global {@code -c}/{@code -C} shorts are
      *         already rejected by the rule that the first token must be a bare subcommand).
      */
+
+    /**
+     * Whether {@code token} IS a URL carrying userinfo, or carries one as an option VALUE
+     * ({@code --repo=https://token@host/...}). Deliberately not a free substring search: a URL quoted
+     * inside ordinary text - e.g. {@code commit -m "see https://user@example.com"} - is not a remote
+     * this tool would ever persist, and rejecting it would block a legitimate commit message.
+     *
+     * @param token one parsed token
+     * @return {@code true} when the token is (or directly carries) a userinfo URL
+     */
+    private static boolean hasCredentialUrl(String token)
+    {
+        // Leading/trailing whitespace must not hide the URL: git would still persist the value.
+        String value = token.trim();
+        if (CREDENTIAL_URL.matcher(value).lookingAt())
+        {
+            return true;
+        }
+        // An option-attached URL: everything after the FIRST '=' of a '-'/'--' option.
+        if (value.startsWith("-")) //$NON-NLS-1$
+        {
+            int eq = value.indexOf('=');
+            if (eq >= 0 && eq + 1 < value.length())
+            {
+                return CREDENTIAL_URL.matcher(value.substring(eq + 1).trim()).lookingAt();
+            }
+        }
+        return false;
+    }
+
+
     private static boolean isBlockedFlag(String token)
     {
         if (!token.startsWith("--") || token.length() <= 2) //$NON-NLS-1$
@@ -421,9 +509,50 @@ public class GitTool implements IMcpTool
      * (auth failures fail fast). The output stream is drained on a separate thread so a large output can
      * never deadlock the wait.
      */
+    /**
+     * Whether this command can rewrite the working tree, so the Eclipse workspace must be refreshed
+     * afterwards. Keyed on the SUBCOMMAND (the first token after {@code git}), matching the set the
+     * branch tools already treat as checkout-like.
+     *
+     * @param argv the parsed command ({@code git} first)
+     * @return {@code true} for a worktree-changing subcommand
+     */
+
+    private static boolean changesWorkTree(List<String> argv)
+    {
+        if (argv.size() < 2)
+        {
+            return false;
+        }
+        return WORKTREE_CHANGING.contains(argv.get(1));
+    }
+
+    /**
+     * Refreshes {@code project} so the workspace picks up files git changed on disk. Best-effort: a
+     * failure is logged and never propagated - the git command itself already succeeded.
+     *
+     * @param project the project to refresh (may be {@code null} for a non-workspace repository)
+     */
+    private static void refreshProject(IProject project)
+    {
+        if (project == null || !project.exists())
+        {
+            return;
+        }
+        try
+        {
+            project.refreshLocal(IResource.DEPTH_INFINITE, new NullProgressMonitor());
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("git: refreshing project '" + project.getName() //$NON-NLS-1$
+                + "' after a worktree-changing command failed", e); //$NON-NLS-1$
+        }
+    }
+
     private String runGit(List<String> argv, File workTree)
     {
-        ProcessBuilder builder = new ProcessBuilder(argv);
+        ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
         builder.directory(workTree);
         builder.redirectErrorStream(true);
         hardenEnv(builder.environment());
@@ -618,6 +747,67 @@ public class GitTool implements IMcpTool
      * machine's own {@code ~/.gitconfig} are deliberately KEPT: authentication and repository config are
      * the machine's, exactly like the developer's terminal.
      */
+    /**
+     * Inserts {@code -c core.askPass=} right after the {@code git} executable, so a {@code core.askPass}
+     * configured in the machine's gitconfig cannot pop a GUI credential dialog for this call. The
+     * caller-supplied tokens are untouched (and {@code --config}/{@code --config-env} stay blocked for
+     * them), so this adds no new injection surface.
+     *
+     * @param argv the parsed command ({@code git} first)
+     * @return a new argv with the non-interactive config option applied
+     */
+    /**
+     * The hardening options this tool prepends to every git call, exposed so a unit test can assert
+     * the non-interactive guarantees without spawning git. Package-private on purpose.
+     *
+     * @return the config tokens applied to a call
+     */
+    static List<String> nonInteractiveConfigForTest()
+    {
+        return withNonInteractiveConfig(List.of("git")); //$NON-NLS-1$
+    }
+
+    private static List<String> withNonInteractiveConfig(List<String> argv)
+    {
+        List<String> command = new ArrayList<>(argv.size() + 2);
+        command.add(argv.get(0));
+        command.add("-c"); //$NON-NLS-1$
+        command.add("core.askPass="); //$NON-NLS-1$
+        // A configured commit.gpgSign / tag.gpgSign would launch gpg-agent's pinentry - a GUI prompt
+        // none of the other settings cover. Signing is work an unattended agent cannot complete, so it
+        // is off for this call; the caller cannot force it back on (-S / --gpg-sign are blocked).
+        command.add("-c"); //$NON-NLS-1$
+        command.add("commit.gpgSign=false"); //$NON-NLS-1$
+        command.add("-c"); //$NON-NLS-1$
+        command.add("tag.gpgSign=false"); //$NON-NLS-1$
+        command.add("-c"); //$NON-NLS-1$
+        command.add("push.gpgSign=false"); //$NON-NLS-1$
+        // tag.forceSignAnnotated=true signs an annotated tag even with tag.gpgSign=false.
+        command.add("-c"); //$NON-NLS-1$
+        command.add("tag.forceSignAnnotated=false"); //$NON-NLS-1$
+        // GIT_SSH_COMMAND below forces OpenSSH; a configured ssh.variant (e.g. plink) would make git
+        // pass Plink-style arguments to it, breaking every ssh remote - pin the variant to match.
+        command.add("-c"); //$NON-NLS-1$
+        command.add("ssh.variant=ssh"); //$NON-NLS-1$
+        // THE signing guarantee: with no usable gpg program, any signing request - however it was
+        // spelled, and whatever the repository config says - fails immediately with a git error
+        // instead of opening the gpg-agent pinentry dialog an unattended session cannot answer.
+        command.add("-c"); //$NON-NLS-1$
+        command.add("gpg.program=" + SIGNING_DISABLED_PROGRAM); //$NON-NLS-1$
+        command.add("-c"); //$NON-NLS-1$
+        command.add("gpg.openpgp.program=" + SIGNING_DISABLED_PROGRAM); //$NON-NLS-1$
+        command.add("-c"); //$NON-NLS-1$
+        command.add("gpg.x509.program=" + SIGNING_DISABLED_PROGRAM); //$NON-NLS-1$
+        command.add("-c"); //$NON-NLS-1$
+        command.add("gpg.ssh.program=" + SIGNING_DISABLED_PROGRAM); //$NON-NLS-1$
+        // With gpg.format=ssh and no user.signingKey, git runs this helper BEFORE the signing program
+        // - a configured one could prompt. Empty it so key discovery cannot become interactive.
+        command.add("-c"); //$NON-NLS-1$
+        command.add("gpg.ssh.defaultKeyCommand="); //$NON-NLS-1$
+        command.addAll(argv.subList(1, argv.size()));
+        return command;
+    }
+
     private static void hardenEnv(Map<String, String> env)
     {
         env.put("GIT_TERMINAL_PROMPT", "0"); // a missing credential fails fast, never a hanging prompt //$NON-NLS-1$ //$NON-NLS-2$
@@ -629,11 +819,22 @@ public class GitTool implements IMcpTool
         // A command that needs an editor (e.g. 'commit' with no -m) fails fast instead of hanging on one.
         env.put("GIT_EDITOR", "false"); //$NON-NLS-1$ //$NON-NLS-2$
         env.put("GIT_SEQUENCE_EDITOR", "false"); //$NON-NLS-1$ //$NON-NLS-2$
+        // GIT_TERMINAL_PROMPT=0 silences git's OWN prompt but not the ssh child: OpenSSH defaults to
+        // BatchMode=no, so a key with a passphrase (or an unknown host) would block a push/fetch on an
+        // interactive prompt. Force ssh non-interactive too - unattended safety, the project rule.
+        env.put("GIT_SSH_COMMAND", "ssh -oBatchMode=yes"); //$NON-NLS-1$ //$NON-NLS-2$
+        // An inherited GIT_SSH_VARIANT (e.g. 'plink') would make git format the arguments for another
+        // client than the OpenSSH one forced above.
+        env.put("GIT_SSH_VARIANT", "ssh"); //$NON-NLS-1$ //$NON-NLS-2$
         for (String redirect : new String[]{
             "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_NAMESPACE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXEC_PATH", "GIT_SHALLOW_FILE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_TRACE"}) // config-injection / external-exec via env //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_TRACE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            // An askpass helper would pop a GUI credential dialog in a desktop EDT session (git tries
+            // GIT_ASKPASS, then core.askPass, then SSH_ASKPASS) - drop the env ones here; the config
+            // one is neutralized per-call with '-c core.askPass=' (see buildCommand).
+            "GIT_ASKPASS", "SSH_ASKPASS"}) // interactive credential dialogs //$NON-NLS-1$ //$NON-NLS-2$
         {
             env.remove(redirect);
         }

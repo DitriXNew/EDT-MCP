@@ -35,6 +35,7 @@ JSON: `{ "success": <exit==0>, "exitCode": <n>, "command": "git ...", "output": 
 ```
 
 ## Notes & gotchas
+- **GPG signing is not available** (creating *or* verifying). Signing needs the gpg-agent pinentry dialog, which an unattended MCP session cannot answer, so every call runs with the signing config off and no usable `gpg.*program`: a signing request fails immediately with a git error instead of hanging. Because git uses the same programs to verify, `tag -v` / `--show-signature` / `--verify-signatures` do not report signatures here either - sign and verify from your terminal.
 - **openWorldHint = true**: `push` / `pull` / `fetch` reach an external remote. The tool never opens or authenticates against a 1C infobase.
 - Operates on the ON-DISK content. Save or `resync_to_disk` the EDT model before `commit` so your model edits are captured.
 - The typed `list_git_branches` / `switch_git_branch` / `create_git_branch` tools remain available (and enabled) for branch work with 1C application binding; this `git` tool is the general-purpose escape hatch.

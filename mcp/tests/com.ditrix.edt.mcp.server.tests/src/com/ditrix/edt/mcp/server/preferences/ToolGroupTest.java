@@ -63,9 +63,11 @@ public class ToolGroupTest
     }
 
     @Test
-    public void testNineGroups()
+    public void testGroupCount()
     {
-        assertEquals("Should have 9 tool groups", 9, ToolGroup.values().length);
+        // 9 original groups + GIT (added so the default-disabled 'git' tool is reachable from the
+        // Tools tab, which builds its tree from ToolGroup.values()).
+        assertEquals("Should have 10 tool groups", 10, ToolGroup.values().length);
     }
 
     // === Tool membership ===

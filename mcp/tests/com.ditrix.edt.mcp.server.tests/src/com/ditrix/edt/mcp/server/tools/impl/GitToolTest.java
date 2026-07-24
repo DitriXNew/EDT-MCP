@@ -231,9 +231,96 @@ public class GitToolTest
     @Test
     public void testParseRejectsCredentialBearingUrl()
     {
+        // A bare token in the userinfo is just as sensitive as user:password.
+        assertRejected("remote add origin https://ghp_token123@example.com/repo.git"); //$NON-NLS-1$
+        // ...including when the URL rides on an option rather than starting the token.
+        assertRejected("push --repo=https://ghp_token123@example.com/repo.git --all"); //$NON-NLS-1$
         // A URL with embedded user:password would be persisted and logged.
         assertRejected("remote add origin https://user:token@example.com/repo.git"); //$NON-NLS-1$
         assertRejected("push https://u:p@example.com/r.git main"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSigningAndUrlGuardsDoNotOverReject()
+    {
+        // -S means GPG-sign only on a commit-producing subcommand; on log/diff it is the pickaxe
+        // search and on blame an unrelated option - those must keep working.
+        assertAccepted("log -Spassword"); //$NON-NLS-1$
+        assertAccepted("log -S \"needle\""); //$NON-NLS-1$
+        assertAccepted("diff -Sneedle"); //$NON-NLS-1$
+        assertAccepted("blame -S file.txt"); //$NON-NLS-1$
+        // 'commit -s' is --signoff, not signing.
+        assertAccepted("commit -s -m msg"); //$NON-NLS-1$
+        // A URL inside ordinary text (a commit message) is not a remote and must not be refused.
+        assertAccepted("commit -m \"see https://user@example.com for details\""); //$NON-NLS-1$
+        // A '@' in a query string is not userinfo.
+        assertAccepted("push https://example.com/r.git?ref=user@host"); //$NON-NLS-1$
+        // A search string or a message is never a remote, so a URL inside one is not refused.
+        assertAccepted("log -S https://user@example.com"); //$NON-NLS-1$
+        assertAccepted("log --grep=https://user@example.com"); //$NON-NLS-1$
+    }
+
+
+
+    @Test
+    public void testSigningIsNeutralizedByConfigNotByTheParser()
+    {
+        // Signing spellings are NOT parse errors any more: enumerating them would mean reimplementing
+        // git's per-subcommand option arity, and every attempt at that produced false rejections of
+        // legitimate values ('commit -m -S', 'log -S<text>', 'commit -mSubject'). They are accepted
+        // here and neutralized where it is airtight - in the executed command's configuration.
+        assertAccepted("commit -S -m msg"); //$NON-NLS-1$
+        assertAccepted("commit --gpg-sign -m msg"); //$NON-NLS-1$
+        assertAccepted("tag -s v1.0"); //$NON-NLS-1$
+        assertAccepted("push --signed origin main"); //$NON-NLS-1$
+        assertAccepted("commit -m -S"); // a message that looks like a flag //$NON-NLS-1$
+        assertAccepted("tag -l --format -s"); //$NON-NLS-1$
+
+        List<String> hardened = GitTool.nonInteractiveConfigForTest();
+        assertTrue("the signing config must be off: " + hardened, //$NON-NLS-1$
+            hardened.contains("commit.gpgSign=false") && hardened.contains("tag.gpgSign=false") //$NON-NLS-1$ //$NON-NLS-2$
+                && hardened.contains("push.gpgSign=false") //$NON-NLS-1$
+                && hardened.contains("tag.forceSignAnnotated=false")); //$NON-NLS-1$
+        assertTrue("no usable signing program may remain: " + hardened, //$NON-NLS-1$
+            hardened.contains("gpg.program=/nonexistent/edt-mcp-signing-disabled") //$NON-NLS-1$
+                && hardened.contains("gpg.ssh.program=/nonexistent/edt-mcp-signing-disabled")); //$NON-NLS-1$
+        assertTrue("ssh key discovery must not become interactive: " + hardened, //$NON-NLS-1$
+            hardened.contains("gpg.ssh.defaultKeyCommand=")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOptionValuesAndOperandsAreNotScannedAsFlags()
+    {
+        // A value that merely looks like a flag is an operand, not an option.
+        assertAccepted("commit -m \"-Subject line\""); //$NON-NLS-1$
+        assertAccepted("tag -l -- -urgent"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCredentialUrlIsCaughtDespiteSurroundingWhitespace()
+    {
+        // git would persist the trimmed value, so leading whitespace must not hide the userinfo.
+        assertRejected("remote add origin \" https://ghp_token@example.com/r.git\""); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUrlInAMessageValueIsNotRejected()
+    {
+        // A commit message that mentions a URL is not a remote.
+        assertAccepted("commit -m \"https://user@example.com is the contact\""); //$NON-NLS-1$
+        assertAccepted("commit --message=\"ping https://user@example.com\""); //$NON-NLS-1$
+    }
+
+    private static void assertAccepted(String command)
+    {
+        try
+        {
+            assertNotNull(GitTool.parseCommand(command));
+        }
+        catch (CommandRejectedException unexpected)
+        {
+            fail("'" + command + "' must be accepted but was rejected: " + unexpected.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     private static void assertRejected(String command)

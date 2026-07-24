@@ -77,6 +77,16 @@ public final class PreferenceConstants
     /** Comma-separated list of disabled tool names */
     public static final String PREF_DISABLED_TOOLS = "mcpDisabledTools"; //$NON-NLS-1$
 
+    /**
+     * Schema version of the tool-enablement preferences, so a NEW default-disabled tool also lands
+     * disabled on an installation whose store already persisted an explicit {@link #PREF_DISABLED_TOOLS}
+     * value (a fresh store gets it from the default; an upgraded one needs the migration).
+     */
+    public static final String PREF_TOOL_PREFS_MIGRATION = "mcpToolPrefsMigration"; //$NON-NLS-1$
+
+    /** Migration version this build applies: 1 = the 'git' tool ships disabled. */
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 1;
+
     /** Default: all tools enabled (empty string = no disabled tools) */
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git"; //$NON-NLS-1$
