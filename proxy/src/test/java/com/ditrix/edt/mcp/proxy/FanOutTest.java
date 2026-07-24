@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.proxy;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -124,6 +125,41 @@ public class FanOutTest
     private static JsonObject firstContentItemOf(JsonObject response)
     {
         return Json.obj(response, "result").getAsJsonArray("content").get(0).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMergedContentIsCappedLikeADirectCall()
+    {
+        // The merged table is re-rendered from the UNCAPPED structured projects of every backend, so it
+        // must be capped again - the proxy must not return a human channel bigger than a direct
+        // list_projects would. structuredContent keeps the full list.
+        String[] many = new String[4000];
+        for (int i = 0; i < many.length; i++)
+        {
+            many[i] = "AVeryLongProjectNameForCapTesting" + i; //$NON-NLS-1$
+        }
+        String backend = listProjectsResponse(1, many);
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1));
+
+        String content = contentTextOf(parsed);
+        assertTrue("merged content must respect the cap: " + content.length(), //$NON-NLS-1$
+            content.length() <= FanOut.MAX_CONTENT_CHARS);
+        assertTrue("a capped table must say so", content.contains("truncated")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the last kept line must be a complete table row", //$NON-NLS-1$
+            content.contains("| AVeryLongProjectNameForCapTesting0 |")); //$NON-NLS-1$
+        // The full list is still available to a machine consumer.
+        assertEquals(many.length, projectNamesOf(parsed).size());
+    }
+
+    @Test
+    public void testMergedContentUnderTheCapIsNotTruncated()
+    {
+        String backend = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
+
+        String content = contentTextOf(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1)));
+
+        assertFalse("a small table must not be truncated", content.contains("truncated")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

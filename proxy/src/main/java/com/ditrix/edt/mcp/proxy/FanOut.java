@@ -31,6 +31,15 @@ public final class FanOut
     /** Error message for the zero-usable-responses case. */
     static final String MSG_NO_BACKENDS = "No running EDT backends"; //$NON-NLS-1$
 
+    /**
+     * Budget (characters) for the REBUILT human content, mirroring the plugin's own content-text cap
+     * ({@code OutputSizeGuard.MAX_CONTENT_CHARS}). A backend caps its content before sending it, but
+     * the merged table is re-rendered here from the (uncapped) structured projects of EVERY backend,
+     * so it must be capped again - otherwise a large fleet could return a human channel bigger than a
+     * direct {@code list_projects} would ever produce.
+     */
+    static final int MAX_CONTENT_CHARS = 100_000;
+
     private static final String KEY_JSONRPC = "jsonrpc"; //$NON-NLS-1$
     private static final String KEY_ID = "id"; //$NON-NLS-1$
     private static final String KEY_ERROR = "error"; //$NON-NLS-1$
@@ -129,7 +138,7 @@ public final class FanOut
         // would be), always, so a client reading `content` sees ALL backends. A structured backend
         // renders rich rows from its full objects; a legacy backend's projects render NAME-only (their
         // only cross-fleet, cap-safe field) - the inherent limit of a content-only backend.
-        rebuildContent(result, renderProjectsTable(mergedProjects));
+        rebuildContent(result, capMarkdown(renderProjectsTable(mergedProjects)));
         writeId(firstEnvelope, requestId);
         return Json.compact(firstEnvelope);
     }
@@ -144,6 +153,31 @@ public final class FanOut
      * @param result the merged JSON-RPC {@code result} object
      * @param markdown the rebuilt table Markdown
      */
+    /**
+     * Caps the rebuilt Markdown to {@link #MAX_CONTENT_CHARS}, mirroring the plugin's own content-text
+     * guard so the proxy never returns a human channel bigger than a direct {@code list_projects}
+     * would. The cut falls on a LINE boundary (so the table never ends mid-row) and a self-describing
+     * truncation notice is appended; the returned string stays within the budget. Text that fits is
+     * returned unchanged (the same instance).
+     *
+     * @param markdown the rendered table Markdown
+     * @return the capped (or unchanged) Markdown
+     */
+    static String capMarkdown(String markdown)
+    {
+        if (markdown == null || markdown.length() <= MAX_CONTENT_CHARS)
+        {
+            return markdown;
+        }
+        String notice = "\n\n_[truncated: the merged table exceeded " + MAX_CONTENT_CHARS //$NON-NLS-1$
+            + " characters; read the full list from structuredContent.projects]_\n"; //$NON-NLS-1$
+        int keep = Math.max(0, MAX_CONTENT_CHARS - notice.length());
+        // Cut back to the last complete line so the table never ends mid-row.
+        int lastNewline = markdown.lastIndexOf('\n', keep);
+        String kept = lastNewline > 0 ? markdown.substring(0, lastNewline) : markdown.substring(0, keep);
+        return kept + notice;
+    }
+
     private static void rebuildContent(JsonObject result, String markdown)
     {
         JsonObject item = firstContentItem(result);
