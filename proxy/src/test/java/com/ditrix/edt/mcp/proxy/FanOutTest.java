@@ -189,12 +189,13 @@ public class FanOutTest
     }
 
     @Test
-    public void testMixedFleetContentCoversAllBackends()
+    public void testMixedFleetContentCoversAllBackendsKeepingLegacyColumns()
     {
         // A mixed fan-out (a content-only legacy backend + a structured one): BOTH backends' projects
-        // appear in structuredContent.projects (legacy recovered from its table) AND in the rebuilt
-        // human content table (the legacy one name-only - a content-only backend exposes no more), so
-        // nothing is hidden and the Total covers everyone.
+        // appear in structuredContent.projects AND in the rebuilt human content, and the legacy
+        // backend's FULL columns (state/path/...) are recovered from its table - not downgraded to
+        // name-only - so a client reading the human channel does not lose the properties list_projects
+        // is meant to show.
         String legacyTable = "## Workspace Projects\n\n**Total:** 1 projects\n\n" //$NON-NLS-1$
             + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
             + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
@@ -209,7 +210,8 @@ public class FanOutTest
         String content = contentTextOf(parsed);
         assertTrue("content total must cover all backends: " + content, //$NON-NLS-1$
             content.contains("**Total:** 2 projects")); //$NON-NLS-1$
-        assertTrue("legacy project listed: " + content, content.contains("| LegacyProj |")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The legacy backend's OWN columns are preserved (path + state), not rendered as "-".
+        assertTrue("legacy path preserved: " + content, content.contains("/ws/Legacy")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("structured project listed: " + content, content.contains("| ProjectA |")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

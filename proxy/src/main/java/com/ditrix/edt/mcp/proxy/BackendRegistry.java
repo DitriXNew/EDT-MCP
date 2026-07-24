@@ -477,6 +477,109 @@ public final class BackendRegistry
     }
 
     /**
+     * Parses the {@code list_projects} Markdown table in {@code result.content} into project objects
+     * matching the plugin's {@code structuredContent.projects} shape, so a content-only (legacy)
+     * backend's FULL columns (not just the name) survive the fan-out merge. Columns are read by the
+     * documented order {@code Name | State | Path | Open | EDT Project | Natures}; a shorter row keeps
+     * whatever cells it has, {@code open}/{@code edtProject} map Yes/No to a boolean (a {@code "-"} is
+     * omitted, matching the structured shape), and {@code \|} escaping is undone. Package-private for
+     * reuse and unit testing.
+     *
+     * @param result the JSON-RPC {@code result} object
+     * @return the parsed project objects; empty when no table is present
+     */
+    static JsonArray projectsFromMarkdownTable(JsonObject result)
+    {
+        JsonArray projects = new JsonArray();
+        boolean pastSeparator = false;
+        for (String line : contentMarkdown(result).split("\n", -1)) //$NON-NLS-1$
+        {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.charAt(0) != '|')
+            {
+                pastSeparator = false;
+                continue;
+            }
+            if (!pastSeparator)
+            {
+                if (isSeparatorRow(trimmed))
+                {
+                    pastSeparator = true;
+                }
+                continue;
+            }
+            List<String> cells = splitRowCells(trimmed);
+            if (cells.isEmpty() || cells.get(0).isEmpty())
+            {
+                continue;
+            }
+            JsonObject project = new JsonObject();
+            project.addProperty("name", cells.get(0)); //$NON-NLS-1$
+            if (cells.size() > 1)
+            {
+                project.addProperty("state", cells.get(1)); //$NON-NLS-1$
+            }
+            if (cells.size() > 2)
+            {
+                project.addProperty("path", cells.get(2)); //$NON-NLS-1$
+            }
+            if (cells.size() > 3)
+            {
+                addBooleanCell(project, "open", cells.get(3)); //$NON-NLS-1$
+            }
+            if (cells.size() > 4)
+            {
+                addBooleanCell(project, "edtProject", cells.get(4)); //$NON-NLS-1$
+            }
+            if (cells.size() > 5)
+            {
+                project.addProperty("natures", cells.get(5)); //$NON-NLS-1$
+            }
+            projects.add(project);
+        }
+        return projects;
+    }
+
+    /**
+     * Splits a table row (starting with {@code '|'}) into its trimmed, {@code \|}-unescaped cells,
+     * bounded by UNESCAPED pipes (with a trailing cell when the row has no closing pipe).
+     */
+    private static List<String> splitRowCells(String rowLine)
+    {
+        List<String> cells = new ArrayList<>();
+        int from = 1;
+        while (from <= rowLine.length())
+        {
+            int end = indexOfUnescapedPipe(rowLine, from);
+            if (end < 0)
+            {
+                String tail = rowLine.substring(from).trim();
+                if (!tail.isEmpty())
+                {
+                    cells.add(tail.replace("\\|", "|")); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                break;
+            }
+            cells.add(rowLine.substring(from, end).trim().replace("\\|", "|")); //$NON-NLS-1$ //$NON-NLS-2$
+            from = end + 1;
+        }
+        return cells;
+    }
+
+    /** Maps a Yes/No cell to a boolean field; a {@code "-"} (or anything else) is omitted. */
+    private static void addBooleanCell(JsonObject project, String key, String cell)
+    {
+        if ("Yes".equalsIgnoreCase(cell)) //$NON-NLS-1$
+        {
+            project.addProperty(key, true);
+        }
+        else if ("No".equalsIgnoreCase(cell)) //$NON-NLS-1$
+        {
+            project.addProperty(key, false);
+        }
+    }
+
+    /**
      * The concatenated {@code result.content[*]} text (each item read from {@code text} or
      * {@code resource.text}), i.e. the human Markdown a {@code list_projects} response carries.
      *

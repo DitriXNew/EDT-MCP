@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.proxy;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -319,6 +320,44 @@ public class BackendRegistryTest
         // it as one would wrongly start collecting the rows after it. No valid separator -> empty.
         String md = "| --- | ready\n| Trade | ready\n"; //$NON-NLS-1$
         assertTrue(BackendRegistry.parseProjectNames(resourceResult(md)).isEmpty());
+    }
+
+    @Test
+    public void testProjectsFromMarkdownTableParsesFullColumns()
+    {
+        // A content-only backend's table is parsed into project objects with all list_projects columns
+        // so the fan-out keeps the columns, not just the name.
+        String md = "## Workspace Projects\n\n**Total:** 1 projects\n\n" //$NON-NLS-1$
+            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
+            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
+            + "| Trade | ready | /ws/Trade | Yes | No | V8ConfigurationNature |\n"; //$NON-NLS-1$
+
+        com.google.gson.JsonArray projects = BackendRegistry.projectsFromMarkdownTable(resultWithContent(md));
+
+        assertEquals(1, projects.size());
+        JsonObject p = projects.get(0).getAsJsonObject();
+        assertEquals("Trade", p.get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ready", p.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("/ws/Trade", p.get("path").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(p.get("open").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(p.get("edtProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("V8ConfigurationNature", p.get("natures").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testProjectsFromMarkdownTableOmitsDashBooleans()
+    {
+        // A "-" in the Open/EDT columns (a closed/uninspected project) is OMITTED, matching the
+        // structured shape (absence = not inspected), rather than stored as a bogus value.
+        String md = "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
+            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
+            + "| Closed | - | - | No | - | - |\n"; //$NON-NLS-1$
+
+        JsonObject p = BackendRegistry.projectsFromMarkdownTable(resultWithContent(md)).get(0).getAsJsonObject();
+
+        assertEquals("Closed", p.get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(p.get("open").getAsBoolean()); //$NON-NLS-1$
+        assertNull("edtProject '-' must be omitted", p.get("edtProject")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ---- helpers ----

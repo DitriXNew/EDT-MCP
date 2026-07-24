@@ -99,13 +99,12 @@ public final class FanOut
                 if (!appendStructuredProjects(result, mergedProjects))
                 {
                     // A content-only backend (legacy build / failed structured generation): recover its
-                    // project NAMES from the Markdown table so its live projects are NOT hidden from the
-                    // merged structuredContent.projects. The registry already discovers them via the same
-                    // fallback, so routed calls reach them - the proxy must not omit them here.
-                    for (String name : BackendRegistry.namesFromMarkdownTable(result))
+                    // projects with their FULL columns from the Markdown table so its live projects are
+                    // not hidden from the merged structuredContent.projects AND the rebuilt human content
+                    // keeps its state/path/open/EDT/natures (not just the name). Both channels then come
+                    // from the same table parse, so they stay consistent.
+                    for (JsonElement project : BackendRegistry.projectsFromMarkdownTable(result))
                     {
-                        JsonObject project = new JsonObject();
-                        project.addProperty(KEY_NAME, name);
                         mergedProjects.add(project);
                     }
                 }
