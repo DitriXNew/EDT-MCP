@@ -510,13 +510,16 @@ public class McpProtocolHandler
         {
             result = result + "\n\n---\n**USER SIGNAL:** " + signal.getMessage();
         }
+        // A markdown tool may ALSO expose a machine-readable structuredContent (issue #302);
+        // it rides alongside the human content and is null for tools that do not opt in.
+        String structuredJson = tool.getStructuredContent(params);
         // In plain text mode, return markdown as plain text instead of embedded resource
         if (plainTextMode)
         {
-            return buildToolCallTextResponse(result, requestId);
+            return buildToolCallTextResponse(result, requestId, structuredJson);
         }
         String fileName = tool.getResultFileName(params);
-        return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId);
+        return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId, structuredJson);
     }
 
     /**
@@ -1000,8 +1003,34 @@ public class McpProtocolHandler
      */
     private String buildToolCallTextResponse(String result, Object requestId)
     {
+        return buildToolCallTextResponse(result, requestId, null);
+    }
+
+    /**
+     * As {@link #buildToolCallTextResponse(String, Object)}, but also attaches an optional
+     * machine-readable {@code structuredContent} JSON alongside the text (issue #302). A
+     * {@code null}/blank {@code structuredJson} yields the exact same response as the 2-arg form.
+     */
+    private String buildToolCallTextResponse(String result, Object requestId, String structuredJson)
+    {
         ToolCallResult toolResult = ToolCallResult.text(OutputSizeGuard.cap(result));
+        attachStructuredContent(toolResult, structuredJson);
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
+    }
+
+    /**
+     * Parses {@code structuredJson} and attaches it to {@code toolResult} as its structured
+     * content. A {@code null}/blank value is a no-op, so a tool that does not opt in keeps a
+     * pure content result. Kept defensive at the tool layer (a tool's
+     * {@code getStructuredContent} returns {@code null} rather than throwing), so this only ever
+     * sees valid JSON or nothing.
+     */
+    private static void attachStructuredContent(ToolCallResult toolResult, String structuredJson)
+    {
+        if (structuredJson != null && !structuredJson.isEmpty())
+        {
+            toolResult.withStructuredContent(JsonParser.parseString(structuredJson));
+        }
     }
     
     /**
@@ -1121,8 +1150,21 @@ public class McpProtocolHandler
      */
     private String buildToolCallResourceResponse(String content, String mimeType, String fileName, Object requestId)
     {
+        return buildToolCallResourceResponse(content, mimeType, fileName, requestId, null);
+    }
+
+    /**
+     * As {@link #buildToolCallResourceResponse(String, String, String, Object)}, but also
+     * attaches an optional machine-readable {@code structuredContent} JSON alongside the embedded
+     * resource (issue #302). A {@code null}/blank {@code structuredJson} yields the exact same
+     * response as the 4-arg form (the resource body stays byte-for-byte identical).
+     */
+    private String buildToolCallResourceResponse(String content, String mimeType, String fileName,
+        Object requestId, String structuredJson)
+    {
         ToolCallResult toolResult =
             ToolCallResult.resource("embedded://" + fileName, mimeType, OutputSizeGuard.cap(content)); //$NON-NLS-1$
+        attachStructuredContent(toolResult, structuredJson);
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
     }
     

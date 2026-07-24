@@ -24,6 +24,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -391,38 +392,60 @@ public final class BackendRegistry
     }
 
     /**
-     * Parses the project names out of a raw {@code list_projects} JSON-RPC response:
-     * {@code result.structuredContent.projects[*].name}. Any missing level or unexpected
-     * shape yields the names collected so far (usually an empty list) — never an exception.
-     * Package-private for direct unit testing.
+     * Parses the project names out of a raw {@code list_projects} JSON-RPC response.
+     * <p>
+     * PRIMARY: the machine contract {@code result.structuredContent.projects[*].name}.
+     * FALLBACK (issue #302): when a backend's {@code list_projects} predates that contract
+     * (an older or third-party plugin build that returns ONLY the human Markdown table in
+     * {@code content}), the project names are recovered from the first column of that table,
+     * so routing still works without a plugin upgrade.
+     * <p>
+     * Any missing level or unexpected shape yields the names collected so far (usually an
+     * empty list) — never an exception. Package-private for direct unit testing.
      *
      * @param rawResponse the raw JSON-RPC response string; may be anything
      * @return the project names; never {@code null}
      */
     static List<String> parseProjectNames(String rawResponse)
     {
-        List<String> names = new ArrayList<>();
         JsonObject response = Json.parseObject(rawResponse);
         if (response == null)
         {
-            return names;
+            return new ArrayList<>();
         }
         JsonObject result = Json.obj(response, "result"); //$NON-NLS-1$
         if (result == null)
         {
-            return names;
+            return new ArrayList<>();
         }
+        // PRIMARY (authoritative): structuredContent.projects. When that array is PRESENT it is the
+        // definitive answer - even an EMPTY array means "this backend has zero projects", so we must
+        // NOT fall back to a possibly-stale Markdown table (the two are built in separate workspace
+        // passes, so an empty structured list beside a stale table row must not resurrect it).
         JsonObject structured = Json.obj(result, "structuredContent"); //$NON-NLS-1$
-        if (structured == null)
+        if (structured != null)
         {
-            return names;
+            JsonElement projects = structured.get("projects"); //$NON-NLS-1$
+            if (projects != null && projects.isJsonArray())
+            {
+                return namesFromProjectsArray(projects.getAsJsonArray());
+            }
         }
-        JsonElement projects = structured.get("projects"); //$NON-NLS-1$
-        if (projects == null || !projects.isJsonArray())
-        {
-            return names;
-        }
-        for (JsonElement element : projects.getAsJsonArray())
+        // FALLBACK: no structured contract at all (an older/third-party build) -> the Markdown table.
+        return namesFromMarkdownTable(result);
+    }
+
+    /**
+     * Collects {@code [*].name} from a {@code structuredContent.projects} array, skipping blank
+     * names and non-object entries.
+     *
+     * @param projects the {@code projects} JSON array
+     * @return the project names; never {@code null}
+     */
+    private static List<String> namesFromProjectsArray(JsonArray projects)
+    {
+        List<String> names = new ArrayList<>();
+        for (JsonElement element : projects)
         {
             if (!element.isJsonObject())
             {
@@ -435,6 +458,172 @@ public final class BackendRegistry
             }
         }
         return names;
+    }
+
+    /**
+     * The fallback path (issue #302): recover project names from the first column of the
+     * {@code list_projects} Markdown table carried in {@code result.content[*]}. Each content
+     * item's text is read from either {@code text} (a text block / plain-text mode) or
+     * {@code resource.text} (an embedded {@code text/markdown} resource). The table's header
+     * ({@code Name}) and separator ({@code ---}) rows are skipped, and the {@code \|} escaping
+     * {@code MarkdownUtils.escapeForTable} applies to a cell is undone.
+     *
+     * @param result the JSON-RPC {@code result} object
+     * @return the project names; empty when no table is present
+     */
+    private static List<String> namesFromMarkdownTable(JsonObject result)
+    {
+        JsonElement content = result.get("content"); //$NON-NLS-1$
+        if (content == null || !content.isJsonArray())
+        {
+            return new ArrayList<>();
+        }
+        StringBuilder md = new StringBuilder();
+        for (JsonElement item : content.getAsJsonArray())
+        {
+            if (!item.isJsonObject())
+            {
+                continue;
+            }
+            JsonObject obj = item.getAsJsonObject();
+            String text = Json.str(obj, "text"); //$NON-NLS-1$
+            if (text == null)
+            {
+                JsonObject resource = Json.obj(obj, "resource"); //$NON-NLS-1$
+                if (resource != null)
+                {
+                    text = Json.str(resource, "text"); //$NON-NLS-1$
+                }
+            }
+            if (text != null)
+            {
+                md.append(text).append('\n');
+            }
+        }
+        return firstColumnOfMarkdownTable(md.toString());
+    }
+
+    /**
+     * Extracts the first-column cell of every DATA row of a Markdown pipe table, skipping the
+     * header ({@code Name}) and separator ({@code ---}/{@code :--:}) rows and any non-table line.
+     *
+     * @param markdown the concatenated Markdown text
+     * @return the first-column values; never {@code null}
+     */
+    private static List<String> firstColumnOfMarkdownTable(String markdown)
+    {
+        List<String> names = new ArrayList<>();
+        boolean pastSeparator = false;
+        for (String line : markdown.split("\n", -1)) //$NON-NLS-1$
+        {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.charAt(0) != '|')
+            {
+                pastSeparator = false; // left this table; a following one needs its own separator
+                continue;
+            }
+            // The cell boundary is the next UNESCAPED pipe: a '\|' inside the value (from
+            // escapeForTable) must NOT be mistaken for the closing pipe.
+            int secondPipe = indexOfUnescapedPipe(trimmed, 1);
+            if (secondPipe < 0)
+            {
+                continue; // a row with a single pipe is not a well-formed table row
+            }
+            if (!pastSeparator)
+            {
+                // Header rows and the |---|---| separator (which divides header from data) contribute
+                // no names; crossing the separator flips us into the data section. Gating on the
+                // whole separator ROW - rather than matching the literal "Name"/dashes of a single
+                // CELL - means a real project named "Name" or "---" in a DATA row is NOT mistaken for
+                // the header/separator and dropped (issue #302).
+                if (isSeparatorRow(trimmed))
+                {
+                    pastSeparator = true;
+                }
+                continue;
+            }
+            String cell = trimmed.substring(1, secondPipe).trim();
+            // Undo the escapeForTable '|' -> '\|' escaping (the only escape that hits a name).
+            names.add(cell.replace("\\|", "|")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return names;
+    }
+
+    /**
+     * Whether a table row (starting with {@code '|'}) is the header/data SEPARATOR: EVERY cell is
+     * dashes/colons only (e.g. {@code |------|:--:|}), which no real data row is. Detecting the full
+     * row (not a lone cell) is what lets a project literally named {@code "---"} survive as data.
+     *
+     * @param rowLine the trimmed row line (its first char is {@code '|'})
+     * @return {@code true} when the row is a Markdown table separator
+     */
+    private static boolean isSeparatorRow(String rowLine)
+    {
+        int from = 1;
+        int cells = 0;
+        while (from <= rowLine.length())
+        {
+            int end = indexOfUnescapedPipe(rowLine, from);
+            if (end < 0)
+            {
+                // The segment AFTER the last pipe: when the row has no trailing '|' this is a real
+                // trailing cell that MUST also be a separator (so "| --- | ready" - a data row whose
+                // first cell happens to be dashes - is not mistaken for a separator). An empty
+                // trailing segment just means the row ended with a '|', so there is no extra cell.
+                String tail = rowLine.substring(from).trim();
+                if (!tail.isEmpty())
+                {
+                    if (!isSeparatorCell(tail))
+                    {
+                        return false;
+                    }
+                    cells++;
+                }
+                break;
+            }
+            if (!isSeparatorCell(rowLine.substring(from, end).trim()))
+            {
+                return false;
+            }
+            cells++;
+            from = end + 1;
+        }
+        return cells > 0;
+    }
+
+    /**
+     * The index of the first {@code '|'} at or after {@code from} that is NOT escaped as
+     * {@code \|}, or {@code -1}. A pipe preceded by a backslash is a {@code escapeForTable}
+     * escape inside a cell value, not a column boundary.
+     */
+    private static int indexOfUnescapedPipe(String s, int from)
+    {
+        for (int i = from; i < s.length(); i++)
+        {
+            if (s.charAt(i) == '|' && (i == 0 || s.charAt(i - 1) != '\\'))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** A Markdown table separator cell is NON-empty and only dashes/colons (e.g. {@code ---}, {@code :--:}). */
+    private static boolean isSeparatorCell(String cell)
+    {
+        if (cell.isEmpty())
+        {
+            return false;
+        }
+        for (int i = 0; i < cell.length(); i++)
+        {
+            char c = cell.charAt(i);
+            if (c != '-' && c != ':')
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void logChange(Snapshot previous, Snapshot current)

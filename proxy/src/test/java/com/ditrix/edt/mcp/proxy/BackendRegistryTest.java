@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
@@ -228,7 +231,143 @@ public class BackendRegistryTest
         assertEquals(List.of("A"), BackendRegistry.parseProjectNames(raw)); //$NON-NLS-1$
     }
 
+    // ---- parseProjectNames: Markdown-table fallback (issue #302) ----
+
+    @Test
+    public void testParseProjectNamesMarkdownFallbackFromResource()
+    {
+        // A backend whose list_projects predates structuredContent returns only the human
+        // Markdown table (as an embedded resource). Names come from the first column.
+        String md = "## Workspace Projects\n\n**Total:** 2 projects\n\n" //$NON-NLS-1$
+            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
+            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
+            + "| Trade | ready | /ws/Trade | Yes | Yes | V8ConfigurationNature |\n" //$NON-NLS-1$
+            + "| ERPKAUT | ready | /ws/ERPKAUT | Yes | Yes | V8ExtensionNature |\n"; //$NON-NLS-1$
+        assertEquals(List.of("Trade", "ERPKAUT"), //$NON-NLS-1$ //$NON-NLS-2$
+            BackendRegistry.parseProjectNames(resourceResult(md)));
+    }
+
+    @Test
+    public void testParseProjectNamesMarkdownFallbackFromTextBlock()
+    {
+        // Plain-text mode: the Markdown arrives as a text block, not a resource.
+        String md = "| Name | State |\n|------|-------|\n| Trade | ready |\n"; //$NON-NLS-1$
+        assertEquals(List.of("Trade"), BackendRegistry.parseProjectNames(textResult(md))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseProjectNamesPrefersStructuredOverMarkdown()
+    {
+        // When BOTH are present, the machine contract wins; the table is ignored.
+        JsonObject structured = new JsonObject();
+        JsonArray projects = new JsonArray();
+        JsonObject p = new JsonObject();
+        p.addProperty("name", "FromStructured"); //$NON-NLS-1$ //$NON-NLS-2$
+        projects.add(p);
+        structured.add("projects", projects); //$NON-NLS-1$
+        JsonObject result = resultWithContent("| Name |\n|---|\n| FromMarkdown |\n"); //$NON-NLS-1$
+        result.add("structuredContent", structured); //$NON-NLS-1$
+        JsonObject response = new JsonObject();
+        response.add("result", result); //$NON-NLS-1$
+        assertEquals(List.of("FromStructured"), //$NON-NLS-1$
+            BackendRegistry.parseProjectNames(response.toString()));
+    }
+
+    @Test
+    public void testParseProjectNamesMarkdownUnescapesPipe()
+    {
+        // escapeForTable turns '|' into '\|'; the fallback must undo that.
+        String md = "| Name | State |\n|---|---|\n| Weird\\|Name | ready |\n"; //$NON-NLS-1$
+        assertEquals(List.of("Weird|Name"), BackendRegistry.parseProjectNames(resourceResult(md))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseProjectNamesMarkdownEmptyTableYieldsEmpty()
+    {
+        String md = "## Workspace Projects\n\n**Total:** 0 projects\n\n*No projects found.*\n"; //$NON-NLS-1$
+        assertTrue(BackendRegistry.parseProjectNames(resourceResult(md)).isEmpty());
+    }
+
+    @Test
+    public void testParseProjectNamesMarkdownDataRowNamedLikeHeaderOrSeparatorSurvives()
+    {
+        // A real project literally named "Name" or "---" sits in a DATA row (after the separator)
+        // and must NOT be mistaken for the header/separator and dropped.
+        String md = "| Name | State |\n|------|-------|\n| Name | ready |\n| --- | ready |\n"; //$NON-NLS-1$
+        assertEquals(List.of("Name", "---"), //$NON-NLS-1$ //$NON-NLS-2$
+            BackendRegistry.parseProjectNames(resourceResult(md)));
+    }
+
+    @Test
+    public void testParseProjectNamesEmptyStructuredIsAuthoritativeNotMarkdown()
+    {
+        // structuredContent.projects present but EMPTY means "zero projects" (authoritative); a stale
+        // Markdown row beside it must NOT be resurrected (the two are separate workspace passes).
+        JsonObject structured = new JsonObject();
+        structured.add("projects", new JsonArray()); // empty, but PRESENT //$NON-NLS-1$
+        JsonObject result = resultWithContent("| Name |\n|---|\n| Stale |\n"); //$NON-NLS-1$
+        result.add("structuredContent", structured); //$NON-NLS-1$
+        JsonObject response = new JsonObject();
+        response.add("result", result); //$NON-NLS-1$
+        assertTrue(BackendRegistry.parseProjectNames(response.toString()).isEmpty());
+    }
+
+    @Test
+    public void testParseProjectNamesSeparatorRowValidatesTrailingCell()
+    {
+        // "| --- | ready" (no trailing pipe, a non-dash trailing cell) is NOT a separator; treating
+        // it as one would wrongly start collecting the rows after it. No valid separator -> empty.
+        String md = "| --- | ready\n| Trade | ready\n"; //$NON-NLS-1$
+        assertTrue(BackendRegistry.parseProjectNames(resourceResult(md)).isEmpty());
+    }
+
     // ---- helpers ----
+
+    /** A tools/call response whose only content is an embedded markdown resource. */
+    private static String resourceResult(String markdown)
+    {
+        JsonObject resource = new JsonObject();
+        resource.addProperty("text", markdown); //$NON-NLS-1$
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "resource"); //$NON-NLS-1$ //$NON-NLS-2$
+        item.add("resource", resource); //$NON-NLS-1$
+        return wrapContent(item);
+    }
+
+    /** A tools/call response whose only content is a plain text block. */
+    private static String textResult(String text)
+    {
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
+        item.addProperty("text", text); //$NON-NLS-1$
+        return wrapContent(item);
+    }
+
+    private static String wrapContent(JsonObject contentItem)
+    {
+        JsonObject response = new JsonObject();
+        response.add("result", resultWithContentItem(contentItem)); //$NON-NLS-1$
+        return response.toString();
+    }
+
+    private static JsonObject resultWithContent(String markdown)
+    {
+        JsonObject resource = new JsonObject();
+        resource.addProperty("text", markdown); //$NON-NLS-1$
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "resource"); //$NON-NLS-1$ //$NON-NLS-2$
+        item.add("resource", resource); //$NON-NLS-1$
+        return resultWithContentItem(item);
+    }
+
+    private static JsonObject resultWithContentItem(JsonObject contentItem)
+    {
+        JsonArray content = new JsonArray();
+        content.add(contentItem);
+        JsonObject result = new JsonObject();
+        result.add("content", content); //$NON-NLS-1$
+        return result;
+    }
 
     private static ProxyConfig scanningConfig(int from, int to)
     {

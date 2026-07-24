@@ -20,6 +20,8 @@ import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 
 /**
  * Tool to list all workspace projects.
@@ -50,6 +52,75 @@ public class ListProjectsTool implements IMcpTool
     public String execute(Map<String, String> params)
     {
         return listProjects();
+    }
+
+    @Override
+    public String getStructuredContent(Map<String, String> params)
+    {
+        return listProjectsStructured();
+    }
+
+    /**
+     * The machine-readable {@code {"projects":[{name,state,path,open,edtProject,natures}]}}
+     * companion to {@link #listProjects()} (issue #302), so a programmatic consumer (the multi-EDT
+     * proxy) can read the project list without scraping the Markdown table. It mirrors the same
+     * columns the table renders. Defensive: ANY failure yields {@code null} (no structuredContent)
+     * rather than sinking the human markdown result.
+     *
+     * @return the projects JSON string, or {@code null} on any failure
+     */
+    static String listProjectsStructured()
+    {
+        try
+        {
+            IWorkspace workspace = ResourcesPlugin.getWorkspace();
+            IProject[] projects = workspace.getRoot().getProjects();
+
+            JsonArray rows = new JsonArray();
+            for (IProject project : projects)
+            {
+                JsonObject row = new JsonObject();
+                row.addProperty("name", project.getName()); //$NON-NLS-1$
+                row.addProperty("state", //$NON-NLS-1$
+                    ProjectStateChecker.checkProjectState(project).getStateValue());
+                row.addProperty("path", project.getLocation() != null //$NON-NLS-1$
+                    ? project.getLocation().toOSString() : ""); //$NON-NLS-1$
+                row.addProperty("open", project.isOpen()); //$NON-NLS-1$
+
+                // Mirror the markdown's Yes/No/- tri-state WITHOUT collapsing it: emit edtProject as a
+                // definitive boolean ONLY when the EDT nature was actually determined (an OPEN project
+                // whose read succeeded). A closed project, or one whose nature read failed, leaves it
+                // "-" in the table and OMITS the field here, so a machine consumer can tell "not EDT"
+                // from "not inspected" instead of seeing a misleading false.
+                String edtStatus = "-"; //$NON-NLS-1$
+                String naturesStr = "-"; //$NON-NLS-1$
+                if (project.isOpen())
+                {
+                    String[] edtAndNatures = readEdtStatusAndNatures(project);
+                    edtStatus = edtAndNatures[0];
+                    naturesStr = edtAndNatures[1];
+                }
+                if ("Yes".equals(edtStatus)) //$NON-NLS-1$
+                {
+                    row.addProperty("edtProject", true); //$NON-NLS-1$
+                }
+                else if ("No".equals(edtStatus)) //$NON-NLS-1$
+                {
+                    row.addProperty("edtProject", false); //$NON-NLS-1$
+                }
+                row.addProperty("natures", naturesStr); //$NON-NLS-1$
+                rows.add(row);
+            }
+
+            JsonObject out = new JsonObject();
+            out.add("projects", rows); //$NON-NLS-1$
+            return out.toString();
+        }
+        catch (Exception e)
+        {
+            Log.warning("list_projects: failed to build structuredContent: " + e.getMessage()); //$NON-NLS-1$
+            return null;
+        }
     }
     
     /**

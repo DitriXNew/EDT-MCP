@@ -236,6 +236,20 @@ public class ToolCallResult
         return result;
     }
     
+    /**
+     * Attaches machine-readable {@code structuredContent} to an existing content result (a
+     * {@code text}/{@code resource} one), so a tool can carry BOTH a human rendering and a
+     * structured payload (issue #302). Returns {@code this} for chaining.
+     *
+     * @param structuredContent the structured payload (typically a Gson {@link JsonElement})
+     * @return this result
+     */
+    public ToolCallResult withStructuredContent(Object structuredContent)
+    {
+        this.structuredContent = structuredContent;
+        return this;
+    }
+
     public List<ContentItem> getContent()
     {
         return content;

@@ -217,4 +217,23 @@ public class ToolCallResultTest
         assertEquals(1, tools.size());
         assertEquals("test_tool", tools.get(0).getAsJsonObject().get("name").getAsString());
     }
+
+    @Test
+    public void testWithStructuredContentKeepsBothChannels()
+    {
+        // A content result (text/markdown) can ALSO carry structuredContent (issue #302): the
+        // human content stays, and the machine payload is exposed and serialized alongside it.
+        JsonElement structured = JsonParser.parseString("{\"projects\":[{\"name\":\"Trade\"}]}");
+        ToolCallResult result = ToolCallResult.text("human markdown").withStructuredContent(structured);
+
+        assertFalse(result.getContent().isEmpty());
+        assertEquals("human markdown", result.getContent().get(0).getText());
+        assertSame(structured, result.getStructuredContent());
+
+        String json = GsonProvider.toJson(result);
+        JsonElement el = JsonParser.parseString(json).getAsJsonObject().get("structuredContent");
+        assertNotNull("structuredContent must serialize alongside content", el);
+        assertEquals("Trade", el.getAsJsonObject().get("projects").getAsJsonArray()
+            .get(0).getAsJsonObject().get("name").getAsString());
+    }
 }
