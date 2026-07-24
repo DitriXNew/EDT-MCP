@@ -105,7 +105,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO " //$NON-NLS-1$
             + "package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
             + "'...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item " //$NON-NLS-1$
-            + "'Catalog.X.Predefined.ItemName' / 'ChartOfCharacteristicTypes.X.Predefined.ItemName') " //$NON-NLS-1$
+            + "'<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / " //$NON-NLS-1$
+            + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
             + "addressed by a 1C full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
             + "references in BSL code, forms and other metadata. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$

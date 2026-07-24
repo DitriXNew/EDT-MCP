@@ -96,10 +96,10 @@ public class GetMetadataDetailsTool implements IMcpTool
                "In the default (non-full) view a ScheduledJob or CommonModule also renders a " + //$NON-NLS-1$
                "type-specific Properties table (e.g. methodName/schedule/use for a job; " + //$NON-NLS-1$
                "server/serverCall/global/returnValuesReuse for a module), and an InformationRegister's " + //$NON-NLS-1$
-               "Dimensions additionally show their Indexing. A Catalog / ChartOfCharacteristicTypes " + //$NON-NLS-1$
-               "also renders its 'Predefined items' table (in both basic and full mode); a single " + //$NON-NLS-1$
-               "predefined item FQN ('Catalog.X.Predefined.ItemName') renders that one item's " + //$NON-NLS-1$
-               "properties. " + //$NON-NLS-1$
+               "Dimensions additionally show their Indexing. A Catalog / ChartOfCharacteristicTypes / " + //$NON-NLS-1$
+               "ChartOfAccounts / ChartOfCalculationTypes also renders its 'Predefined items' table " + //$NON-NLS-1$
+               "(in both basic and full mode); a single predefined item FQN " + //$NON-NLS-1$
+               "('<Owner>.X.Predefined.ItemName') renders that one item's properties. " + //$NON-NLS-1$
                "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
