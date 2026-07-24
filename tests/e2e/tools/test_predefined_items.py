@@ -278,16 +278,16 @@ def test_characteristic_types_predefined_item():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
-def test_chart_of_accounts_predefined_is_deferred_not_faked():
-    # The owner-TYPE gate runs before any owner-existence lookup, so a non-existent
-    # ChartOfAccounts name still gets the actionable "not yet supported" refusal (never a
-    # false "owner not found", and never silently faked support).
+def test_chart_of_accounts_predefined_missing_owner_is_reported():
+    # ChartOfAccounts predefined items are supported now (see test_predefined_coa.py), so a
+    # non-existent chart name is a genuine owner-lookup miss: the refusal must be the actionable
+    # "owner not found" naming the missing chart - never a crash, never a stale "not yet supported".
     r = call("create_metadata", {
         "projectName": PROJECT,
         "fqn": "ChartOfAccounts.NoSuchChart.Predefined.Cash",
     })
-    err = assert_error(r, "ChartOfAccounts predefined item must be refused")
-    assert_error_quality(err, suggests=["not yet supported"])
+    err = assert_error(r, "a create under a non-existent ChartOfAccounts must be refused")
+    assert_error_quality(err, names=["NoSuchChart"], suggests=["not found"])
     assert_no_diff("a refused create must not mutate the project")
 
 
