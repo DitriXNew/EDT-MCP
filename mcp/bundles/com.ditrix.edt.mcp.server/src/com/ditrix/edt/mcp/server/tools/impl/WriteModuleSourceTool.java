@@ -18,6 +18,10 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.ProjectScope;
+import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.preferences.IScopeContext;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -256,15 +260,21 @@ public class WriteModuleSourceTool implements IMcpTool
         // Read current content (if file exists)
         List<String> originalLines;
         boolean hasBom;
+        String lineDelimiter;
         if (fileExists)
         {
             originalLines = BslModuleUtils.readFileLines(file);
             hasBom = detectBom(file);
+            // Preserve the module's OWN line separator (issue #305): EDT writes BSL modules with CRLF,
+            // and the raw \n write flipped every line to LF, marking the whole module changed. Detect
+            // from the raw text (readFileText keeps the original separators; readFileLines strips them).
+            lineDelimiter = resolveLineDelimiter(file.getProject(), BslModuleUtils.readFileText(file));
         }
         else
         {
             originalLines = new ArrayList<>();
             hasBom = true; // New BSL files should have BOM
+            lineDelimiter = resolveLineDelimiter(file.getProject(), null);
         }
 
         String hashError = checkExpectedHashGuard(req, file, fileExists);
@@ -293,7 +303,7 @@ public class WriteModuleSourceTool implements IMcpTool
         }
 
         // Write file (the mutating step — kept inline under the passed guards)
-        writeFile(file, newLines, hasBom, fileExists);
+        writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
 
         // Return success
         return buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
@@ -936,17 +946,63 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
-     * Writes lines to the file, preserving BOM if needed.
+     * The line delimiter to write the module with. An EXISTING module keeps its OWN dominant
+     * delimiter (so an edit does not flip every line to LF and mark the whole module changed —
+     * issue #305); a brand-new module (or an existing single-line one with no delimiter) uses the
+     * project's configured line separator, falling back to the platform default.
+     *
+     * @param project the module's project (for the line-separator preference scope)
+     * @param rawCurrentText the file's raw content WITH its original separators, or {@code null}
+     *     for a new file
+     * @return {@code "\r\n"} or {@code "\n"}
+     */
+    private static String resolveLineDelimiter(IProject project, String rawCurrentText)
+    {
+        String detected = detectDominantDelimiter(rawCurrentText);
+        if (detected != null)
+        {
+            return detected;
+        }
+        String pref = Platform.getPreferencesService().getString(Platform.PI_RUNTIME,
+            Platform.PREF_LINE_SEPARATOR, null,
+            new IScopeContext[] { new ProjectScope(project), InstanceScope.INSTANCE });
+        return (pref != null && !pref.isEmpty()) ? pref : System.lineSeparator();
+    }
+
+    /**
+     * The dominant line delimiter of {@code text} ({@code "\r\n"} vs {@code "\n"}), or {@code null}
+     * when the text is null/empty or has no line break at all (a single line, where the caller falls
+     * back to the project default). A tie counts as CRLF (the EDT/1C convention for BSL modules).
+     */
+    static String detectDominantDelimiter(String text)
+    {
+        if (text == null || text.isEmpty())
+        {
+            return null;
+        }
+        int crlf = countOccurrences(text, "\r\n"); //$NON-NLS-1$
+        int lf = countOccurrences(text, "\n") - crlf; // bare LF not part of a CRLF //$NON-NLS-1$
+        if (crlf == 0 && lf == 0)
+        {
+            return null;
+        }
+        return crlf >= lf ? "\r\n" : "\n"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Writes lines to the file, preserving BOM if needed. {@code lineDelimiter} is the module's own
+     * separator (see {@link #resolveLineDelimiter}); {@code lines} are LF-normalized (no {@code \r}),
+     * so joining with it re-applies the file's convention verbatim.
      */
     private void writeFile(IFile file, List<String> lines, boolean withBom,
-        boolean fileExists) throws Exception
+        boolean fileExists, String lineDelimiter) throws Exception
     {
-        String content = String.join("\n", lines); //$NON-NLS-1$
+        String content = String.join(lineDelimiter, lines);
 
-        // Ensure file ends with newline
-        if (!content.endsWith("\n")) //$NON-NLS-1$
+        // Ensure file ends with a newline, in the file's own delimiter
+        if (!content.endsWith(lineDelimiter))
         {
-            content += "\n"; //$NON-NLS-1$
+            content += lineDelimiter;
         }
 
         byte[] contentBytes = content.getBytes("UTF-8"); //$NON-NLS-1$
