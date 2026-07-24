@@ -18,6 +18,7 @@ import java.util.Locale;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.common.AccountType;
+import com._1c.g5.v8.dt.metadata.mdclass.AccountingFlag;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccounts;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccountsPredefinedItem;
@@ -398,5 +399,44 @@ public class PredefinedWriterChartOfAccountsTest
         item.getExtDimensionTypes().add(ext);
 
         assertEquals("?", PredefinedWriter.displayExtDimensionTypes(item)); //$NON-NLS-1$
+    }
+
+    // ==================== chart flag references: yo tolerance + dangling safety (issue #296 f/u) =====
+
+    @Test
+    public void testAccountingFlagReferenceResolvesYoVariantName()
+    {
+        // A flag stored with the yo-normalized spelling (е = 'е', as create_metadata stores it)
+        // must still resolve when a predefined account cites it with the natural yo spelling
+        // (ё = 'ё') - the same tolerance sibling base/displaced/leading references already get.
+        ChartOfAccounts coa = newChartOfAccounts("Main"); //$NON-NLS-1$
+        AccountingFlag flag = MdClassFactory.eINSTANCE.createAccountingFlag();
+        flag.setName("Quantityе"); // stored with 'е' //$NON-NLS-1$
+        coa.getAccountingFlags().add(flag);
+
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.accountingFlags = List.of("Quantityё"); // cited with 'ё' //$NON-NLS-1$
+        props.accountingFlagsSet = true;
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(coa, "Cash", props, false); //$NON-NLS-1$
+        assertFalse("a yo-variant flag name must resolve via the normalizeYo retry: " + result.error, //$NON-NLS-1$
+            result.isError());
+    }
+
+    @Test
+    public void testDisplayAccountingFlagsDanglingFlagRendersMarkerNotNpe()
+    {
+        ChartOfAccounts coa = newChartOfAccounts("Main"); //$NON-NLS-1$
+        PredefinedWriter.WriteResult account =
+            PredefinedWriter.create(coa, "Cash", new PredefinedWriter.ItemProps(), false); //$NON-NLS-1$
+        assertFalse(account.isError());
+        ChartOfAccountsPredefinedItem item = (ChartOfAccountsPredefinedItem)account.item;
+
+        // A dangling AccountingFlag (force-deleted while still cited) has a null Name; the details
+        // render must degrade to "?" rather than print "null" or abort get_metadata_details.
+        AccountingFlag dangling = MdClassFactory.eINSTANCE.createAccountingFlag();
+        // dangling.getName() left null
+        item.getAccountingFlags().add(dangling);
+
+        assertEquals("?", PredefinedWriter.displayAccountingFlags(item)); //$NON-NLS-1$
     }
 }

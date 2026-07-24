@@ -2407,13 +2407,30 @@ public final class PredefinedWriter
         return null;
     }
 
-    /** Resolves a named {@link MdObject} in a live list by case-insensitive Name (1C identifiers). */
+    /**
+     * Resolves a named {@link MdObject} in a live list by case-insensitive Name (1C identifiers),
+     * EXACT-first then with a yo-normalized ('ё'->'е') retry - the SAME tolerance the predefined
+     * SIBLING references already get via {@link #locateYo}. create_metadata normalizes a new
+     * AccountingFlag / ExtDimensionAccountingFlag Name by default, so a caller who later cites the
+     * flag with its natural 'ё' spelling must still resolve the stored (normalized) flag.
+     */
     private static <T extends MdObject> T findByName(List<T> list, String name)
     {
         if (name == null || list == null)
         {
             return null;
         }
+        T exact = findByNameExact(list, name);
+        if (exact != null)
+        {
+            return exact;
+        }
+        String normalized = MdNameNormalizer.normalizeYo(name);
+        return normalized.equals(name) ? null : findByNameExact(list, normalized);
+    }
+
+    private static <T extends MdObject> T findByNameExact(List<T> list, String name)
+    {
         for (T candidate : list)
         {
             if (name.equalsIgnoreCase(candidate.getName()))
@@ -2498,7 +2515,7 @@ public final class PredefinedWriter
             List<String> names = new ArrayList<>();
             for (AccountingFlag flag : account.getAccountingFlags())
             {
-                names.add(flag.getName());
+                names.add(safeName(flag));
             }
             return names.isEmpty() ? null : String.join(", ", names); //$NON-NLS-1$
         }
@@ -2540,6 +2557,22 @@ public final class PredefinedWriter
         return name != null ? name : "?"; //$NON-NLS-1$
     }
 
+    /**
+     * The {@link MdObject} overload of {@link #safeName(PredefinedItem)}, for a chart's
+     * {@code AccountingFlag} / {@code ExtDimensionAccountingFlag} reference: a force-deleted flag
+     * still cited by a predefined account leaves a dangling proxy / null Name, which would make
+     * {@code String.join} render "null" (or abort on a hard proxy). Renders {@code "?"} instead.
+     */
+    private static String safeName(MdObject obj)
+    {
+        if (obj == null || obj.eIsProxy())
+        {
+            return "?"; //$NON-NLS-1$
+        }
+        String name = obj.getName();
+        return name != null ? name : "?"; //$NON-NLS-1$
+    }
+
     /** Renders one {@link ExtDimensionType} row as {@code "<charType> [turnover] {flag, ...}"}. */
     private static String renderExtDimensionType(ExtDimensionType ext)
     {
@@ -2551,7 +2584,7 @@ public final class PredefinedWriter
         List<String> flags = new ArrayList<>();
         for (ExtDimensionAccountingFlag flag : ext.getExtDimensionAccountingFlags())
         {
-            flags.add(flag.getName());
+            flags.add(safeName(flag));
         }
         if (!flags.isEmpty())
         {
