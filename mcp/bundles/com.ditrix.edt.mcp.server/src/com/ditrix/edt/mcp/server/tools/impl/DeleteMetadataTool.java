@@ -907,8 +907,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Reached only when the reference check completed with nothing blocking, OR force=true bypasses
         // either an incomplete check or a non-empty blocking set.
         int cascadeTotal = 1 + preview.descendantCount;
-        StringBuilder consentSubtitle = new StringBuilder(preview.isFolder && preview.descendantCount > 0
-            ? "This deletes predefined item '" + ref.itemName + "' (a folder) and its " //$NON-NLS-1$ //$NON-NLS-2$
+        // Cascade wording follows the real containment-descendant count, not isFolder: a
+        // ChartOfAccounts parent account (isFolder=false) still cascades its childItems, so the
+        // subtitle must report the count. The "(a folder)" label stays gated on isFolder.
+        StringBuilder consentSubtitle = new StringBuilder(preview.descendantCount > 0
+            ? "This deletes predefined item '" + ref.itemName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (preview.isFolder ? " (a folder)" : "") + " and its " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + preview.descendantCount + " nested item(s) from " + ref.ownerFqn() + "." //$NON-NLS-1$ //$NON-NLS-2$
             : "This deletes predefined item '" + ref.itemName + "' from " + ref.ownerFqn() + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!refScan.completed)
@@ -959,14 +963,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             items.add(row);
         }
 
-        boolean cascades = preview.isFolder && preview.descendantCount > 0;
+        // A cascade is driven by CONTAINMENT descendants, NOT by isFolder: a ChartOfAccounts parent
+        // account is NOT a folder yet its childItems DO cascade (isFolder=false, descendantCount>0).
+        // The "(a FOLDER)" label stays gated on isFolder so a non-folder cascading owner is not
+        // mislabelled, but the cascade wording itself follows the real descendant count.
+        boolean cascades = preview.descendantCount > 0;
         // A confirm=true delete WITHOUT force would block when the scan found references OR did not
         // complete - the SAME decision the confirm path makes - so the preview's blocking flag never
         // contradicts what a subsequent confirm actually does.
         boolean wouldBlock = predefinedDeleteWouldBlock(refScan, false);
         boolean hasBlocking = refScan.completed && !refScan.refs.isEmpty();
         StringBuilder message = new StringBuilder(cascades
-            ? "Preview: deleting predefined item '" + ref.itemName + "' (a FOLDER) from " //$NON-NLS-1$ //$NON-NLS-2$
+            ? "Preview: deleting predefined item '" + ref.itemName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (preview.isFolder ? " (a FOLDER)" : "") + " from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ref.ownerFqn() + " would remove it AND its " + preview.descendantCount //$NON-NLS-1$
                 + " nested item(s)." //$NON-NLS-1$
             : "Preview: deleting predefined item '" + ref.itemName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
@@ -1051,7 +1060,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         boolean persisted = BmTransactions.forceExportToDisk(project, canonicalOwnerFqnHolder[0]);
         PredefinedWriter.DeletePreview txPreview = txPreviewHolder[0];
-        boolean cascaded = txPreview != null && txPreview.isFolder && txPreview.descendantCount > 0;
+        // Cascade is driven by the CONTAINMENT descendant count, not isFolder: a ChartOfAccounts
+        // parent account (isFolder=false) still cascades its childItems, so the executed-result
+        // message must report the nested count too (the "(with its N nested item(s))" clause below is
+        // already folder-agnostic, so Catalog/CCT output stays byte-identical - their non-folders have
+        // zero containment descendants).
+        boolean cascaded = txPreview != null && txPreview.descendantCount > 0;
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)

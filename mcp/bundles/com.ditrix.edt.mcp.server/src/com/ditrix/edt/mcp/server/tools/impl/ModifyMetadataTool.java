@@ -598,15 +598,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Dispatches a FQN addressing a PREDEFINED item on a {@code Catalog} /
-     * {@code ChartOfCharacteristicTypes} owner ({@code Type.Owner.Predefined.ItemName}). Refuses the
-     * sibling payloads (Role / membership {@code content} / {@code template} / {@code dcs}) up front
-     * so they are never silently dropped, then validates the owner kind, parses the
-     * {@code description} / {@code code} / {@code isFolder} / {@code valueType} (CCT only) properties
-     * (via the SHARED {@link PredefinedWriter#parseProperties}, which also refuses {@code name} and
-     * {@code parent} - a move - on modify), resolves the owner (yo-fallback) and mutates it inside a
-     * BM write transaction. Like create, there is no separate top object to attach - only the owner's
-     * canonical FQN is force-exported.
+     * Dispatches a FQN addressing a PREDEFINED item on a {@code Catalog},
+     * {@code ChartOfCharacteristicTypes}, {@code ChartOfCalculationTypes} or {@code ChartOfAccounts}
+     * owner ({@code Type.Owner.Predefined.ItemName}). Refuses the sibling payloads (Role / membership
+     * {@code content} / {@code template} / {@code dcs}) up front so they are never silently dropped,
+     * then validates the owner kind (in lockstep with {@link PredefinedWriter#unsupportedOwnerTypeError}),
+     * parses the properties via the SHARED {@link PredefinedWriter#parseProperties} (which also refuses
+     * {@code name} and {@code parent} - a move - on modify), resolves the owner (yo-fallback) and
+     * mutates it via {@link PredefinedWriter#modify} inside a BM write transaction. The owner kind is
+     * NOT switched on here: every owner flows through the SAME generic path, with the per-owner
+     * property vocabulary and its gating living inside {@link PredefinedWriter}. Like create, there is
+     * no separate top object to attach - only the owner's canonical FQN is force-exported.
      */
     private String dispatchPredefinedItemFqn(ProjectContext ctx, String normFqn,
         PredefinedWriter.PredefinedRef ref, ModifyArgs args)
@@ -640,11 +642,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         Configuration config = ctx.config;
-        // valueType (issue #296 P2) needs a resolution context (Configuration + platform Version)
-        // PredefinedWriter itself cannot reach - the SAME context the generic attribute-type path
-        // (resolvePlatformVersion / ExtensionOriginUtils.isExtensionProject) resolves, stashed on
-        // props for PredefinedWriter#modify to use. Harmless to set unconditionally (PredefinedWriter
-        // only touches it when valueTypeSet).
+        // A ChartOfCharacteristicTypes item's valueType is the one per-item property that needs a
+        // resolution context (Configuration + platform Version) PredefinedWriter itself cannot reach:
+        // it is built via MetadataTypeBuilder, the SAME platform machinery an attribute's type uses.
+        // (extDimensionTypes[].characteristicType is NOT a consumer - the writer resolves it by
+        // navigating the live model, not against config.) Stash the SAME context the generic
+        // attribute-type path (resolvePlatformVersion / ExtensionOriginUtils.isExtensionProject)
+        // resolves on props for PredefinedWriter#modify to use. Harmless to set unconditionally
+        // (PredefinedWriter reads it only when a property that needs it was supplied).
         props.config = config;
         props.version = resolvePlatformVersion(ctx);
         props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(ctx.project);
@@ -722,6 +727,44 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (props.isFolderSet)
         {
             applied.add("isFolder"); //$NON-NLS-1$
+        }
+        // ChartOfAccounts owner-specific properties (parsed + applied by PredefinedWriter.modify).
+        if (props.accountTypeSet)
+        {
+            applied.add("accountType"); //$NON-NLS-1$
+        }
+        if (props.offBalanceSet)
+        {
+            applied.add("offBalance"); //$NON-NLS-1$
+        }
+        if (props.orderSet)
+        {
+            applied.add("order"); //$NON-NLS-1$
+        }
+        if (props.accountingFlagsSet)
+        {
+            applied.add("accountingFlags"); //$NON-NLS-1$
+        }
+        if (props.extDimensionTypesSet)
+        {
+            applied.add("extDimensionTypes"); //$NON-NLS-1$
+        }
+        // ChartOfCalculationTypes owner-specific properties.
+        if (props.actionPeriodIsBaseSet)
+        {
+            applied.add("actionPeriodIsBase"); //$NON-NLS-1$
+        }
+        if (props.baseSet)
+        {
+            applied.add("base"); //$NON-NLS-1$
+        }
+        if (props.displacedSet)
+        {
+            applied.add("displaced"); //$NON-NLS-1$
+        }
+        if (props.leadingSet)
+        {
+            applied.add("leading"); //$NON-NLS-1$
         }
         return buildModifiedResult(normFqn, applied, persisted, args.normReport);
     }

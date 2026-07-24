@@ -228,21 +228,24 @@ public class PredefinedWriterTest
     }
 
     @Test
-    public void testUnsupportedOwnerTypeErrorDefersChartOfAccounts()
+    public void testUnsupportedOwnerTypeErrorNullForChartOfAccounts()
     {
-        String err = PredefinedWriter.unsupportedOwnerTypeError("ChartOfAccounts"); //$NON-NLS-1$
-        assertNotNull(err);
-        assertTrue("must say not yet supported", err.contains("not yet supported")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("must name the richer per-item model", err.contains("AccountType")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Issue #296 phase 3: a ChartOfAccounts owner IS now supported (predefined accounts with
+        // accountType / offBalance / order / accountingFlags / extDimensionTypes / childItems), so the
+        // owner-type gate no longer defers - it returns null (supported), in lockstep with the create /
+        // modify / get_metadata_details / delete callers admitting the owner. See
+        // PredefinedWriterChartOfAccountsTest for the per-property guards and parsers.
+        assertNull(PredefinedWriter.unsupportedOwnerTypeError("ChartOfAccounts")); //$NON-NLS-1$
     }
 
     @Test
-    public void testUnsupportedOwnerTypeErrorDefersChartOfCalculationTypes()
+    public void testUnsupportedOwnerTypeErrorNullForChartOfCalculationTypes()
     {
-        String err = PredefinedWriter.unsupportedOwnerTypeError("ChartOfCalculationTypes"); //$NON-NLS-1$
-        assertNotNull(err);
-        assertTrue(err.contains("not yet supported")); //$NON-NLS-1$
-        assertTrue("must name the base/displaced model", err.contains("displaced")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Issue #296 phase 2: a ChartOfCalculationTypes owner IS now supported (flat predefined calc
+        // types with base / displaced / leading references and actionPeriodIsBase), so the gate returns
+        // null instead of the old "not yet supported" deferral. See
+        // PredefinedWriterChartOfCalculationTypesTest for the per-property guards and parsers.
+        assertNull(PredefinedWriter.unsupportedOwnerTypeError("ChartOfCalculationTypes")); //$NON-NLS-1$
     }
 
     @Test

@@ -486,15 +486,18 @@ public class CreateMetadataToolTest
         assertTrue("description should mention predefined items", desc.contains("Predefined")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** A ChartOfAccounts predefined item is recognized structurally but rejected as not-yet-supported. */
+    /**
+     * A ChartOfAccounts predefined item is recognized structurally and now admitted by the owner-type
+     * gate (issue #296 phase 3 added ChartOfAccounts predefined-item authoring), so the gate returns
+     * {@code null} in lockstep with the create / modify / get_metadata_details / delete callers.
+     */
     @Test
-    public void testChartOfAccountsPredefinedItemIsDeferred()
+    public void testChartOfAccountsPredefinedItemIsSupported()
     {
         PredefinedWriter.PredefinedRef ref =
             PredefinedWriter.parseRef("ChartOfAccounts.Main.Predefined.Cash"); //$NON-NLS-1$
         assertNotNull(ref);
-        String err = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
-        assertNotNull("ChartOfAccounts predefined items must be rejected as not-yet-supported", err); //$NON-NLS-1$
-        assertTrue(err.contains("not yet supported")); //$NON-NLS-1$
+        assertNull("ChartOfAccounts predefined items are now supported (gate must return null)", //$NON-NLS-1$
+            PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType));
     }
 }

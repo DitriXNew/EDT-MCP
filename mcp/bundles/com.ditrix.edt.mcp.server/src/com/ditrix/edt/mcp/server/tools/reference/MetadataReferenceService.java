@@ -1259,6 +1259,15 @@ public class MetadataReferenceService
             {
                 return ((MdObject) object).getName();
             }
+            // PredefinedItem (Catalog / CCT / ChartOfAccounts / ChartOfCalculationTypes predefined
+            // items) exposes getName() but is neither a NamedElement nor an MdObject, so without this
+            // branch its path segment is dropped as null (skipped above) and an incoming reference -
+            // e.g. a calc type sibling's base / displaced / leading list (issue #296) - would render
+            // only the containing "Predefined" set, never the citing item's own Name.
+            if (object instanceof PredefinedItem)
+            {
+                return ((PredefinedItem) object).getName();
+            }
             // For ExtInfo (form extension info), return EClass name
             // Check by class name to avoid dependency on form bundle
             String className = object.eClass().getName();

@@ -699,11 +699,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     // ---- predefined-item creation (a plain EMF containment on the owner, issue #293) --------------
 
     /**
-     * Creates a PREDEFINED item on a {@code Catalog} / {@code ChartOfCharacteristicTypes} owner,
-     * addressed by {@code Type.Owner.Predefined.ItemName}. Unlike a form object, the predefined
-     * content is a plain EMF containment on the owner (verified from {@code MdClass.xcore}) - there
-     * is no separate top object to attach, so the mutation runs on the OWNER (re-fetched by bmId
-     * inside the write transaction) and only the owner's canonical FQN is force-exported.
+     * Creates a PREDEFINED item on a {@code Catalog}, {@code ChartOfCharacteristicTypes},
+     * {@code ChartOfCalculationTypes} or {@code ChartOfAccounts} owner, addressed by
+     * {@code Type.Owner.Predefined.ItemName}. The owner kind is NOT switched on here: every owner
+     * flows through the SAME generic path (parse via {@link PredefinedWriter#parseProperties}, mutate
+     * via {@link PredefinedWriter#create}), which admits the supported owners in lockstep with
+     * {@link PredefinedWriter#unsupportedOwnerTypeError} - the per-owner property vocabulary and its
+     * gating live inside {@link PredefinedWriter}, not in this wiring. Unlike a form object, the
+     * predefined content is a plain EMF containment on the owner (verified from {@code MdClass.xcore})
+     * - there is no separate top object to attach, so the mutation runs on the OWNER (re-fetched by
+     * bmId inside the write transaction) and only the owner's canonical FQN is force-exported.
      */
     private String createPredefinedItem(String projectName, String normFqn,
         PredefinedWriter.PredefinedRef ref, List<JsonObject> properties, boolean expectedNotExists,
@@ -773,10 +778,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return bm.error;
         }
-        // valueType (issue #296 P2) needs a resolution context (Configuration + platform Version)
-        // PredefinedWriter itself cannot reach - the SAME context resolveBmContext already resolved
-        // for the rest of this create path, stashed on props for PredefinedWriter#create to use.
-        // Harmless to set unconditionally (PredefinedWriter only touches it when valueTypeSet).
+        // A ChartOfCharacteristicTypes item's valueType is the one per-item property that needs a
+        // resolution context (Configuration + platform Version) PredefinedWriter itself cannot reach:
+        // it is built via MetadataTypeBuilder, the SAME platform machinery an attribute's type uses.
+        // (extDimensionTypes[].characteristicType is NOT a consumer - the writer resolves it by
+        // navigating the live model, not against config.) Stash the SAME context resolveBmContext
+        // already resolved for the rest of this create path on props for PredefinedWriter#create to
+        // use. Harmless to set unconditionally (PredefinedWriter reads it only when a property that
+        // needs it was supplied).
         props.config = config;
         props.version = bm.version;
         props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);

@@ -10,9 +10,14 @@ import java.math.BigDecimal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
@@ -24,20 +29,32 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
+import com._1c.g5.v8.dt.metadata.common.AccountType;
+import com._1c.g5.v8.dt.metadata.mdclass.AccountingFlag;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCodeType;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogPredefined;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogPredefinedItem;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccounts;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccountsPredefined;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccountsPredefinedItem;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypes;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypesCodeType;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypesPredefined;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypesPredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefined;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypesPredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.ExtDimensionAccountingFlag;
+import com._1c.g5.v8.dt.metadata.mdclass.ExtDimensionType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Predefined;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
@@ -66,11 +83,18 @@ import com.google.gson.JsonObject;
  * containment on the already-resolved {@code Configuration} (the same in-resource data as the owner's
  * other reflected sections), not a lazily-loaded sub-resource.
  * <p>
- * <b>Scope (v1):</b> {@code Catalog} and {@code ChartOfCharacteristicTypes} only. A
- * {@code ChartOfAccounts} / {@code ChartOfCalculationTypes} owner carries a richer per-item model
- * (account type / accounting flags / ext-dimension types, or base/displaced/leading arrays) this
- * version does not author; such a request is rejected with an actionable "not yet supported" error
- * rather than faking support (see {@link #unsupportedOwnerTypeError}).
+ * <b>Scope:</b> {@code Catalog} and {@code ChartOfCharacteristicTypes} (the value-type owner), plus the
+ * two richer owners {@code ChartOfCalculationTypes} (a contained {@code mcore.Value} code, an
+ * {@code actionPeriodIsBase} flag and the {@code base}/{@code displaced}/{@code leading} NON-containment
+ * reference lists to SIBLING predefined calc types - a FLAT model, no folders) and
+ * {@code ChartOfAccounts} (a {@code String} code and {@code order}, an {@code accountType} enum, an
+ * {@code offBalance} flag, the {@code accountingFlags} reference list to the chart's own accounting
+ * flags, the CONTAINED {@code extDimensionTypes} rows - each a {@code characteristicType} reference into
+ * the LINKED {@code ChartOfCharacteristicTypes}, a {@code turnover} flag and an
+ * {@code extDimensionAccountingFlags} reference list - and the CONTAINED {@code childItems} account
+ * hierarchy). All references resolve to a live in-resource {@link EObject} inside the caller's write
+ * transaction (never a proxy / FQN string); only the CONTAINMENT trees ({@code content}/{@code childItems})
+ * ever enter a recursive walk, so a cycle in a reference list can never loop the request thread.
  */
 public final class PredefinedWriter
 {
@@ -104,6 +128,73 @@ public final class PredefinedWriter
 
     /** Refused property: identity is the FQN leaf, not a renamable property. */
     private static final String PROP_NAME = "name"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfAccounts only): the account type token (Active / Passive / ActivePassive). */
+    private static final String PROP_ACCOUNT_TYPE = "accounttype"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfAccounts only): the off-balance flag (JSON boolean). */
+    private static final String PROP_OFF_BALANCE = "offbalance"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfAccounts only): the String order value (validated against orderLength). */
+    private static final String PROP_ORDER = "order"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfCalculationTypes only): the action-period-is-base flag (JSON boolean). */
+    private static final String PROP_ACTION_PERIOD_IS_BASE = "actionperiodisbase"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfCalculationTypes only): base sibling calc-type names (JSON string array). */
+    private static final String PROP_BASE = "base"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfCalculationTypes only): displaced sibling calc-type names (JSON string array). */
+    private static final String PROP_DISPLACED = "displaced"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfCalculationTypes only): leading sibling calc-type names (JSON string array). */
+    private static final String PROP_LEADING = "leading"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfAccounts only): accounting-flag names on the same chart (JSON string array). */
+    private static final String PROP_ACCOUNTING_FLAGS = "accountingflags"; //$NON-NLS-1$
+
+    /** Supported property (ChartOfAccounts only): the ext-dimension-type rows (JSON object array). */
+    private static final String PROP_EXT_DIMENSION_TYPES = "extdimensiontypes"; //$NON-NLS-1$
+
+    /** Nested {@code extDimensionTypes} entry key: the linked-CCT predefined item name (the characteristicType). */
+    private static final String KEY_CHARACTERISTIC_TYPE = "characteristictype"; //$NON-NLS-1$
+
+    /** Nested {@code extDimensionTypes} entry key: the turnover flag (JSON boolean, default false). */
+    private static final String KEY_TURNOVER = "turnover"; //$NON-NLS-1$
+
+    /** Nested {@code extDimensionTypes} entry key: the ext-dimension accounting-flag names (JSON string array). */
+    private static final String KEY_EXT_DIMENSION_ACCOUNTING_FLAGS = "extdimensionaccountingflags"; //$NON-NLS-1$
+
+    // The Russian AccountType aliases, built from lowercase Unicode code points so this source stays
+    // ASCII (the same non-UTF-8 Tycho-build guard the Russian FQN kind tokens above use). Matched by
+    // EXACT (trimmed, lower-cased) token, NEVER contains() - see RU_ACTIVE / RU_PASSIVE below.
+    private static final String RU_ACTIVE =
+        MetadataLanguageUtils.cp(0x0430, 0x043a, 0x0442, 0x0438, 0x0432, 0x043d, 0x044b, 0x0439);
+
+    private static final String RU_PASSIVE =
+        MetadataLanguageUtils.cp(0x043f, 0x0430, 0x0441, 0x0441, 0x0438, 0x0432, 0x043d, 0x044b, 0x0439);
+
+    /**
+     * The accepted {@code accountType} tokens, mapped by their EXACT (trimmed, lower-cased) spelling to
+     * the platform {@link AccountType} enum literal. Bilingual: the English enum tokens plus the Russian
+     * account-type names (built via {@code \\uXXXX} code points). Matched by exact key, never by
+     * {@code contains()} (a {@code contains} match would let "activepassivextra" resolve to a real type).
+     */
+    private static final Map<String, AccountType> ACCOUNT_TYPE_TOKENS = buildAccountTypeTokens();
+
+    private static Map<String, AccountType> buildAccountTypeTokens()
+    {
+        Map<String, AccountType> m = new LinkedHashMap<>();
+        m.put("active", AccountType.ACTIVE); //$NON-NLS-1$
+        m.put(RU_ACTIVE, AccountType.ACTIVE);
+        m.put("passive", AccountType.PASSIVE); //$NON-NLS-1$
+        m.put(RU_PASSIVE, AccountType.PASSIVE);
+        m.put("active_passive", AccountType.ACTIVE_PASSIVE); //$NON-NLS-1$
+        m.put("activepassive", AccountType.ACTIVE_PASSIVE); //$NON-NLS-1$
+        m.put(RU_ACTIVE + "/" + RU_PASSIVE, AccountType.ACTIVE_PASSIVE); //$NON-NLS-1$
+        m.put(RU_ACTIVE + RU_PASSIVE, AccountType.ACTIVE_PASSIVE);
+        return m;
+    }
 
     /**
      * Digit cap for a numeric code when the Catalog's {@code codeLength} is 0 (= unlimited): the
@@ -208,30 +299,25 @@ public final class PredefinedWriter
      * (a pure token-level check), so it can fail fast before any project/model resolution.
      *
      * @param ownerTypeToken the owner TYPE token, as supplied in the FQN
-     * @return {@code null} when supported (Catalog / ChartOfCharacteristicTypes); otherwise a ready,
-     *     actionable error message naming the limitation
+     * @return {@code null} when supported (Catalog / ChartOfCharacteristicTypes / ChartOfAccounts /
+     *     ChartOfCalculationTypes); otherwise a ready, actionable error message naming the limitation
      */
     public static String unsupportedOwnerTypeError(String ownerTypeToken)
     {
         String canonical = MetadataTypeUtils.toEnglishSingular(ownerTypeToken);
-        if ("Catalog".equals(canonical) || "ChartOfCharacteristicTypes".equals(canonical)) //$NON-NLS-1$ //$NON-NLS-2$
+        if ("Catalog".equals(canonical) || "ChartOfCharacteristicTypes".equals(canonical) //$NON-NLS-1$ //$NON-NLS-2$
+            || "ChartOfAccounts".equals(canonical) || "ChartOfCalculationTypes".equals(canonical)) //$NON-NLS-1$ //$NON-NLS-2$
         {
             return null;
-        }
-        if ("ChartOfAccounts".equals(canonical) || "ChartOfCalculationTypes".equals(canonical)) //$NON-NLS-1$ //$NON-NLS-2$
-        {
-            return "Predefined items on '" + canonical + "' are not yet supported by this tool: it " //$NON-NLS-1$ //$NON-NLS-2$
-                + "carries a richer per-item model (AccountType / AccountingFlags / ExtDimensionTypes " //$NON-NLS-1$
-                + "for a Chart of Accounts, or base / displaced / leading arrays for a Chart of " //$NON-NLS-1$
-                + "Calculation Types) this version does not author. Author it directly in EDT."; //$NON-NLS-1$
         }
         if (canonical != null)
         {
             return "'" + canonical + "' does not have predefined items. The '...Predefined.<Item>' " //$NON-NLS-1$ //$NON-NLS-2$
-                + "address is supported only on Catalog and ChartOfCharacteristicTypes."; //$NON-NLS-1$
+                + "address is supported on Catalog, ChartOfCharacteristicTypes, ChartOfAccounts and " //$NON-NLS-1$
+                + "ChartOfCalculationTypes."; //$NON-NLS-1$
         }
         return "Unknown metadata type '" + ownerTypeToken + "'. Predefined items are supported on " //$NON-NLS-1$ //$NON-NLS-2$
-            + "Catalog and ChartOfCharacteristicTypes."; //$NON-NLS-1$
+            + "Catalog, ChartOfCharacteristicTypes, ChartOfAccounts and ChartOfCalculationTypes."; //$NON-NLS-1$
     }
 
     // ============================================================================================
@@ -273,6 +359,55 @@ public final class PredefinedWriter
         public Configuration config;
         public Version version;
         public boolean isExtensionProject;
+
+        // ---- ChartOfAccounts-only props (owner-gated in create/modify, like valueType) -----------
+
+        /** Raw {@code accountType} token (bilingual: Active/Passive/ActivePassive + RU); resolved in apply. */
+        public String accountType;
+        public boolean accountTypeSet;
+        /** The {@code offBalance} flag; only the {@code *Set} form is applied. */
+        public Boolean offBalance;
+        public boolean offBalanceSet;
+        /** Raw JSON {@code order} (a String, length-validated against {@code orderLength}); null clears. */
+        public JsonElement order;
+        public boolean orderSet;
+        /** Accounting-flag names (FULL-REPLACE: the supplied list becomes the exact list; empty = clear). */
+        public List<String> accountingFlags;
+        public boolean accountingFlagsSet;
+        /** Ext-dimension-type rows (FULL-REPLACE; each is a {@link ExtDimensionTypeSpec}). */
+        public List<ExtDimensionTypeSpec> extDimensionTypes;
+        public boolean extDimensionTypesSet;
+
+        // ---- ChartOfCalculationTypes-only props --------------------------------------------------
+
+        /** The {@code actionPeriodIsBase} flag; only the {@code *Set} form is applied. */
+        public Boolean actionPeriodIsBase;
+        public boolean actionPeriodIsBaseSet;
+        /** Base sibling calc-type names (FULL-REPLACE; empty = clear). */
+        public List<String> base;
+        public boolean baseSet;
+        /** Displaced sibling calc-type names (FULL-REPLACE; empty = clear). */
+        public List<String> displaced;
+        public boolean displacedSet;
+        /** Leading sibling calc-type names (FULL-REPLACE; empty = clear). */
+        public List<String> leading;
+        public boolean leadingSet;
+    }
+
+    /**
+     * One parsed {@code extDimensionTypes} row for a {@code ChartOfAccounts} predefined item. An
+     * {@link ExtDimensionType} is CONTAINMENT (created fresh in the write tx) with no identity of its own,
+     * so the whole list is authored by FULL-REPLACE (no partial row edit). Public fields, populated by
+     * {@link #parseProperties} from the wire JSON or set directly by unit tests.
+     */
+    public static final class ExtDimensionTypeSpec
+    {
+        /** The characteristicType target: a predefined item Name of the chart's LINKED CCT (resolved in apply). */
+        public String characteristicType;
+        /** The turnover flag (default {@code false} when omitted). */
+        public boolean turnover;
+        /** Ext-dimension accounting-flag names on the same chart (resolved in apply; may be empty). */
+        public List<String> extDimensionAccountingFlags = new ArrayList<>();
     }
 
     /**
@@ -355,10 +490,44 @@ public final class PredefinedWriter
             case PROP_VALUE_TYPE:
             case PROP_TYPE_ALIAS:
                 return applyValueTypeProperty(prop, out, isModify);
+            case PROP_ACCOUNT_TYPE:
+                return applyAccountTypeProperty(prop, out);
+            case PROP_OFF_BALANCE:
+                return applyOffBalanceProperty(prop, out);
+            case PROP_ORDER:
+            {
+                boolean orderCleared = !prop.has(KEY_VALUE) || prop.get(KEY_VALUE).isJsonNull();
+                if (orderCleared && !isModify)
+                {
+                    return ToolResult.error("The 'order' entry needs a 'value' (a JSON string, " //$NON-NLS-1$
+                        + "validated against the ChartOfAccounts orderLength; on modify_metadata, omit " //$NON-NLS-1$
+                        + "the value or pass null to clear an existing order).").toJson(); //$NON-NLS-1$
+                }
+                out.order = orderCleared ? JsonNull.INSTANCE : prop.get(KEY_VALUE);
+                out.orderSet = true;
+                return null;
+            }
+            case PROP_ACTION_PERIOD_IS_BASE:
+                return applyActionPeriodIsBaseProperty(prop, out);
+            case PROP_BASE:
+                return applyNameListProperty(prop, PROP_BASE, l -> out.base = l, () -> out.baseSet = true);
+            case PROP_DISPLACED:
+                return applyNameListProperty(prop, PROP_DISPLACED, l -> out.displaced = l,
+                    () -> out.displacedSet = true);
+            case PROP_LEADING:
+                return applyNameListProperty(prop, PROP_LEADING, l -> out.leading = l,
+                    () -> out.leadingSet = true);
+            case PROP_ACCOUNTING_FLAGS:
+                return applyNameListProperty(prop, PROP_ACCOUNTING_FLAGS, l -> out.accountingFlags = l,
+                    () -> out.accountingFlagsSet = true);
+            case PROP_EXT_DIMENSION_TYPES:
+                return applyExtDimensionTypesProperty(prop, out);
             default:
                 return ToolResult.error("Property '" + name + "' is not supported for a predefined item. " //$NON-NLS-1$ //$NON-NLS-2$
                     + "Supported: description, code, isFolder, valueType (alias 'type'; " //$NON-NLS-1$
-                    + "ChartOfCharacteristicTypes only)" //$NON-NLS-1$
+                    + "ChartOfCharacteristicTypes only), accountType / offBalance / order / " //$NON-NLS-1$
+                    + "accountingFlags / extDimensionTypes (ChartOfAccounts only), base / displaced / " //$NON-NLS-1$
+                    + "leading / actionPeriodIsBase (ChartOfCalculationTypes only)" //$NON-NLS-1$
                     + (isModify ? "" : ", parent (create only)") + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
@@ -453,9 +622,210 @@ public final class PredefinedWriter
         return null;
     }
 
+    /**
+     * {@code accountType} (ChartOfAccounts only) - a non-empty account-type token. Shape-validated here
+     * (a non-empty string); the token→{@link AccountType} resolution and the owner gate run later, once
+     * the item's OWNER is known (mirrors {@link #applyValueTypeProperty}).
+     */
+    private static String applyAccountTypeProperty(JsonObject prop, ItemProps out)
+    {
+        JsonElement v = prop.get(KEY_VALUE);
+        if (v == null || !v.isJsonPrimitive() || !v.getAsJsonPrimitive().isString()
+            || v.getAsString().trim().isEmpty())
+        {
+            return ToolResult.error("'accountType' must be a non-empty JSON string (Active / Passive / " //$NON-NLS-1$
+                + "ActivePassive, or their Russian equivalents); got " + jsonLabel(v) //$NON-NLS-1$
+                + ". Applies only to a ChartOfAccounts predefined item.").toJson(); //$NON-NLS-1$
+        }
+        out.accountType = v.getAsString();
+        out.accountTypeSet = true;
+        return null;
+    }
+
+    private static String applyOffBalanceProperty(JsonObject prop, ItemProps out)
+    {
+        JsonElement v = prop.get(KEY_VALUE);
+        if (v == null || !v.isJsonPrimitive() || !v.getAsJsonPrimitive().isBoolean())
+        {
+            return ToolResult.error("'offBalance' must be a JSON boolean (true/false). Applies only to a " //$NON-NLS-1$
+                + "ChartOfAccounts predefined item.").toJson(); //$NON-NLS-1$
+        }
+        out.offBalance = v.getAsBoolean();
+        out.offBalanceSet = true;
+        return null;
+    }
+
+    private static String applyActionPeriodIsBaseProperty(JsonObject prop, ItemProps out)
+    {
+        JsonElement v = prop.get(KEY_VALUE);
+        if (v == null || !v.isJsonPrimitive() || !v.getAsJsonPrimitive().isBoolean())
+        {
+            return ToolResult.error("'actionPeriodIsBase' must be a JSON boolean (true/false). Applies " //$NON-NLS-1$
+                + "only to a ChartOfCalculationTypes predefined item.").toJson(); //$NON-NLS-1$
+        }
+        out.actionPeriodIsBase = v.getAsBoolean();
+        out.actionPeriodIsBaseSet = true;
+        return null;
+    }
+
+    /**
+     * A FULL-REPLACE list-of-names property ({@code base} / {@code displaced} / {@code leading} /
+     * {@code accountingFlags}): the {@code value} is a JSON array of non-empty strings (a MISSING or
+     * null value means the empty list = clear, symmetric with a {@code valueType} clear). The names are
+     * resolved to live in-resource objects later, once the OWNER is known.
+     *
+     * @param prop the raw property entry
+     * @param propName the property's display name (for error messages)
+     * @param sink receives the parsed name list
+     * @param markSet marks the corresponding {@code *Set} flag
+     * @return {@code null} on success, or a ready JSON error
+     */
+    private static String applyNameListProperty(JsonObject prop, String propName,
+        Consumer<List<String>> sink, Runnable markSet)
+    {
+        JsonElement v = prop.get(KEY_VALUE);
+        List<String> names = new ArrayList<>();
+        if (v != null && !v.isJsonNull())
+        {
+            if (!v.isJsonArray())
+            {
+                return ToolResult.error("'" + propName + "' must be a JSON array of names (e.g. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "[\"Main\", \"Extra\"]); got " + jsonLabel(v) //$NON-NLS-1$
+                    + ". Pass [] to clear the list.").toJson(); //$NON-NLS-1$
+            }
+            String err = collectNames(v.getAsJsonArray(), propName, names);
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        sink.accept(names);
+        markSet.run();
+        return null;
+    }
+
+    /** Collects non-empty string elements of {@code arr} into {@code out}; rejects a non-string element. */
+    private static String collectNames(JsonArray arr, String propName, List<String> out)
+    {
+        for (JsonElement el : arr)
+        {
+            if (el == null || !el.isJsonPrimitive() || !el.getAsJsonPrimitive().isString()
+                || el.getAsString().trim().isEmpty())
+            {
+                return ToolResult.error("Each '" + propName + "' entry must be a non-empty JSON string " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "(a target Name); got " + jsonLabel(el) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            out.add(el.getAsString());
+        }
+        return null;
+    }
+
+    /**
+     * {@code extDimensionTypes} (ChartOfAccounts only) - a FULL-REPLACE array of ext-dimension-type rows,
+     * each {@code {characteristicType:"<CctItem>", turnover?:bool, extDimensionAccountingFlags?:[...]}}.
+     * Shape-validated here; the cross-owner {@code characteristicType} and flag references resolve later,
+     * once the OWNER (and its linked CCT) is known. A MISSING / null value means the empty list = clear.
+     */
+    private static String applyExtDimensionTypesProperty(JsonObject prop, ItemProps out)
+    {
+        JsonElement v = prop.get(KEY_VALUE);
+        List<ExtDimensionTypeSpec> rows = new ArrayList<>();
+        if (v != null && !v.isJsonNull())
+        {
+            if (!v.isJsonArray())
+            {
+                return ToolResult.error("'extDimensionTypes' must be a JSON array of rows like " //$NON-NLS-1$
+                    + "[{\"characteristicType\":\"Contractors\",\"turnover\":false}]; got " + jsonLabel(v) //$NON-NLS-1$
+                    + ". Pass [] to clear the list.").toJson(); //$NON-NLS-1$
+            }
+            for (JsonElement el : v.getAsJsonArray())
+            {
+                String err = parseExtDimensionRow(el, rows);
+                if (err != null)
+                {
+                    return err;
+                }
+            }
+        }
+        out.extDimensionTypes = rows;
+        out.extDimensionTypesSet = true;
+        return null;
+    }
+
+    /** Parses one {@code extDimensionTypes} row into {@code out}; returns a ready JSON error on a bad shape. */
+    private static String parseExtDimensionRow(JsonElement el, List<ExtDimensionTypeSpec> out)
+    {
+        if (el == null || !el.isJsonObject())
+        {
+            return ToolResult.error("Each 'extDimensionTypes' entry must be a JSON object " //$NON-NLS-1$
+                + "{characteristicType, turnover?, extDimensionAccountingFlags?}; got " + jsonLabel(el) //$NON-NLS-1$
+                + ".").toJson(); //$NON-NLS-1$
+        }
+        JsonObject row = el.getAsJsonObject();
+        // The nested row keys are matched case-INSENSITIVELY, exactly like the top-level property
+        // names (the name.toLowerCase(Locale.ROOT) switch in applyProperty): the documented keys are
+        // camelCase (characteristicType / extDimensionAccountingFlags) but JsonObject.get() is
+        // case-sensitive, so read them through a lower-cased view of the row's members (issue #296 P3).
+        Map<String, JsonElement> members = lowerCaseKeyed(row);
+        ExtDimensionTypeSpec spec = new ExtDimensionTypeSpec();
+        JsonElement ct = members.get(KEY_CHARACTERISTIC_TYPE);
+        if (ct == null || !ct.isJsonPrimitive() || !ct.getAsJsonPrimitive().isString()
+            || ct.getAsString().trim().isEmpty())
+        {
+            return ToolResult.error("Each 'extDimensionTypes' entry needs a non-empty " //$NON-NLS-1$
+                + "'characteristicType' (a predefined item Name of the chart's linked " //$NON-NLS-1$
+                + "ChartOfCharacteristicTypes); got " + jsonLabel(ct) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        spec.characteristicType = ct.getAsString();
+        JsonElement turnover = members.get(KEY_TURNOVER);
+        if (turnover != null && !turnover.isJsonNull())
+        {
+            if (!turnover.isJsonPrimitive() || !turnover.getAsJsonPrimitive().isBoolean())
+            {
+                return ToolResult.error("'turnover' in an 'extDimensionTypes' entry must be a JSON " //$NON-NLS-1$
+                    + "boolean; got " + jsonLabel(turnover) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            spec.turnover = turnover.getAsBoolean();
+        }
+        JsonElement flags = members.get(KEY_EXT_DIMENSION_ACCOUNTING_FLAGS);
+        if (flags != null && !flags.isJsonNull())
+        {
+            if (!flags.isJsonArray())
+            {
+                return ToolResult.error("'extDimensionAccountingFlags' in an 'extDimensionTypes' entry " //$NON-NLS-1$
+                    + "must be a JSON array of names; got " + jsonLabel(flags) + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            String err = collectNames(flags.getAsJsonArray(), KEY_EXT_DIMENSION_ACCOUNTING_FLAGS,
+                spec.extDimensionAccountingFlags);
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        out.add(spec);
+        return null;
+    }
+
     private static String asString(JsonElement el)
     {
         return (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
+    }
+
+    /**
+     * A lower-cased-key view of a JSON object's members (last spelling wins on a case collision), so
+     * the documented camelCase nested keys resolve the same way the top-level property names do (which
+     * go through a {@code name.toLowerCase(Locale.ROOT)} switch). {@link JsonObject#get} is
+     * case-sensitive, so without this a documented {@code {"characteristicType": ...}} row would be
+     * reported as missing its {@code characteristicType} (issue #296 P3).
+     */
+    private static Map<String, JsonElement> lowerCaseKeyed(JsonObject obj)
+    {
+        Map<String, JsonElement> m = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonElement> e : obj.entrySet())
+        {
+            m.put(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
+        }
+        return m;
     }
 
     // ============================================================================================
@@ -500,6 +870,19 @@ public final class PredefinedWriter
         }
     }
 
+    /**
+     * A fresh identity-based visited set for the tree walks below. A disk-loaded {@code .mdo} cannot
+     * express a containment cycle (nested XML serializes each item under exactly one parent), and this
+     * writer only ever attaches freshly-created items, so a cycle is not reachable in practice - but an
+     * in-memory graph COULD contain one, and an unguarded iterative walk would then loop forever on the
+     * wire/UI thread. Marking every item on first visit bounds the walk (skip-on-revisit), the same
+     * guard the reference-scan walk in {@code MetadataReferenceService} uses (issue #293 P2).
+     */
+    private static Set<PredefinedItem> newVisitedSet()
+    {
+        return Collections.newSetFromMap(new IdentityHashMap<>());
+    }
+
     private static Located locate(EObject owner, String name)
     {
         if (name == null || name.isEmpty())
@@ -511,6 +894,7 @@ public final class PredefinedWriter
         {
             return null;
         }
+        Set<PredefinedItem> seen = newVisitedSet();
         ArrayDeque<WalkFrame> stack = new ArrayDeque<>();
         stack.push(new WalkFrame(topItems(predefined), null, 0));
         while (!stack.isEmpty())
@@ -522,6 +906,10 @@ public final class PredefinedWriter
                 continue;
             }
             PredefinedItem it = frame.list.get(frame.index++);
+            if (!seen.add(it))
+            {
+                continue;
+            }
             if (name.equalsIgnoreCase(it.getName()))
             {
                 return new Located(it, frame.list, frame.parentName);
@@ -601,10 +989,16 @@ public final class PredefinedWriter
     public static int countDescendants(PredefinedItem item)
     {
         int count = 0;
+        Set<PredefinedItem> seen = newVisitedSet();
+        seen.add(item);
         ArrayDeque<PredefinedItem> stack = new ArrayDeque<>(childrenOf(item));
         while (!stack.isEmpty())
         {
             PredefinedItem next = stack.pop();
+            if (!seen.add(next))
+            {
+                continue;
+            }
             count++;
             stack.addAll(childrenOf(next));
         }
@@ -621,6 +1015,8 @@ public final class PredefinedWriter
     public static List<String[]> descendantRows(PredefinedItem item)
     {
         List<String[]> out = new ArrayList<>();
+        Set<PredefinedItem> seen = newVisitedSet();
+        seen.add(item);
         ArrayDeque<WalkFrame> stack = new ArrayDeque<>();
         stack.push(new WalkFrame(childrenOf(item), item.getName(), 0));
         while (!stack.isEmpty())
@@ -632,6 +1028,10 @@ public final class PredefinedWriter
                 continue;
             }
             PredefinedItem next = frame.list.get(frame.index++);
+            if (!seen.add(next))
+            {
+                continue;
+            }
             out.add(new String[] { next.getName(), next.eClass().getName() });
             List<? extends PredefinedItem> children = childrenOf(next);
             if (!children.isEmpty())
@@ -656,10 +1056,16 @@ public final class PredefinedWriter
     public static List<PredefinedItem> descendants(PredefinedItem item)
     {
         List<PredefinedItem> out = new ArrayList<>();
+        Set<PredefinedItem> seen = newVisitedSet();
+        seen.add(item);
         ArrayDeque<PredefinedItem> stack = new ArrayDeque<>(childrenOf(item));
         while (!stack.isEmpty())
         {
             PredefinedItem next = stack.pop();
+            if (!seen.add(next))
+            {
+                continue;
+            }
             out.add(next);
             stack.addAll(childrenOf(next));
         }
@@ -670,7 +1076,15 @@ public final class PredefinedWriter
     // read-side: flat listing for get_metadata_details' owner-level "Predefined items" section
     // ============================================================================================
 
-    /** One row of the owner-level predefined-items listing (a flattened, depth-tagged tree walk). */
+    /**
+     * One row of the owner-level predefined-items listing (a flattened, depth-tagged tree walk). Carries
+     * the shared columns (name/code/description/folder/valueType) plus the OWNER-SPECIFIC columns, each
+     * rendered to display text and {@code null} when not applicable (the dash-when-N/A precedent of
+     * {@code valueType}): {@code accountType}/{@code offBalance}/{@code order} and the reference-name
+     * lists ({@code base}/{@code displaced}/{@code leading} for a calc type; {@code accountingFlags} and
+     * {@code extDimensionTypes} for an account) - all computed from the item via the public
+     * {@code display*} helpers so the read caller consumes only strings.
+     */
     public static final class ItemRow
     {
         public final String name;
@@ -688,17 +1102,43 @@ public final class PredefinedWriter
          * carries one - issue #296 P2).
          */
         public final String valueType;
+        /** ChartOfAccounts account type (e.g. {@code "ActivePassive"}), or {@code null} for other kinds. */
+        public final String accountType;
+        /** ChartOfAccounts off-balance flag, or {@code null} for other kinds. */
+        public final Boolean offBalance;
+        /** ChartOfAccounts order String, or {@code null} when unset / other kinds. */
+        public final String order;
+        /** ChartOfCalculationTypes action-period-is-base flag, or {@code null} for other kinds. */
+        public final Boolean actionPeriodIsBase;
+        /** ChartOfCalculationTypes base sibling names, comma-joined, or {@code null} when empty / other kinds. */
+        public final String base;
+        /** ChartOfCalculationTypes displaced sibling names, comma-joined, or {@code null}. */
+        public final String displaced;
+        /** ChartOfCalculationTypes leading sibling names, comma-joined, or {@code null}. */
+        public final String leading;
+        /** ChartOfAccounts accounting-flag names, comma-joined, or {@code null} when empty / other kinds. */
+        public final String accountingFlags;
+        /** ChartOfAccounts ext-dimension-type rows, rendered, or {@code null} when empty / other kinds. */
+        public final String extDimensionTypes;
 
-        ItemRow(String name, String code, String description, boolean isFolder, String parentName, int depth,
-            String valueType)
+        ItemRow(PredefinedItem item, String parentName, int depth)
         {
-            this.name = name;
-            this.code = code;
-            this.description = description;
-            this.isFolder = isFolder;
+            this.name = item.getName();
+            this.code = displayCode(item);
+            this.description = item.getDescription();
+            this.isFolder = isFolder(item);
             this.parentName = parentName;
             this.depth = depth;
-            this.valueType = valueType;
+            this.valueType = displayValueType(item);
+            this.accountType = displayAccountType(item);
+            this.offBalance = displayOffBalance(item);
+            this.order = displayOrder(item);
+            this.actionPeriodIsBase = displayActionPeriodIsBase(item);
+            this.base = displayBase(item);
+            this.displaced = displayDisplaced(item);
+            this.leading = displayLeading(item);
+            this.accountingFlags = displayAccountingFlags(item);
+            this.extDimensionTypes = displayExtDimensionTypes(item);
         }
     }
 
@@ -718,6 +1158,7 @@ public final class PredefinedWriter
         {
             return rows;
         }
+        Set<PredefinedItem> seen = newVisitedSet();
         ArrayDeque<WalkFrame> stack = new ArrayDeque<>();
         stack.push(new WalkFrame(topItems(predefined), null, 0));
         while (!stack.isEmpty())
@@ -729,8 +1170,11 @@ public final class PredefinedWriter
                 continue;
             }
             PredefinedItem item = frame.list.get(frame.index++);
-            rows.add(new ItemRow(item.getName(), displayCode(item), item.getDescription(), isFolder(item),
-                frame.parentName, frame.depth, displayValueType(item)));
+            if (!seen.add(item))
+            {
+                continue;
+            }
+            rows.add(new ItemRow(item, frame.parentName, frame.depth));
             List<? extends PredefinedItem> children = childrenOf(item);
             if (!children.isEmpty())
             {
@@ -790,7 +1234,7 @@ public final class PredefinedWriter
     public static WriteResult create(EObject owner, String itemName, ItemProps props,
         boolean expectedNotExists)
     {
-        if (!(owner instanceof Catalog) && !(owner instanceof ChartOfCharacteristicTypes))
+        if (!isSupportedOwner(owner))
         {
             return WriteResult.fail("Owner does not support predefined items: " + owner.eClass().getName()); //$NON-NLS-1$
         }
@@ -803,23 +1247,21 @@ public final class PredefinedWriter
                 : "Predefined item already exists: '" + itemName + "' on " + ownerLabel(owner) + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
 
-        PredefinedItem parent = null;
-        if (props.parentName != null && !props.parentName.trim().isEmpty())
+        // Owner gate for every owner-specific property, BEFORE any mutation (fail fast) - the same
+        // discipline as applyValueType: parse unconditionally, reject the wrong owner with an
+        // actionable error instead of silently dropping the property.
+        String gateErr = rejectCrossOwnerProps(owner, props);
+        if (gateErr != null)
         {
-            Located parentLoc = locateYo(owner, props.parentName);
-            if (parentLoc == null)
-            {
-                return WriteResult.fail("Parent predefined item (folder) not found: '" + props.parentName //$NON-NLS-1$
-                    + "' on " + ownerLabel(owner) + ". Create the folder first, or omit 'parent' for a " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "top-level item."); //$NON-NLS-1$
-            }
-            if (!isFolder(parentLoc.item))
-            {
-                return WriteResult.fail("Parent '" + props.parentName + "' on " + ownerLabel(owner) //$NON-NLS-1$ //$NON-NLS-2$
-                    + " is not a folder (isFolder=false); only a folder item can hold children."); //$NON-NLS-1$
-            }
-            parent = parentLoc.item;
+            return WriteResult.fail(gateErr);
         }
+
+        WriteResultOrParent parentResolution = resolveCreateParent(owner, props);
+        if (parentResolution.error != null)
+        {
+            return WriteResult.fail(parentResolution.error);
+        }
+        PredefinedItem parent = parentResolution.parent;
 
         // An OMITTED description defaults to the Name (the designer's UX); a supplied one - even an
         // explicit empty string - is honored as-is (parseProperties already guaranteed it's a string).
@@ -874,8 +1316,58 @@ public final class PredefinedWriter
                 return WriteResult.fail(valueTypeErr);
             }
         }
+        String ownerPropsErr = applyOwnerSpecificProps(owner, item, props);
+        if (ownerPropsErr != null)
+        {
+            return WriteResult.fail(ownerPropsErr);
+        }
         attach(predefined, parent, item);
         return WriteResult.ok(item);
+    }
+
+    /** A resolved create-time parent (or {@code null} for top-level), or a ready error. */
+    private static final class WriteResultOrParent
+    {
+        final PredefinedItem parent;
+        final String error;
+
+        private WriteResultOrParent(PredefinedItem parent, String error)
+        {
+            this.parent = parent;
+            this.error = error;
+        }
+    }
+
+    /**
+     * Resolves the create-time {@code parent} nesting target. {@code ChartOfCalculationTypes} is FLAT and
+     * has no {@code parent} at all (rejected up front in {@link #rejectCrossOwnerProps}). For
+     * {@code Catalog} / {@code ChartOfCharacteristicTypes} the parent must be an existing FOLDER; for
+     * {@code ChartOfAccounts} it is an existing parent ACCOUNT (no folder concept - it nests via
+     * {@code childItems}).
+     */
+    private static WriteResultOrParent resolveCreateParent(EObject owner, ItemProps props)
+    {
+        if (props.parentName == null || props.parentName.trim().isEmpty())
+        {
+            return new WriteResultOrParent(null, null);
+        }
+        Located parentLoc = locateYo(owner, props.parentName);
+        if (parentLoc == null)
+        {
+            boolean account = owner instanceof ChartOfAccounts;
+            return new WriteResultOrParent(null, "Parent predefined item (" //$NON-NLS-1$
+                + (account ? "account" : "folder") + ") not found: '" + props.parentName //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "' on " + ownerLabel(owner) + ". Create it first, or omit 'parent' for a top-level item."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        // A ChartOfAccounts nests accounts under a parent account (no folder flag); Catalog / CCT nest
+        // only under a folder item.
+        if (!(owner instanceof ChartOfAccounts) && !isFolder(parentLoc.item))
+        {
+            return new WriteResultOrParent(null, "Parent '" + props.parentName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + ownerLabel(owner) + " is not a folder (isFolder=false); only a folder item can hold " //$NON-NLS-1$
+                + "children."); //$NON-NLS-1$
+        }
+        return new WriteResultOrParent(parentLoc.item, null);
     }
 
     /**
@@ -896,6 +1388,11 @@ public final class PredefinedWriter
         {
             return WriteResult.fail("Predefined item not found: '" + itemName + "' on " + ownerLabel(owner) //$NON-NLS-1$ //$NON-NLS-2$
                 + ". Use get_metadata_details to list the owner's predefined items."); //$NON-NLS-1$
+        }
+        String gateErr = rejectCrossOwnerProps(owner, props);
+        if (gateErr != null)
+        {
+            return WriteResult.fail(gateErr);
         }
         PredefinedItem item = found.item;
         if (props.descriptionSet)
@@ -933,6 +1430,11 @@ public final class PredefinedWriter
             }
             setFolder(item, newValue);
         }
+        String ownerPropsErr = applyOwnerSpecificProps(owner, item, props);
+        if (ownerPropsErr != null)
+        {
+            return WriteResult.fail(ownerPropsErr);
+        }
         return WriteResult.ok(item);
     }
 
@@ -962,7 +1464,12 @@ public final class PredefinedWriter
 
     /**
      * Previews deleting the predefined item named {@code itemName} on {@code owner}: whether it is a
-     * FOLDER, and (if so) which descendants the delete would cascade. Read-only.
+     * FOLDER, and which descendants the delete would cascade. Read-only. The cascade set is derived from
+     * CONTAINMENT children ({@link #descendantRows}, i.e. {@link #childrenOf}), so it covers both a
+     * Catalog / CCT FOLDER's content AND a {@code ChartOfAccounts} parent account's {@code childItems}
+     * (an account is not a folder, yet its child accounts DO cascade). Byte-equivalent to the previous
+     * folder-gated logic for Catalog / CCT (a non-folder there has no containment children, so the set
+     * is empty either way).
      *
      * @param owner the owner object
      * @param itemName the item's programmatic Name
@@ -976,7 +1483,7 @@ public final class PredefinedWriter
             return new DeletePreview(false, false, null, Collections.emptyList());
         }
         boolean folder = isFolder(found.item);
-        List<String[]> descendants = folder ? descendantRows(found.item) : Collections.emptyList();
+        List<String[]> descendants = descendantRows(found.item);
         return new DeletePreview(true, folder, found.item.eClass().getName(), descendants);
     }
 
@@ -1002,8 +1509,16 @@ public final class PredefinedWriter
     }
 
     // ============================================================================================
-    // internal EMF plumbing (Catalog / ChartOfCharacteristicTypes dispatch by instanceof)
+    // internal EMF plumbing (Catalog / ChartOfCharacteristicTypes / ChartOfAccounts /
+    // ChartOfCalculationTypes dispatch by instanceof)
     // ============================================================================================
+
+    /** Whether {@code owner} is one of the four owner kinds that carry authored predefined items. */
+    private static boolean isSupportedOwner(EObject owner)
+    {
+        return owner instanceof Catalog || owner instanceof ChartOfCharacteristicTypes
+            || owner instanceof ChartOfAccounts || owner instanceof ChartOfCalculationTypes;
+    }
 
     private static Predefined getPredefinedContainer(EObject owner)
     {
@@ -1014,6 +1529,14 @@ public final class PredefinedWriter
         if (owner instanceof ChartOfCharacteristicTypes)
         {
             return ((ChartOfCharacteristicTypes)owner).getPredefined();
+        }
+        if (owner instanceof ChartOfAccounts)
+        {
+            return ((ChartOfAccounts)owner).getPredefined();
+        }
+        if (owner instanceof ChartOfCalculationTypes)
+        {
+            return ((ChartOfCalculationTypes)owner).getPredefined();
         }
         return null;
     }
@@ -1040,6 +1563,26 @@ public final class PredefinedWriter
             }
             return p;
         }
+        if (owner instanceof ChartOfAccounts accounts)
+        {
+            ChartOfAccountsPredefined p = accounts.getPredefined();
+            if (p == null)
+            {
+                p = MdClassFactory.eINSTANCE.createChartOfAccountsPredefined();
+                accounts.setPredefined(p);
+            }
+            return p;
+        }
+        if (owner instanceof ChartOfCalculationTypes calc)
+        {
+            ChartOfCalculationTypesPredefined p = calc.getPredefined();
+            if (p == null)
+            {
+                p = MdClassFactory.eINSTANCE.createChartOfCalculationTypesPredefined();
+                calc.setPredefined(p);
+            }
+            return p;
+        }
         throw new IllegalArgumentException(
             "Owner does not support predefined items: " + owner.eClass().getName()); //$NON-NLS-1$
     }
@@ -1054,10 +1597,25 @@ public final class PredefinedWriter
         {
             return MdClassFactory.eINSTANCE.createChartOfCharacteristicTypesPredefinedItem();
         }
+        if (owner instanceof ChartOfAccounts)
+        {
+            return MdClassFactory.eINSTANCE.createChartOfAccountsPredefinedItem();
+        }
+        if (owner instanceof ChartOfCalculationTypes)
+        {
+            return MdClassFactory.eINSTANCE.createChartOfCalculationTypesPredefinedItem();
+        }
         throw new IllegalArgumentException(
             "Owner does not support predefined items: " + owner.eClass().getName()); //$NON-NLS-1$
     }
 
+    /**
+     * The item's CONTAINED children - the only list that ever enters a tree walk. A
+     * {@code ChartOfAccountsPredefinedItem} nests sub-accounts via {@code getChildItems()};
+     * {@code ChartOfCalculationTypesPredefinedItem} is FLAT (empty). The {@code base}/{@code displaced}/
+     * {@code leading} and {@code accountingFlags}/{@code extDimensionTypes} REFERENCE lists are NEVER
+     * returned here - feeding a reference list to the recursive walk could loop on a cycle.
+     */
     private static List<? extends PredefinedItem> childrenOf(PredefinedItem item)
     {
         if (item instanceof CatalogPredefinedItem)
@@ -1068,6 +1626,11 @@ public final class PredefinedWriter
         {
             return ((ChartOfCharacteristicTypesPredefinedItem)item).getContent();
         }
+        if (item instanceof ChartOfAccountsPredefinedItem)
+        {
+            return ((ChartOfAccountsPredefinedItem)item).getChildItems();
+        }
+        // ChartOfCalculationTypesPredefinedItem is FLAT - no containment children.
         return Collections.emptyList();
     }
 
@@ -1080,6 +1643,14 @@ public final class PredefinedWriter
         if (predefined instanceof ChartOfCharacteristicTypesPredefined)
         {
             return ((ChartOfCharacteristicTypesPredefined)predefined).getItems();
+        }
+        if (predefined instanceof ChartOfAccountsPredefined)
+        {
+            return ((ChartOfAccountsPredefined)predefined).getItems();
+        }
+        if (predefined instanceof ChartOfCalculationTypesPredefined)
+        {
+            return ((ChartOfCalculationTypesPredefined)predefined).getItems();
         }
         return Collections.emptyList();
     }
@@ -1098,6 +1669,12 @@ public final class PredefinedWriter
             parentTypesItem.getContent().add((ChartOfCharacteristicTypesPredefinedItem)item);
             return;
         }
+        if (parent instanceof ChartOfAccountsPredefinedItem parentAccountItem
+            && item instanceof ChartOfAccountsPredefinedItem)
+        {
+            parentAccountItem.getChildItems().add((ChartOfAccountsPredefinedItem)item);
+            return;
+        }
         if (predefined instanceof CatalogPredefined catalogPredefined && item instanceof CatalogPredefinedItem)
         {
             catalogPredefined.getItems().add((CatalogPredefinedItem)item);
@@ -1107,6 +1684,18 @@ public final class PredefinedWriter
             && item instanceof ChartOfCharacteristicTypesPredefinedItem)
         {
             typesPredefined.getItems().add((ChartOfCharacteristicTypesPredefinedItem)item);
+            return;
+        }
+        if (predefined instanceof ChartOfAccountsPredefined accountsPredefined
+            && item instanceof ChartOfAccountsPredefinedItem)
+        {
+            accountsPredefined.getItems().add((ChartOfAccountsPredefinedItem)item);
+            return;
+        }
+        if (predefined instanceof ChartOfCalculationTypesPredefined calcPredefined
+            && item instanceof ChartOfCalculationTypesPredefinedItem)
+        {
+            calcPredefined.getItems().add((ChartOfCalculationTypesPredefinedItem)item);
         }
     }
 
@@ -1142,9 +1731,10 @@ public final class PredefinedWriter
     }
 
     /**
-     * The item's display code: for a {@link CatalogPredefinedItem} the wrapped {@link Value}
-     * (String/Number) is unwrapped to plain text; for a {@link ChartOfCharacteristicTypesPredefinedItem}
-     * the plain {@code String} code is returned as-is.
+     * The item's display code: for a {@link CatalogPredefinedItem} /
+     * {@link ChartOfCalculationTypesPredefinedItem} the wrapped {@link Value} (String/Number) is
+     * unwrapped to plain text; for a {@link ChartOfCharacteristicTypesPredefinedItem} /
+     * {@link ChartOfAccountsPredefinedItem} the plain {@code String} code is returned as-is.
      *
      * @param item the predefined item
      * @return the display code, or {@code null} when unset / unrecognized
@@ -1153,31 +1743,44 @@ public final class PredefinedWriter
     {
         if (item instanceof CatalogPredefinedItem)
         {
-            Value v = ((CatalogPredefinedItem)item).getCode();
-            if (v instanceof StringValue)
-            {
-                return ((StringValue)v).getValue();
-            }
-            if (v instanceof NumberValue)
-            {
-                BigDecimal bd = ((NumberValue)v).getValue();
-                if (bd == null)
-                {
-                    return null;
-                }
-                // Pre-existing configs may hold values with an absurd exponent (either sign) our
-                // own write path would reject - render those in scientific notation instead of
-                // expanding them into a potentially enormous plain string. Two explicit compares,
-                // not Math.abs (abs(Integer.MIN_VALUE) overflows negative and would skip the guard).
-                int scale = bd.scale();
-                return scale < -MAX_NUMERIC_CODE_DIGITS || scale > MAX_NUMERIC_CODE_DIGITS
-                    ? bd.toString() : bd.toPlainString();
-            }
-            return null;
+            return displayValueCode(((CatalogPredefinedItem)item).getCode());
+        }
+        if (item instanceof ChartOfCalculationTypesPredefinedItem)
+        {
+            return displayValueCode(((ChartOfCalculationTypesPredefinedItem)item).getCode());
         }
         if (item instanceof ChartOfCharacteristicTypesPredefinedItem)
         {
             return ((ChartOfCharacteristicTypesPredefinedItem)item).getCode();
+        }
+        if (item instanceof ChartOfAccountsPredefinedItem)
+        {
+            return ((ChartOfAccountsPredefinedItem)item).getCode();
+        }
+        return null;
+    }
+
+    /** Unwraps an {@code mcore.Value} code (String/Number) to plain display text, or {@code null}. */
+    private static String displayValueCode(Value v)
+    {
+        if (v instanceof StringValue)
+        {
+            return ((StringValue)v).getValue();
+        }
+        if (v instanceof NumberValue)
+        {
+            BigDecimal bd = ((NumberValue)v).getValue();
+            if (bd == null)
+            {
+                return null;
+            }
+            // Pre-existing configs may hold values with an absurd exponent (either sign) our own write
+            // path would reject - render those in scientific notation instead of expanding them into a
+            // potentially enormous plain string. Two explicit compares, not Math.abs
+            // (abs(Integer.MIN_VALUE) overflows negative and would skip the guard).
+            int scale = bd.scale();
+            return scale < -MAX_NUMERIC_CODE_DIGITS || scale > MAX_NUMERIC_CODE_DIGITS
+                ? bd.toString() : bd.toPlainString();
         }
         return null;
     }
@@ -1244,51 +1847,78 @@ public final class PredefinedWriter
 
     /**
      * Builds/validates the {@code code} value on {@code item}, matched to {@code owner}'s code type:
-     * a {@link Catalog} needs an {@code mcore.Value} (a {@link StringValue} or {@link NumberValue},
-     * chosen by {@code Catalog#getCodeType()}); a {@link ChartOfCharacteristicTypes} takes a plain
-     * {@code String}. A JSON {@code null} value CLEARS the code (used by modify to unset a wrongly-set
-     * code; {@code parseProperties} maps a MISSING value on MODIFY to this same clear, since the MCP
-     * wire strips a null-valued key - on CREATE a missing value is rejected there instead, nothing to
-     * clear). Validates the JSON value's STRICT type (a string code must be a JSON
-     * string, a number code a JSON number - #291 lesson) and the owner's {@code codeLength} (0 =
-     * unlimited, matching the rest of this plugin's convention), rejecting an over-long code.
+     * a {@link Catalog} / {@link ChartOfCalculationTypes} needs an {@code mcore.Value} (a
+     * {@link StringValue} or {@link NumberValue}, chosen by the owner's {@code getCodeType()}); a
+     * {@link ChartOfCharacteristicTypes} / {@link ChartOfAccounts} takes a plain {@code String}. A JSON
+     * {@code null} value CLEARS the code (used by modify to unset a wrongly-set code;
+     * {@code parseProperties} maps a MISSING value on MODIFY to this same clear, since the MCP wire
+     * strips a null-valued key - on CREATE a missing value is rejected there instead, nothing to clear).
+     * Validates the JSON value's STRICT type (a string code must be a JSON string, a number code a JSON
+     * number - #291 lesson) and the owner's {@code codeLength} (0 = unlimited, matching the rest of this
+     * plugin's convention), rejecting an over-long code.
      *
      * @return {@code null} on success, or a ready, actionable error message
      */
     private static String applyCode(EObject owner, PredefinedItem item, JsonElement code)
     {
-        if (owner instanceof Catalog)
+        if (owner instanceof Catalog catalog)
         {
-            return applyCatalogCode((Catalog)owner, (CatalogPredefinedItem)item, code);
+            return applyValueCode(catalog.getCodeType() == CatalogCodeType.NUMBER, catalog.getCodeLength(),
+                "Catalog", catalog.getName(), code, ((CatalogPredefinedItem)item)::setCode); //$NON-NLS-1$
         }
         if (owner instanceof ChartOfCharacteristicTypes)
         {
             return applyCharacteristicTypesCode((ChartOfCharacteristicTypes)owner,
                 (ChartOfCharacteristicTypesPredefinedItem)item, code);
         }
+        if (owner instanceof ChartOfCalculationTypes calc)
+        {
+            return applyValueCode(calc.getCodeType() == ChartOfCalculationTypesCodeType.NUMBER,
+                calc.getCodeLength(), "ChartOfCalculationTypes", calc.getName(), code, //$NON-NLS-1$
+                ((ChartOfCalculationTypesPredefinedItem)item)::setCode);
+        }
+        if (owner instanceof ChartOfAccounts accounts)
+        {
+            return applyAccountsCode(accounts, (ChartOfAccountsPredefinedItem)item, code);
+        }
         return "Owner does not support a predefined-item code."; //$NON-NLS-1$
     }
 
-    private static String applyCatalogCode(Catalog catalog, CatalogPredefinedItem item, JsonElement code)
+    /**
+     * The generalized {@code mcore.Value} code path shared by {@link Catalog} and
+     * {@link ChartOfCalculationTypes} (both store a {@link Value} chosen by their {@code codeType}). The
+     * BigDecimal precision/scale hardening is reused verbatim; {@code ownerKind} keeps the messages
+     * owner-accurate (byte-identical to the original Catalog wording when {@code ownerKind} is
+     * {@code "Catalog"}). A JSON {@code null} clears the code via {@code setter.accept(null)}.
+     *
+     * @param numeric whether the owner's code type is Number (else String)
+     * @param codeLength the owner's code length (0 = unlimited)
+     * @param ownerKind the owner's English type name (e.g. {@code Catalog}), for messages
+     * @param ownerName the owner's Name, for messages
+     * @param code the raw JSON code value (may be {@code null} / JSON null to clear)
+     * @param setter sets the built {@link Value} (or {@code null}) on the concrete item
+     * @return {@code null} on success, or a ready, actionable error message
+     */
+    private static String applyValueCode(boolean numeric, int codeLength, String ownerKind, String ownerName,
+        JsonElement code, Consumer<Value> setter)
     {
         if (code == null || code.isJsonNull())
         {
-            item.setCode(null);
+            setter.accept(null);
             return null;
         }
-        int codeLength = catalog.getCodeLength();
-        if (catalog.getCodeType() == CatalogCodeType.NUMBER)
+        if (numeric)
         {
             if (!(code.isJsonPrimitive() && code.getAsJsonPrimitive().isNumber()))
             {
-                return "'code' must be a JSON number for Catalog '" + catalog.getName() //$NON-NLS-1$
+                return "'code' must be a JSON number for " + ownerKind + " '" + ownerName //$NON-NLS-1$ //$NON-NLS-2$
                     + "' (codeType=Number); got '" + code + "'."; //$NON-NLS-1$ //$NON-NLS-2$
             }
             BigDecimal bd = code.getAsBigDecimal();
             if (bd.signum() < 0)
             {
-                return "'code' " + bd + " is negative; a numeric Catalog code must be a non-negative " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "integer."; //$NON-NLS-1$
+                return "'code' " + bd + " is negative; a numeric " + ownerKind + " code must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "non-negative integer."; //$NON-NLS-1$
             }
             // Digit-count math on precision/scale - NEVER materialize the integer (toBigInteger/
             // toPlainString on e.g. 1e100000000 would expand a tiny request into a gigabyte), and
@@ -1312,8 +1942,8 @@ public final class PredefinedWriter
                 BigDecimal stripped = bd.stripTrailingZeros();
                 if (stripped.scale() > 0)
                 {
-                    return "'code' " + bd + " has a fractional part; a numeric Catalog code must be " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "a non-negative integer."; //$NON-NLS-1$
+                    return "'code' " + bd + " has a fractional part; a numeric " + ownerKind + " code " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + "must be a non-negative integer."; //$NON-NLS-1$
                 }
                 digitCount = (long)stripped.precision() - stripped.scale();
             }
@@ -1321,8 +1951,8 @@ public final class PredefinedWriter
             if (digitCount > limit)
             {
                 return codeLength > 0
-                    ? "'code' " + bd + " has " + digitCount + " digit(s), exceeding Catalog '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                        + catalog.getName() + "'s codeLength (" + codeLength + ")." //$NON-NLS-1$ //$NON-NLS-2$
+                    ? "'code' " + bd + " has " + digitCount + " digit(s), exceeding " + ownerKind + " '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                        + ownerName + "'s codeLength (" + codeLength + ")." //$NON-NLS-1$ //$NON-NLS-2$
                     : "'code' " + bd + " has " + digitCount + " digit(s), exceeding the platform's " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                         + "numeric precision cap (" + MAX_NUMERIC_CODE_DIGITS + ")."; //$NON-NLS-1$ //$NON-NLS-2$
             }
@@ -1333,23 +1963,80 @@ public final class PredefinedWriter
             // time. Safe here: the digit cap above bounds the expansion, and the fractional check
             // guarantees setScale(0) is exact.
             nv.setValue(bd.setScale(0));
-            item.setCode(nv);
+            setter.accept(nv);
             return null;
         }
         if (!(code.isJsonPrimitive() && code.getAsJsonPrimitive().isString()))
         {
-            return "'code' must be a JSON string for Catalog '" + catalog.getName() //$NON-NLS-1$
+            return "'code' must be a JSON string for " + ownerKind + " '" + ownerName //$NON-NLS-1$ //$NON-NLS-2$
                 + "' (codeType=String); got '" + code + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         String s = code.getAsString();
         if (codeLength > 0 && s.length() > codeLength)
         {
-            return "'code' \"" + s + "\" (" + s.length() + " char(s)) exceeds Catalog '" + catalog.getName() //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "'s codeLength (" + codeLength + ")."; //$NON-NLS-1$ //$NON-NLS-2$
+            return "'code' \"" + s + "\" (" + s.length() + " char(s)) exceeds " + ownerKind + " '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                + ownerName + "'s codeLength (" + codeLength + ")."; //$NON-NLS-1$ //$NON-NLS-2$
         }
         StringValue sv = McoreFactory.eINSTANCE.createStringValue();
         sv.setValue(s);
-        item.setCode(sv);
+        setter.accept(sv);
+        return null;
+    }
+
+    /**
+     * A {@link ChartOfAccounts} predefined item takes a plain {@code String} code, validated against the
+     * chart's {@code codeLength} (0 = unlimited). A JSON {@code null} clears it. Never truncated.
+     */
+    private static String applyAccountsCode(ChartOfAccounts chart, ChartOfAccountsPredefinedItem item,
+        JsonElement code)
+    {
+        if (code == null || code.isJsonNull())
+        {
+            item.setCode(null);
+            return null;
+        }
+        if (!(code.isJsonPrimitive() && code.getAsJsonPrimitive().isString()))
+        {
+            return "'code' must be a JSON string for ChartOfAccounts '" + chart.getName() //$NON-NLS-1$
+                + "'; got '" + code + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String s = code.getAsString();
+        int codeLength = chart.getCodeLength();
+        if (codeLength > 0 && s.length() > codeLength)
+        {
+            return "'code' \"" + s + "\" (" + s.length() + " char(s)) exceeds ChartOfAccounts '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + chart.getName() + "'s codeLength (" + codeLength + ")."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        item.setCode(s);
+        return null;
+    }
+
+    /**
+     * A {@link ChartOfAccounts} predefined item's {@code order} is a plain {@code String}, validated
+     * against the chart's {@code orderLength} (0 = unlimited). A JSON {@code null} clears it. Never
+     * truncated.
+     */
+    private static String applyOrder(ChartOfAccounts chart, ChartOfAccountsPredefinedItem item,
+        JsonElement order)
+    {
+        if (order == null || order.isJsonNull())
+        {
+            item.setOrder(null);
+            return null;
+        }
+        if (!(order.isJsonPrimitive() && order.getAsJsonPrimitive().isString()))
+        {
+            return "'order' must be a JSON string for ChartOfAccounts '" + chart.getName() //$NON-NLS-1$
+                + "'; got '" + order + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String s = order.getAsString();
+        int orderLength = chart.getOrderLength();
+        if (orderLength > 0 && s.length() > orderLength)
+        {
+            return "'order' \"" + s + "\" (" + s.length() + " char(s)) exceeds ChartOfAccounts '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + chart.getName() + "'s orderLength (" + orderLength + ")."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        item.setOrder(s);
         return null;
     }
 
@@ -1426,6 +2113,468 @@ public final class PredefinedWriter
         return null;
     }
 
+    // ============================================================================================
+    // owner-specific properties (ChartOfAccounts / ChartOfCalculationTypes) - gate + apply
+    // ============================================================================================
+
+    /**
+     * Owner GATE for every owner-specific property, run BEFORE any mutation (fail fast) - the same
+     * discipline as {@link #applyValueType}: a property is parsed unconditionally by
+     * {@link #parseProperties}, then rejected here with an actionable, owner-scoped error when it does
+     * not apply to this owner (never silently dropped). {@code accountType}/{@code offBalance}/
+     * {@code order}/{@code accountingFlags}/{@code extDimensionTypes} require a {@link ChartOfAccounts};
+     * {@code base}/{@code displaced}/{@code leading}/{@code actionPeriodIsBase} require a
+     * {@link ChartOfCalculationTypes}; {@code isFolder} is rejected for both new owners (no folder
+     * concept) and {@code parent} for a {@link ChartOfCalculationTypes} (a FLAT model).
+     *
+     * @return {@code null} when every supplied property is legal for {@code owner}, else a ready error
+     */
+    private static String rejectCrossOwnerProps(EObject owner, ItemProps props)
+    {
+        boolean coa = owner instanceof ChartOfAccounts;
+        boolean coct = owner instanceof ChartOfCalculationTypes;
+        if (!coa)
+        {
+            String err = firstCrossOwnerReject(owner, "ChartOfAccounts", //$NON-NLS-1$
+                new String[] {"accountType", "offBalance", "order", "accountingFlags", "extDimensionTypes"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                new boolean[] {props.accountTypeSet, props.offBalanceSet, props.orderSet,
+                    props.accountingFlagsSet, props.extDimensionTypesSet});
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        if (!coct)
+        {
+            String err = firstCrossOwnerReject(owner, "ChartOfCalculationTypes", //$NON-NLS-1$
+                new String[] {"base", "displaced", "leading", "actionPeriodIsBase"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                new boolean[] {props.baseSet, props.displacedSet, props.leadingSet,
+                    props.actionPeriodIsBaseSet});
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        if (props.isFolderSet && (coa || coct))
+        {
+            return "Property 'isFolder' is not supported for a " + ownerLabel(owner) //$NON-NLS-1$
+                + " predefined item: this owner has no folder concept." //$NON-NLS-1$
+                + (coa ? " Nest an account under an existing parent account with 'parent' instead." : ""); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (coct && props.parentName != null && !props.parentName.trim().isEmpty())
+        {
+            return "Property 'parent' is not supported for a " + ownerLabel(owner) //$NON-NLS-1$
+                + " predefined item: a Chart of Calculation Types is FLAT (no folders, no nesting)."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Returns a cross-owner reject for the first set property in {@code names}, or {@code null}. */
+    private static String firstCrossOwnerReject(EObject owner, String requiredOwner, String[] names,
+        boolean[] set)
+    {
+        for (int i = 0; i < names.length; i++)
+        {
+            if (set[i])
+            {
+                return "Property '" + names[i] + "' applies only to a " + requiredOwner //$NON-NLS-1$ //$NON-NLS-2$
+                    + " predefined item; " + ownerLabel(owner) + " does not support it."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Applies the owner-specific properties once the owner gate ({@link #rejectCrossOwnerProps}) has
+     * passed: the {@link ChartOfAccounts} scalar + reference props, or the {@link ChartOfCalculationTypes}
+     * flag + sibling-reference lists. Every reference resolves to a LIVE in-resource {@link EObject}
+     * inside the caller's write transaction (never a proxy / FQN string); a name that resolves to nothing
+     * is a hard, actionable error (the caller then rolls the whole write back).
+     *
+     * @return {@code null} on success, or a ready, actionable error message
+     */
+    private static String applyOwnerSpecificProps(EObject owner, PredefinedItem item, ItemProps props)
+    {
+        if (owner instanceof ChartOfAccounts chart && item instanceof ChartOfAccountsPredefinedItem account)
+        {
+            return applyChartOfAccountsProps(chart, account, props);
+        }
+        if (owner instanceof ChartOfCalculationTypes chart
+            && item instanceof ChartOfCalculationTypesPredefinedItem calc)
+        {
+            return applyChartOfCalculationTypesProps(chart, calc, props);
+        }
+        return null;
+    }
+
+    private static String applyChartOfAccountsProps(ChartOfAccounts chart, ChartOfAccountsPredefinedItem item,
+        ItemProps props)
+    {
+        if (props.accountTypeSet)
+        {
+            AccountType type = resolveAccountType(props.accountType);
+            if (type == null)
+            {
+                return "'accountType' '" + props.accountType + "' is not recognized. Use one of: ACTIVE, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "PASSIVE, ACTIVE_PASSIVE (or their Russian equivalents)."; //$NON-NLS-1$
+            }
+            item.setAccountType(type);
+        }
+        if (props.offBalanceSet && props.offBalance != null)
+        {
+            item.setOffBalance(props.offBalance);
+        }
+        if (props.orderSet)
+        {
+            String orderErr = applyOrder(chart, item, props.order);
+            if (orderErr != null)
+            {
+                return orderErr;
+            }
+        }
+        if (props.accountingFlagsSet)
+        {
+            String flagsErr = replaceAccountingFlags(chart, item, props.accountingFlags);
+            if (flagsErr != null)
+            {
+                return flagsErr;
+            }
+        }
+        if (props.extDimensionTypesSet)
+        {
+            String extErr = replaceExtDimensionTypes(chart, item, props.extDimensionTypes);
+            if (extErr != null)
+            {
+                return extErr;
+            }
+        }
+        return null;
+    }
+
+    private static String applyChartOfCalculationTypesProps(ChartOfCalculationTypes chart,
+        ChartOfCalculationTypesPredefinedItem item, ItemProps props)
+    {
+        if (props.actionPeriodIsBaseSet && props.actionPeriodIsBase != null)
+        {
+            item.setActionPeriodIsBase(props.actionPeriodIsBase);
+        }
+        if (props.baseSet)
+        {
+            String err = replaceCalcTypeRefs(chart, item.getBase(), props.base, "base"); //$NON-NLS-1$
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        if (props.displacedSet)
+        {
+            String err = replaceCalcTypeRefs(chart, item.getDisplaced(), props.displaced, "displaced"); //$NON-NLS-1$
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        if (props.leadingSet)
+        {
+            String err = replaceCalcTypeRefs(chart, item.getLeading(), props.leading, "leading"); //$NON-NLS-1$
+            if (err != null)
+            {
+                return err;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * FULL-REPLACE the {@code base}/{@code displaced}/{@code leading} reference list on a calc-type item:
+     * every supplied name is resolved to a SIBLING predefined calc type in the SAME chart (a live
+     * in-resource {@link EObject}) via the shared {@link #findByName} primitive; a name that resolves to
+     * nothing (or to a non-calc-type item) is a hard error and NOTHING is left half-written for the
+     * caller to roll back. The list is CLEARED first, so an empty input clears it.
+     */
+    private static String replaceCalcTypeRefs(ChartOfCalculationTypes chart,
+        EList<ChartOfCalculationTypesPredefinedItem> target, List<String> names, String propName)
+    {
+        List<ChartOfCalculationTypesPredefinedItem> resolved = new ArrayList<>();
+        if (names != null)
+        {
+            for (String name : names)
+            {
+                PredefinedItem sibling = findByName(chart, name);
+                if (!(sibling instanceof ChartOfCalculationTypesPredefinedItem calcSibling))
+                {
+                    return "'" + propName + "' references a predefined calculation type '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' that does not exist on " + ownerLabel(chart) //$NON-NLS-1$
+                        + ". Create it first, or fix the name."; //$NON-NLS-1$
+                }
+                resolved.add(calcSibling);
+            }
+        }
+        target.clear();
+        target.addAll(resolved);
+        return null;
+    }
+
+    /**
+     * FULL-REPLACE the {@code accountingFlags} reference list: every supplied name is resolved to one of
+     * the chart's OWN {@link AccountingFlag} objects by Name (a live in-resource {@link EObject}); a name
+     * that matches no accounting flag is a hard error (never create a flag). Cleared first.
+     */
+    private static String replaceAccountingFlags(ChartOfAccounts chart, ChartOfAccountsPredefinedItem item,
+        List<String> names)
+    {
+        List<AccountingFlag> resolved = new ArrayList<>();
+        if (names != null)
+        {
+            for (String name : names)
+            {
+                AccountingFlag flag = findByName(chart.getAccountingFlags(), name);
+                if (flag == null)
+                {
+                    return "'accountingFlags' references an accounting flag '" + name //$NON-NLS-1$
+                        + "' that does not exist on " + ownerLabel(chart) //$NON-NLS-1$
+                        + ". Add it to the chart's AccountingFlags first, or fix the name."; //$NON-NLS-1$
+                }
+                resolved.add(flag);
+            }
+        }
+        item.getAccountingFlags().clear();
+        item.getAccountingFlags().addAll(resolved);
+        return null;
+    }
+
+    /**
+     * FULL-REPLACE the CONTAINED {@code extDimensionTypes} rows: each row is a fresh {@link ExtDimensionType}
+     * whose {@code characteristicType} resolves to a predefined item of the chart's LINKED
+     * {@link ChartOfCharacteristicTypes} ({@link ChartOfAccounts#getExtDimensionTypes()} on the CHART
+     * returns that single linked CCT - a name collision with the item-level list this method fills) and
+     * whose {@code extDimensionAccountingFlags} resolve to the chart's own
+     * {@link ExtDimensionAccountingFlag}s. A missing target is a hard error. Cleared first.
+     */
+    private static String replaceExtDimensionTypes(ChartOfAccounts chart, ChartOfAccountsPredefinedItem item,
+        List<ExtDimensionTypeSpec> specs)
+    {
+        List<ExtDimensionType> resolved = new ArrayList<>();
+        if (specs != null)
+        {
+            ChartOfCharacteristicTypes linkedCct = chart.getExtDimensionTypes();
+            for (ExtDimensionTypeSpec spec : specs)
+            {
+                String err = buildExtDimensionType(chart, linkedCct, spec, resolved);
+                if (err != null)
+                {
+                    return err;
+                }
+            }
+        }
+        item.getExtDimensionTypes().clear();
+        item.getExtDimensionTypes().addAll(resolved);
+        return null;
+    }
+
+    /** Builds one {@link ExtDimensionType} from {@code spec} into {@code out}, or returns a ready error. */
+    private static String buildExtDimensionType(ChartOfAccounts chart, ChartOfCharacteristicTypes linkedCct,
+        ExtDimensionTypeSpec spec, List<ExtDimensionType> out)
+    {
+        if (linkedCct == null)
+        {
+            return "Cannot resolve 'characteristicType' '" + spec.characteristicType + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                + ownerLabel(chart) + " has no linked ChartOfCharacteristicTypes (set the chart's " //$NON-NLS-1$
+                + "ExtDimensionType property first)."; //$NON-NLS-1$
+        }
+        PredefinedItem ct = findByName(linkedCct, spec.characteristicType);
+        if (!(ct instanceof ChartOfCharacteristicTypesPredefinedItem characteristic))
+        {
+            return "'extDimensionTypes' references a characteristicType '" + spec.characteristicType //$NON-NLS-1$
+                + "' that is not a predefined item of the linked " + ownerLabel(linkedCct) //$NON-NLS-1$
+                + ". Create it first, or fix the name."; //$NON-NLS-1$
+        }
+        ExtDimensionType ext = MdClassFactory.eINSTANCE.createExtDimensionType();
+        ext.setCharacteristicType(characteristic);
+        ext.setTurnover(spec.turnover);
+        for (String flagName : spec.extDimensionAccountingFlags)
+        {
+            ExtDimensionAccountingFlag flag = findByName(chart.getExtDimensionAccountingFlags(), flagName);
+            if (flag == null)
+            {
+                return "'extDimensionAccountingFlags' references '" + flagName //$NON-NLS-1$
+                    + "' that does not exist on " + ownerLabel(chart) //$NON-NLS-1$
+                    + ". Add it to the chart's ExtDimensionAccountingFlags first, or fix the name."; //$NON-NLS-1$
+            }
+            ext.getExtDimensionAccountingFlags().add(flag);
+        }
+        out.add(ext);
+        return null;
+    }
+
+    /** Resolves a named {@link MdObject} in a live list by case-insensitive Name (1C identifiers). */
+    private static <T extends MdObject> T findByName(List<T> list, String name)
+    {
+        if (name == null || list == null)
+        {
+            return null;
+        }
+        for (T candidate : list)
+        {
+            if (name.equalsIgnoreCase(candidate.getName()))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** Resolves an {@code accountType} token to the platform enum, EXACT (never contains()), or {@code null}. */
+    private static AccountType resolveAccountType(String token)
+    {
+        if (token == null)
+        {
+            return null;
+        }
+        return ACCOUNT_TYPE_TOKENS.get(token.trim().toLowerCase(Locale.ROOT));
+    }
+
+    // ============================================================================================
+    // read-side display helpers for the owner-specific columns (dash-when-N/A, like formatValueType)
+    // ============================================================================================
+
+    /** The ChartOfAccounts account type as its enum literal name, or {@code null} for other kinds. */
+    public static String displayAccountType(PredefinedItem item)
+    {
+        if (item instanceof ChartOfAccountsPredefinedItem account)
+        {
+            AccountType type = account.getAccountType();
+            return type != null ? type.getName() : null;
+        }
+        return null;
+    }
+
+    /** The ChartOfAccounts off-balance flag, or {@code null} for other kinds. */
+    public static Boolean displayOffBalance(PredefinedItem item)
+    {
+        return (item instanceof ChartOfAccountsPredefinedItem account)
+            ? Boolean.valueOf(account.isOffBalance()) : null;
+    }
+
+    /** The ChartOfAccounts order String, or {@code null} when unset / other kinds. */
+    public static String displayOrder(PredefinedItem item)
+    {
+        return (item instanceof ChartOfAccountsPredefinedItem account) ? account.getOrder() : null;
+    }
+
+    /** The ChartOfCalculationTypes action-period-is-base flag, or {@code null} for other kinds. */
+    public static Boolean displayActionPeriodIsBase(PredefinedItem item)
+    {
+        return (item instanceof ChartOfCalculationTypesPredefinedItem calc)
+            ? Boolean.valueOf(calc.isActionPeriodIsBase()) : null;
+    }
+
+    /** The calc-type {@code base} sibling Names, comma-joined, or {@code null} when empty / other kinds. */
+    public static String displayBase(PredefinedItem item)
+    {
+        return (item instanceof ChartOfCalculationTypesPredefinedItem calc)
+            ? joinItemNames(calc.getBase()) : null;
+    }
+
+    /** The calc-type {@code displaced} sibling Names, comma-joined, or {@code null}. */
+    public static String displayDisplaced(PredefinedItem item)
+    {
+        return (item instanceof ChartOfCalculationTypesPredefinedItem calc)
+            ? joinItemNames(calc.getDisplaced()) : null;
+    }
+
+    /** The calc-type {@code leading} sibling Names, comma-joined, or {@code null}. */
+    public static String displayLeading(PredefinedItem item)
+    {
+        return (item instanceof ChartOfCalculationTypesPredefinedItem calc)
+            ? joinItemNames(calc.getLeading()) : null;
+    }
+
+    /** The ChartOfAccounts {@code accountingFlags} Names, comma-joined, or {@code null} when empty. */
+    public static String displayAccountingFlags(PredefinedItem item)
+    {
+        if (item instanceof ChartOfAccountsPredefinedItem account)
+        {
+            List<String> names = new ArrayList<>();
+            for (AccountingFlag flag : account.getAccountingFlags())
+            {
+                names.add(flag.getName());
+            }
+            return names.isEmpty() ? null : String.join(", ", names); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * The ChartOfAccounts {@code extDimensionTypes} rows rendered as text (e.g.
+     * {@code "Contractors [turnover] {Sum}; Products"}), or {@code null} when empty / other kinds.
+     */
+    public static String displayExtDimensionTypes(PredefinedItem item)
+    {
+        if (!(item instanceof ChartOfAccountsPredefinedItem account))
+        {
+            return null;
+        }
+        List<String> rows = new ArrayList<>();
+        for (ExtDimensionType ext : account.getExtDimensionTypes())
+        {
+            rows.add(renderExtDimensionType(ext));
+        }
+        return rows.isEmpty() ? null : String.join("; ", rows); //$NON-NLS-1$
+    }
+
+    /**
+     * A predefined-item reference's Name for DISPLAY, hardened against a DANGLING reference: a
+     * {@code null}, an unresolved EMF proxy, or a {@code null} Name (e.g. left behind when the
+     * referenced item was removed with {@code force=true} and the project was reloaded) renders
+     * {@code "?"} instead of throwing. Without this, {@code new StringBuilder(proxy.getName())} would
+     * {@code NullPointerException} and fail the whole {@code get_metadata_details} render (issue #296 P3).
+     */
+    private static String safeName(PredefinedItem it)
+    {
+        if (it == null || it.eIsProxy())
+        {
+            return "?"; //$NON-NLS-1$
+        }
+        String name = it.getName();
+        return name != null ? name : "?"; //$NON-NLS-1$
+    }
+
+    /** Renders one {@link ExtDimensionType} row as {@code "<charType> [turnover] {flag, ...}"}. */
+    private static String renderExtDimensionType(ExtDimensionType ext)
+    {
+        StringBuilder sb = new StringBuilder(safeName(ext.getCharacteristicType()));
+        if (ext.isTurnover())
+        {
+            sb.append(" [turnover]"); //$NON-NLS-1$
+        }
+        List<String> flags = new ArrayList<>();
+        for (ExtDimensionAccountingFlag flag : ext.getExtDimensionAccountingFlags())
+        {
+            flags.add(flag.getName());
+        }
+        if (!flags.isEmpty())
+        {
+            sb.append(" {").append(String.join(", ", flags)).append("}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        return sb.toString();
+    }
+
+    /** Comma-joins the Names of a predefined-item reference list, or {@code null} when empty. */
+    private static String joinItemNames(List<? extends PredefinedItem> items)
+    {
+        if (items == null || items.isEmpty())
+        {
+            return null;
+        }
+        List<String> names = new ArrayList<>();
+        for (PredefinedItem it : items)
+        {
+            names.add(safeName(it));
+        }
+        return String.join(", ", names); //$NON-NLS-1$
+    }
+
     /**
      * The owner's {@code descriptionLength} (issue #296 addendum): {@code Catalog} and
      * {@code ChartOfCharacteristicTypes} both expose {@code getDescriptionLength()} (0 = unlimited,
@@ -1442,12 +2591,20 @@ public final class PredefinedWriter
         {
             return ((ChartOfCharacteristicTypes)owner).getDescriptionLength();
         }
+        if (owner instanceof ChartOfAccounts)
+        {
+            return ((ChartOfAccounts)owner).getDescriptionLength();
+        }
+        if (owner instanceof ChartOfCalculationTypes)
+        {
+            return ((ChartOfCalculationTypes)owner).getDescriptionLength();
+        }
         return 0;
     }
 
     /**
      * Validates {@code description}'s length against {@code owner}'s {@code descriptionLength} - the
-     * description-side counterpart of {@link #applyCatalogCode}/{@link #applyCharacteristicTypesCode}'s
+     * description-side counterpart of {@link #applyValueCode}/{@link #applyCharacteristicTypesCode}'s
      * {@code codeLength} check: an over-long description is REJECTED with an actionable error, never
      * silently truncated (0 = unlimited, never rejects).
      *
