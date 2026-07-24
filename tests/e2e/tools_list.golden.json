@@ -3223,9 +3223,18 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List all workspace projects with properties (name, path, type, natures)",
+    "description": "List all workspace projects with properties (name, path, type, natures). format='md' (default) returns the human Markdown table; format='json' returns the machine-readable project list in structuredContent.",
     "inputSchema": {
-      "properties": {},
+      "properties": {
+        "format": {
+          "description": "Output format: 'md' (default) renders the human Markdown table; 'json' returns {projects:[{name, state, path, open, edtProject, natures}]} in structuredContent for a programmatic consumer.",
+          "enum": [
+            "md",
+            "json"
+          ],
+          "type": "string"
+        }
+      },
       "required": [],
       "type": "object"
     },

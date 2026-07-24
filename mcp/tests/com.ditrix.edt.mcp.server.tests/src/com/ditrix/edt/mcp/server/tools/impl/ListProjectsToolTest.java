@@ -98,4 +98,56 @@ public class ListProjectsToolTest
         assertEquals("list_projects.md", //$NON-NLS-1$
             new ListProjectsTool().getResultFileName(new HashMap<>()));
     }
+
+    // ==================== the 'format' parameter (issue #302) ====================
+
+    @Test
+    public void testSchemaDeclaresFormatParameter()
+    {
+        // Schema/execute parity: execute() reads 'format', so tools/list must declare it (with both
+        // allowed values) or a schema-driven client cannot discover the machine format.
+        String schema = new ListProjectsTool().getInputSchema();
+        assertTrue(schema.contains("\"format\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"md\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"json\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResponseTypeIsMarkdownByDefault()
+    {
+        // No format argument -> the human Markdown table (the no-regression default).
+        assertEquals(ResponseType.MARKDOWN,
+            new ListProjectsTool().getResponseType(new HashMap<>()));
+    }
+
+    @Test
+    public void testResponseTypeIsJsonWhenFormatJson()
+    {
+        HashMap<String, String> params = new HashMap<>();
+        params.put("format", "json"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(ResponseType.JSON, new ListProjectsTool().getResponseType(params));
+    }
+
+    @Test
+    public void testResponseTypeIsMarkdownForExplicitMdAndUnknownValues()
+    {
+        ListProjectsTool tool = new ListProjectsTool();
+        HashMap<String, String> md = new HashMap<>();
+        md.put("format", "md"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(ResponseType.MARKDOWN, tool.getResponseType(md));
+
+        // Anything that is not 'json' keeps the human default rather than failing the call.
+        HashMap<String, String> other = new HashMap<>();
+        other.put("format", "xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(ResponseType.MARKDOWN, tool.getResponseType(other));
+    }
+
+    @Test
+    public void testFormatJsonIsCaseInsensitiveAndTrimmed()
+    {
+        ListProjectsTool tool = new ListProjectsTool();
+        HashMap<String, String> params = new HashMap<>();
+        params.put("format", " JSON "); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(ResponseType.JSON, tool.getResponseType(params));
+    }
 }

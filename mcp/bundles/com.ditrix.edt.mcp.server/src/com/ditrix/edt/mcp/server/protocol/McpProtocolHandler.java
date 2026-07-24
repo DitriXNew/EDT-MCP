@@ -470,7 +470,10 @@ public class McpProtocolHandler
     private String buildToolCallResponse(IMcpTool tool, String result, UserSignal signal,
         boolean plainTextMode, Object requestId, Map<String, String> params)
     {
-        switch (tool.getResponseType())
+        // Per-call response type: a tool whose caller can choose the output format (e.g.
+        // list_projects' format=md|json) decides from the arguments; every other tool falls back to
+        // its fixed getResponseType().
+        switch (tool.getResponseType(params))
         {
             case JSON:
                 return buildJsonToolResponse(tool, result, signal, plainTextMode, requestId);
@@ -617,10 +620,12 @@ public class McpProtocolHandler
             // Parse JSON and add userSignal field
             result = addUserSignalToJson(result, signal);
         }
-        // In plain text mode, return markdown as plain text instead of structured content
+        // In plain text mode, return markdown as plain text instead of structured content. A FAILED
+        // payload keeps isError:true (with the real message in the text channel) - suppressing the
+        // structured payload must never make a failure look like a success.
         if (plainTextMode)
         {
-            return buildToolCallTextResponse(result, requestId);
+            return buildTextOnlyJsonResponse(result, requestId);
         }
         // Capability gate for structuredContent. By DEFAULT (no capabilities,
         // or a client that does not explicitly opt out) this is true, so the
@@ -630,9 +635,30 @@ public class McpProtocolHandler
         // then delivered as text so the data is still returned.
         if (!clientCapabilities.get().allowsStructuredContent())
         {
-            return buildToolCallTextResponse(result, requestId);
+            return buildTextOnlyJsonResponse(result, requestId);
         }
         return buildToolCallJsonResponse(result, requestId, tool.getName());
+    }
+
+    /**
+     * Delivers a JSON tool payload as TEXT (no {@code structuredContent}) for the two suppression
+     * cases on the JSON path - plain-text mode and a client that opted out of structuredContent -
+     * while PRESERVING the tool-level outcome: a {@code ToolResult.error} payload keeps
+     * {@code isError:true} with the real message in the text channel, so a suppressed structured
+     * payload can never make a failure look like a success. A success is delivered exactly as before.
+     *
+     * @param result the tool's JSON payload
+     * @param requestId the JSON-RPC request id to echo
+     * @return the serialized JSON-RPC response
+     */
+    private String buildTextOnlyJsonResponse(String result, Object requestId)
+    {
+        if (!isJsonErrorPayload(result))
+        {
+            return buildToolCallTextResponse(result, requestId);
+        }
+        ToolCallResult errorResult = ToolCallResult.errorText(JsonParser.parseString(result));
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId, errorResult));
     }
     
     /**

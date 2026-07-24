@@ -24,6 +24,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -74,6 +75,12 @@ public final class BackendRegistry
      * starved by this debounce.
      */
     private static final long DEBOUNCE_MILLIS = 1000;
+
+    /** {@code list_projects} argument selecting the machine payload. */
+    private static final String ARG_FORMAT = "format"; //$NON-NLS-1$
+
+    /** {@link #ARG_FORMAT} value asking for the machine-readable project list. */
+    private static final String FORMAT_JSON = "json"; //$NON-NLS-1$
 
     private final ProxyConfig cfg;
     private final HttpClient client;
@@ -190,6 +197,7 @@ public final class BackendRegistry
 
         List<Backend> live = new ArrayList<>();
         Map<String, List<Backend>> holders = new LinkedHashMap<>();
+        List<Integer> unsupported = new ArrayList<>();
         for (int port = cfg.scanFrom; port <= cfg.scanTo; port++)
         {
             if (Thread.currentThread().isInterrupted())
@@ -203,14 +211,19 @@ public final class BackendRegistry
                 continue;
             }
             live.add(backend);
-            for (String project : fetchProjectNames(backend))
+            ProjectsProbe probe = fetchProjectNames(backend);
+            if (!probe.supported)
+            {
+                unsupported.add(backend.getPort());
+            }
+            for (String project : probe.names)
             {
                 holders.computeIfAbsent(project, k -> new ArrayList<>()).add(backend);
             }
         }
 
         Snapshot previous = snapshot;
-        snapshot = Snapshot.build(live, holders);
+        snapshot = Snapshot.build(live, holders, unsupported);
         lastRefreshMillis = System.currentTimeMillis();
         logChange(previous, snapshot);
     }
@@ -282,6 +295,19 @@ public final class BackendRegistry
     public Map<Integer, List<String>> projectsByPort()
     {
         return snapshot.projectsByPort;
+    }
+
+    /**
+     * Ports of live backends whose EDT-MCP plugin does NOT support the machine project list
+     * ({@code list_projects} with {@code format=json}) - an unsupported plugin version. Their
+     * projects cannot be routed; surfaced so a routing failure can say so instead of just
+     * "unknown project".
+     *
+     * @return an unmodifiable list of ports, ascending; empty when every live backend is supported
+     */
+    public List<Integer> unsupportedBackends()
+    {
+        return snapshot.unsupported;
     }
 
     /**
@@ -357,7 +383,7 @@ public final class BackendRegistry
      */
     void installStateForTest(List<Backend> liveBackends, Map<String, List<Backend>> projectHolders)
     {
-        snapshot = Snapshot.build(liveBackends, projectHolders);
+        snapshot = Snapshot.build(liveBackends, projectHolders, List.of());
     }
 
     /**
@@ -370,23 +396,182 @@ public final class BackendRegistry
      * @param backend the live backend to query
      * @return the project names; empty on any failure
      */
-    private static List<String> fetchProjectNames(Backend backend)
+    private static ProjectsProbe fetchProjectNames(Backend backend)
     {
         try
         {
-            String raw = backend.callToolBlocking("list_projects", new JsonObject(), DISCOVERY_TIMEOUT_SECONDS); //$NON-NLS-1$
-            return parseProjectNames(raw);
+            // Ask for the MACHINE format: a plugin that supports it answers with
+            // structuredContent.projects. One that ignores the parameter (an older MCP version)
+            // answers with the human Markdown only - which this proxy deliberately does NOT parse;
+            // such a backend is reported as an unsupported plugin version instead.
+            JsonObject arguments = new JsonObject();
+            arguments.addProperty(ARG_FORMAT, FORMAT_JSON);
+            String raw = backend.callToolBlocking("list_projects", arguments, DISCOVERY_TIMEOUT_SECONDS); //$NON-NLS-1$
+            if (isToolError(raw))
+            {
+                // A CURRENT plugin can fail this call transiently (its own ToolResult.error). That is
+                // not evidence of an unsupported version - contribute no projects (checked FIRST, so a
+                // failed response carrying a partial/stale projects array cannot register names) and
+                // let the next scan retry, without telling the operator to upgrade.
+                LOGGER.log(Level.FINE, "list_projects(format=json) returned a tool error on backend :" //$NON-NLS-1$
+                    + backend.getPort() + " - treating as no projects"); //$NON-NLS-1$
+                return ProjectsProbe.of(List.of());
+            }
+            if (!hasStructuredProjects(raw))
+            {
+                LOGGER.warning("Backend :" + backend.getPort() //$NON-NLS-1$
+                    + " did not answer list_projects(format=json) with a machine project list" //$NON-NLS-1$
+                    + " - unsupported EDT-MCP plugin version; its projects are not routable."); //$NON-NLS-1$
+                return ProjectsProbe.unsupported();
+            }
+            return ProjectsProbe.of(parseProjectNames(raw));
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            return List.of();
+            return ProjectsProbe.of(List.of());
         }
         catch (IOException | RuntimeException e)
         {
             LOGGER.log(Level.FINE,
                 "list_projects failed on backend :" + backend.getPort() + " - treating as no projects", e); //$NON-NLS-1$ //$NON-NLS-2$
-            return List.of();
+            return ProjectsProbe.of(List.of());
+        }
+    }
+
+    /**
+     * Whether a raw {@code list_projects} response carries the machine contract
+     * {@code result.structuredContent.projects} (a JSON array). Its ABSENCE means the backend's
+     * plugin predates the {@code format=json} parameter - an unsupported MCP version for routing.
+     *
+     * @param rawResponse the raw JSON-RPC response string; may be anything
+     * @return {@code true} when the structured projects array is present
+     */
+    static boolean hasStructuredProjects(String rawResponse)
+    {
+        return machineProjects(rawResponse) != null;
+    }
+
+    /**
+     * The machine project list of a {@code list_projects(format=json)} response, or {@code null} when
+     * the backend did not produce one (its plugin predates {@code format=json}).
+     * <p>
+     * Read from {@code result.structuredContent.projects} normally, and - when the backend runs in
+     * PLAIN-TEXT mode (the Cursor-compatibility preference, which delivers a JSON tool result as
+     * text instead of structuredContent) - from the JSON carried in {@code result.content[*].text}.
+     * That is the SAME machine contract in the other transport channel, not a Markdown fallback: a
+     * current plugin with plain-text mode enabled must not be misreported as an unsupported version.
+     *
+     * @param rawResponse the raw JSON-RPC response string; may be anything
+     * @return the projects array, or {@code null} when the machine contract is absent
+     */
+    private static JsonArray machineProjects(String rawResponse)
+    {
+        JsonObject response = Json.parseObject(rawResponse);
+        return response == null ? null : machineProjects(Json.obj(response, "result")); //$NON-NLS-1$
+    }
+
+    /**
+     * The result-object form of {@link #machineProjects(String)}, shared with the fan-out merge so
+     * both paths accept the machine list from {@code structuredContent} AND from plain-text mode.
+     *
+     * @param result the JSON-RPC {@code result} object (may be {@code null})
+     * @return the projects array, or {@code null} when the machine contract is absent
+     */
+    static JsonArray machineProjects(JsonObject result)
+    {
+        if (result == null)
+        {
+            return null;
+        }
+        JsonArray fromStructured = projectsArray(Json.obj(result, "structuredContent")); //$NON-NLS-1$
+        if (fromStructured != null)
+        {
+            return fromStructured;
+        }
+        // Plain-text mode: the same JSON payload arrives as content text.
+        JsonElement content = result.get("content"); //$NON-NLS-1$
+        if (content == null || !content.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement item : content.getAsJsonArray())
+        {
+            if (!item.isJsonObject())
+            {
+                continue;
+            }
+            JsonArray fromText = projectsArray(Json.parseObject(Json.str(item.getAsJsonObject(), "text"))); //$NON-NLS-1$
+            if (fromText != null)
+            {
+                return fromText;
+            }
+        }
+        return null;
+    }
+
+    /** The {@code projects} array of a payload object, or {@code null} when absent/not an array. */
+    private static JsonArray projectsArray(JsonObject payload)
+    {
+        if (payload == null)
+        {
+            return null;
+        }
+        // A payload that declares FAILURE is not a project list, even if it happens to carry a
+        // 'projects' array - accepting it would register phantom projects for routing.
+        JsonElement success = payload.get("success"); //$NON-NLS-1$
+        if (success != null && success.isJsonPrimitive() && success.getAsJsonPrimitive().isBoolean()
+            && !success.getAsBoolean())
+        {
+            return null;
+        }
+        JsonElement projects = payload.get("projects"); //$NON-NLS-1$
+        return projects != null && projects.isJsonArray() ? projects.getAsJsonArray() : null;
+    }
+
+    /**
+     * Whether a raw response is a TOOL-LEVEL error ({@code result.isError == true}) - a transient
+     * execution failure of a CURRENT plugin, not evidence that the plugin lacks {@code format=json}.
+     *
+     * @param rawResponse the raw JSON-RPC response string
+     * @return {@code true} when the tool reported an error
+     */
+    static boolean isToolError(String rawResponse)
+    {
+        JsonObject result = Json.obj(Json.parseObject(rawResponse), "result"); //$NON-NLS-1$
+        if (result == null)
+        {
+            return false;
+        }
+        JsonElement isError = result.get("isError"); //$NON-NLS-1$
+        return isError != null && isError.isJsonPrimitive() && isError.getAsJsonPrimitive().isBoolean()
+            && isError.getAsBoolean();
+    }
+
+    /**
+     * The outcome of probing one backend for its projects: the discovered names, plus whether the
+     * backend's plugin SUPPORTS the machine contract at all (an unsupported one contributes no
+     * routable projects and is reported to the operator).
+     */
+    private static final class ProjectsProbe
+    {
+        final List<String> names;
+        final boolean supported;
+
+        private ProjectsProbe(List<String> names, boolean supported)
+        {
+            this.names = names;
+            this.supported = supported;
+        }
+
+        static ProjectsProbe of(List<String> names)
+        {
+            return new ProjectsProbe(names, true);
+        }
+
+        static ProjectsProbe unsupported()
+        {
+            return new ProjectsProbe(List.of(), false);
         }
     }
 
@@ -402,27 +587,12 @@ public final class BackendRegistry
     static List<String> parseProjectNames(String rawResponse)
     {
         List<String> names = new ArrayList<>();
-        JsonObject response = Json.parseObject(rawResponse);
-        if (response == null)
+        JsonArray projects = machineProjects(rawResponse);
+        if (projects == null)
         {
             return names;
         }
-        JsonObject result = Json.obj(response, "result"); //$NON-NLS-1$
-        if (result == null)
-        {
-            return names;
-        }
-        JsonObject structured = Json.obj(result, "structuredContent"); //$NON-NLS-1$
-        if (structured == null)
-        {
-            return names;
-        }
-        JsonElement projects = structured.get("projects"); //$NON-NLS-1$
-        if (projects == null || !projects.isJsonArray())
-        {
-            return names;
-        }
-        for (JsonElement element : projects.getAsJsonArray())
+        for (JsonElement element : projects)
         {
             if (!element.isJsonObject())
             {
@@ -468,17 +638,20 @@ public final class BackendRegistry
      */
     private static final class Snapshot
     {
-        static final Snapshot EMPTY = build(List.of(), Map.of());
+        static final Snapshot EMPTY = build(List.of(), Map.of(), List.of());
 
         final List<Backend> live;
         final Map<String, Backend> owners;
         final Map<String, List<Integer>> duplicates;
         final List<String> knownProjects;
         final Map<Integer, List<String>> projectsByPort;
+        /** Ports of live backends whose plugin does not support the machine project list. */
+        final List<Integer> unsupported;
 
         private Snapshot(List<Backend> live, Map<String, Backend> owners, Map<String, List<Integer>> duplicates,
-            List<String> knownProjects, Map<Integer, List<String>> projectsByPort)
+            List<String> knownProjects, Map<Integer, List<String>> projectsByPort, List<Integer> unsupported)
         {
+            this.unsupported = unsupported;
             this.live = live;
             this.owners = owners;
             this.duplicates = duplicates;
@@ -486,7 +659,8 @@ public final class BackendRegistry
             this.projectsByPort = projectsByPort;
         }
 
-        static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders)
+        static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders,
+            List<Integer> unsupportedIn)
         {
             List<Backend> live = new ArrayList<>(liveIn);
             live.sort(Comparator.comparingInt(Backend::getPort));
@@ -538,7 +712,8 @@ public final class BackendRegistry
                 Collections.unmodifiableMap(owners),
                 Collections.unmodifiableMap(duplicates),
                 Collections.unmodifiableList(projectNames),
-                Collections.unmodifiableMap(frozenByPort));
+                Collections.unmodifiableMap(frozenByPort),
+                Collections.unmodifiableList(new ArrayList<>(unsupportedIn)));
         }
     }
 }

@@ -169,7 +169,11 @@ public class ProxyRoutingIT
     @Test
     public void testListProjectsMergesBothBackends() throws Exception
     {
-        JsonObject response = client.callTool(TOOL_LIST_PROJECTS, new JsonObject());
+        // format=json is the MACHINE contract: the merged machine payload carries every backend's
+        // projects. (The default format=md returns the human table instead - asserted below.)
+        JsonObject jsonArgs = new JsonObject();
+        jsonArgs.addProperty("format", "json"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject response = client.callTool(TOOL_LIST_PROJECTS, jsonArgs);
         assertFalse("merged list_projects must succeed: " + response, isToolError(response)); //$NON-NLS-1$
         JsonObject structured = structuredContent(response);
         assertTrue("merged result must keep the projects array: " + structured, //$NON-NLS-1$
@@ -181,6 +185,13 @@ public class ProxyRoutingIT
         }
         assertEquals("projects must merge in ascending backend port order", //$NON-NLS-1$
             List.of(PROJECT_A, PROJECT_B), names);
+
+        // The DEFAULT (format=md) shape mirrors a direct markdown call: the merged human table, and
+        // no structuredContent - the proxy must not force the machine payload on a markdown caller.
+        JsonObject mdResponse = client.callTool(TOOL_LIST_PROJECTS, new JsonObject());
+        assertFalse("default list_projects must succeed: " + mdResponse, isToolError(mdResponse)); //$NON-NLS-1$
+        assertFalse("the md default must not carry structuredContent: " + mdResponse, //$NON-NLS-1$
+            mdResponse.getAsJsonObject("result").has("structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

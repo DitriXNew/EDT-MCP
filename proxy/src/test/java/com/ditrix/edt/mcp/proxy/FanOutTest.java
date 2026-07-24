@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.proxy;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -40,9 +42,20 @@ public class FanOutTest
         structured.addProperty("success", true); //$NON-NLS-1$
         structured.add("projects", projects); //$NON-NLS-1$
 
+        // The human content table a list_projects response also carries (the fan-out row-merges these).
+        StringBuilder table = new StringBuilder();
+        table.append("## Workspace Projects\n\n**Total:** ").append(projectNames.length) //$NON-NLS-1$
+            .append(" projects\n\n") //$NON-NLS-1$
+            .append("| Name | State | Path | Open | EDT Project | Natures |\n") //$NON-NLS-1$
+            .append("|------|-------|------|------|-------------|--------|\n"); //$NON-NLS-1$
+        for (String name : projectNames)
+        {
+            table.append("| ").append(name).append(" | ready | /ws/").append(name) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" | Yes | Yes | Nature |\n"); //$NON-NLS-1$
+        }
         JsonObject textItem = new JsonObject();
         textItem.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
-        textItem.addProperty("text", "projects listed"); //$NON-NLS-1$ //$NON-NLS-2$
+        textItem.addProperty("text", table.toString()); //$NON-NLS-1$
         JsonArray content = new JsonArray();
         content.add(textItem);
 
@@ -77,10 +90,211 @@ public class FanOutTest
         String responseA = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
         String responseB = listProjectsResponse(2, "ProjectB", "ProjectC"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        String merged = FanOut.mergeListProjects(Arrays.asList(responseA, responseB), 99);
+        String merged = FanOut.mergeListProjects(Arrays.asList(responseA, responseB), 99, true);
 
         assertEquals(List.of("ProjectA", "ProjectB", "ProjectC"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             projectNamesOf(Json.parseObject(merged)));
+    }
+
+    @Test
+    public void testMergedContentReflectsAllBackendsNotJustFirst()
+    {
+        // The human `content` channel must show ALL merged projects, not only the first backend's
+        // envelope (issue #302): the rebuilt table's total and rows cover every backend.
+        String responseA = listProjectsResponse(1, "ProjectA", "ProjectB"); //$NON-NLS-1$ //$NON-NLS-2$
+        String responseB = listProjectsResponse(2, "ProjectC"); //$NON-NLS-1$
+
+        String merged = FanOut.mergeListProjects(Arrays.asList(responseA, responseB), 99, true);
+
+        String content = contentTextOf(Json.parseObject(merged));
+        assertTrue("total must reflect all backends: " + content, //$NON-NLS-1$
+            content.contains("**Total:** 3 projects")); //$NON-NLS-1$
+        for (String name : new String[] { "ProjectA", "ProjectB", "ProjectC" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("content must list " + name + ": " + content, //$NON-NLS-1$ //$NON-NLS-2$
+                content.contains("| " + name + " |")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    private static String contentTextOf(JsonObject response)
+    {
+        JsonObject item = firstContentItemOf(response);
+        JsonObject resource = Json.obj(item, "resource"); //$NON-NLS-1$
+        return resource != null ? Json.str(resource, "text") : Json.str(item, "text"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static JsonObject firstContentItemOf(JsonObject response)
+    {
+        return Json.obj(response, "result").getAsJsonArray("content").get(0).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMergedContentIsCappedLikeADirectCall()
+    {
+        // The merged table is re-rendered from the UNCAPPED structured projects of every backend, so it
+        // must be capped again - the proxy must not return a human channel bigger than a direct
+        // list_projects would. structuredContent keeps the full list.
+        String[] many = new String[4000];
+        for (int i = 0; i < many.length; i++)
+        {
+            many[i] = "AVeryLongProjectNameForCapTesting" + i; //$NON-NLS-1$
+        }
+        String backend = listProjectsResponse(1, many);
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, true));
+
+        String content = contentTextOf(parsed);
+        assertTrue("merged content must respect the cap: " + content.length(), //$NON-NLS-1$
+            content.length() <= FanOut.MAX_CONTENT_CHARS);
+        assertTrue("a capped table must say so", content.contains("truncated")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the last kept line must be a complete table row", //$NON-NLS-1$
+            content.contains("| AVeryLongProjectNameForCapTesting0 |")); //$NON-NLS-1$
+        // The full list is still available to a machine consumer.
+        assertEquals(many.length, projectNamesOf(parsed).size());
+    }
+
+    @Test
+    public void testMergedContentUnderTheCapIsNotTruncated()
+    {
+        String backend = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
+
+        String content = contentTextOf(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, true)));
+
+        assertFalse("a small table must not be truncated", content.contains("truncated")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDefaultMdFormatReturnsNoStructuredContent()
+    {
+        // format=md (the default) must look like a DIRECT markdown call: the human table only, with
+        // no structuredContent - the proxy must not force the machine payload on a markdown caller.
+        String backend = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, false));
+
+        assertNull("md format must not carry structuredContent", //$NON-NLS-1$
+            Json.obj(Json.obj(parsed, "result"), "structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("md format must still render the table", //$NON-NLS-1$
+            contentTextOf(parsed).contains("| ProjectA |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJsonFormatKeepsSuccessFlagEvenWhenFirstBackendIsContentOnly()
+    {
+        // The donating envelope may come from a backend that answered without structuredContent; the
+        // merged machine payload must still carry success:true like a direct format=json call.
+        String contentOnly = legacyContentOnlyResponse(1, "no structured payload here"); //$NON-NLS-1$
+        String structured = listProjectsResponse(2, "ProjectA"); //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(
+            FanOut.mergeListProjects(Arrays.asList(contentOnly, structured), 9, true));
+
+        JsonObject merged = Json.obj(Json.obj(parsed, "result"), "structuredContent"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("merged machine payload must keep success:true", //$NON-NLS-1$
+            merged.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(List.of("ProjectA"), projectNamesOf(parsed)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMergedContentKeepsPlainTextShapeForCursor()
+    {
+        // A backend in Cursor plain-text mode returns content as a type:"text" block. The merged
+        // content MUST stay a text block, not become a resource Cursor cannot consume.
+        String backend = listProjectsResponse(1, "ProjectA"); // content is a type:"text" block //$NON-NLS-1$
+
+        JsonObject item = firstContentItemOf(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, true)));
+
+        assertEquals("text", Json.str(item, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the text block is rewritten from the merged projects", //$NON-NLS-1$
+            Json.str(item, "text").contains("| ProjectA |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMergedContentKeepsResourceShape()
+    {
+        // A backend whose content is a text/markdown embedded resource keeps the resource shape.
+        String backend = listProjectsResourceResponse(2, "ProjectB"); //$NON-NLS-1$
+
+        JsonObject item = firstContentItemOf(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 2, true)));
+
+        assertEquals("resource", Json.str(item, "type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the resource text is rewritten from the merged projects", //$NON-NLS-1$
+            Json.str(Json.obj(item, "resource"), "text").contains("| ProjectB |")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** A structured list_projects response whose content[0] is a text/markdown embedded resource. */
+    private static String listProjectsResourceResponse(Object id, String... projectNames)
+    {
+        JsonArray projects = new JsonArray();
+        for (String name : projectNames)
+        {
+            JsonObject project = new JsonObject();
+            project.addProperty("name", name); //$NON-NLS-1$
+            projects.add(project);
+        }
+        JsonObject structured = new JsonObject();
+        structured.add("projects", projects); //$NON-NLS-1$
+
+        JsonObject resource = new JsonObject();
+        resource.addProperty("uri", "embedded://list-projects.md"); //$NON-NLS-1$ //$NON-NLS-2$
+        resource.addProperty("mimeType", "text/markdown"); //$NON-NLS-1$ //$NON-NLS-2$
+        resource.addProperty("text", "backend table"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "resource"); //$NON-NLS-1$ //$NON-NLS-2$
+        item.add("resource", resource); //$NON-NLS-1$
+        JsonArray content = new JsonArray();
+        content.add(item);
+
+        JsonObject result = new JsonObject();
+        result.add("content", content); //$NON-NLS-1$
+        result.addProperty("isError", false); //$NON-NLS-1$
+        result.add("structuredContent", structured); //$NON-NLS-1$
+
+        JsonObject envelope = new JsonObject();
+        envelope.addProperty("jsonrpc", "2.0"); //$NON-NLS-1$ //$NON-NLS-2$
+        FanOut.writeId(envelope, id);
+        envelope.add("result", result); //$NON-NLS-1$
+        return Json.compact(envelope);
+    }
+
+    @Test
+    public void testContentOnlyBackendContributesNothing()
+    {
+        // The fan-out asks every backend for format=json, so a response WITHOUT
+        // structuredContent.projects comes from a plugin too old to support it. The proxy does NOT
+        // scrape its human Markdown as a fallback: such a backend contributes no projects (the
+        // registry reports it as an unsupported plugin version instead).
+        String legacyTable = "## Workspace Projects\n\n**Total:** 1 projects\n\n" //$NON-NLS-1$
+            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
+            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
+            + "| LegacyProj | ready | /ws/Legacy | Yes | Yes | V8ConfigurationNature |\n"; //$NON-NLS-1$
+        String legacy = legacyContentOnlyResponse(1, legacyTable);
+        String structured = listProjectsResponse(2, "ProjectA"); //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(Arrays.asList(legacy, structured), 99, true));
+
+        assertEquals(List.of("ProjectA"), projectNamesOf(parsed)); //$NON-NLS-1$
+        String content = contentTextOf(parsed);
+        assertTrue("content covers only the supported backend: " + content, //$NON-NLS-1$
+            content.contains("**Total:** 1 projects") && content.contains("| ProjectA |")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A usable list_projects response with a human content table but NO structuredContent. */
+    private static String legacyContentOnlyResponse(Object id, String text)
+    {
+        JsonObject textItem = new JsonObject();
+        textItem.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
+        textItem.addProperty("text", text); //$NON-NLS-1$
+        JsonArray content = new JsonArray();
+        content.add(textItem);
+        JsonObject result = new JsonObject();
+        result.add("content", content); //$NON-NLS-1$
+        result.addProperty("isError", false); //$NON-NLS-1$
+        JsonObject envelope = new JsonObject();
+        envelope.addProperty("jsonrpc", "2.0"); //$NON-NLS-1$ //$NON-NLS-2$
+        FanOut.writeId(envelope, id);
+        envelope.add("result", result); //$NON-NLS-1$
+        return Json.compact(envelope);
     }
 
     @Test
@@ -91,7 +305,7 @@ public class FanOutTest
 
         // Reversed input order -> reversed merged order: the merge is order-preserving,
         // not sorting - callers (the handler) are responsible for passing port order.
-        String merged = FanOut.mergeListProjects(Arrays.asList(responseB, responseA), 1);
+        String merged = FanOut.mergeListProjects(Arrays.asList(responseB, responseA), 1, true);
 
         assertEquals(List.of("ProjectB", "ProjectA"), projectNamesOf(Json.parseObject(merged))); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -101,7 +315,7 @@ public class FanOutTest
     {
         String responseA = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
 
-        String merged = FanOut.mergeListProjects(List.of(responseA), 42);
+        String merged = FanOut.mergeListProjects(List.of(responseA), 42, true);
 
         assertEquals(42, Json.parseObject(merged).get("id").getAsInt()); //$NON-NLS-1$
     }
@@ -111,7 +325,7 @@ public class FanOutTest
     {
         String responseA = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
 
-        String merged = FanOut.mergeListProjects(List.of(responseA), null);
+        String merged = FanOut.mergeListProjects(List.of(responseA), null, true);
 
         // writeId stamps JsonNull for a null request id, but the shared Gson (no
         // serializeNulls) drops an explicit JsonNull member on serialization - so the
@@ -130,7 +344,7 @@ public class FanOutTest
         String good = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
         String broken = "this is not json"; //$NON-NLS-1$
 
-        String merged = FanOut.mergeListProjects(Arrays.asList(good, broken), 1);
+        String merged = FanOut.mergeListProjects(Arrays.asList(good, broken), 1, true);
 
         assertEquals(List.of("ProjectA"), projectNamesOf(Json.parseObject(merged))); //$NON-NLS-1$
     }
@@ -141,7 +355,7 @@ public class FanOutTest
         String good = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
         String errorResponse = FanOut.jsonRpcError(-32000, "boom", 2); //$NON-NLS-1$
 
-        String merged = FanOut.mergeListProjects(Arrays.asList(good, errorResponse), 1);
+        String merged = FanOut.mergeListProjects(Arrays.asList(good, errorResponse), 1, true);
 
         assertEquals(List.of("ProjectA"), projectNamesOf(Json.parseObject(merged))); //$NON-NLS-1$
     }
@@ -157,7 +371,7 @@ public class FanOutTest
         toolError.addProperty("id", 2); //$NON-NLS-1$
         toolError.add("result", result); //$NON-NLS-1$
 
-        String merged = FanOut.mergeListProjects(Arrays.asList(good, Json.compact(toolError)), 1);
+        String merged = FanOut.mergeListProjects(Arrays.asList(good, Json.compact(toolError)), 1, true);
 
         assertEquals(List.of("ProjectA"), projectNamesOf(Json.parseObject(merged))); //$NON-NLS-1$
     }
@@ -167,19 +381,19 @@ public class FanOutTest
     @Test
     public void testZeroUsableResponsesYieldsNoBackendsError()
     {
-        assertNoBackendsError(FanOut.mergeListProjects(List.of("garbage", "also garbage"), 7), 7); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNoBackendsError(FanOut.mergeListProjects(List.of("garbage", "also garbage"), 7, true), 7); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testNullResponseListYieldsNoBackendsError()
     {
-        assertNoBackendsError(FanOut.mergeListProjects(null, 1), 1);
+        assertNoBackendsError(FanOut.mergeListProjects(null, 1, true), 1);
     }
 
     @Test
     public void testEmptyResponseListYieldsNoBackendsError()
     {
-        assertNoBackendsError(FanOut.mergeListProjects(List.of(), 1), 1);
+        assertNoBackendsError(FanOut.mergeListProjects(List.of(), 1, true), 1);
     }
 
     private static void assertNoBackendsError(String merged, int expectedId)

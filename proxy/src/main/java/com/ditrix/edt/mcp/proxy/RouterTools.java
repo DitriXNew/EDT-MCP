@@ -175,6 +175,14 @@ public final class RouterTools
         structured.addProperty(KEY_SUCCESS, true);
         structured.addProperty("proxyPort", cfg != null ? cfg.port : 0); //$NON-NLS-1$
         structured.add("backends", backends); //$NON-NLS-1$
+        // Live backends whose plugin does not support list_projects(format=json): their projects are
+        // not routable, so an operator must see them here and not just in the log.
+        JsonArray unsupportedJson = new JsonArray();
+        for (Integer port : registry.unsupportedBackends())
+        {
+            unsupportedJson.add(port);
+        }
+        structured.add("unsupportedBackends", unsupportedJson); //$NON-NLS-1$
         structured.add("duplicates", duplicatesJson); //$NON-NLS-1$
         structured.addProperty("lastRefreshMs", registry.lastRefreshMillis()); //$NON-NLS-1$
         structured.addProperty("scanRange", //$NON-NLS-1$

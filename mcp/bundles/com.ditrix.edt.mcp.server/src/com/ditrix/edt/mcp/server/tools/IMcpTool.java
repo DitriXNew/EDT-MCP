@@ -103,6 +103,24 @@ public interface IMcpTool
     }
 
     /**
+     * The response type for ONE call, given its arguments — the per-call form of
+     * {@link #getResponseType()}. The default ignores the arguments and returns the tool's fixed
+     * {@link #getResponseType()}, so a tool with a single output format needs no override.
+     * <p>
+     * Override it for a tool that lets the caller choose the output format, e.g.
+     * {@code list_projects}' {@code format} parameter: {@code md} (the default) renders the human
+     * Markdown table, {@code json} returns the machine payload in {@code structuredContent}. The
+     * dispatcher calls THIS method (never the no-arg one) when delivering a tool result.
+     *
+     * @param params the same parameters passed to {@link #execute(Map)}
+     * @return the response type for this call
+     */
+    default ResponseType getResponseType(Map<String, String> params)
+    {
+        return getResponseType();
+    }
+
+    /**
      * Whether this tool's result can carry personal data read from a live 1C
      * infobase (debug variables, evaluated expressions, suspended stack frames,
      * and — once it lands — event-log entries), as opposed to EDT/workspace

@@ -141,7 +141,28 @@ public final class ProjectRouter
         }
         return RouteResult.error("No running EDT instance serves project '" + project //$NON-NLS-1$
             + "'. Live backends: " + describeLiveBackends() //$NON-NLS-1$
+            + describeUnsupportedBackends()
             + ". If you just started EDT it may still be initializing - retry in ~30 s, or call router_refresh."); //$NON-NLS-1$
+    }
+
+    /**
+     * A clause naming the live backends whose EDT-MCP plugin does NOT support the machine project
+     * list, or {@code ""} when every live backend supports it. Such a backend's projects can never be
+     * routed, so a routing failure must say WHY instead of just reporting the project as unknown.
+     *
+     * @return the clause to append to a routing error, possibly empty
+     */
+    private String describeUnsupportedBackends()
+    {
+        List<Integer> unsupported = registry.unsupportedBackends();
+        if (unsupported.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return ". NOTE: backend(s) on port(s) " + joinPorts(unsupported) //$NON-NLS-1$
+            + " run an EDT-MCP plugin version that does not support the machine project list" //$NON-NLS-1$
+            + " (list_projects with format=json), so their projects cannot be routed - update the" //$NON-NLS-1$
+            + " plugin in those EDT instances"; //$NON-NLS-1$
     }
 
     /**

@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.proxy;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -228,7 +229,70 @@ public class BackendRegistryTest
         assertEquals(List.of("A"), BackendRegistry.parseProjectNames(raw)); //$NON-NLS-1$
     }
 
+    @Test
+    public void testParseProjectNamesRejectsAFailedPayload()
+    {
+        // A payload that declares failure is not a project list, even with a projects array -
+        // accepting it would register phantom projects for routing.
+        String raw = "{\"result\":{\"structuredContent\":{\"success\":false," //$NON-NLS-1$
+            + "\"projects\":[{\"name\":\"Phantom\"}]}}}"; //$NON-NLS-1$
+        assertTrue(BackendRegistry.parseProjectNames(raw).isEmpty());
+        assertFalse(BackendRegistry.hasStructuredProjects(raw));
+    }
+
+    @Test
+    public void testPlainTextModeStillYieldsTheMachineList()
+    {
+        // Plain-text mode (the Cursor-compatibility preference) delivers the SAME JSON payload as
+        // content text instead of structuredContent - that is still the machine contract, so such a
+        // backend must be supported and routable, not reported as an unsupported plugin version.
+        String payload = "{\"success\":true,\"projects\":[{\"name\":\"Trade\"}]}"; //$NON-NLS-1$
+        String raw = textResult(payload);
+        assertTrue(BackendRegistry.hasStructuredProjects(raw));
+        assertEquals(List.of("Trade"), BackendRegistry.parseProjectNames(raw)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMarkdownOnlyResponseIsNotAMachineList()
+    {
+        // A genuinely old plugin answers with the human table only - no Markdown scraping, so it
+        // yields nothing and is classified as unsupported by the caller.
+        String md = "| Name | State |\n|---|---|\n| Trade | ready |\n"; //$NON-NLS-1$
+        assertFalse(BackendRegistry.hasStructuredProjects(textResult(md)));
+        assertTrue(BackendRegistry.parseProjectNames(textResult(md)).isEmpty());
+    }
+
+    @Test
+    public void testToolErrorWithStaleProjectsContributesNothing()
+    {
+        // isError:true is checked FIRST, so a failed response that still carries a partial/stale
+        // projects array cannot register those names for routing.
+        String raw = "{\"result\":{\"isError\":true,\"structuredContent\":{\"success\":true," //$NON-NLS-1$
+            + "\"projects\":[{\"name\":\"Stale\"}]}}}"; //$NON-NLS-1$
+        // The response DOES carry a machine list, so only the isError-FIRST ordering keeps those
+        // names out of the routing table (the probe returns no projects for a tool error).
+        assertTrue("the response must be recognised as a tool error", //$NON-NLS-1$
+            BackendRegistry.isToolError(raw));
+        assertTrue("...even though it also carries a projects array", //$NON-NLS-1$
+            BackendRegistry.hasStructuredProjects(raw));
+    }
+
     // ---- helpers ----
+
+    /** A tools/call response whose only content is a plain text block (plain-text mode shape). */
+    private static String textResult(String text)
+    {
+        com.google.gson.JsonObject item = new com.google.gson.JsonObject();
+        item.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
+        item.addProperty("text", text); //$NON-NLS-1$
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        content.add(item);
+        com.google.gson.JsonObject result = new com.google.gson.JsonObject();
+        result.add("content", content); //$NON-NLS-1$
+        com.google.gson.JsonObject response = new com.google.gson.JsonObject();
+        response.add("result", result); //$NON-NLS-1$
+        return response.toString();
+    }
 
     private static ProxyConfig scanningConfig(int from, int to)
     {

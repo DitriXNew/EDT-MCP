@@ -6,10 +6,14 @@ Every project in the EDT workspace, with the state and metadata you need to pick
 - To tell configuration projects from extension projects, or to see a project's natures.
 
 ## Parameter details
-None - it always lists the whole workspace.
+- `format` (optional, default `md`) - the output format. `md` renders the human Markdown table; `json` returns the same rows as a machine payload in `structuredContent`, for a programmatic consumer that would otherwise have to scrape the table (this is what the multi-EDT proxy uses to build its routing).
+
+It always lists the whole workspace - there is no filter.
 
 ## What you get
-A Markdown table with one row per project: **Name**, **State** (e.g. ready / building / closed), **Path** on disk, **Open** (Yes/No), **EDT Project** (Yes if it has the 1C configuration or extension nature), and an abbreviated **Natures** list (first few, with `...+N` for the rest). A total count is shown above the table.
+With `format=md` (the default): a Markdown table with one row per project - **Name**, **State** (e.g. ready / building / closed), **Path** on disk, **Open** (Yes/No), **EDT Project** (Yes if it has the 1C configuration or extension nature), and an abbreviated **Natures** list (first few, with `...+N` for the rest). A total count is shown above the table.
+
+With `format=json`: `structuredContent` carries `{"projects": [{"name", "state", "path", "open", "edtProject", "natures"}]}` - the same rows, machine-readable. `open` is a boolean; `edtProject` is a boolean ONLY when the nature was actually determined and is **omitted** for a closed or uninspected project (mirroring the table's `-`), so a consumer can tell "not an EDT project" from "not inspected".
 
 ## Notes & gotchas
 - A project shown as still *building* is not yet safe for model reads/writes - wait for it to settle (or `clean_project`) before driving it.
