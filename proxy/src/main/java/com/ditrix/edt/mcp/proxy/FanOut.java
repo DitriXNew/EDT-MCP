@@ -108,6 +108,27 @@ public final class FanOut
     public static String mergeListProjects(List<String> backendResponses, Object requestId,
         boolean jsonFormat)
     {
+        return mergeListProjects(backendResponses, requestId, jsonFormat, true);
+    }
+
+    /**
+     * As {@link #mergeListProjects(List, Object, boolean)}, but honouring the CLIENT's
+     * structuredContent opt-out. The proxy terminates the MCP handshake itself, so a backend never
+     * sees {@code capabilities.experimental.structuredContent=false} and cannot apply its own gate -
+     * this parameter carries that decision into the merge. With {@code allowStructuredContent=false}
+     * and {@code format=json} the merged payload is delivered as a TEXT block and no
+     * {@code structuredContent} is written, exactly like a DIRECT call to a backend by such a client:
+     * the data is still returned, just in the channel the client can accept.
+     *
+     * @param backendResponses the raw backend responses
+     * @param requestId the id to write into the merged envelope
+     * @param jsonFormat whether the caller asked for {@code format=json}
+     * @param allowStructuredContent whether the client accepts {@code structuredContent}
+     * @return the merged response JSON
+     */
+    public static String mergeListProjects(List<String> backendResponses, Object requestId,
+        boolean jsonFormat, boolean allowStructuredContent)
+    {
         JsonArray mergedProjects = new JsonArray();
         JsonObject firstEnvelope = null;
 
@@ -148,10 +169,17 @@ public final class FanOut
         // embedded text/markdown resource, unless the backend runs in plain-text mode (Cursor), which
         // a direct call would also deliver as a text block.
         boolean plainText = isPlainTextEnvelope(result);
+        // A client that opted out of structuredContent gets the machine payload as TEXT (what a
+        // direct call gives it), not the structured field it declared it cannot accept.
+        boolean structuredJson = jsonFormat && allowStructuredContent;
         String markdown = capMarkdown(renderProjectsTable(mergedProjects), jsonFormat);
-        if (jsonFormat)
+        if (structuredJson)
         {
             rebuildContent(result, markdown);
+        }
+        else if (jsonFormat)
+        {
+            result.add(KEY_CONTENT, freshTextContent(capText(machinePayload(mergedProjects))));
         }
         else if (plainText)
         {
@@ -161,7 +189,7 @@ public final class FanOut
         {
             result.add(KEY_CONTENT, freshResourceContent(markdown));
         }
-        if (jsonFormat)
+        if (structuredJson)
         {
             // format=json: the caller wants the machine payload, exactly like a direct call.
             JsonObject structured = Json.obj(result, KEY_STRUCTURED_CONTENT);
@@ -177,12 +205,49 @@ public final class FanOut
         }
         else
         {
-            // format=md (the default): the human table ONLY, mirroring a direct markdown call - a
-            // markdown response carries no structuredContent.
+            // format=md (the default), or a client that opted out: no structuredContent at all -
+            // a direct markdown call carries none, and an opted-out client must not be sent one.
             result.remove(KEY_STRUCTURED_CONTENT);
         }
         writeId(firstEnvelope, requestId);
         return Json.compact(firstEnvelope);
+    }
+
+    /**
+     * Builds the machine payload a {@code format=json} call returns - the same
+     * {@code {"success": true, "projects": [...]}} object the structured path writes - for delivery
+     * as text to a client that cannot accept {@code structuredContent}.
+     *
+     * @param mergedProjects the merged projects array
+     * @return the payload as compact JSON
+     */
+    private static String machinePayload(JsonArray mergedProjects)
+    {
+        JsonObject payload = new JsonObject();
+        payload.addProperty(KEY_SUCCESS, true);
+        payload.add(KEY_PROJECTS, mergedProjects);
+        return Json.compact(payload);
+    }
+
+    /**
+     * Caps a text payload to {@link #MAX_CONTENT_CHARS} the way the plugin's own size guard does:
+     * a hard cut plus a truncation notice. Applied to the opted-out JSON text so the proxy never
+     * returns a bigger content channel than a direct call would. Like the plugin, a cut that fires
+     * leaves the text no longer parseable as JSON - the notice says so, and the alternative
+     * (an uncapped response) is what the guard exists to prevent.
+     *
+     * @param text the payload text
+     * @return the capped (or unchanged) text
+     */
+    private static String capText(String text)
+    {
+        if (text == null || text.length() <= MAX_CONTENT_CHARS)
+        {
+            return text;
+        }
+        String notice = "\n\n... [truncated: " + text.length() + " chars, limit " //$NON-NLS-1$ //$NON-NLS-2$
+            + MAX_CONTENT_CHARS + "; narrow the request to get a complete payload]"; //$NON-NLS-1$
+        return text.substring(0, Math.max(0, MAX_CONTENT_CHARS - notice.length())) + notice;
     }
 
     /**

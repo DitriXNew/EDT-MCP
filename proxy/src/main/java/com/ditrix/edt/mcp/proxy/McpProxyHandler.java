@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.sun.net.httpserver.HttpExchange;
@@ -296,7 +297,9 @@ public final class McpProxyHandler implements HttpHandler
         result.add(KEY_CAPABILITIES, capabilities);
         result.add(KEY_SERVER_INFO, serverInfo);
 
-        String sessionId = sessions.create();
+        // The session remembers ITS client's structuredContent capability: the proxy terminates the
+        // handshake, so no backend ever sees it, and several clients can share one proxy.
+        String sessionId = sessions.create(readStructuredContentCapability(requestJson));
         if (sessionId == null)
         {
             sendMcpResponse(exchange, 200, buildJsonRpcError(ERROR_INTERNAL,
@@ -377,7 +380,9 @@ public final class McpProxyHandler implements HttpHandler
                 forwardToBackend(exchange, route.backend, rawBody, isToolCall, requestId);
                 break;
             case FAN_OUT_LIST_PROJECTS:
-                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson));
+                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson),
+                    sessions.allowsStructuredContent(
+                        exchange.getRequestHeaders().getFirst(HEADER_SESSION_ID)));
                 break;
             case PROXY_SELF:
                 handleProxySelf(exchange, requestJson, requestId);
@@ -435,6 +440,30 @@ public final class McpProxyHandler implements HttpHandler
      * @param requestJson the parsed JSON-RPC request
      * @return {@code true} when the caller passed {@code format=json}
      */
+    /**
+     * Whether the client's {@code initialize} allows {@code structuredContent}. Only an explicit
+     * {@code capabilities.experimental.structuredContent == false} opts out - an absent block, an empty
+     * one or a non-boolean value keeps the permissive default, exactly like the plugin.
+     *
+     * @param requestJson the parsed initialize request
+     * @return {@code false} only when the client explicitly opted out
+     */
+    private static boolean readStructuredContentCapability(JsonObject requestJson)
+    {
+        JsonObject experimental =
+            Json.obj(Json.obj(Json.obj(requestJson, KEY_PARAMS), KEY_CAPABILITIES), "experimental"); //$NON-NLS-1$
+        if (experimental == null)
+        {
+            return true;
+        }
+        JsonElement flag = experimental.get("structuredContent"); //$NON-NLS-1$
+        if (flag == null || !flag.isJsonPrimitive() || !flag.getAsJsonPrimitive().isBoolean())
+        {
+            return true;
+        }
+        return flag.getAsBoolean();
+    }
+
     private static boolean wantsJsonFormat(JsonObject requestJson)
     {
         JsonObject arguments = Json.obj(Json.obj(requestJson, KEY_PARAMS), KEY_ARGUMENTS);
@@ -446,10 +475,12 @@ public final class McpProxyHandler implements HttpHandler
      * Calls {@code list_projects} on every live backend and merges the results via
      * {@link FanOut#mergeListProjects}. A backend that fails the call simply contributes no
      * response (mirroring the registry's own defensive {@code list_projects} handling); the
-     * registry is refreshed once when at least one backend failed.
+     * registry is refreshed once when at least one backend failed. The merge is told whether the
+     * CALLING SESSION's client accepts {@code structuredContent}: the proxy answered that handshake
+     * itself, so the backends never saw the capability and the gate has to be applied here.
      */
-    private void handleFanOut(HttpExchange exchange, Object requestId, boolean jsonFormat)
-        throws IOException
+    private void handleFanOut(HttpExchange exchange, Object requestId, boolean jsonFormat,
+        boolean allowStructuredContent) throws IOException
     {
         List<Backend> live = registry.live();
         List<String> responses = new ArrayList<>(live.size());
@@ -482,7 +513,7 @@ public final class McpProxyHandler implements HttpHandler
             registry.refresh();
         }
         sendMcpResponse(exchange, 200,
-            FanOut.mergeListProjects(responses, requestId, jsonFormat), null);
+            FanOut.mergeListProjects(responses, requestId, jsonFormat, allowStructuredContent), null);
     }
 
     /** Answers {@code router_status} / {@code router_refresh} itself via {@link RouterTools}. */

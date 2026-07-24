@@ -173,4 +173,40 @@ public class SessionManagerTest
         assertNotNull("create must succeed again once a slot is freed", afterClose);
         assertEquals(SessionManager.MAX_SESSIONS, sessions.activeCount());
     }
+
+    /**
+     * The structuredContent capability belongs to the SESSION: several clients share one proxy, so
+     * one client's opt-out must not change what another client receives.
+     */
+    @Test
+    public void testStructuredContentCapabilityIsPerSession()
+    {
+        SessionManager sessions = new SessionManager();
+
+        String optedOut = sessions.create(false);
+        String normal = sessions.create(true);
+
+        assertFalse("the opted-out session must report its opt-out", //$NON-NLS-1$
+            sessions.allowsStructuredContent(optedOut));
+        assertTrue("another client's session must be unaffected", //$NON-NLS-1$
+            sessions.allowsStructuredContent(normal));
+    }
+
+    /**
+     * Everything that is not an explicit opt-out keeps the permissive default - including a session
+     * created by the capability-less {@link SessionManager#create()}, an unknown id (a call whose
+     * session was already closed) and a missing header.
+     */
+    @Test
+    public void testUnknownAndDefaultSessionsAllowStructuredContent()
+    {
+        SessionManager sessions = new SessionManager();
+
+        assertTrue("create() must default to allowing structuredContent", //$NON-NLS-1$
+            sessions.allowsStructuredContent(sessions.create()));
+        assertTrue("an unknown session must not suppress the field", //$NON-NLS-1$
+            sessions.allowsStructuredContent("no-such-session")); //$NON-NLS-1$
+        assertTrue("a missing session header must not suppress the field", //$NON-NLS-1$
+            sessions.allowsStructuredContent(null));
+    }
 }

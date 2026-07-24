@@ -6,7 +6,7 @@
 
 package com.ditrix.edt.mcp.proxy;
 
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -19,7 +19,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * This mirrors the plugin's transport, where the session id is minted by
  * {@code McpHttpHandler} on initialize.</p>
  *
- * <p>Thread-safe: backed by a concurrent set, so transport threads can create, validate and
+ * <p>Each session also remembers whether ITS client accepts {@code structuredContent}. The proxy
+ * answers {@code initialize} itself, so the backends never see that capability and cannot apply
+ * their own gate - and because several clients can be connected to one proxy at once, the answer
+ * must be per session rather than per server.</p>
+ *
+ * <p>Thread-safe: backed by a concurrent map, so transport threads can create, validate and
  * close sessions concurrently.</p>
  *
  * <p><b>Session cap (issue #253 hardening).</b> {@link #create()} refuses to grow the set past
@@ -34,7 +39,8 @@ public final class SessionManager
     /** Hard cap on concurrently open sessions; {@link #create()} returns {@code null} past it. */
     static final int MAX_SESSIONS = 10_000;
 
-    private final Set<String> sessions = ConcurrentHashMap.newKeySet();
+    /** Session id -> whether that client accepts {@code structuredContent}. */
+    private final Map<String, Boolean> sessions = new ConcurrentHashMap<>();
 
     /**
      * Creates a new client session, unless the proxy already holds {@value #MAX_SESSIONS} open
@@ -45,13 +51,43 @@ public final class SessionManager
      */
     public String create()
     {
+        return create(true);
+    }
+
+    /**
+     * Creates a new client session that remembers the client's {@code structuredContent}
+     * capability, unless the proxy already holds {@value #MAX_SESSIONS} open sessions.
+     *
+     * @param allowsStructuredContent whether this client accepts {@code structuredContent}
+     * @return the freshly issued random UUID session id, or {@code null} when the session cap
+     *         ({@value #MAX_SESSIONS}) has been reached
+     */
+    public String create(boolean allowsStructuredContent)
+    {
         if (sessions.size() >= MAX_SESSIONS)
         {
             return null;
         }
         String sessionId = UUID.randomUUID().toString();
-        sessions.add(sessionId);
+        sessions.put(sessionId, Boolean.valueOf(allowsStructuredContent));
         return sessionId;
+    }
+
+    /**
+     * Whether the client behind a session accepts {@code structuredContent}. An unknown or
+     * {@code null} session answers {@code true}: only an EXPLICIT opt-out at {@code initialize}
+     * suppresses the field, so anything else keeps the long-standing permissive behaviour.
+     *
+     * @param sessionId the session id from the {@code Mcp-Session-Id} header (may be {@code null})
+     * @return {@code false} only when that session's client explicitly opted out
+     */
+    public boolean allowsStructuredContent(String sessionId)
+    {
+        if (sessionId == null)
+        {
+            return true;
+        }
+        return !Boolean.FALSE.equals(sessions.get(sessionId));
     }
 
     /**
@@ -62,7 +98,7 @@ public final class SessionManager
      */
     public boolean isValid(String sessionId)
     {
-        return sessionId != null && sessions.contains(sessionId);
+        return sessionId != null && sessions.containsKey(sessionId);
     }
 
     /**

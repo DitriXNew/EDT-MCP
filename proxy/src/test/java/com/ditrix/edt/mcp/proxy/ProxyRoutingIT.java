@@ -195,6 +195,46 @@ public class ProxyRoutingIT
     }
 
     /**
+     * A client that declares it cannot accept {@code structuredContent} must not be sent one by the
+     * fan-out either. The proxy answers {@code initialize} ITSELF, so the backends never see that
+     * capability and cannot apply their own gate - the proxy has to remember it and mirror what a
+     * DIRECT backend call would return to that client: the merged payload as text.
+     */
+    @Test
+    public void testStructuredContentOptOutIsHonouredByTheFanOut() throws Exception
+    {
+        JsonObject experimental = new JsonObject();
+        experimental.addProperty("structuredContent", false); //$NON-NLS-1$
+        JsonObject capabilities = new JsonObject();
+        capabilities.add("experimental", experimental); //$NON-NLS-1$
+        McpTestClient optedOut = new McpTestClient(proxy.port());
+        optedOut.handshake(capabilities);
+
+        JsonObject jsonArgs = new JsonObject();
+        jsonArgs.addProperty("format", "json"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject response = optedOut.callTool(TOOL_LIST_PROJECTS, jsonArgs);
+
+        assertFalse("the opted-out call must still succeed: " + response, isToolError(response)); //$NON-NLS-1$
+        JsonObject result = response.getAsJsonObject("result"); //$NON-NLS-1$
+        assertFalse("an opted-out client must not receive structuredContent: " + result, //$NON-NLS-1$
+            result.has("structuredContent")); //$NON-NLS-1$
+        // The data must survive the downgrade: both backends' projects, delivered as text.
+        JsonObject payload = Json.parseObject(
+            result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> names = new ArrayList<>();
+        for (JsonElement project : payload.getAsJsonArray("projects")) //$NON-NLS-1$
+        {
+            names.add(project.getAsJsonObject().get("name").getAsString()); //$NON-NLS-1$
+        }
+        assertEquals("the text payload must carry every backend's projects", //$NON-NLS-1$
+            List.of(PROJECT_A, PROJECT_B), names);
+
+        // No regression for everyone else: a client that did NOT opt out still gets the field.
+        assertTrue("a default client must still receive structuredContent", //$NON-NLS-1$
+            structuredContent(client.callTool(TOOL_LIST_PROJECTS, jsonArgs)).has("projects")); //$NON-NLS-1$
+    }
+
+    /**
      * {@code tools/list} through the proxy = the first backend's tools (the fake serves two)
      * with the two {@code router_*} descriptors injected on top.
      */
@@ -504,12 +544,24 @@ public class ProxyRoutingIT
          */
         JsonObject handshake() throws IOException, InterruptedException
         {
+            return handshake(new JsonObject());
+        }
+
+        /**
+         * As {@link #handshake()}, but declaring the given client capabilities - the block a real
+         * client uses to opt out of {@code structuredContent}.
+         *
+         * @param capabilities the {@code capabilities} object to send
+         * @return the parsed initialize JSON-RPC response
+         */
+        JsonObject handshake(JsonObject capabilities) throws IOException, InterruptedException
+        {
             JsonObject clientInfo = new JsonObject();
             clientInfo.addProperty("name", "edt-mcp-proxy-it"); //$NON-NLS-1$ //$NON-NLS-2$
             clientInfo.addProperty("version", "0.0.1"); //$NON-NLS-1$ //$NON-NLS-2$
             JsonObject params = new JsonObject();
             params.addProperty("protocolVersion", PROTOCOL_VERSION); //$NON-NLS-1$
-            params.add("capabilities", new JsonObject()); //$NON-NLS-1$
+            params.add("capabilities", capabilities); //$NON-NLS-1$
             params.add("clientInfo", clientInfo); //$NON-NLS-1$
             HttpResponse<String> response = post(jsonRpcRequest("initialize", params).toString()); //$NON-NLS-1$
             assertEquals("initialize must succeed", 200, response.statusCode()); //$NON-NLS-1$

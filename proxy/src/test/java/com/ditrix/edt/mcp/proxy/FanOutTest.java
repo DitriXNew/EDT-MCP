@@ -164,6 +164,59 @@ public class FanOutTest
     }
 
     @Test
+    public void testOptedOutClientGetsTheJsonPayloadAsTextNotStructuredContent()
+    {
+        // The proxy answers the handshake itself, so a backend never sees the client's opt-out and
+        // cannot apply its own gate. A client that declared it cannot accept structuredContent must
+        // get exactly what a DIRECT backend gives it: the machine payload as TEXT, no structured field.
+        String backend = listProjectsResponse(1, "ProjectA", "ProjectB"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, true, false));
+
+        assertNull("an opted-out client must not be sent structuredContent", //$NON-NLS-1$
+            Json.obj(Json.obj(parsed, "result"), "structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject item = firstContentItemOf(parsed);
+        assertEquals("the payload must arrive as a plain text block", //$NON-NLS-1$
+            "text", item.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        // The DATA must survive the downgrade - the text is the same payload, just in another channel.
+        JsonObject payload = Json.parseObject(item.get("text").getAsString()); //$NON-NLS-1$
+        assertTrue("the text payload must keep the success flag", //$NON-NLS-1$
+            payload.get("success").getAsBoolean()); //$NON-NLS-1$
+        JsonArray projects = payload.getAsJsonArray("projects"); //$NON-NLS-1$
+        assertEquals(2, projects.size());
+        assertEquals("ProjectA", //$NON-NLS-1$
+            projects.get(0).getAsJsonObject().get("name").getAsString()); //$NON-NLS-1$
+        assertEquals("ProjectB", //$NON-NLS-1$
+            projects.get(1).getAsJsonObject().get("name").getAsString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOptedOutClientAskingForMdStillGetsTheTable()
+    {
+        // The opt-out changes nothing for a markdown caller: that path never carried
+        // structuredContent anyway.
+        String backend = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, false, false));
+
+        assertNull("md format must not carry structuredContent", //$NON-NLS-1$
+            Json.obj(Json.obj(parsed, "result"), "structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("md format must still render the table", //$NON-NLS-1$
+            contentTextOf(parsed).contains("| ProjectA |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheThreeArgMergeKeepsStructuredContentForEveryOtherClient()
+    {
+        // The no-regression guarantee: only an EXPLICIT opt-out suppresses the field, so the
+        // capability-less entry point must behave exactly as before.
+        String backend = listProjectsResponse(1, "ProjectA"); //$NON-NLS-1$
+
+        assertEquals(Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, true, true)),
+            Json.parseObject(FanOut.mergeListProjects(List.of(backend), 1, true)));
+    }
+
+    @Test
     public void testDefaultMdFormatReturnsNoStructuredContent()
     {
         // format=md (the default) must look like a DIRECT markdown call: the human table only, with
