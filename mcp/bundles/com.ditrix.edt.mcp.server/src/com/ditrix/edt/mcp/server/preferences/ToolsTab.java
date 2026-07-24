@@ -682,7 +682,12 @@ public class ToolsTab
      */
     public void performDefaults()
     {
+        // Restore the DEFAULT disabled set, not an empty one: tools that ship disabled (the raw
+        // git command tool) must stay disabled after "Restore Defaults" - clearing the set would
+        // silently enable them.
         disabledTools.clear();
+        disabledTools.addAll(
+            ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS));
         destructiveAllowedTools.clear();
         refreshCheckStates();
         selectMatchingPreset();

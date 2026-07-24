@@ -15,12 +15,17 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 import org.eclipse.jgit.lib.Repository;
@@ -125,7 +130,7 @@ public class GitTool implements IMcpTool
      * MCP call history, which records the raw request body.
      */
     private static final Pattern CREDENTIAL_URL =
-        Pattern.compile("[a-zA-Z][a-zA-Z0-9+.\\-]*://[^/?#@\\s]*@"); //$NON-NLS-1$
+        Pattern.compile("[a-zA-Z][a-zA-Z0-9+.\\-]*+://[^/?#@\\s]*+@"); //$NON-NLS-1$
 
     /**
      * The sentinel "signing program": an ABSOLUTE path that cannot exist, so git fails to sign
@@ -134,6 +139,15 @@ public class GitTool implements IMcpTool
      */
     private static final String SIGNING_DISABLED_PROGRAM =
         "/nonexistent/edt-mcp-signing-disabled"; //$NON-NLS-1$
+
+    /** The {@code ://} that separates a URL scheme from its authority. */
+    private static final String SCHEME_SEPARATOR = "://"; //$NON-NLS-1$
+
+    /** Seconds the {@code git config --get core.sshCommand} probe may take before it is killed. */
+    private static final int CONFIG_PROBE_TIMEOUT_SECONDS = 5;
+
+    /** Milliseconds to wait for the probe's drain thread after the process itself has ended. */
+    private static final long DRAIN_JOIN_MILLIS = 1000;
 
     /** Subcommands that can turn a token into a REMOTE, i.e. where a credential URL is refused. */
     private static final Set<String> REMOTE_SUBCOMMANDS =
@@ -267,6 +281,11 @@ public class GitTool implements IMcpTool
             }
             Repository repo = resolution.repository();
             File workTree = repo.getWorkTree(); // NoWorkTreeException for a bare repo -> caught below
+            String outsideOperand = outsideRepositoryOperand(argv, workTree);
+            if (outsideOperand != null)
+            {
+                return ToolResult.error(outsideOperand).toJson();
+            }
             String output = runGit(argv, workTree);
             // A command that rewrites the working tree changed files behind Eclipse's back: refresh the
             // project so the workspace - and the EDT model built on it - sees them. Refreshed on ANY
@@ -555,7 +574,7 @@ public class GitTool implements IMcpTool
         ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
         builder.directory(workTree);
         builder.redirectErrorStream(true);
-        hardenEnv(builder.environment());
+        hardenEnv(builder.environment(), workTree);
 
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
         Process process = null;
@@ -619,12 +638,345 @@ public class GitTool implements IMcpTool
         }
     }
 
+    /**
+     * Returns the ssh command the repository's configuration asks for, or {@code null} when none is
+     * configured. Read with a plain {@code git config --get} in the work tree, so it honours the same
+     * repo / global / system precedence git itself would apply.
+     * <p>
+     * Only consulted to decide whether we may install our own non-interactive ssh command - never
+     * executed here.
+     *
+     * @param workTree the repository work tree to read the configuration in
+     * @return the configured command, or {@code null} when unset, empty or unreadable
+     */
+    private static String configuredSshCommand(File workTree)
+    {
+        Process process = null;
+        try
+        {
+            ProcessBuilder probe =
+                new ProcessBuilder("git", "config", "--get", "core.sshCommand"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            probe.directory(workTree);
+            probe.redirectErrorStream(true);
+            scrubInheritedGitEnv(probe.environment());
+            process = probe.start();
+            // Drain CONCURRENTLY with the timed wait. Reading first would hang forever on a git that
+            // never returns (a config include on a stalled network path); waiting first would hang
+            // git itself once an oversized value fills the pipe - and that false timeout would make
+            // us install our own ssh command over the user's.
+            AtomicReference<String> firstLine = new AtomicReference<>();
+            Process reading = process;
+            Thread drain = new Thread(() -> {
+                try (BufferedReader reader =
+                    new BufferedReader(new InputStreamReader(reading.getInputStream(), StandardCharsets.UTF_8)))
+                {
+                    firstLine.set(reader.readLine());
+                    while (reader.readLine() != null)
+                    {
+                        // keep draining so git can finish writing
+                    }
+                }
+                catch (IOException e) // NOSONAR the probe result is best-effort by design
+                {
+                    firstLine.set(null);
+                }
+            }, "git-config-probe"); //$NON-NLS-1$
+            drain.setDaemon(true);
+            drain.start();
+            if (!process.waitFor(CONFIG_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            {
+                killTree(process); // closes the pipe, so the drain ends on its own
+                joinDrain(drain);
+                return null;
+            }
+            if (!joinDrain(drain))
+            {
+                // Still stuck on the pipe: there is no value here we could trust.
+                return null;
+            }
+            String value = firstLine.get();
+            if (process.exitValue() != 0 || value == null || value.isBlank())
+            {
+                return null;
+            }
+            return value.trim();
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        catch (IOException | RuntimeException e) // NOSONAR the probe must never fail the git call
+        {
+            Activator.logError("git: reading core.sshCommand failed", e); //$NON-NLS-1$
+            return null;
+        }
+        finally
+        {
+            if (process != null && process.isAlive())
+            {
+                killTree(process);
+            }
+        }
+    }
+
+    /**
+     * Waits briefly for the probe's drain thread to finish.
+     *
+     * @param drain the drain thread
+     * @return {@code true} when it finished, so its captured value is complete and visible here
+     */
+    private static boolean joinDrain(Thread drain)
+    {
+        try
+        {
+            drain.join(DRAIN_JOIN_MILLIS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return !drain.isAlive();
+    }
+
+    /**
+     * Rejects a {@code diff} operand that points OUTSIDE the repository.
+     * <p>
+     * {@code --no-index} is refused by the flag guard, but git applies that filesystem-compare form
+     * IMPLICITLY when a path lies outside the work tree - so {@code git diff /etc/passwd tracked.txt}
+     * would print a file this tool does not govern.
+     * <p>
+     * Past the pathspec {@code --} every token is a path, so one that leaves the work tree is refused
+     * outright. Before it, a token is judged by what it could actually READ - refused only when an
+     * EXISTING file or directory outside the work tree sits at that path - so a revision
+     * ({@code HEAD~1}, {@code main..feature}) and a {@code -S}/{@code -G} search string such as
+     * {@code ../needle} pass untouched.
+     * <p>
+     * Two limits are deliberate. A separated option VALUE that happens to name a real outside file
+     * ({@code -S ../existing}) is refused: telling a value from an operand would mean reimplementing
+     * git's per-option arity, and the error says how to proceed. And an existence check is not
+     * atomic with git's open, so a path created or re-pointed in between is not covered - a strict
+     * guarantee would need OS-level containment, which is out of scope for a tool the operator
+     * enables deliberately.
+     *
+     * @param argv the validated argument vector ({@code argv[0]} is git, {@code argv[1]} the subcommand)
+     * @param workTree the repository work tree
+     * @return an actionable error message, or {@code null} when every operand stays inside
+     */
+    private static String outsideRepositoryOperand(List<String> argv, File workTree)
+    {
+        if (argv.size() < 2 || !"diff".equals(argv.get(1))) //$NON-NLS-1$
+        {
+            return null;
+        }
+        Path root;
+        try
+        {
+            root = workTree.toPath().toRealPath();
+        }
+        catch (IOException e)
+        {
+            root = workTree.toPath().toAbsolutePath().normalize();
+        }
+        boolean afterPathspecSeparator = false;
+        for (int i = 2; i < argv.size(); i++)
+        {
+            String token = argv.get(i);
+            if (!afterPathspecSeparator)
+            {
+                if ("--".equals(token)) //$NON-NLS-1$
+                {
+                    afterPathspecSeparator = true;
+                    continue;
+                }
+                if (token.startsWith("-")) //$NON-NLS-1$
+                {
+                    continue;
+                }
+            }
+            if (!escapesRepository(token, root, afterPathspecSeparator))
+            {
+                continue;
+            }
+            return "'" + token + "' points outside the repository '" + root //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. git diff compares files on disk when a path lies outside the work tree, which " //$NON-NLS-1$
+                + "would read a file this tool does not govern - pass a path inside the project."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Whether a {@code diff} operand resolves outside {@code root}.
+     *
+     * @param token the operand to test
+     * @param root the canonical repository work tree
+     * @param lexicalToo whether a path that leaves the repository is refused even when nothing
+     *            exists there yet - true past the pathspec {@code --}, where every token IS a path
+     * @return {@code true} when the token is a path that leaves the repository
+     */
+    private static boolean escapesRepository(String token, Path root, boolean lexicalToo)
+    {
+        if (token.isEmpty())
+        {
+            return false;
+        }
+        char first = token.charAt(0);
+        boolean rootRelative = first == '/' || first == '\\';
+        try
+        {
+            Path candidate = Paths.get(token);
+            if (rootRelative && !candidate.isAbsolute())
+            {
+                // Windows: '/etc/passwd' is not absolute for Java, but git resolves it against a root
+                // of its own (the MSYS prefix) - a location outside this repository either way, and
+                // one this JVM cannot test for existence.
+                return true;
+            }
+            Path resolved = candidate.isAbsolute() ? candidate : root.resolve(candidate);
+            if (lexicalToo && !resolved.normalize().startsWith(root))
+            {
+                // After the pathspec '--' every token IS a path, so a path that leaves the repository
+                // is refused even when nothing is there yet - closing the window in which the file
+                // could appear between this check and git opening it.
+                return true;
+            }
+            if (!Files.exists(resolved))
+            {
+                // Nothing to read: git's implicit --no-index would fail on its own, so this is a
+                // revision or a search string, not an escape.
+                return false;
+            }
+            // toRealPath, not normalize: an in-repository symlink or junction ('external' -> /etc)
+            // is lexically inside the root while its content lives outside it.
+            return !resolved.toRealPath().startsWith(root);
+        }
+        catch (InvalidPathException e)
+        {
+            // Not a filesystem path at all (a revision such as 'main..feature'): nothing to escape.
+            return rootRelative;
+        }
+        catch (IOException e)
+        {
+            // The path exists but cannot be canonicalized - refuse rather than guess.
+            return true;
+        }
+    }
+
+    /**
+     * Replaces the {@code userinfo@} of every URL in git's own output with {@code ***@}.
+     * <p>
+     * A repository can already hold a credential-bearing remote ({@code https://<token>@host/repo}),
+     * and {@code remote -v} / {@code push} print it verbatim - handing an agent a token that was
+     * merely stored on disk. The whole userinfo is redacted, not just a password: a bare
+     * {@code https://ghp_xxx@host} carries the secret AS the user name. A plain ssh user name
+     * ({@code ssh://git@host}) is redacted too - over-redacting a public name is the safe side of
+     * that trade, and the host and path stay readable.
+     *
+     * Scanned by hand rather than with {@link #CREDENTIAL_URL}: a regex is restarted at every
+     * position, so output that merely LOOKS like a scheme ("aaa...a:@") costs O(n^2) - measured at
+     * 85 s for 100k characters. This walk visits each character a bounded number of times.
+     *
+     * @param text git's captured output (may be {@code null})
+     * @return the output with every URL userinfo replaced
+     */
+    static String redactCredentialUrls(String text)
+    {
+        if (text == null || text.indexOf('@') < 0)
+        {
+            return text;
+        }
+        StringBuilder redacted = null;
+        int copiedUpTo = 0;
+        int marker = text.indexOf(SCHEME_SEPARATOR);
+        while (marker >= 0)
+        {
+            int userinfoEnd = userinfoEnd(text, marker + SCHEME_SEPARATOR.length());
+            if (userinfoEnd < 0 || !hasSchemeBefore(text, marker))
+            {
+                marker = text.indexOf(SCHEME_SEPARATOR, marker + SCHEME_SEPARATOR.length());
+                continue;
+            }
+            if (redacted == null)
+            {
+                redacted = new StringBuilder(text.length());
+            }
+            redacted.append(text, copiedUpTo, marker + SCHEME_SEPARATOR.length()).append("***@"); //$NON-NLS-1$
+            copiedUpTo = userinfoEnd + 1;
+            marker = text.indexOf(SCHEME_SEPARATOR, copiedUpTo);
+        }
+        if (redacted == null)
+        {
+            return text;
+        }
+        return redacted.append(text, copiedUpTo, text.length()).toString();
+    }
+
+    /**
+     * ASCII whitespace, exactly what a regex {@code \s} matches without {@code UNICODE_CHARACTER_CLASS}.
+     * Deliberately NOT {@link Character#isWhitespace}: a Unicode space inside a URL's userinfo must not
+     * end the scan, or {@code https://secret<U+2003>name@host} would keep its secret.
+     *
+     * @param c the character to test
+     * @return {@code true} for space, tab, newline, vertical tab, form feed and carriage return
+     */
+    private static boolean isAsciiWhitespace(char c)
+    {
+        return c == ' ' || c == '\t' || c == '\n' || c == 0x0B || c == '\f' || c == '\r';
+    }
+
+    /**
+     * Whether the characters immediately before {@code marker} form a URL scheme.
+     *
+     * @param text the output being scanned
+     * @param marker the index of {@value #SCHEME_SEPARATOR}
+     * @return {@code true} when a scheme run ending at {@code marker} contains a letter
+     */
+    private static boolean hasSchemeBefore(String text, int marker)
+    {
+        boolean sawLetter = false;
+        for (int i = marker - 1; i >= 0; i--)
+        {
+            char c = text.charAt(i);
+            if (!(Character.isLetterOrDigit(c) && c < 128) && c != '+' && c != '.' && c != '-')
+            {
+                break;
+            }
+            sawLetter = sawLetter || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        }
+        return sawLetter;
+    }
+
+    /**
+     * Finds the {@code @} that closes a URL's userinfo.
+     *
+     * @param text the output being scanned
+     * @param from the index just after {@value #SCHEME_SEPARATOR}
+     * @return the index of the closing {@code @}, or {@code -1} when this URL carries no userinfo
+     */
+    private static int userinfoEnd(String text, int from)
+    {
+        for (int i = from; i < text.length(); i++)
+        {
+            char c = text.charAt(i);
+            if (c == '@')
+            {
+                return i;
+            }
+            if (c == '/' || c == '?' || c == '#' || isAsciiWhitespace(c))
+            {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
     /** @return a thread-safe snapshot of the drained output so far. */
     private static String snapshot(StringBuilder out)
     {
         synchronized (out)
         {
-            return out.toString();
+            return redactCredentialUrls(out.toString());
         }
     }
 
@@ -773,6 +1125,13 @@ public class GitTool implements IMcpTool
         command.add(argv.get(0));
         command.add("-c"); //$NON-NLS-1$
         command.add("core.askPass="); //$NON-NLS-1$
+        // GIT_TERMINAL_PROMPT / core.askPass cover git's own prompts, NOT a credential HELPER: a
+        // GUI-capable one (Git Credential Manager) pops its own window when no credential is cached.
+        // credential.interactive=false is the documented knob that keeps such a helper silent, so a
+        // missing credential fails fast instead of blocking an unattended call on a dialog. Helpers
+        // that do not know the key ignore it, so a cached credential still works as before.
+        command.add("-c"); //$NON-NLS-1$
+        command.add("credential.interactive=false"); //$NON-NLS-1$
         // A configured commit.gpgSign / tag.gpgSign would launch gpg-agent's pinentry - a GUI prompt
         // none of the other settings cover. Signing is work an unattended agent cannot complete, so it
         // is off for this call; the caller cannot force it back on (-S / --gpg-sign are blocked).
@@ -785,10 +1144,6 @@ public class GitTool implements IMcpTool
         // tag.forceSignAnnotated=true signs an annotated tag even with tag.gpgSign=false.
         command.add("-c"); //$NON-NLS-1$
         command.add("tag.forceSignAnnotated=false"); //$NON-NLS-1$
-        // GIT_SSH_COMMAND below forces OpenSSH; a configured ssh.variant (e.g. plink) would make git
-        // pass Plink-style arguments to it, breaking every ssh remote - pin the variant to match.
-        command.add("-c"); //$NON-NLS-1$
-        command.add("ssh.variant=ssh"); //$NON-NLS-1$
         // THE signing guarantee: with no usable gpg program, any signing request - however it was
         // spelled, and whatever the repository config says - fails immediately with a git error
         // instead of opening the gpg-agent pinentry dialog an unattended session cannot answer.
@@ -808,7 +1163,7 @@ public class GitTool implements IMcpTool
         return command;
     }
 
-    private static void hardenEnv(Map<String, String> env)
+    private static void hardenEnv(Map<String, String> env, File workTree)
     {
         env.put("GIT_TERMINAL_PROMPT", "0"); // a missing credential fails fast, never a hanging prompt //$NON-NLS-1$ //$NON-NLS-2$
         env.put("GIT_PAGER", "cat"); // never invoke a pager (would block) //$NON-NLS-1$ //$NON-NLS-2$
@@ -819,13 +1174,37 @@ public class GitTool implements IMcpTool
         // A command that needs an editor (e.g. 'commit' with no -m) fails fast instead of hanging on one.
         env.put("GIT_EDITOR", "false"); //$NON-NLS-1$ //$NON-NLS-2$
         env.put("GIT_SEQUENCE_EDITOR", "false"); //$NON-NLS-1$ //$NON-NLS-2$
+        // OpenSSH >= 8.4: never fall back to a GUI askpass, whatever ssh command ends up running.
+        env.put("SSH_ASKPASS_REQUIRE", "never"); //$NON-NLS-1$ //$NON-NLS-2$
         // GIT_TERMINAL_PROMPT=0 silences git's OWN prompt but not the ssh child: OpenSSH defaults to
         // BatchMode=no, so a key with a passphrase (or an unknown host) would block a push/fetch on an
         // interactive prompt. Force ssh non-interactive too - unattended safety, the project rule.
-        env.put("GIT_SSH_COMMAND", "ssh -oBatchMode=yes"); //$NON-NLS-1$ //$NON-NLS-2$
-        // An inherited GIT_SSH_VARIANT (e.g. 'plink') would make git format the arguments for another
-        // client than the OpenSSH one forced above.
-        env.put("GIT_SSH_VARIANT", "ssh"); //$NON-NLS-1$ //$NON-NLS-2$
+        // BUT only when the user has NOT configured an ssh command: GIT_SSH_COMMAND overrides
+        // core.sshCommand, so setting it unconditionally would discard the custom identity / port /
+        // wrapper that makes the remote work in the user's own terminal. When they configured one we
+        // leave it alone and rely on the askpass settings above plus the call timeout.
+        if (env.get("GIT_SSH_COMMAND") == null && configuredSshCommand(workTree) == null) //$NON-NLS-1$
+        {
+            env.put("GIT_SSH_COMMAND", "ssh -oBatchMode=yes"); //$NON-NLS-1$ //$NON-NLS-2$
+            // An inherited GIT_SSH_VARIANT (e.g. 'plink') would make git format the arguments for
+            // another client than the OpenSSH one forced just above.
+            env.put("GIT_SSH_VARIANT", "ssh"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        scrubInheritedGitEnv(env);
+    }
+
+    /**
+     * Removes the inherited variables that would redirect git to another repository, feed it inline
+     * configuration, or open an interactive credential dialog.
+     * <p>
+     * Applied to the {@link #configuredSshCommand} probe as well as the real call: the probe decides
+     * whether an ssh command is configured, so it has to read the configuration the real call will
+     * actually use - a {@code GIT_CONFIG_*} the real call drops must not steer that answer.
+     *
+     * @param env the process environment to scrub in place
+     */
+    private static void scrubInheritedGitEnv(Map<String, String> env)
+    {
         for (String redirect : new String[]{
             "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_NAMESPACE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXEC_PATH", "GIT_SHALLOW_FILE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$

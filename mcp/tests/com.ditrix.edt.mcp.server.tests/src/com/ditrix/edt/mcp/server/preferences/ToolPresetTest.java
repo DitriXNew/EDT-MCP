@@ -214,4 +214,28 @@ public class ToolPresetTest
             }
         }
     }
+
+    /**
+     * A tool that ships DISABLED must stay disabled when a preset is applied: picking "Analysis Only"
+     * means "less than the default", so it cannot be the act that switches on the raw git command
+     * tool. {@link ToolPreset#ALL_TOOLS} is the single deliberate exception - its name says so.
+     */
+    @Test
+    public void testOnlyAllToolsPresetEnablesTheDefaultOffTools()
+    {
+        Set<String> defaultOff =
+            ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        assertFalse("this test is meaningless without a default-off tool", defaultOff.isEmpty()); //$NON-NLS-1$
+
+        for (ToolPreset preset : ToolPreset.values())
+        {
+            Set<String> disabled = preset.getDisabledTools();
+            if (disabled == null || preset == ToolPreset.ALL_TOOLS)
+            {
+                continue;
+            }
+            assertTrue(preset.getDisplayName() + " must keep the default-off tools disabled", //$NON-NLS-1$
+                disabled.containsAll(defaultOff));
+        }
+    }
 }

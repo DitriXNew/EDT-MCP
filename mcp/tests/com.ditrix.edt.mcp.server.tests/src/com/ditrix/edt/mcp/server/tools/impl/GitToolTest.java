@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -309,6 +310,78 @@ public class GitToolTest
         // A commit message that mentions a URL is not a remote.
         assertAccepted("commit -m \"https://user@example.com is the contact\""); //$NON-NLS-1$
         assertAccepted("commit --message=\"ping https://user@example.com\""); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRedactionCoversAUnicodeSpaceInsideUserinfo()
+    {
+        // The scan must stop only on ASCII whitespace: a Unicode space inside the userinfo is part of
+        // it, so stopping there would leave the secret in place.
+        String output = "fatal: could not read from https://secret name@example.com/r.git";
+
+        String redacted = GitTool.redactCredentialUrls(output);
+
+        assertFalse("the secret must not survive: " + redacted, redacted.contains("secret")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the host must stay readable: " + redacted, //$NON-NLS-1$
+            redacted.contains("https://***@example.com/r.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRedactionIsLinearOnHostileOutput()
+    {
+        // The credential pattern must not backtrack: a long scheme-like run that never becomes a URL
+        // would otherwise rescan every suffix and stall the CPU on git output that merely contains '@'.
+        StringBuilder hostile = new StringBuilder(100_000);
+        for (int i = 0; i < 100_000; i++)
+        {
+            hostile.append('a');
+        }
+        hostile.append(":@"); //$NON-NLS-1$
+
+        long startedAt = System.nanoTime();
+        String result = GitTool.redactCredentialUrls(hostile.toString());
+        long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
+
+        assertEquals("nothing to redact here", hostile.toString(), result); //$NON-NLS-1$
+        assertTrue("redaction must stay linear, took " + elapsedMillis + " ms", elapsedMillis < 2000); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCredentialUrlsAreRedactedFromGitOutput()
+    {
+        // A repository can ALREADY hold a credential-bearing remote; 'remote -v' prints it verbatim,
+        // which would hand an agent a token that merely sat in the repo config.
+        String output = "origin\thttps://ghp_secrettoken@example.com/acme/repo.git (fetch)"; //$NON-NLS-1$
+
+        String redacted = GitTool.redactCredentialUrls(output);
+
+        assertFalse("the token must not survive: " + redacted, //$NON-NLS-1$
+            redacted.contains("ghp_secrettoken")); //$NON-NLS-1$
+        assertTrue("the remote must stay readable: " + redacted, //$NON-NLS-1$
+            redacted.contains("https://***@example.com/acme/repo.git")); //$NON-NLS-1$
+        assertTrue("the remote name must stay readable: " + redacted, //$NON-NLS-1$
+            redacted.contains("origin")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRedactionLeavesOutputWithoutCredentialsUntouched()
+    {
+        String clean = "On branch master\nnothing to commit, working tree clean"; //$NON-NLS-1$
+
+        assertSame("output without an '@' must not even be rebuilt", //$NON-NLS-1$
+            clean, GitTool.redactCredentialUrls(clean));
+        String scpStyle = "origin\tgit@github.com:acme/repo.git (push)"; //$NON-NLS-1$
+        assertEquals("an scp-style remote carries no userinfo URL to redact", //$NON-NLS-1$
+            scpStyle, GitTool.redactCredentialUrls(scpStyle));
+    }
+
+    @Test
+    public void testCredentialHelpersAreKeptNonInteractive()
+    {
+        // core.askPass / GIT_TERMINAL_PROMPT do not cover a GUI credential HELPER (Git Credential
+        // Manager), which pops its own window when nothing is cached.
+        assertTrue("a GUI credential helper must be told not to prompt", //$NON-NLS-1$
+            GitTool.nonInteractiveConfigForTest().contains("credential.interactive=false")); //$NON-NLS-1$
     }
 
     private static void assertAccepted(String command)

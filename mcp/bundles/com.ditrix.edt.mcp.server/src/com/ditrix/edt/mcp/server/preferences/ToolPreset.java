@@ -16,7 +16,7 @@ import java.util.Set;
  */
 public enum ToolPreset
 {
-    ALL_TOOLS("All Tools", "All tools enabled", //$NON-NLS-1$ //$NON-NLS-2$
+    ALL_TOOLS("All Tools", "All tools enabled, including the ones off by default", //$NON-NLS-1$ //$NON-NLS-2$
         Collections.emptySet()),
 
     ANALYSIS_ONLY("Analysis Only", //$NON-NLS-1$
@@ -103,12 +103,30 @@ public enum ToolPreset
      */
     private static Set<String> disabledFor(ToolGroup... groups)
     {
-        Set<String> disabled = new HashSet<>();
+        Set<String> disabled = withDefaultsOff();
         for (ToolGroup group : groups)
         {
             disabled.addAll(group.getToolNames());
         }
         return Collections.unmodifiableSet(disabled);
+    }
+
+    /**
+     * Starts a preset's disabled set from the tools that are OFF BY DEFAULT
+     * ({@link PreferenceConstants#DEFAULT_DISABLED_TOOLS}).
+     * <p>
+     * A preset must never silently ENABLE a tool that ships disabled: picking "Analysis Only"
+     * expresses "less than the default", so it cannot be the act that switches on the raw
+     * {@code git} command tool. The only preset that turns those on is {@link #ALL_TOOLS}, whose
+     * name and description say exactly that - otherwise a default-off tool is enabled only by
+     * ticking it explicitly.
+     *
+     * @return a fresh, mutable set holding the default-off tool names
+     */
+    private static Set<String> withDefaultsOff()
+    {
+        return new HashSet<>(
+            ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS));
     }
 
     /**
@@ -118,7 +136,7 @@ public enum ToolPreset
      */
     private static Set<String> buildCodeReviewDisabled()
     {
-        Set<String> disabled = new HashSet<>();
+        Set<String> disabled = withDefaultsOff();
         disabled.addAll(ToolGroup.APPLICATIONS.getToolNames());
         disabled.addAll(ToolGroup.DEBUG.getToolNames());
         disabled.addAll(ToolGroup.REFACTORING.getToolNames());
@@ -137,7 +155,7 @@ public enum ToolPreset
      */
     private static Set<String> buildAnalysisOnlyDisabled()
     {
-        Set<String> disabled = new HashSet<>();
+        Set<String> disabled = withDefaultsOff();
         disabled.addAll(ToolGroup.APPLICATIONS.getToolNames());
         disabled.addAll(ToolGroup.DEBUG.getToolNames());
         disabled.addAll(ToolGroup.BSL_CODE.getToolNames());
