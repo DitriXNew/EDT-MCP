@@ -1164,4 +1164,42 @@ public class WriteModuleSourceToolTest
         String result = tool.execute(params);
         assertTrue(result.contains("Project not found")); //$NON-NLS-1$
     }
+
+    // ==================== line-delimiter detection (issue #305) ====================
+
+    @Test
+    public void testDetectDelimiterCrlfDominant()
+    {
+        assertEquals("\r\n", WriteModuleSourceTool.detectDominantDelimiter("a\r\nb\r\nc")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDetectDelimiterLfOnly()
+    {
+        assertEquals("\n", WriteModuleSourceTool.detectDominantDelimiter("a\nb\nc")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDetectDelimiterMixedPrefersMajority()
+    {
+        // two CRLF vs one bare LF -> CRLF wins
+        assertEquals("\r\n", WriteModuleSourceTool.detectDominantDelimiter("a\r\nb\r\nc\nd")); //$NON-NLS-1$ //$NON-NLS-2$
+        // two bare LF vs one CRLF -> LF wins
+        assertEquals("\n", WriteModuleSourceTool.detectDominantDelimiter("a\nb\nc\r\nd")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDetectDelimiterTieIsCrlf()
+    {
+        // one CRLF, one bare LF -> tie -> CRLF (the EDT/1C BSL convention)
+        assertEquals("\r\n", WriteModuleSourceTool.detectDominantDelimiter("a\r\nb\nc")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDetectDelimiterSingleLineOrEmptyIsNull()
+    {
+        assertNull(WriteModuleSourceTool.detectDominantDelimiter("single line, no break")); //$NON-NLS-1$
+        assertNull(WriteModuleSourceTool.detectDominantDelimiter("")); //$NON-NLS-1$
+        assertNull(WriteModuleSourceTool.detectDominantDelimiter(null));
+    }
 }
