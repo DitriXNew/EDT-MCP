@@ -682,6 +682,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(ERR_NO_BM_MODEL + args.projectName).toJson();
         }
 
+        // Retyping a predefined item is as destructive as retyping an attribute (it can drop stored
+        // values on the next database update), so it goes through the SAME consent gate the ordinary
+        // valueType path uses - BEFORE the write transaction opens.
+        if (props.valueTypeSet)
+        {
+            String consentErr = consentForPredefinedRetype(normFqn);
+            if (consentErr != null)
+            {
+                return consentErr;
+            }
+        }
+
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String itemName = ref.itemName;
         // Force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
@@ -2586,6 +2598,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
      * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
      */
+    /**
+     * The predefined-item counterpart of {@link #consentForTypeChanges}: a
+     * {@code ChartOfCharacteristicTypes} predefined item's {@code valueType} is a real RETYPE (or a
+     * clear), so it must pass the same destructive-consent gate an ordinary attribute retype does,
+     * before the write transaction opens.
+     *
+     * @param normFqn the predefined item's normalized FQN
+     * @return a ready {@link ToolResult#error} JSON payload when consent was not granted, else
+     *         {@code null}
+     */
+    private static String consentForPredefinedRetype(String normFqn)
+    {
+        ConsentPreview preview = new ConsentPreview(
+            "Change the data type of " + normFqn, //$NON-NLS-1$
+            "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
+            1, List.of(PROP_VALUE_TYPE));
+        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+        }
+        return null;
+    }
+
     private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
     {
         List<String> retyped = new ArrayList<>();

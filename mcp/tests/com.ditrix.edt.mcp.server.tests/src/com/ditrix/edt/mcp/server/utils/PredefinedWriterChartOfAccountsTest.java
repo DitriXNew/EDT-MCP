@@ -401,6 +401,38 @@ public class PredefinedWriterChartOfAccountsTest
         assertEquals("?", PredefinedWriter.displayExtDimensionTypes(item)); //$NON-NLS-1$
     }
 
+    // ==================== extDimensionTypes.characteristicType must not be a FOLDER ================
+
+    @Test
+    public void testExtDimensionCharacteristicTypeRejectsAFolder()
+    {
+        // A folder shares the predefined-item class but is a grouping node: an account whose ext
+        // dimension points at one is rejected by the platform, so the writer must refuse it up front.
+        ChartOfAccounts coa = newChartOfAccounts("Main"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes cct =
+            MdClassFactory.eINSTANCE.createChartOfCharacteristicTypes();
+        cct.setName("Subkonto"); //$NON-NLS-1$
+        coa.setExtDimensionTypes(cct);
+
+        PredefinedWriter.ItemProps folderProps = new PredefinedWriter.ItemProps();
+        folderProps.isFolder = Boolean.TRUE;
+        folderProps.isFolderSet = true;
+        PredefinedWriter.WriteResult folder = PredefinedWriter.create(cct, "Group", folderProps, false); //$NON-NLS-1$
+        assertFalse("seed the CCT folder: " + folder.error, folder.isError()); //$NON-NLS-1$
+
+        PredefinedWriter.ExtDimensionTypeSpec row = new PredefinedWriter.ExtDimensionTypeSpec();
+        row.characteristicType = "Group"; //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.extDimensionTypes = List.of(row);
+        props.extDimensionTypesSet = true;
+
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(coa, "Cash", props, false); //$NON-NLS-1$
+
+        assertTrue("a folder characteristicType must be refused", result.isError()); //$NON-NLS-1$
+        assertTrue("the error must say it is a folder: " + result.error, //$NON-NLS-1$
+            result.error.toLowerCase(Locale.ROOT).contains("folder")); //$NON-NLS-1$
+    }
+
     // ==================== chart flag references: yo tolerance + dangling safety (issue #296 f/u) =====
 
     @Test

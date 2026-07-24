@@ -2389,6 +2389,16 @@ public final class PredefinedWriter
                 + "' that is not a predefined item of the linked " + ownerLabel(linkedCct) //$NON-NLS-1$
                 + ". Create it first, or fix the name."; //$NON-NLS-1$
         }
+        // A FOLDER shares the predefined-item class but is a grouping node, not a characteristic: an
+        // account whose ext dimension points at one is rejected by the platform, so refuse it here
+        // with an actionable message instead of persisting an invalid subkonto.
+        if (isFolder(characteristic))
+        {
+            return "'extDimensionTypes' references a characteristicType '" + spec.characteristicType //$NON-NLS-1$
+                + "' that is a FOLDER in " + ownerLabel(linkedCct) //$NON-NLS-1$
+                + ". An ext dimension type must be a real predefined characteristic, not a group - " //$NON-NLS-1$
+                + "name one of the folder's items instead."; //$NON-NLS-1$
+        }
         ExtDimensionType ext = MdClassFactory.eINSTANCE.createExtDimensionType();
         ext.setCharacteristicType(characteristic);
         ext.setTurnover(spec.turnover);
