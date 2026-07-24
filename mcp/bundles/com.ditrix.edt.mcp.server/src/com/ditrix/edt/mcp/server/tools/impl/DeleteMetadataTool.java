@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
@@ -46,6 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -55,6 +57,7 @@ import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
@@ -99,10 +102,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     public String getDescription()
     {
         return "Delete a metadata node (object or member, including a FORM object " //$NON-NLS-1$
-            + "'Type.Object.Form.Name', a FORM member - item / attribute / " //$NON-NLS-1$
-            + "command / handler - or an XDTO package member 'XDTOPackage.<Package>.ObjectType.<Name>' " //$NON-NLS-1$
-            + "/ '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>') addressed by a 1C " //$NON-NLS-1$
-            + "full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
+            + "'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO " //$NON-NLS-1$
+            + "package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
+            + "'...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item " //$NON-NLS-1$
+            + "'<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / " //$NON-NLS-1$
+            + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
+            + "addressed by a 1C full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
             + "references in BSL code, forms and other metadata. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
             + "If the node is still referenced by metadata the refactoring cannot auto-clean, a " //$NON-NLS-1$
@@ -208,9 +213,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return deleteXdtoMember(ctx, normFqn, xdtoRef, confirm);
         }
 
+        // A FQN addressing a PREDEFINED item (Catalog/ChartOfCharacteristicTypes.Name.Predefined.Item)
+        // is handled by a dedicated branch too: the predefined content is a plain EMF containment on
+        // the owner, not a top object the md-refactoring service can see (issue #293).
+        PredefinedWriter.PredefinedRef predefinedRef = PredefinedWriter.parseRef(normFqn);
+        if (predefinedRef != null)
+        {
+            return deletePredefinedItem(ctx, normFqn, predefinedRef, confirm, force);
+        }
+
         // The md-refactoring service is needed ONLY by the generic mdclass path below - the
-        // form-member / form-object / XDTO-member branches above delete directly through their
-        // own content models, so its unavailability (e.g. during startup) must not block them.
+        // form-member / form-object / XDTO-member / predefined-item branches above delete directly
+        // through their own content models, so its unavailability (e.g. during startup) must not block
+        // them.
         IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
         if (refactoringService == null)
         {
@@ -808,6 +823,608 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         // Remove the MD-form from the owner's 'forms' containment list.
         EcoreUtil.remove(txMdForm);
+    }
+
+    // ==================== PREDEFINED item (a plain EMF containment on the owner) ====================
+
+    /**
+     * Deletes a PREDEFINED item addressed by {@code Type.Owner.Predefined.ItemName}. Two-phase like
+     * the rest of this tool: {@code confirm=false} previews (a FOLDER's preview reports how many
+     * nested items the delete would cascade), {@code confirm=true} removes it from its ACTUAL
+     * containing list and force-exports the OWNER's canonical FQN (the predefined content is a plain
+     * EMF containment - there is no separate top object to detach, unlike an owned form).
+     */
+    private String deletePredefinedItem(ProjectContext ctx, String normFqn,
+        PredefinedWriter.PredefinedRef ref, boolean confirm, boolean force)
+    {
+        String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
+        if (ownerTypeErr != null)
+        {
+            return ToolResult.error(ownerTypeErr).toJson();
+        }
+
+        MetadataNodeResolver.ResolvedNode ownerResolved =
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.ownerFqn());
+        if (ownerResolved.node == null)
+        {
+            return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
+                + MetadataNodeResolver.yoNotFoundHint(ref.ownerFqn())).toJson();
+        }
+        MdObject owner = ownerResolved.node.object;
+        if (!(owner instanceof IBmObject))
+        {
+            return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        PredefinedWriter.DeletePreview preview = PredefinedWriter.preview(owner, ref.itemName);
+        if (!preview.found)
+        {
+            return ToolResult.error("Predefined item not found: '" + ref.itemName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + ref.ownerFqn() + ". Use get_metadata_details to list the owner's predefined items.") //$NON-NLS-1$
+                .toJson();
+        }
+
+        // Incoming-reference check (issue #296 P1): a predefined item CAN be referenced elsewhere in
+        // the model (e.g. a DynamicList filter, another object's default value referencing this
+        // item), so deleting it unconditionally could silently leave a dangling reference. Mirrors
+        // the generic-node delete path above (collectBlockingProblems / force), reusing the SAME
+        // back-reference mechanism find_references' MetadataReferenceService uses.
+        //
+        // FAIL-CLOSED (P1 fix): the scan can fail to run to completion (no BM model/manager, a missing
+        // owner/item inside the transaction, or a per-item getBackReferences exception) - that is NOT
+        // the same as "genuinely zero references" and must never be silently treated as safe. See
+        // PredefinedRefScan#completed.
+        PredefinedRefScan refScan = collectPredefinedItemBlockingReferences(ctx.project, (IBmObject)owner, ref);
+
+        if (!confirm)
+        {
+            return buildPredefinedItemDeletePreview(normFqn, ref, preview, refScan);
+        }
+
+        if (predefinedDeleteWouldBlock(refScan, force))
+        {
+            // Distinct message for the two block reasons: an UNVERIFIED scan vs. actual references.
+            String reason = !refScan.completed
+                ? "Could not verify incoming references to predefined item '" + ref.itemName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref.ownerFqn() + " (the project may still be building or the reference index is " //$NON-NLS-1$
+                    + "unavailable). Retry when the project is ready, or pass force=true to delete " //$NON-NLS-1$
+                    + "without the reference check." //$NON-NLS-1$
+                : "Cannot delete predefined item '" + ref.itemName + "' on " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+                    + ": it is still referenced by " + refScan.refs.size() + " place(s). Remove the " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "references first, or call again with force=true to delete anyway (those " //$NON-NLS-1$
+                    + "references will be left dangling)."; //$NON-NLS-1$
+            ToolResult blocked = ToolResult.error(reason)
+                .put(McpKeys.ACTION, "blocked") //$NON-NLS-1$
+                .put("fqn", normFqn) //$NON-NLS-1$
+                .put(KEY_BLOCKING, true);
+            return putBlockingReferences(blocked, refScan.refs).toJson();
+        }
+
+        // Destructive-operation consent gate: the LAST check before the mutation, mirroring the
+        // generic-node path above. delete_metadata is a gated tool, and a FOLDER delete cascades its
+        // whole content tree - so an interactive session that requires confirmation must get the
+        // dialog here too. On ALLOW the behaviour is unchanged; headless / env-bypass never block.
+        // Reached only when the reference check completed with nothing blocking, OR force=true bypasses
+        // either an incomplete check or a non-empty blocking set.
+        int cascadeTotal = 1 + preview.descendantCount;
+        // Cascade wording follows the real containment-descendant count, not isFolder: a
+        // ChartOfAccounts parent account (isFolder=false) still cascades its childItems, so the
+        // subtitle must report the count. The "(a folder)" label stays gated on isFolder.
+        StringBuilder consentSubtitle = new StringBuilder(preview.descendantCount > 0
+            ? "This deletes predefined item '" + ref.itemName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (preview.isFolder ? " (a folder)" : "") + " and its " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + preview.descendantCount + " nested item(s) from " + ref.ownerFqn() + "." //$NON-NLS-1$ //$NON-NLS-2$
+            : "This deletes predefined item '" + ref.itemName + "' from " + ref.ownerFqn() + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!refScan.completed)
+        {
+            consentSubtitle.append(' ').append("The incoming-reference check did not complete " //$NON-NLS-1$
+                + "(force=true bypasses it); any references to this item are UNVERIFIED and may be " //$NON-NLS-1$
+                + "left dangling."); //$NON-NLS-1$
+        }
+        else if (!refScan.refs.isEmpty())
+        {
+            consentSubtitle.append(' ').append(refScan.refs.size())
+                .append(" incoming reference(s) will be left dangling."); //$NON-NLS-1$
+        }
+        ConsentPreview consentPreview = new ConsentPreview(
+            "Delete predefined item", //$NON-NLS-1$
+            consentSubtitle.toString(), cascadeTotal, Collections.singletonList(normFqn));
+        DestructiveConsentGate.ConsentDecision consentDecision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview);
+        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+        }
+
+        return performPredefinedItemDelete(ctx.project, owner, normFqn, ref, refScan, force);
+    }
+
+    /**
+     * Preview (no mutation): a {name, type} row for the item itself AND one per cascaded descendant
+     * (a folder delete removes its whole content tree - the structured {@code items} must list
+     * everything the confirm would remove, like the owned-form preview does), plus a message noting
+     * a folder's cascade count AND (issue #296 P1) the incoming-reference count - or, when the scan
+     * did NOT run to completion, that the check could not be completed (so a confirm=true may still
+     * be blocked) - so a caller sees the block coming before ever calling confirm=true.
+     */
+    private String buildPredefinedItemDeletePreview(String normFqn, PredefinedWriter.PredefinedRef ref,
+        PredefinedWriter.DeletePreview preview, PredefinedRefScan refScan)
+    {
+        Map<String, Object> head = new java.util.LinkedHashMap<>();
+        head.put("name", ref.itemName); //$NON-NLS-1$
+        head.put("type", preview.kind); //$NON-NLS-1$
+        List<Map<String, Object>> items = new ArrayList<>();
+        items.add(head);
+        for (String[] descendant : preview.descendants)
+        {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("name", descendant[0]); //$NON-NLS-1$
+            row.put("type", descendant[1]); //$NON-NLS-1$
+            items.add(row);
+        }
+
+        // A cascade is driven by CONTAINMENT descendants, NOT by isFolder: a ChartOfAccounts parent
+        // account is NOT a folder yet its childItems DO cascade (isFolder=false, descendantCount>0).
+        // The "(a FOLDER)" label stays gated on isFolder so a non-folder cascading owner is not
+        // mislabelled, but the cascade wording itself follows the real descendant count.
+        boolean cascades = preview.descendantCount > 0;
+        // A confirm=true delete WITHOUT force would block when the scan found references OR did not
+        // complete - the SAME decision the confirm path makes - so the preview's blocking flag never
+        // contradicts what a subsequent confirm actually does.
+        boolean wouldBlock = predefinedDeleteWouldBlock(refScan, false);
+        boolean hasBlocking = refScan.completed && !refScan.refs.isEmpty();
+        StringBuilder message = new StringBuilder(cascades
+            ? "Preview: deleting predefined item '" + ref.itemName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                + (preview.isFolder ? " (a FOLDER)" : "") + " from " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ref.ownerFqn() + " would remove it AND its " + preview.descendantCount //$NON-NLS-1$
+                + " nested item(s)." //$NON-NLS-1$
+            : "Preview: deleting predefined item '" + ref.itemName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
+                + " would remove the item itself."); //$NON-NLS-1$
+        if (!refScan.completed)
+        {
+            message.append(" The incoming-reference check could NOT be completed (the project may " //$NON-NLS-1$
+                + "still be building or the reference index is unavailable): a confirm=true delete may " //$NON-NLS-1$
+                + "be BLOCKED unless force=true is also passed."); //$NON-NLS-1$
+        }
+        else if (hasBlocking)
+        {
+            message.append(" It is referenced by ").append(refScan.refs.size()) //$NON-NLS-1$
+                .append(" place(s) that cannot be auto-cleaned: a confirm=true delete will be BLOCKED " //$NON-NLS-1$
+                    + "unless force=true is also passed (force leaves these references dangling)."); //$NON-NLS-1$
+        }
+        message.append(" Call confirm=true to apply."); //$NON-NLS-1$
+
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_PREVIEW)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put(KEY_REFACTORING_TITLE, "Delete predefined item " + ref.itemName) //$NON-NLS-1$
+            .put(KEY_ITEMS, items)
+            .put(KEY_BLOCKING, wouldBlock);
+        return putBlockingReferences(result, refScan.refs)
+            .put(McpKeys.MESSAGE, message.toString())
+            .toJson();
+    }
+
+    /**
+     * Delete inside a WRITE transaction: re-fetch the owner, remove the item, export the owner FQN.
+     * {@code refScan} / {@code force} are used only to compose the result message (the actual
+     * block/force decision already ran in the caller before this is reached).
+     */
+    private String performPredefinedItemDelete(IProject project, MdObject owner,
+        String normFqn, PredefinedWriter.PredefinedRef ref, PredefinedRefScan refScan,
+        boolean force)
+    {
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+        }
+        IBmModel bmModel = bmModelManager.getModel(project);
+        if (bmModel == null)
+        {
+            return ToolResult.error("BM model not available for project: " + project.getName()).toJson(); //$NON-NLS-1$
+        }
+
+        final long ownerBmId = ((IBmObject)owner).bmGetId();
+        final String itemName = ref.itemName;
+        // Force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
+        // caller's spelling; and the cascade count in the result message is re-taken INSIDE the
+        // write transaction (the pre-confirm preview may be stale by the time confirm runs).
+        final String[] canonicalOwnerFqnHolder = new String[1];
+        final PredefinedWriter.DeletePreview[] txPreviewHolder = new PredefinedWriter.DeletePreview[1];
+
+        try
+        {
+            BmTransactions.<Void>write(bmModel, "DeletePredefinedItem", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject txOwner = (EObject)tx.getObjectById(ownerBmId);
+                if (txOwner == null)
+                {
+                    throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+                }
+                canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
+                txPreviewHolder[0] = PredefinedWriter.preview(txOwner, itemName);
+                PredefinedWriter.WriteResult result = PredefinedWriter.delete(txOwner, itemName);
+                if (result.isError())
+                {
+                    throw new IllegalStateException(result.error);
+                }
+                return null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error deleting predefined item", e); //$NON-NLS-1$
+            return ToolResult.error("Delete failed: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        boolean persisted = BmTransactions.forceExportToDisk(project, canonicalOwnerFqnHolder[0]);
+        PredefinedWriter.DeletePreview txPreview = txPreviewHolder[0];
+        // Cascade is driven by the CONTAINMENT descendant count, not isFolder: a ChartOfAccounts
+        // parent account (isFolder=false) still cascades its childItems, so the executed-result
+        // message must report the nested count too (the "(with its N nested item(s))" clause below is
+        // already folder-agnostic, so Catalog/CCT output stays byte-identical - their non-folders have
+        // zero containment descendants).
+        boolean cascaded = txPreview != null && txPreview.descendantCount > 0;
+
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_EXECUTED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("forced", force); //$NON-NLS-1$
+        StringBuilder message =
+            new StringBuilder("Deleted predefined item '" + itemName + "' from " + ref.ownerFqn()); //$NON-NLS-1$ //$NON-NLS-2$
+        if (cascaded)
+        {
+            message.append(" (with its ").append(txPreview.descendantCount).append(" nested item(s))"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        message.append(persisted ? " and persisted to disk." //$NON-NLS-1$
+            : " (in-memory only; on-disk write did not complete - re-check before relying on it)."); //$NON-NLS-1$
+        if (!refScan.completed)
+        {
+            message.append(' ').append("The incoming-reference check did not complete before this " //$NON-NLS-1$
+                + "delete; any references to this item are UNVERIFIED and may be left dangling."); //$NON-NLS-1$
+            if (!refScan.refs.isEmpty())
+            {
+                putBlockingReferences(result, refScan.refs);
+            }
+        }
+        else if (!refScan.refs.isEmpty())
+        {
+            message.append(' ').append(refScan.refs.size())
+                .append(" incoming reference(s) were left dangling."); //$NON-NLS-1$
+            putBlockingReferences(result, refScan.refs);
+        }
+        return result.put(McpKeys.MESSAGE, message.toString()).toJson();
+    }
+
+    /**
+     * Outcome of {@link #collectPredefinedItemBlockingReferences} (issue #296 P1 fix): the
+     * blocking-reference rows gathered so far, AND whether the scan ran to completion.
+     * {@code completed=false} means the incoming-reference state is UNVERIFIED - a null BM model /
+     * model manager, a missing owner/item once re-fetched inside the transaction, a per-item
+     * {@code getBackReferences} failure, or any other exception - and must NEVER be read as "genuinely
+     * zero references": {@code refs} may still carry a partial list gathered before the failure, but
+     * callers must fail CLOSED (block unless {@code force=true}), never silently proceed. See
+     * {@link #deletePredefinedItem}.
+     */
+    /**
+     * Result of the predefined-item incoming-reference scan: the collected blocking-reference rows,
+     * and whether the scan RAN TO COMPLETION. {@code completed=false} (a partial/failed scan) is NOT
+     * the same as "genuinely zero references" - it means the reference state is UNVERIFIED, which
+     * fail-closes a non-forced delete (see {@link #predefinedDeleteWouldBlock}). Package-visible so the
+     * pure block-decision it feeds is unit-testable.
+     */
+    static final class PredefinedRefScan
+    {
+        final List<Map<String, Object>> refs;
+        final boolean completed;
+
+        PredefinedRefScan(List<Map<String, Object>> refs, boolean completed)
+        {
+            this.refs = refs;
+            this.completed = completed;
+        }
+    }
+
+    /**
+     * The SINGLE fail-closed decision for a predefined-item delete: whether a {@code confirm=true}
+     * delete would be BLOCKED for this reference scan. A non-forced delete blocks when the scan did NOT
+     * complete (the reference state is UNVERIFIED - safer to refuse than to delete blind) OR when it
+     * completed and found at least one blocking reference. {@code force=true} bypasses both. Both the
+     * confirm path and the preview's {@code blocking} flag route through this ONE method, so the
+     * behaviour cannot drift between them and a regression that inverts it fails the unit test.
+     * Package-visible for testing.
+     *
+     * @param scan the reference scan result
+     * @param force the caller's {@code force} flag
+     * @return {@code true} when a non-forced delete must be blocked
+     */
+    static boolean predefinedDeleteWouldBlock(PredefinedRefScan scan, boolean force)
+    {
+        if (force)
+        {
+            return false;
+        }
+        return !scan.completed || !scan.refs.isEmpty();
+    }
+
+    /**
+     * Result-size hint passed to {@link MetadataReferenceService#collectReferencesForObjectStrict} for a
+     * predefined item's incoming-reference scan - generous enough that a real config never truncates it
+     * (the collector's own internal cap is {@code limit * 10} per category), matching find_references'
+     * own default ({@code FindReferencesTool}'s {@code limit} parameter default).
+     */
+    private static final int PREDEFINED_REF_SCAN_LIMIT = 100;
+
+    /**
+     * Collects incoming references to the predefined item {@code ref.itemName} on {@code owner} AND -
+     * when it is a FOLDER - every descendant it would cascade (issue #296 P1), REUSING the exact same
+     * reference-collection engine {@code find_references} uses ({@link
+     * MetadataReferenceService#collectReferencesForObjectStrict}, issue #293) rather than a hand-rolled
+     * subset of it. This closes two gaps the former hand-rolled scan had: (1) it now ALSO covers BSL
+     * code references - the SEPARATE Xtext-indexed mechanism the shared service wires in as its 5th
+     * collection step ({@code collectBslReferences}), which a plain {@code IBmEngine.getBackReferences}
+     * scan can never see; and (2) it no longer false-positives on the item's OWN owner showing up as a
+     * "reference" through the derived predefined-data-source linkage (the EXACT {@code "source"}
+     * feature, narrowed - a same-owner reference through any OTHER feature is a real dependency and
+     * still blocks) - see {@link #isOwnerSelfReference}. Runs inside its own READ transaction,
+     * re-fetching the owner by BM id (like every other transaction in this tool: an EMF object resolved
+     * OUTSIDE a transaction is not valid to query INSIDE a different one). De-duplicated by
+     * (referencingObject, reference, line).
+     * <p>
+     * FAILS CLOSED: returns {@link PredefinedRefScan#completed}=false (never throws) when the BM model
+     * manager / model is unavailable, the owner/item cannot be re-fetched inside the transaction, a
+     * per-item scan throws, the transaction itself throws, OR the BSL code-reference step of the scan
+     * for the item OR any descendant did not itself complete ({@link
+     * MetadataReferenceService.ReferenceScanResult#complete}={@code false} - an unavailable/throwing
+     * Xtext reference index) - the caller must then treat the reference state as UNVERIFIED, not as
+     * "zero references" (never silently treated as safe).
+     * <p>
+     * <b>BSL coverage (confirmed live):</b> a predefined item is exposed to BSL as a member of its
+     * owner's manager (e.g. {@code Catalogs.Products.SomeItem}). The Xtext scope provider resolves that
+     * usage to the {@code PredefinedItem}'s OWN EMF URI, so {@link
+     * MetadataReferenceService#collectReferencesForObjectStrict}'s BSL step (which matches on {@code
+     * EcoreUtil.getURI(target)}) DOES find it - verified end-to-end on the 2026.1 stand (a common
+     * module reading a predefined item blocks the item's non-forced delete). The e2e suite fails hard
+     * if this ever stops holding (a BSL URI-resolution / indexing regression), so this path can be
+     * relied on to catch a BSL incoming reference to a predefined item.
+     *
+     * @param project the owning workspace project
+     * @param owner the (already resolved) predefined-item owner
+     * @param ref the parsed predefined-item FQN
+     * @return the scan outcome (never {@code null}); {@code refs} is the de-duplicated blocking-reference
+     *     rows, the SAME shape {@link #describeProblem} builds for the generic-node delete path
+     */
+    private static PredefinedRefScan collectPredefinedItemBlockingReferences(IProject project,
+        IBmObject owner, PredefinedWriter.PredefinedRef ref)
+    {
+        try
+        {
+            IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+            if (bmModelManager == null)
+            {
+                return new PredefinedRefScan(Collections.emptyList(), false);
+            }
+            final IBmModel bmModel = bmModelManager.getModel(project);
+            if (bmModel == null)
+            {
+                return new PredefinedRefScan(Collections.emptyList(), false);
+            }
+            final long ownerBmId = owner.bmGetId();
+            return BmTransactions.<PredefinedRefScan>read(bmModel, "PredefinedItemBackReferences", //$NON-NLS-1$
+                (tx, pm) ->
+                {
+                    EObject txOwner = (EObject)tx.getObjectById(ownerBmId);
+                    if (txOwner == null)
+                    {
+                        return new PredefinedRefScan(Collections.emptyList(), false);
+                    }
+                    PredefinedItem item = PredefinedWriter.findByName(txOwner, ref.itemName);
+                    if (item == null)
+                    {
+                        return new PredefinedRefScan(Collections.emptyList(), false);
+                    }
+                    MetadataReferenceService referenceService = new MetadataReferenceService();
+                    List<Map<String, Object>> refs = new ArrayList<>();
+                    java.util.Set<String> seen = new java.util.HashSet<>();
+                    boolean completed = collectOnePredefinedItemReferences(referenceService, bmModel, item,
+                        ownerBmId, seen, refs);
+                    for (PredefinedItem descendant : PredefinedWriter.descendants(item))
+                    {
+                        completed = collectOnePredefinedItemReferences(referenceService, bmModel, descendant,
+                            ownerBmId, seen, refs) && completed;
+                    }
+                    return new PredefinedRefScan(refs, completed);
+                });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error collecting predefined item back references; the reference check " //$NON-NLS-1$
+                + "could not be completed", e); //$NON-NLS-1$
+            return new PredefinedRefScan(Collections.emptyList(), false);
+        }
+    }
+
+    /**
+     * Collects (into {@code out}, de-duplicated via {@code seen}) the non-owner-self references to a
+     * single predefined item - reusing the SAME metadata+BSL reference-collection engine
+     * find_references uses ({@link MetadataReferenceService#collectReferencesForObjectStrict}), which
+     * already applies find_references' OWN technical-noise filter (a transient feature; a {@code
+     * dbview} / {@code cmi}+{@code deriveddata} package reference - mirrors {@code
+     * MetadataReferenceService.ReferenceCollector#isInternalReference}/{@code #isInternalPath}), and ALSO
+     * reports whether its BSL code-reference step completed. This method adds ONE further exclusion on
+     * top, specific to THIS delete safety check and NOT applied by the shared service (which
+     * intentionally shows self-references in its own diagnostic view): a reference whose source object's
+     * own top container IS the item's owner AND whose feature is the structural predefined-data-source
+     * linkage is dropped - see {@link #isOwnerSelfReference}.
+     *
+     * @return {@code true} when the scan for THIS item completed without error AND its BSL
+     *     code-reference step ({@link MetadataReferenceService.ReferenceScanResult#complete}) itself ran
+     *     to completion (issue #293 P1 fix-round: an unavailable/throwing BSL index now fails the scan
+     *     CLOSED instead of silently reading as "no BSL references"), {@code false} when either {@link
+     *     MetadataReferenceService#collectReferencesForObjectStrict} threw or its BSL step did not
+     *     complete (in which case {@code out} may still hold whatever rows a previous item in the
+     *     caller's loop already gathered - the caller ANDs this flag across every item/descendant it
+     *     scans, per {@link PredefinedRefScan#completed})
+     */
+    private static boolean collectOnePredefinedItemReferences(MetadataReferenceService referenceService,
+        IBmModel bmModel, PredefinedItem item, long ownerTopId, java.util.Set<String> seen,
+        List<Map<String, Object>> out)
+    {
+        MetadataReferenceService.ReferenceScanResult scanResult;
+        try
+        {
+            scanResult = referenceService.collectReferencesForObjectStrict(bmModel, (IBmObject)item,
+                PREDEFINED_REF_SCAN_LIMIT);
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error collecting references for predefined item '" + item.getName() //$NON-NLS-1$
+                + "'", e); //$NON-NLS-1$
+            return false;
+        }
+        for (MetadataReferenceService.ReferenceInfo info : scanResult.refs)
+        {
+            if (isOwnerSelfReference(info, ownerTopId))
+            {
+                continue;
+            }
+            Map<String, Object> row = describePredefinedReferenceInfo(item, info);
+            String key = row.get("referencingObject") + ":" + row.get("reference") + ":" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + row.get("line"); //$NON-NLS-1$
+            if (seen.add(key))
+            {
+                out.add(row);
+            }
+        }
+        return scanResult.complete;
+    }
+
+    /**
+     * The structural feature name of the predefined-data-source linkage: a derived-model back-reference
+     * to a pristine {@link PredefinedItem} through this EXACT feature always resolves to the item's own
+     * owner Catalog/ChartOfCharacteristicTypes - {@link PredefinedItem} itself declares no such feature
+     * in {@code MdClass.xcore} (only {@code id}/{@code name}/{@code description}/{@code extension}), so
+     * this back-reference is produced by a derived model the platform maintains alongside the raw
+     * containment, not by any real dependency. Confirmed live (issue #293 P1): a fresh predefined item
+     * with zero real references still surfaces exactly one back-reference whose feature name is this
+     * constant and whose resolved source renders as the owner itself.
+     */
+    private static final String PREDEFINED_DATA_SOURCE_FEATURE = "source"; //$NON-NLS-1$
+
+    /**
+     * Whether {@code info} is the STRUCTURAL predefined-data-source self-reference to exclude (issue
+     * #293 P1, narrowed): {@code true} ONLY when BOTH (a) {@code info}'s SOURCE object (a metadata
+     * reference only - a BSL reference never carries one, see {@link
+     * MetadataReferenceService.ReferenceInfo#sourceObject}) belongs to the SAME owner top-object as the
+     * predefined item being deleted (walks the source object's container chain up to its OWN top {@code
+     * IBmObject} and compares {@code bmGetId()} against {@code ownerTopId}), AND (b) the reference's
+     * structural feature is exactly {@link #PREDEFINED_DATA_SOURCE_FEATURE}.
+     * <p>
+     * The feature check matters: matching on same-owner ALONE was too broad and discarded a REAL
+     * same-owner reference - e.g. a Catalog attribute's fill value / {@code ReferenceValue} pointing at
+     * a predefined item of the SAME catalog (feature "value"), or a {@code
+     * ChartOfCalculationTypesPredefinedItem}'s {@code base}/{@code displaced}/{@code leading} referring
+     * to a SIBLING predefined item - both of which must still BLOCK a delete. Only a same-owner
+     * reference through the derived predefined-data-source linkage is purely structural (it exists
+     * merely because the item lives inside that owner) and never an external dependency.
+     * <p>
+     * Deliberately NOT applied inside {@code MetadataReferenceService} itself - find_references
+     * intentionally shows self-references in its own diagnostic view; this exclusion is specific to the
+     * delete safety check. Package-visible for tests.
+     *
+     * @param info the collected reference (its {@code sourceObject} may be {@code null})
+     * @param ownerTopId the {@code bmGetId()} of the predefined item's owner (a top object)
+     * @return {@code true} when this reference is the structural predefined-data-source self-reference
+     */
+    static boolean isOwnerSelfReference(MetadataReferenceService.ReferenceInfo info, long ownerTopId)
+    {
+        IBmObject source = info.sourceObject;
+        if (source == null)
+        {
+            // A BSL reference (no live source object) - never an owner-self reference: a BSL module is
+            // always a DIFFERENT top object from the predefined item's owner.
+            return false;
+        }
+        if (!PREDEFINED_DATA_SOURCE_FEATURE.equals(info.feature))
+        {
+            // A REAL reference (value / fillValue / type / base / displaced / leading /
+            // characteristicType / ...) must never be excluded, even from the same owner top-object.
+            return false;
+        }
+        IBmObject top = findTopContainer(source);
+        return top != null && top.bmGetId() == ownerTopId;
+    }
+
+    /**
+     * Walks {@code object}'s container chain up to (and including) its own top {@link IBmObject} -
+     * mirrors {@code MetadataReferenceService.ReferenceCollector#findTopContainer} (private to a
+     * different package, so this is a small, deliberate duplicate: the owner-self exclusion belongs in
+     * THIS delete path, not the shared find_references service - see {@link #isOwnerSelfReference}).
+     * Guarded by an IDENTITY visited-set (not a depth cap): a genuine {@code eContainer()} CYCLE
+     * terminates and returns {@code null}, while every finite chain reaches its real top. Returns
+     * {@code null} on a top-less / cyclic chain - NOT the last reached non-top object:
+     * {@link #isOwnerSelfReference} then treats it as "not owner-self" and KEEPS the reference (a
+     * delete over-blocks rather than deleting a possibly referenced item - the fail-safe direction).
+     * The ONLY non-null return is a real top object.
+     */
+    private static IBmObject findTopContainer(IBmObject object)
+    {
+        if (object == null)
+        {
+            return null;
+        }
+        if (object.bmIsTop())
+        {
+            return object;
+        }
+        java.util.Set<EObject> visited =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        EObject current = (EObject)object;
+        while (current != null && visited.add(current))
+        {
+            if (current instanceof IBmObject && ((IBmObject)current).bmIsTop())
+            {
+                return (IBmObject)current;
+            }
+            current = current.eContainer();
+        }
+        return null;
+    }
+
+    /**
+     * Converts one {@link MetadataReferenceService.ReferenceInfo} (from {@link
+     * MetadataReferenceService#collectReferencesForObjectStrict}) into this tool's block-row map shape - the
+     * SAME {@code problemType} / {@code referencingObject} / {@code reference} / {@code targetObject}
+     * fields {@link #describeProblem} builds for the generic-node delete path - so the wire contract
+     * ({@code blockingReferences}) is unchanged regardless of which collector produced the row.
+     * {@code problemType} carries the reference's CATEGORY (e.g. "BSL modules", "Documents", "Common
+     * modules") - more specific than the single "PredefinedItemReference" constant the former
+     * hand-rolled collector used, since the shared service already classifies every reference it finds.
+     * A BSL reference additionally carries its {@code line} number (a metadata reference has none - it
+     * carries a {@code reference} feature name instead). Package-visible for tests.
+     */
+    static Map<String, Object> describePredefinedReferenceInfo(PredefinedItem item,
+        MetadataReferenceService.ReferenceInfo info)
+    {
+        Map<String, Object> map = new java.util.LinkedHashMap<>();
+        map.put("problemType", info.category != null ? info.category : "Reference"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (info.sourcePath != null && !info.sourcePath.isEmpty())
+        {
+            map.put("referencingObject", info.sourcePath); //$NON-NLS-1$
+        }
+        if (info.isBslReference)
+        {
+            map.put("reference", "BSL code"); //$NON-NLS-1$ //$NON-NLS-2$
+            map.put("line", info.line); //$NON-NLS-1$
+        }
+        else if (info.feature != null && !info.feature.isEmpty())
+        {
+            map.put("reference", info.feature); //$NON-NLS-1$
+        }
+        map.put("targetObject", item.getName()); //$NON-NLS-1$
+        return map;
     }
 
     /** Outcome of the orphan form-folder cleanup - never conflate "not found" with "removed". */

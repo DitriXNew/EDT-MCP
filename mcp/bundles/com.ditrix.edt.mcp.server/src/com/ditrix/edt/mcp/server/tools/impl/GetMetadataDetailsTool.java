@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
@@ -23,12 +24,17 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccounts;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypes;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
@@ -50,6 +56,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
 import com.ditrix.edt.mcp.server.utils.XdtoStructureReader;
@@ -89,7 +96,10 @@ public class GetMetadataDetailsTool implements IMcpTool
                "In the default (non-full) view a ScheduledJob or CommonModule also renders a " + //$NON-NLS-1$
                "type-specific Properties table (e.g. methodName/schedule/use for a job; " + //$NON-NLS-1$
                "server/serverCall/global/returnValuesReuse for a module), and an InformationRegister's " + //$NON-NLS-1$
-               "Dimensions additionally show their Indexing. " + //$NON-NLS-1$
+               "Dimensions additionally show their Indexing. A Catalog / ChartOfCharacteristicTypes / " + //$NON-NLS-1$
+               "ChartOfAccounts / ChartOfCalculationTypes also renders its 'Predefined items' table " + //$NON-NLS-1$
+               "(in both basic and full mode); a single predefined item FQN " + //$NON-NLS-1$
+               "('<Owner>.X.Predefined.ItemName') renders that one item's properties. " + //$NON-NLS-1$
                "Use this for the full properties of one named object; to list objects by type use get_metadata_objects. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
@@ -115,7 +125,10 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "Instead of the details view, return the ASSIGNABLE-property schema (default false): " + //$NON-NLS-1$
                 "per property its value kind, current value and ALLOWED values (enum literals). This " + //$NON-NLS-1$
                 "is what modify_metadata can set; FQNs may address members (e.g. " + //$NON-NLS-1$
-                "'Catalog.Products.Attribute.Weight').") //$NON-NLS-1$
+                "'Catalog.Products.Attribute.Weight'), but NOT a predefined item " + //$NON-NLS-1$
+                "('...Predefined.<Item>' is not resolvable in this mode - its settable surface is " + //$NON-NLS-1$
+                "fixed: description / code / isFolder, plus 'valueType' for a " + //$NON-NLS-1$
+                "ChartOfCharacteristicTypes item only).") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
@@ -303,6 +316,19 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
+        // A FQN addressing a single PREDEFINED item (Catalog/ChartOfCharacteristicTypes.Name.Predefined.
+        // Item, issue #293) renders that ONE item's properties. This must run BEFORE resolveObject
+        // below: resolveObject only looks at the first two FQN segments, so without this branch a
+        // predefined-item FQN would silently render its OWNER's full details instead of the item (or
+        // fail outright) - never a silent wrong render.
+        String normFqnForPredefined = MetadataTypeUtils.normalizeFqn(fqn);
+        PredefinedWriter.PredefinedRef predefinedRef = PredefinedWriter.parseRef(normFqnForPredefined);
+        if (predefinedRef != null)
+        {
+            appendPredefinedItemView(predefinedRef, fqn, normFqnForPredefined, sb, failures, ctx);
+            return;
+        }
+
         MdObject mdObject = resolveObject(ctx.config, fqn);
         if (mdObject == null)
         {
@@ -412,13 +438,186 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /**
+     * Renders a single PREDEFINED item's properties (issue #293). The predefined items are plain EMF
+     * containment on the already-resolved {@code Configuration} - the SAME in-resource data the owner
+     * FQN's own "Predefined items" section reads ({@link #appendPredefinedItems}) - NOT a
+     * lazily-loaded sub-resource like a form's content or a role's rights, so it needs no BM read
+     * transaction and stays inspectable even before the project's BM model is built (matching the
+     * owner-section behaviour: a client must not be able to read the whole table yet be denied a
+     * single row of it).
+     */
+    private void appendPredefinedItemView(PredefinedWriter.PredefinedRef ref, String fqn, String normFqn,
+        StringBuilder sb, List<String[]> failures, RenderContext ctx)
+    {
+        String rendered = renderPredefinedItemViewBody(ref, fqn, normFqn, failures, ctx);
+        if (rendered != null)
+        {
+            sb.append(rendered);
+            sb.append(SECTION_SEPARATOR);
+        }
+    }
+
+    /**
+     * The body of {@link #appendPredefinedItemView}: resolves the owner
+     * (yo-fallback), finds the item (recursive, exact name match) and renders a Property/Value table
+     * (Name / Code / Description / Value type / Folder / Parent / nested-item count when it is a
+     * folder). Returns
+     * the Markdown, or {@code null} after adding a {fqn, reason} failure row when the owner TYPE is
+     * unsupported, the owner does not exist, or the item is not found - never a silent wrong render.
+     * Package-private: the unit tests exercise it directly against an in-memory {@code Configuration}.
+     */
+    String renderPredefinedItemViewBody(PredefinedWriter.PredefinedRef ref, String fqn, String normFqn,
+        List<String[]> failures, RenderContext ctx)
+    {
+        String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
+        if (ownerTypeErr != null)
+        {
+            failures.add(new String[] { fqn, ownerTypeErr });
+            return null;
+        }
+        MetadataNodeResolver.ResolvedNode ownerResolved =
+            MetadataNodeResolver.resolveExistingWithYoFallback(ctx.config, ref.ownerFqn());
+        if (ownerResolved.node == null)
+        {
+            failures.add(new String[] { fqn, "Owner object not found: " + ref.ownerFqn() //$NON-NLS-1$
+                + ". Use get_metadata_objects to list available objects." }); //$NON-NLS-1$
+            return null;
+        }
+        PredefinedWriter.ItemLookup lookup = PredefinedWriter.lookup(ownerResolved.node.object, ref.itemName);
+        if (lookup == null)
+        {
+            failures.add(new String[] { fqn, "Predefined item not found: '" + ref.itemName + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + ref.ownerFqn() }); //$NON-NLS-1$
+            return null;
+        }
+        PredefinedWriter.ItemRow row = findItemRow(ownerResolved.node.object, lookup);
+        return formatPredefinedItem(normFqn, lookup, ownerResolved.node.object, row);
+    }
+
+    /**
+     * Finds the {@link PredefinedWriter.ItemRow} for {@code lookup}'s item among the owner's flattened
+     * listing - the SAME pre-order items+content walk {@link PredefinedWriter#lookup} used, matched on
+     * Name and parent, so it is exactly the located item's row. This lets the single-item view CONSUME
+     * the widened ItemRow (its owner-specific fields) rather than re-deriving them - the same source the
+     * owner-level listing renders. Returns {@code null} only on an internal inconsistency (the located
+     * item somehow not enumerated), which the caller then renders as dashes.
+     */
+    private static PredefinedWriter.ItemRow findItemRow(MdObject owner, PredefinedWriter.ItemLookup lookup)
+    {
+        String name = lookup.item.getName();
+        for (PredefinedWriter.ItemRow row : PredefinedWriter.listAll(owner))
+        {
+            if (name != null && name.equals(row.name)
+                && Objects.equals(lookup.parentName, row.parentName))
+            {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Renders one predefined item's properties as a Property/Value Markdown table. The owner-specific
+     * rows (issue #296 Phase 2/3) are gated on the owner kind: a ChartOfAccounts item adds Account type
+     * / Off-balance / Order / Accounting flags / Ext dimension types; a ChartOfCalculationTypes item
+     * adds Base / Displaced / Leading / Action period is base; a Catalog / ChartOfCharacteristicTypes
+     * item renders none of them (Phase-1 output byte-unchanged). Each new value is sourced from the
+     * widened {@code row} and follows the dash-when-N/A precedent of {@code formatValueType}. The Folder
+     * row shows a dash for the two new kinds - a chart of accounts nests via its childItems, a chart of
+     * calculation types is flat, and neither carries the Catalog/CCT {@code isFolder} flag.
+     *
+     * @param row the item's widened listing row (its owner-specific fields), or {@code null} on an
+     *     internal inconsistency (owner-specific values then render as dashes)
+     */
+    private static String formatPredefinedItem(String normFqn, PredefinedWriter.ItemLookup lookup,
+        EObject owner, PredefinedWriter.ItemRow row)
+    {
+        PredefinedItem item = lookup.item;
+        boolean chartOfAccounts = owner instanceof ChartOfAccounts;
+        boolean chartOfCalculationTypes = owner instanceof ChartOfCalculationTypes;
+        boolean newOwnerKind = chartOfAccounts || chartOfCalculationTypes;
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Predefined item: ").append(normFqn).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(MarkdownUtils.tableHeader("Property", "Value")); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(MarkdownUtils.tableRow("Name", item.getName())); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Code", valueOrDash(PredefinedWriter.displayCode(item)))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Description", valueOrDash(item.getDescription()))); //$NON-NLS-1$
+        // Value type (issue #296 P2): meaningful only for a ChartOfCharacteristicTypes item - dash for
+        // any other owner kind (a Catalog item has no such concept) or when unset.
+        sb.append(MarkdownUtils.tableRow("Value type", valueOrDash(PredefinedWriter.displayValueType(item)))); //$NON-NLS-1$
+        if (chartOfAccounts)
+        {
+            appendChartOfAccountsItemRows(sb, row);
+        }
+        if (chartOfCalculationTypes)
+        {
+            appendChartOfCalculationTypesItemRows(sb, row);
+        }
+        // Folder: dash for the two new kinds (a chart of accounts nests via childItems, a chart of
+        // calculation types is flat) - neither carries the Catalog/CCT isFolder flag; Yes/No otherwise.
+        sb.append(MarkdownUtils.tableRow("Folder", //$NON-NLS-1$
+            newOwnerKind ? DASH : yesNo(PredefinedWriter.isFolder(item))));
+        sb.append(MarkdownUtils.tableRow("Parent", valueOrDash(lookup.parentName))); //$NON-NLS-1$
+        // Nested items: a Catalog/CCT folder always reports its (possibly 0) descendant count; a chart of
+        // accounts reports it only when the account actually nests child accounts (a flat calc type never
+        // does, so its count stays 0 and the row is skipped).
+        int descendants = PredefinedWriter.countDescendants(item);
+        boolean showNested = newOwnerKind ? descendants > 0 : PredefinedWriter.isFolder(item);
+        if (showNested)
+        {
+            sb.append(MarkdownUtils.tableRow("Nested items", String.valueOf(descendants))); //$NON-NLS-1$
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Appends the ChartOfAccounts-specific single-item rows (issue #296 Phase 3): Account type /
+     * Off-balance / Order and the joined reference lists (Accounting flags, Ext dimension types), each
+     * dash-when-N/A. Sourced from the widened {@link PredefinedWriter.ItemRow} (whose joined target-name
+     * strings {@link PredefinedWriter} resolves from the live in-resource EObjects); this formatter only
+     * renders them. A {@code null} row (internal inconsistency) renders every value as a dash.
+     */
+    private static void appendChartOfAccountsItemRows(StringBuilder sb, PredefinedWriter.ItemRow row)
+    {
+        String accountType = row != null ? row.accountType : null;
+        Boolean offBalance = row != null ? row.offBalance : null;
+        String order = row != null ? row.order : null;
+        String accountingFlags = row != null ? row.accountingFlags : null;
+        String extDimensionTypes = row != null ? row.extDimensionTypes : null;
+        sb.append(MarkdownUtils.tableRow("Account type", valueOrDash(accountType))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Off-balance", nullableYesNo(offBalance))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Order", valueOrDash(order))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Accounting flags", valueOrDash(accountingFlags))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Ext dimension types", valueOrDash(extDimensionTypes))); //$NON-NLS-1$
+    }
+
+    /**
+     * Appends the ChartOfCalculationTypes-specific single-item rows (issue #296 Phase 2): the joined
+     * Base / Displaced / Leading sibling lists and Action period is base, each dash-when-N/A. Sourced
+     * from the widened {@link PredefinedWriter.ItemRow} (whose joined sibling-name strings
+     * {@link PredefinedWriter} produces); this formatter only renders them. A {@code null} row (internal
+     * inconsistency) renders every value as a dash.
+     */
+    private static void appendChartOfCalculationTypesItemRows(StringBuilder sb, PredefinedWriter.ItemRow row)
+    {
+        String base = row != null ? row.base : null;
+        String displaced = row != null ? row.displaced : null;
+        String leading = row != null ? row.leading : null;
+        Boolean actionPeriodIsBase = row != null ? row.actionPeriodIsBase : null;
+        sb.append(MarkdownUtils.tableRow("Base", valueOrDash(base))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Displaced", valueOrDash(displaced))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Leading", valueOrDash(leading))); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableRow("Action period is base", nullableYesNo(actionPeriodIsBase))); //$NON-NLS-1$
+    }
+
+    /**
      * Immutable per-request render context threaded through {@link #processFqn}: the resolved
      * configuration, the (best-effort) BM model used only for a form's cross-model hop, the
      * effective synonym language code and the three rendering flags. Computed once in
      * {@link #getMetadataDetailsInternal} and constant across every FQN. Bundles the parameters
      * without changing any value or rendering behaviour.
      */
-    private static final class RenderContext
+    static final class RenderContext
     {
         final Configuration config;
         final IBmModel bmModel;
@@ -547,7 +746,102 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             appendDimensionIndexing(sb, (InformationRegister)mdObject);
         }
+        // Predefined items (issue #293, #296): rendered in BOTH basic and full modes - a mode must never
+        // carry less (the #288 lesson above). A Catalog / ChartOfCharacteristicTypes / ChartOfAccounts /
+        // ChartOfCalculationTypes with no predefined content yet renders nothing (PredefinedWriter.listAll
+        // returns an empty list).
+        if (mdObject instanceof Catalog || mdObject instanceof ChartOfCharacteristicTypes
+            || mdObject instanceof ChartOfAccounts || mdObject instanceof ChartOfCalculationTypes)
+        {
+            appendPredefinedItems(sb, mdObject);
+        }
         return sb.toString();
+    }
+
+    /**
+     * Renders the owner's "Predefined items" section: one row per item (recursively, items + content),
+     * with a per-owner-kind column set. A Catalog / ChartOfCharacteristicTypes keeps the Phase-1 table
+     * (Name / Code / Description / Type / Folder / Parent) byte-unchanged; a ChartOfAccounts /
+     * ChartOfCalculationTypes gets its own owner-specific columns (issue #296 Phase 2/3). A no-op (no
+     * section at all) when the owner has no predefined content yet.
+     */
+    private static void appendPredefinedItems(StringBuilder sb, MdObject mdObject)
+    {
+        List<PredefinedWriter.ItemRow> rows = PredefinedWriter.listAll(mdObject);
+        if (rows.isEmpty())
+        {
+            return;
+        }
+        sb.append("\n### Predefined items\n\n"); //$NON-NLS-1$
+        if (mdObject instanceof ChartOfAccounts)
+        {
+            appendChartOfAccountsPredefinedRows(sb, rows);
+        }
+        else if (mdObject instanceof ChartOfCalculationTypes)
+        {
+            appendChartOfCalculationTypesPredefinedRows(sb, rows);
+        }
+        else
+        {
+            appendCatalogLikePredefinedRows(sb, rows);
+        }
+    }
+
+    /**
+     * The Phase-1 Catalog / ChartOfCharacteristicTypes predefined listing (byte-unchanged): the Parent
+     * column shows nesting (top-level items carry {@link #DASH}); the Type column is populated only for a
+     * ChartOfCharacteristicTypes item's value type (issue #296 P2, dash for a Catalog item / an unset
+     * type).
+     */
+    private static void appendCatalogLikePredefinedRows(StringBuilder sb,
+        List<PredefinedWriter.ItemRow> rows)
+    {
+        sb.append(MarkdownUtils.tableHeader("Name", "Code", "Description", "Type", "Folder", "Parent")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        for (PredefinedWriter.ItemRow row : rows)
+        {
+            sb.append(MarkdownUtils.tableRow(row.name, valueOrDash(row.code), valueOrDash(row.description),
+                valueOrDash(row.valueType), yesNo(row.isFolder), valueOrDash(row.parentName)));
+        }
+    }
+
+    /**
+     * The ChartOfAccounts predefined listing (issue #296 Phase 3): the account's Code / Description plus
+     * Account type / Off-balance / Order and the joined reference lists (Accounting flags, Ext dimension
+     * types), each dash-when-N/A. Folder is always a dash (a chart of accounts nests via childItems, not
+     * the isFolder flag); Parent names the containing account (the childItems hierarchy that
+     * {@link PredefinedWriter#listAll} recurses).
+     */
+    private static void appendChartOfAccountsPredefinedRows(StringBuilder sb,
+        List<PredefinedWriter.ItemRow> rows)
+    {
+        sb.append(MarkdownUtils.tableHeader("Name", "Code", "Description", "Account type", "Off-balance", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "Order", "Accounting flags", "Ext dimension types", "Folder", "Parent")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        for (PredefinedWriter.ItemRow row : rows)
+        {
+            sb.append(MarkdownUtils.tableRow(row.name, valueOrDash(row.code), valueOrDash(row.description),
+                valueOrDash(row.accountType), nullableYesNo(row.offBalance), valueOrDash(row.order),
+                valueOrDash(row.accountingFlags), valueOrDash(row.extDimensionTypes), DASH,
+                valueOrDash(row.parentName)));
+        }
+    }
+
+    /**
+     * The ChartOfCalculationTypes predefined listing (issue #296 Phase 2): the calc type's Code /
+     * Description plus the joined Base / Displaced / Leading sibling lists and Action period is base,
+     * each dash-when-N/A. Folder and Parent are always a dash - a chart of calculation types is flat (no
+     * folders, no nesting).
+     */
+    private static void appendChartOfCalculationTypesPredefinedRows(StringBuilder sb,
+        List<PredefinedWriter.ItemRow> rows)
+    {
+        sb.append(MarkdownUtils.tableHeader("Name", "Code", "Description", "Base", "Displaced", "Leading", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "Action period is base", "Folder", "Parent")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (PredefinedWriter.ItemRow row : rows)
+        {
+            sb.append(MarkdownUtils.tableRow(row.name, valueOrDash(row.code), valueOrDash(row.description),
+                valueOrDash(row.base), valueOrDash(row.displaced), valueOrDash(row.leading),
+                nullableYesNo(row.actionPeriodIsBase), DASH, valueOrDash(row.parentName)));
+        }
     }
 
     /**
@@ -651,6 +945,17 @@ public class GetMetadataDetailsTool implements IMcpTool
     private static String yesNo(boolean value)
     {
         return value ? "Yes" : "No"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Renders a nullable boolean flag as {@code Yes}/{@code No}, or {@link #DASH} when {@code null} (the
+     * flag does not apply to this owner kind / this predefined-item kind) - the boolean counterpart of
+     * {@link #valueOrDash}, used for the ChartOfAccounts {@code offBalance} and the
+     * ChartOfCalculationTypes {@code actionPeriodIsBase} owner-specific rows (issue #296 Phase 2/3).
+     */
+    private static String nullableYesNo(Boolean value)
+    {
+        return value == null ? DASH : yesNo(value.booleanValue());
     }
 
     /**

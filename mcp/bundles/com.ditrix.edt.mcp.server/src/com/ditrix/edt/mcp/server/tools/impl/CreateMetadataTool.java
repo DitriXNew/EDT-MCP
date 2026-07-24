@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver.CreateTarget;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.google.gson.JsonElement;
@@ -150,7 +151,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), " //$NON-NLS-1$
             + "'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or " //$NON-NLS-1$
             + "'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an " //$NON-NLS-1$
-            + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. " //$NON-NLS-1$
+            + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates " //$NON-NLS-1$
+            + "a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, " //$NON-NLS-1$
+            + "ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with " //$NON-NLS-1$
+            + "owner-specific 'properties'). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
@@ -176,13 +180,21 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "'string', the EXACT name of an ObjectType already in the same package for a " //$NON-NLS-1$
                 + "same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / " //$NON-NLS-1$
                 + "'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' " //$NON-NLS-1$
-                + "(booleans, 'fixed'=true needs a 'default') and 'default' (string).") //$NON-NLS-1$
+                + "(booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED " //$NON-NLS-1$
+                + "item ('...Predefined.<Item>') uses yet another vocabulary: common 'description' / " //$NON-NLS-1$
+                + "'code' / 'isFolder' / 'parent' plus owner-specific properties - 'valueType' (alias " //$NON-NLS-1$
+                + "'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a " //$NON-NLS-1$
+                + "ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / " //$NON-NLS-1$
+                + "'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
+                + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item " //$NON-NLS-1$
+                + "(see the guide for which apply to each owner).") //$NON-NLS-1$
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing " //$NON-NLS-1$
-                + "FQN segment) and in any synonym / comment value (default true). 'ё' in a Name is " //$NON-NLS-1$
+                + "FQN segment) and in any synonym / comment / predefined-item description value " //$NON-NLS-1$
+                + "(default true). 'ё' in a Name is " //$NON-NLS-1$
                 + "flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input " //$NON-NLS-1$
                 + "stores a compliant name. Set false to keep 'ё' exactly as supplied.") //$NON-NLS-1$
             .booleanProperty(KEY_SET_AS_DEFAULT,
@@ -332,6 +344,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (xdtoRef != null)
         {
             return createXdtoMember(projectName, normFqn, xdtoRef, properties);
+        }
+
+        // A FQN addressing a PREDEFINED item (Catalog/ChartOfCharacteristicTypes.Name.Predefined.Item)
+        // is handled by a dedicated branch: the predefined content is a plain EMF containment on the
+        // owner (not an mdclass member collection MetadataNodeResolver knows), so it must be parsed
+        // and dispatched BEFORE the generic member resolution below (issue #293).
+        PredefinedWriter.PredefinedRef predefinedRef = PredefinedWriter.parseRef(normFqn);
+        if (predefinedRef != null)
+        {
+            return createPredefinedItem(projectName, normFqn, predefinedRef, properties,
+                expectedNotExists, normReport);
         }
 
         // Parse the supported properties (synonym/comment); reject anything else early. The synonym /
@@ -675,6 +698,145 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .put(McpKeys.MESSAGE, verb + normFqn + (result.applied.isEmpty() ? "" //$NON-NLS-1$
                 : " (" + String.join(", ", result.applied) + ")")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
+    }
+
+    // ---- predefined-item creation (a plain EMF containment on the owner, issue #293) --------------
+
+    /**
+     * Creates a PREDEFINED item on a {@code Catalog}, {@code ChartOfCharacteristicTypes},
+     * {@code ChartOfCalculationTypes} or {@code ChartOfAccounts} owner, addressed by
+     * {@code Type.Owner.Predefined.ItemName}. The owner kind is NOT switched on here: every owner
+     * flows through the SAME generic path (parse via {@link PredefinedWriter#parseProperties}, mutate
+     * via {@link PredefinedWriter#create}), which admits the supported owners in lockstep with
+     * {@link PredefinedWriter#unsupportedOwnerTypeError} - the per-owner property vocabulary and its
+     * gating live inside {@link PredefinedWriter}, not in this wiring. Unlike a form object, the
+     * predefined content is a plain EMF containment on the owner (verified from {@code MdClass.xcore})
+     * - there is no separate top object to attach, so the mutation runs on the OWNER (re-fetched by
+     * bmId inside the write transaction) and only the owner's canonical FQN is force-exported.
+     */
+    private String createPredefinedItem(String projectName, String normFqn,
+        PredefinedWriter.PredefinedRef ref, List<JsonObject> properties, boolean expectedNotExists,
+        MdNameNormalizer.Report normReport)
+    {
+        // This tool's normalizeYo contract normalizes 'ё'->'е' in the new node's NAME (the trailing
+        // FQN segment) - a predefined item's Name is exactly that, so normalize it here too (with
+        // normalizeYo=false the report is a no-op and the 'ё' is kept). The stored Name is thus
+        // standard-compliant (mdo-ru-name-unallowed-letter), and later read/modify/delete tolerate
+        // the original 'ё' spelling via PredefinedWriter's yo-fallback lookup.
+        String itemName = normReport.apply("name", ref.itemName); //$NON-NLS-1$
+        if (!isValidIdentifier(itemName))
+        {
+            return ToolResult.error("Invalid name '" + itemName + "'. A name must start with a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+        }
+        String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
+        if (ownerTypeErr != null)
+        {
+            return ToolResult.error(ownerTypeErr).toJson();
+        }
+
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        String propErr = PredefinedWriter.parseProperties(properties, false, props);
+        if (propErr != null)
+        {
+            return propErr;
+        }
+        // Same normalizeYo policy for the description (free text) and the 'parent' folder reference
+        // (a Name the caller supplies, resolved against the already-normalized stored folder Names) -
+        // on CREATE only; modify_metadata promises free text stays exactly as supplied.
+        if (props.descriptionSet && props.description != null)
+        {
+            props.description = normReport.apply("description", props.description); //$NON-NLS-1$
+        }
+        if (props.parentName != null)
+        {
+            props.parentName = normReport.apply("parent", props.parentName); //$NON-NLS-1$
+        }
+
+        ProjectContext ctx = resolveProjectAndConfig(projectName);
+        if (ctx.hasError())
+        {
+            return ctx.error;
+        }
+        IProject project = ctx.project;
+        Configuration config = ctx.config;
+
+        // Owner resolution uses the yo-fallback (create_metadata itself normalizes 'yo'->'ye' in Names
+        // by default), and force-export targets the RESOLVED owner's canonical FQN.
+        MetadataNodeResolver.ResolvedNode ownerResolved =
+            MetadataNodeResolver.resolveExistingWithYoFallback(config, ref.ownerFqn());
+        if (ownerResolved.node == null)
+        {
+            return ToolResult.error("Owner object not found: " + ref.ownerFqn() + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Use get_metadata_objects to list available objects." //$NON-NLS-1$
+                + MetadataNodeResolver.yoNotFoundHint(ref.ownerFqn())).toJson();
+        }
+        MdObject owner = ownerResolved.node.object;
+        if (!(owner instanceof IBmObject))
+        {
+            return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        BmContext bm = resolveBmContext(project, projectName);
+        if (bm.hasError())
+        {
+            return bm.error;
+        }
+        // A ChartOfCharacteristicTypes item's valueType is the one per-item property that needs a
+        // resolution context (Configuration + platform Version) PredefinedWriter itself cannot reach:
+        // it is built via MetadataTypeBuilder, the SAME platform machinery an attribute's type uses.
+        // (extDimensionTypes[].characteristicType is NOT a consumer - the writer resolves it by
+        // navigating the live model, not against config.) Stash the SAME context resolveBmContext
+        // already resolved for the rest of this create path on props for PredefinedWriter#create to
+        // use. Harmless to set unconditionally (PredefinedWriter reads it only when a property that
+        // needs it was supplied).
+        props.config = config;
+        props.version = bm.version;
+        props.isExtensionProject = ExtensionOriginUtils.isExtensionProject(project);
+
+        final long ownerBmId = ((IBmObject)owner).bmGetId();
+        final String createItemName = itemName;
+        final String[] createdKindHolder = new String[1];
+        // The force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
+        // caller's spelling (ownerResolved.fqn echoes the input) - a case/spelling variant that
+        // still resolves would otherwise export a non-existent FQN and leave the change in memory.
+        final String[] canonicalOwnerFqnHolder = new String[1];
+
+        try
+        {
+            BmTransactions.<Void>write(bm.bmModel, "CreatePredefinedItem", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject txOwner = (EObject)tx.getObjectById(ownerBmId);
+                if (txOwner == null)
+                {
+                    throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
+                }
+                canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
+                PredefinedWriter.WriteResult result =
+                    PredefinedWriter.create(txOwner, createItemName, props, expectedNotExists);
+                if (result.isError())
+                {
+                    throw new IllegalStateException(result.error);
+                }
+                createdKindHolder[0] = result.item.eClass().getName();
+                return null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error creating predefined item", e); //$NON-NLS-1$
+            return ToolResult.error(unwrapCauseMessage(e)).toJson();
+        }
+
+        boolean persisted = BmTransactions.forceExportToDisk(project, canonicalOwnerFqnHolder[0]);
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, VAL_CREATED)
+            .put("fqn", normFqn) //$NON-NLS-1$
+            .put("kind", createdKindHolder[0]) //$NON-NLS-1$
+            .put("name", itemName) //$NON-NLS-1$
+            .put(KEY_PERSISTED, persisted);
+        normReport.addTo(result);
+        return result.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
     }
 
     // ---- top-level creation (mirrors the former create_metadata_object) -------------------------

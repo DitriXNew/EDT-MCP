@@ -30,7 +30,11 @@ import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogCodeType;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.Constant;
 import com._1c.g5.v8.dt.metadata.mdclass.Indexing;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension;
@@ -38,6 +42,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.google.gson.JsonPrimitive;
 
 /**
  * Tests for {@link GetMetadataDetailsTool}.
@@ -667,17 +673,168 @@ public class GetMetadataDetailsToolTest
     }
 
     /**
-     * A type this method does not special-case (e.g. Catalog) must add nothing, in either mode - the
-     * hook must be a true no-op for everything else, matching the ratchet other section-formatter tests
-     * apply.
+     * A type this method does not special-case (e.g. a plain Constant) must add nothing, in either
+     * mode - the hook must be a true no-op for everything else, matching the ratchet other
+     * section-formatter tests apply. (A Catalog IS special-cased for its Predefined items, but with
+     * none authored it likewise renders nothing - see
+     * {@link #testUnrelatedTypeCatalogWithNoPredefinedItemsRendersNothing} and the Predefined-items
+     * tests below for the non-empty case, issue #293.)
      */
     @Test
     public void testUnrelatedTypeRendersNothing()
+    {
+        Constant constant = MdClassFactory.eINSTANCE.createConstant();
+        constant.setName("Threshold"); //$NON-NLS-1$
+
+        assertEquals("", GetMetadataDetailsTool.formatTypeSpecificProperties(constant, false)); //$NON-NLS-1$
+        assertEquals("", GetMetadataDetailsTool.formatTypeSpecificProperties(constant, true)); //$NON-NLS-1$
+    }
+
+    /** A Catalog with no predefined content authored yet renders no Predefined-items section. */
+    @Test
+    public void testUnrelatedTypeCatalogWithNoPredefinedItemsRendersNothing()
     {
         Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
         catalog.setName("Products"); //$NON-NLS-1$
 
         assertEquals("", GetMetadataDetailsTool.formatTypeSpecificProperties(catalog, false)); //$NON-NLS-1$
         assertEquals("", GetMetadataDetailsTool.formatTypeSpecificProperties(catalog, true)); //$NON-NLS-1$
+    }
+
+    // ==================== Predefined items section (issue #293) ====================
+
+    /**
+     * A Catalog with authored predefined items renders the "Predefined items" table (Name / Code /
+     * Description / Folder / Parent), in BOTH basic and full mode - a mode must never carry less (the
+     * same #288 lesson the ScheduledJob/CommonModule tables above rely on).
+     */
+    @Test
+    public void testCatalogPredefinedItemsRenderedInBasicAndFullMode()
+    {
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("Colors"); //$NON-NLS-1$
+        catalog.setCodeType(CatalogCodeType.STRING);
+        catalog.setCodeLength(9);
+
+        PredefinedWriter.ItemProps folderProps = new PredefinedWriter.ItemProps();
+        folderProps.isFolder = true;
+        folderProps.isFolderSet = true;
+        PredefinedWriter.create(catalog, "Warm", folderProps, false); //$NON-NLS-1$
+
+        PredefinedWriter.ItemProps childProps = new PredefinedWriter.ItemProps();
+        childProps.parentName = "Warm"; //$NON-NLS-1$
+        childProps.code = new JsonPrimitive("00001"); //$NON-NLS-1$
+        childProps.codeSet = true;
+        childProps.description = "Bright red"; //$NON-NLS-1$
+        childProps.descriptionSet = true;
+        PredefinedWriter.create(catalog, "Red", childProps, false); //$NON-NLS-1$
+
+        for (boolean full : new boolean[] { false, true })
+        {
+            String md = GetMetadataDetailsTool.formatTypeSpecificProperties(catalog, full);
+            assertTrue("mode " + full + " must render the section header", //$NON-NLS-1$ //$NON-NLS-2$
+                md.contains("### Predefined items")); //$NON-NLS-1$
+            assertTrue("mode " + full + " must list the folder", md.contains("| Warm |")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertTrue("mode " + full + " must render the folder flag", md.contains("| Yes |")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertTrue("mode " + full + " must list the nested item with its code/description/parent", //$NON-NLS-1$ //$NON-NLS-2$
+                md.contains("Red") && md.contains("00001") && md.contains("Bright red")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+    }
+
+    /** {@code ChartOfCharacteristicTypes} likewise renders its Predefined items table. */
+    @Test
+    public void testChartOfCharacteristicTypesPredefinedItemsRendered()
+    {
+        ChartOfCharacteristicTypes types = MdClassFactory.eINSTANCE.createChartOfCharacteristicTypes();
+        types.setName("Properties"); //$NON-NLS-1$
+        types.setCodeLength(5);
+
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.code = new JsonPrimitive("W001"); //$NON-NLS-1$
+        props.codeSet = true;
+        PredefinedWriter.create(types, "Weight", props, false); //$NON-NLS-1$
+
+        String md = GetMetadataDetailsTool.formatTypeSpecificProperties(types, false);
+        assertTrue(md.contains("### Predefined items")); //$NON-NLS-1$
+        assertTrue(md.contains("Weight") && md.contains("W001")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A single predefined-item FQN ({@code Catalog.X.Predefined.ItemName}) renders that ONE item's
+     * properties (Name / Code / Description / Folder / Parent) via
+     * {@link GetMetadataDetailsTool#renderPredefinedItemViewBody}, resolving the owner from an
+     * in-memory {@link Configuration}. Predefined items are plain containment on the resolved
+     * Configuration, so the read needs NO BM transaction (unlike a form's content or a role's rights).
+     */
+    @Test
+    public void testSinglePredefinedItemFqnRendersThatItem()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("Colors"); //$NON-NLS-1$
+        catalog.setCodeType(CatalogCodeType.STRING);
+        catalog.setCodeLength(9);
+        config.getCatalogs().add(catalog);
+
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.code = new JsonPrimitive("00001"); //$NON-NLS-1$
+        props.codeSet = true;
+        props.description = "Bright blue"; //$NON-NLS-1$
+        props.descriptionSet = true;
+        PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
+
+        GetMetadataDetailsTool.RenderContext ctx =
+            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, 0); //$NON-NLS-1$
+        GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
+        List<String[]> failures = new ArrayList<>();
+        PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Catalog.Colors.Predefined.Blue"); //$NON-NLS-1$
+
+        String md = tool.renderPredefinedItemViewBody(ref, "Catalog.Colors.Predefined.Blue", //$NON-NLS-1$
+            "Catalog.Colors.Predefined.Blue", failures, ctx); //$NON-NLS-1$
+
+        assertTrue("no failure expected: " + failures, failures.isEmpty()); //$NON-NLS-1$
+        assertNotNull(md);
+        assertTrue(md.contains("## Predefined item: Catalog.Colors.Predefined.Blue")); //$NON-NLS-1$
+        assertTrue(md.contains("00001")); //$NON-NLS-1$
+        assertTrue(md.contains("Bright blue")); //$NON-NLS-1$
+    }
+
+    /** An unsupported owner TYPE (e.g. Document) reports an actionable failure, not a silent miss. */
+    @Test
+    public void testSinglePredefinedItemFqnUnsupportedOwnerTypeReportsFailure()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        GetMetadataDetailsTool.RenderContext ctx =
+            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, 0); //$NON-NLS-1$
+        GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
+        List<String[]> failures = new ArrayList<>();
+        PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Document.Order.Predefined.X"); //$NON-NLS-1$
+
+        String md = tool.renderPredefinedItemViewBody(ref, "Document.Order.Predefined.X", //$NON-NLS-1$
+            "Document.Order.Predefined.X", failures, ctx); //$NON-NLS-1$
+
+        assertNull(md);
+        assertEquals(1, failures.size());
+        assertTrue(failures.get(0)[1].contains("does not have predefined items")); //$NON-NLS-1$
+    }
+
+    /** An owner that does not exist reports an actionable failure. */
+    @Test
+    public void testSinglePredefinedItemFqnOwnerNotFoundReportsFailure()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        GetMetadataDetailsTool.RenderContext ctx =
+            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, 0); //$NON-NLS-1$
+        GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
+        List<String[]> failures = new ArrayList<>();
+        PredefinedWriter.PredefinedRef ref =
+            PredefinedWriter.parseRef("Catalog.NoSuchCatalog.Predefined.X"); //$NON-NLS-1$
+
+        String md = tool.renderPredefinedItemViewBody(ref, "Catalog.NoSuchCatalog.Predefined.X", //$NON-NLS-1$
+            "Catalog.NoSuchCatalog.Predefined.X", failures, ctx); //$NON-NLS-1$
+
+        assertNull(md);
+        assertEquals(1, failures.size());
+        assertTrue(failures.get(0)[1].contains("Owner object not found")); //$NON-NLS-1$
     }
 }

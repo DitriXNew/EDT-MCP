@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
@@ -1317,5 +1318,51 @@ public class ModifyMetadataToolTest
         String yoSpelledName = MetadataLanguageUtils.cp(0x0417, 0x0430, 0x043a, 0x0430, 0x0437, 0x0451);
         assertEquals("modifyXdtoMemberInTx's own target resolution must tolerate a yo-spelled FQN segment", //$NON-NLS-1$
             type, com.ditrix.edt.mcp.server.utils.XdtoWriter.findObjectType(pkg, yoSpelledName));
+    }
+
+    // ==================== predefined-item dispatch (issue #293) ====================
+
+    /**
+     * The modify dispatch routes a 4-part predefined-item FQN to its dedicated branch via
+     * {@link PredefinedWriter#parseRef}, the SAME recognizer create_metadata / delete_metadata use -
+     * asserted runtime-free, mirroring the form-member recognizer precedent above.
+     */
+    @Test
+    public void testPredefinedItemFqnRecognizedByModifyDispatch()
+    {
+        PredefinedWriter.PredefinedRef ref =
+            PredefinedWriter.parseRef("ChartOfCharacteristicTypes.Properties.Predefined.Weight"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("ChartOfCharacteristicTypes", ref.ownerType); //$NON-NLS-1$
+        assertEquals("Weight", ref.itemName); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionMentionsPredefinedItems()
+    {
+        String desc = new ModifyMetadataTool().getDescription();
+        assertTrue("description should mention predefined items", desc.contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** 'name' is always refused (identity is the FQN leaf); 'parent' (a move) is refused on modify only. */
+    @Test
+    public void testPredefinedItemPropertiesGuardRules()
+    {
+        PredefinedWriter.ItemProps out = new PredefinedWriter.ItemProps();
+
+        JsonObject nameProp = new JsonObject();
+        nameProp.addProperty("name", "name"); //$NON-NLS-1$ //$NON-NLS-2$
+        nameProp.addProperty("value", "NewName"); //$NON-NLS-1$ //$NON-NLS-2$
+        String nameErr =
+            PredefinedWriter.parseProperties(java.util.List.of(nameProp), true, out);
+        assertNotNull("renaming a predefined item must be refused", nameErr); //$NON-NLS-1$
+
+        JsonObject parentProp = new JsonObject();
+        parentProp.addProperty("name", "parent"); //$NON-NLS-1$ //$NON-NLS-2$
+        parentProp.addProperty("value", "Folder"); //$NON-NLS-1$ //$NON-NLS-2$
+        String parentErr =
+            PredefinedWriter.parseProperties(java.util.List.of(parentProp), true, out);
+        assertNotNull("moving to a different parent must be refused on modify", parentErr); //$NON-NLS-1$
+        assertTrue(parentErr.contains("not yet supported")); //$NON-NLS-1$
     }
 }
