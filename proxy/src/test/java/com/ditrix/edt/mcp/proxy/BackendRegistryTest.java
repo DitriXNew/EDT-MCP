@@ -18,9 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
@@ -232,180 +229,69 @@ public class BackendRegistryTest
         assertEquals(List.of("A"), BackendRegistry.parseProjectNames(raw)); //$NON-NLS-1$
     }
 
-    // ---- parseProjectNames: Markdown-table fallback (issue #302) ----
-
     @Test
-    public void testParseProjectNamesMarkdownFallbackFromResource()
+    public void testParseProjectNamesRejectsAFailedPayload()
     {
-        // A backend whose list_projects predates structuredContent returns only the human
-        // Markdown table (as an embedded resource). Names come from the first column.
-        String md = "## Workspace Projects\n\n**Total:** 2 projects\n\n" //$NON-NLS-1$
-            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
-            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
-            + "| Trade | ready | /ws/Trade | Yes | Yes | V8ConfigurationNature |\n" //$NON-NLS-1$
-            + "| ERPKAUT | ready | /ws/ERPKAUT | Yes | Yes | V8ExtensionNature |\n"; //$NON-NLS-1$
-        assertEquals(List.of("Trade", "ERPKAUT"), //$NON-NLS-1$ //$NON-NLS-2$
-            BackendRegistry.parseProjectNames(resourceResult(md)));
+        // A payload that declares failure is not a project list, even with a projects array -
+        // accepting it would register phantom projects for routing.
+        String raw = "{\"result\":{\"structuredContent\":{\"success\":false," //$NON-NLS-1$
+            + "\"projects\":[{\"name\":\"Phantom\"}]}}}"; //$NON-NLS-1$
+        assertTrue(BackendRegistry.parseProjectNames(raw).isEmpty());
+        assertFalse(BackendRegistry.hasStructuredProjects(raw));
     }
 
     @Test
-    public void testParseProjectNamesMarkdownFallbackFromTextBlock()
+    public void testPlainTextModeStillYieldsTheMachineList()
     {
-        // Plain-text mode: the Markdown arrives as a text block, not a resource.
-        String md = "| Name | State |\n|------|-------|\n| Trade | ready |\n"; //$NON-NLS-1$
-        assertEquals(List.of("Trade"), BackendRegistry.parseProjectNames(textResult(md))); //$NON-NLS-1$
+        // Plain-text mode (the Cursor-compatibility preference) delivers the SAME JSON payload as
+        // content text instead of structuredContent - that is still the machine contract, so such a
+        // backend must be supported and routable, not reported as an unsupported plugin version.
+        String payload = "{\"success\":true,\"projects\":[{\"name\":\"Trade\"}]}"; //$NON-NLS-1$
+        String raw = textResult(payload);
+        assertTrue(BackendRegistry.hasStructuredProjects(raw));
+        assertEquals(List.of("Trade"), BackendRegistry.parseProjectNames(raw)); //$NON-NLS-1$
     }
 
     @Test
-    public void testParseProjectNamesPrefersStructuredOverMarkdown()
+    public void testMarkdownOnlyResponseIsNotAMachineList()
     {
-        // When BOTH are present, the machine contract wins; the table is ignored.
-        JsonObject structured = new JsonObject();
-        JsonArray projects = new JsonArray();
-        JsonObject p = new JsonObject();
-        p.addProperty("name", "FromStructured"); //$NON-NLS-1$ //$NON-NLS-2$
-        projects.add(p);
-        structured.add("projects", projects); //$NON-NLS-1$
-        JsonObject result = resultWithContent("| Name |\n|---|\n| FromMarkdown |\n"); //$NON-NLS-1$
-        result.add("structuredContent", structured); //$NON-NLS-1$
-        JsonObject response = new JsonObject();
-        response.add("result", result); //$NON-NLS-1$
-        assertEquals(List.of("FromStructured"), //$NON-NLS-1$
-            BackendRegistry.parseProjectNames(response.toString()));
+        // A genuinely old plugin answers with the human table only - no Markdown scraping, so it
+        // yields nothing and is classified as unsupported by the caller.
+        String md = "| Name | State |\n|---|---|\n| Trade | ready |\n"; //$NON-NLS-1$
+        assertFalse(BackendRegistry.hasStructuredProjects(textResult(md)));
+        assertTrue(BackendRegistry.parseProjectNames(textResult(md)).isEmpty());
     }
 
     @Test
-    public void testParseProjectNamesMarkdownUnescapesPipe()
+    public void testToolErrorWithStaleProjectsContributesNothing()
     {
-        // escapeForTable turns '|' into '\|'; the fallback must undo that.
-        String md = "| Name | State |\n|---|---|\n| Weird\\|Name | ready |\n"; //$NON-NLS-1$
-        assertEquals(List.of("Weird|Name"), BackendRegistry.parseProjectNames(resourceResult(md))); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testParseProjectNamesMarkdownEmptyTableYieldsEmpty()
-    {
-        String md = "## Workspace Projects\n\n**Total:** 0 projects\n\n*No projects found.*\n"; //$NON-NLS-1$
-        assertTrue(BackendRegistry.parseProjectNames(resourceResult(md)).isEmpty());
-    }
-
-    @Test
-    public void testParseProjectNamesMarkdownDataRowNamedLikeHeaderOrSeparatorSurvives()
-    {
-        // A real project literally named "Name" or "---" sits in a DATA row (after the separator)
-        // and must NOT be mistaken for the header/separator and dropped.
-        String md = "| Name | State |\n|------|-------|\n| Name | ready |\n| --- | ready |\n"; //$NON-NLS-1$
-        assertEquals(List.of("Name", "---"), //$NON-NLS-1$ //$NON-NLS-2$
-            BackendRegistry.parseProjectNames(resourceResult(md)));
-    }
-
-    @Test
-    public void testParseProjectNamesEmptyStructuredIsAuthoritativeNotMarkdown()
-    {
-        // structuredContent.projects present but EMPTY means "zero projects" (authoritative); a stale
-        // Markdown row beside it must NOT be resurrected (the two are separate workspace passes).
-        JsonObject structured = new JsonObject();
-        structured.add("projects", new JsonArray()); // empty, but PRESENT //$NON-NLS-1$
-        JsonObject result = resultWithContent("| Name |\n|---|\n| Stale |\n"); //$NON-NLS-1$
-        result.add("structuredContent", structured); //$NON-NLS-1$
-        JsonObject response = new JsonObject();
-        response.add("result", result); //$NON-NLS-1$
-        assertTrue(BackendRegistry.parseProjectNames(response.toString()).isEmpty());
-    }
-
-    @Test
-    public void testParseProjectNamesSeparatorRowValidatesTrailingCell()
-    {
-        // "| --- | ready" (no trailing pipe, a non-dash trailing cell) is NOT a separator; treating
-        // it as one would wrongly start collecting the rows after it. No valid separator -> empty.
-        String md = "| --- | ready\n| Trade | ready\n"; //$NON-NLS-1$
-        assertTrue(BackendRegistry.parseProjectNames(resourceResult(md)).isEmpty());
-    }
-
-    @Test
-    public void testProjectsFromMarkdownTableParsesFullColumns()
-    {
-        // A content-only backend's table is parsed into project objects with all list_projects columns
-        // so the fan-out keeps the columns, not just the name.
-        String md = "## Workspace Projects\n\n**Total:** 1 projects\n\n" //$NON-NLS-1$
-            + "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
-            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
-            + "| Trade | ready | /ws/Trade | Yes | No | V8ConfigurationNature |\n"; //$NON-NLS-1$
-
-        com.google.gson.JsonArray projects = BackendRegistry.projectsFromMarkdownTable(resultWithContent(md));
-
-        assertEquals(1, projects.size());
-        JsonObject p = projects.get(0).getAsJsonObject();
-        assertEquals("Trade", p.get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("ready", p.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("/ws/Trade", p.get("path").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(p.get("open").getAsBoolean()); //$NON-NLS-1$
-        assertFalse(p.get("edtProject").getAsBoolean()); //$NON-NLS-1$
-        assertEquals("V8ConfigurationNature", p.get("natures").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    @Test
-    public void testProjectsFromMarkdownTableOmitsDashBooleans()
-    {
-        // A "-" in the Open/EDT columns (a closed/uninspected project) is OMITTED, matching the
-        // structured shape (absence = not inspected), rather than stored as a bogus value.
-        String md = "| Name | State | Path | Open | EDT Project | Natures |\n" //$NON-NLS-1$
-            + "|------|-------|------|------|-------------|--------|\n" //$NON-NLS-1$
-            + "| Closed | - | - | No | - | - |\n"; //$NON-NLS-1$
-
-        JsonObject p = BackendRegistry.projectsFromMarkdownTable(resultWithContent(md)).get(0).getAsJsonObject();
-
-        assertEquals("Closed", p.get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(p.get("open").getAsBoolean()); //$NON-NLS-1$
-        assertNull("edtProject '-' must be omitted", p.get("edtProject")); //$NON-NLS-1$ //$NON-NLS-2$
+        // isError:true is checked FIRST, so a failed response that still carries a partial/stale
+        // projects array cannot register those names for routing.
+        String raw = "{\"result\":{\"isError\":true,\"structuredContent\":{\"success\":true," //$NON-NLS-1$
+            + "\"projects\":[{\"name\":\"Stale\"}]}}}"; //$NON-NLS-1$
+        // The response DOES carry a machine list, so only the isError-FIRST ordering keeps those
+        // names out of the routing table (the probe returns no projects for a tool error).
+        assertTrue("the response must be recognised as a tool error", //$NON-NLS-1$
+            BackendRegistry.isToolError(raw));
+        assertTrue("...even though it also carries a projects array", //$NON-NLS-1$
+            BackendRegistry.hasStructuredProjects(raw));
     }
 
     // ---- helpers ----
 
-    /** A tools/call response whose only content is an embedded markdown resource. */
-    private static String resourceResult(String markdown)
-    {
-        JsonObject resource = new JsonObject();
-        resource.addProperty("text", markdown); //$NON-NLS-1$
-        JsonObject item = new JsonObject();
-        item.addProperty("type", "resource"); //$NON-NLS-1$ //$NON-NLS-2$
-        item.add("resource", resource); //$NON-NLS-1$
-        return wrapContent(item);
-    }
-
-    /** A tools/call response whose only content is a plain text block. */
+    /** A tools/call response whose only content is a plain text block (plain-text mode shape). */
     private static String textResult(String text)
     {
-        JsonObject item = new JsonObject();
+        com.google.gson.JsonObject item = new com.google.gson.JsonObject();
         item.addProperty("type", "text"); //$NON-NLS-1$ //$NON-NLS-2$
         item.addProperty("text", text); //$NON-NLS-1$
-        return wrapContent(item);
-    }
-
-    private static String wrapContent(JsonObject contentItem)
-    {
-        JsonObject response = new JsonObject();
-        response.add("result", resultWithContentItem(contentItem)); //$NON-NLS-1$
-        return response.toString();
-    }
-
-    private static JsonObject resultWithContent(String markdown)
-    {
-        JsonObject resource = new JsonObject();
-        resource.addProperty("text", markdown); //$NON-NLS-1$
-        JsonObject item = new JsonObject();
-        item.addProperty("type", "resource"); //$NON-NLS-1$ //$NON-NLS-2$
-        item.add("resource", resource); //$NON-NLS-1$
-        return resultWithContentItem(item);
-    }
-
-    private static JsonObject resultWithContentItem(JsonObject contentItem)
-    {
-        JsonArray content = new JsonArray();
-        content.add(contentItem);
-        JsonObject result = new JsonObject();
+        com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+        content.add(item);
+        com.google.gson.JsonObject result = new com.google.gson.JsonObject();
         result.add("content", content); //$NON-NLS-1$
-        return result;
+        com.google.gson.JsonObject response = new com.google.gson.JsonObject();
+        response.add("result", result); //$NON-NLS-1$
+        return response.toString();
     }
 
     private static ProxyConfig scanningConfig(int from, int to)

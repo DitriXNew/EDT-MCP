@@ -81,10 +81,10 @@ public class ToolCallResult
     }
 
     /**
-     * A text-only ERROR result: the real error message in the text channel plus {@code isError:true},
-     * and NO {@code structuredContent}. Used when a client opted out of structuredContent but the
-     * failure must stay machine-detectable (issue #302 follow-up) - suppressing the structured payload
-     * must not turn a failure into a success-looking result.
+     * A TEXT-only error result: the real error message in the text channel plus {@code isError:true},
+     * and NO {@code structuredContent}. Used on the JSON path when the structured payload must be
+     * suppressed (plain-text mode, or a client that opted out of structuredContent) - suppressing it
+     * must not turn a tool FAILURE into a success-looking result.
      *
      * @param structuredContent the structured error payload (typically a Gson {@link JsonElement})
      * @return a text result flagged {@code isError:true}
@@ -92,8 +92,8 @@ public class ToolCallResult
     public static ToolCallResult errorText(Object structuredContent)
     {
         ToolCallResult result = new ToolCallResult();
-        // Cap the text like the normal text path (buildToolCallTextResponse) does, so an opted-out
-        // client cannot receive an unbounded content[0].text from a huge error message.
+        // Capped like the normal text path (buildToolCallTextResponse): suppressing the structured
+        // payload must not let a huge error message through unbounded.
         result.content.add(ContentItem.text(OutputSizeGuard.cap(buildErrorText(structuredContent))));
         result.isError = Boolean.TRUE;
         return result;
@@ -256,20 +256,6 @@ public class ToolCallResult
         return result;
     }
     
-    /**
-     * Attaches machine-readable {@code structuredContent} to an existing content result (a
-     * {@code text}/{@code resource} one), so a tool can carry BOTH a human rendering and a
-     * structured payload (issue #302). Returns {@code this} for chaining.
-     *
-     * @param structuredContent the structured payload (typically a Gson {@link JsonElement})
-     * @return this result
-     */
-    public ToolCallResult withStructuredContent(Object structuredContent)
-    {
-        this.structuredContent = structuredContent;
-        return this;
-    }
-
     public List<ContentItem> getContent()
     {
         return content;

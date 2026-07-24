@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
@@ -14,14 +17,13 @@ import org.eclipse.core.resources.ResourcesPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
+import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker.ProjectStateResult;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 
 /**
  * Tool to list all workspace projects.
@@ -29,7 +31,17 @@ import com.google.gson.JsonObject;
 public class ListProjectsTool implements IMcpTool
 {
     public static final String NAME = "list_projects"; //$NON-NLS-1$
-    
+
+    /** Output-format parameter: {@code md} (default, the human table) or {@code json}. */
+    private static final String PARAM_FORMAT = "format"; //$NON-NLS-1$
+
+    /** {@link #PARAM_FORMAT} value selecting the machine payload in {@code structuredContent}. */
+    private static final String FORMAT_JSON = "json"; //$NON-NLS-1$
+
+    /** {@link #PARAM_FORMAT} value (the default) selecting the human Markdown table. */
+    private static final String FORMAT_MD = "md"; //$NON-NLS-1$
+
+
     @Override
     public String getName()
     {
@@ -39,59 +51,67 @@ public class ListProjectsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List all workspace projects with properties (name, path, type, natures)"; //$NON-NLS-1$
+        return "List all workspace projects with properties (name, path, type, natures). " //$NON-NLS-1$
+            + "format='md' (default) returns the human Markdown table; format='json' returns the " //$NON-NLS-1$
+            + "machine-readable project list in structuredContent."; //$NON-NLS-1$
     }
-    
+
     @Override
     public String getInputSchema()
     {
-        return JsonSchemaBuilder.object().build();
+        return JsonSchemaBuilder.object()
+            .enumProperty(PARAM_FORMAT,
+                "Output format: 'md' (default) renders the human Markdown table; 'json' returns " //$NON-NLS-1$
+                + "{projects:[{name, state, path, open, edtProject, natures}]} in structuredContent " //$NON-NLS-1$
+                + "for a programmatic consumer.", //$NON-NLS-1$
+                FORMAT_MD, FORMAT_JSON)
+            .build();
+    }
+
+    @Override
+    public ResponseType getResponseType(Map<String, String> params)
+    {
+        return isJsonFormat(params) ? ResponseType.JSON : ResponseType.MARKDOWN;
     }
 
     @Override
     public String execute(Map<String, String> params)
     {
-        return listProjects();
+        return isJsonFormat(params) ? listProjectsJson() : listProjects();
     }
 
-    @Override
-    public String getStructuredContent(Map<String, String> params)
+    /** Whether this call asked for the machine payload ({@code format=json}); default is Markdown. */
+    private static boolean isJsonFormat(Map<String, String> params)
     {
-        return listProjectsStructured();
+        String format = JsonUtils.extractStringArgument(params, PARAM_FORMAT);
+        return format != null && FORMAT_JSON.equalsIgnoreCase(format.trim());
     }
 
     /**
-     * The machine-readable {@code {"projects":[{name,state,path,open,edtProject,natures}]}}
-     * companion to {@link #listProjects()} (issue #302), so a programmatic consumer (the multi-EDT
-     * proxy) can read the project list without scraping the Markdown table. It mirrors the same
-     * columns the table renders. Defensive: ANY failure yields {@code null} (no structuredContent)
-     * rather than sinking the human markdown result.
+     * The machine-readable project list ({@code format=json}): the SAME rows the Markdown table
+     * renders, as {@code {projects:[{name, state, path, open, edtProject, natures}]}}.
+     * {@code edtProject} is a boolean ONLY when the EDT nature was actually determined (an open
+     * project whose read succeeded); a closed project, or one whose nature read failed, OMITS it -
+     * mirroring the table's Yes/No/- tri-state, so a consumer can tell "not an EDT project" from
+     * "not inspected".
      *
-     * @return the projects JSON string, or {@code null} on any failure
+     * @return the JSON payload for {@code structuredContent}
      */
-    static String listProjectsStructured()
+    public static String listProjectsJson()
     {
         try
         {
             IWorkspace workspace = ResourcesPlugin.getWorkspace();
-            IProject[] projects = workspace.getRoot().getProjects();
-
-            JsonArray rows = new JsonArray();
-            for (IProject project : projects)
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (IProject project : workspace.getRoot().getProjects())
             {
-                JsonObject row = new JsonObject();
-                row.addProperty("name", project.getName()); //$NON-NLS-1$
-                row.addProperty("state", //$NON-NLS-1$
-                    ProjectStateChecker.checkProjectState(project).getStateValue());
-                row.addProperty("path", project.getLocation() != null //$NON-NLS-1$
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name", project.getName()); //$NON-NLS-1$
+                row.put("state", ProjectStateChecker.checkProjectState(project).getStateValue()); //$NON-NLS-1$
+                row.put("path", project.getLocation() != null //$NON-NLS-1$
                     ? project.getLocation().toOSString() : ""); //$NON-NLS-1$
-                row.addProperty("open", project.isOpen()); //$NON-NLS-1$
+                row.put("open", project.isOpen()); //$NON-NLS-1$
 
-                // Mirror the markdown's Yes/No/- tri-state WITHOUT collapsing it: emit edtProject as a
-                // definitive boolean ONLY when the EDT nature was actually determined (an OPEN project
-                // whose read succeeded). A closed project, or one whose nature read failed, leaves it
-                // "-" in the table and OMITS the field here, so a machine consumer can tell "not EDT"
-                // from "not inspected" instead of seeing a misleading false.
                 String edtStatus = "-"; //$NON-NLS-1$
                 String naturesStr = "-"; //$NON-NLS-1$
                 if (project.isOpen())
@@ -102,24 +122,21 @@ public class ListProjectsTool implements IMcpTool
                 }
                 if ("Yes".equals(edtStatus)) //$NON-NLS-1$
                 {
-                    row.addProperty("edtProject", true); //$NON-NLS-1$
+                    row.put("edtProject", Boolean.TRUE); //$NON-NLS-1$
                 }
                 else if ("No".equals(edtStatus)) //$NON-NLS-1$
                 {
-                    row.addProperty("edtProject", false); //$NON-NLS-1$
+                    row.put("edtProject", Boolean.FALSE); //$NON-NLS-1$
                 }
-                row.addProperty("natures", naturesStr); //$NON-NLS-1$
+                row.put("natures", naturesStr); //$NON-NLS-1$
                 rows.add(row);
             }
-
-            JsonObject out = new JsonObject();
-            out.add("projects", rows); //$NON-NLS-1$
-            return out.toString();
+            return ToolResult.success().put("projects", rows).toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {
-            Log.warning("list_projects: failed to build structuredContent: " + e.getMessage()); //$NON-NLS-1$
-            return null;
+            Activator.logError("Failed to list projects", e); //$NON-NLS-1$
+            return ToolResult.error(e.getMessage()).toJson();
         }
     }
     

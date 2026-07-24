@@ -51,6 +51,12 @@ public final class McpProxyHandler implements HttpHandler
     // dependency on the plugin, so the literal values are duplicated here).
     // ------------------------------------------------------------------------------------
 
+    /** {@code list_projects} argument selecting the output format. */
+    private static final String ARG_FORMAT = "format"; //$NON-NLS-1$
+
+    /** {@link #ARG_FORMAT} value asking a backend for the machine-readable project list. */
+    private static final String FORMAT_JSON = "json"; //$NON-NLS-1$
+
     private static final String HEADER_SESSION_ID = "Mcp-Session-Id"; //$NON-NLS-1$
     private static final String HEADER_ACCEPT = "Accept"; //$NON-NLS-1$
     private static final String HEADER_CONTENT_TYPE = "Content-Type"; //$NON-NLS-1$
@@ -89,6 +95,7 @@ public final class McpProxyHandler implements HttpHandler
 
     private static final String KEY_METHOD = "method"; //$NON-NLS-1$
     private static final String KEY_PARAMS = "params"; //$NON-NLS-1$
+    private static final String KEY_ARGUMENTS = "arguments"; //$NON-NLS-1$
     private static final String KEY_NAME = "name"; //$NON-NLS-1$
     private static final String KEY_ID = "id"; //$NON-NLS-1$
     private static final String KEY_JSONRPC = "jsonrpc"; //$NON-NLS-1$
@@ -370,7 +377,7 @@ public final class McpProxyHandler implements HttpHandler
                 forwardToBackend(exchange, route.backend, rawBody, isToolCall, requestId);
                 break;
             case FAN_OUT_LIST_PROJECTS:
-                handleFanOut(exchange, requestId);
+                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson));
                 break;
             case PROXY_SELF:
                 handleProxySelf(exchange, requestJson, requestId);
@@ -420,12 +427,29 @@ public final class McpProxyHandler implements HttpHandler
     }
 
     /**
+     * Whether the CLIENT asked {@code list_projects} for {@code format=json}. The fan-out always
+     * queries the backends with {@code format=json} (the merge needs the machine list), but the
+     * merged response must be shaped like a direct call of the format the client actually requested:
+     * the human table by default, the machine payload only when asked for.
+     *
+     * @param requestJson the parsed JSON-RPC request
+     * @return {@code true} when the caller passed {@code format=json}
+     */
+    private static boolean wantsJsonFormat(JsonObject requestJson)
+    {
+        JsonObject arguments = Json.obj(Json.obj(requestJson, KEY_PARAMS), KEY_ARGUMENTS);
+        String format = Json.str(arguments, ARG_FORMAT);
+        return format != null && FORMAT_JSON.equalsIgnoreCase(format.trim());
+    }
+
+    /**
      * Calls {@code list_projects} on every live backend and merges the results via
      * {@link FanOut#mergeListProjects}. A backend that fails the call simply contributes no
      * response (mirroring the registry's own defensive {@code list_projects} handling); the
      * registry is refreshed once when at least one backend failed.
      */
-    private void handleFanOut(HttpExchange exchange, Object requestId) throws IOException
+    private void handleFanOut(HttpExchange exchange, Object requestId, boolean jsonFormat)
+        throws IOException
     {
         List<Backend> live = registry.live();
         List<String> responses = new ArrayList<>(live.size());
@@ -434,7 +458,13 @@ public final class McpProxyHandler implements HttpHandler
         {
             try
             {
-                responses.add(backend.callToolBlocking(ProjectRouter.TOOL_LIST_PROJECTS, new JsonObject()));
+                // Always ask for the MACHINE payload: the merge reads structuredContent.projects, and
+                // the human table of the merged response is re-rendered from it. A backend whose
+                // plugin ignores the parameter answers without structuredContent and contributes
+                // nothing - the registry reports it as an unsupported plugin version.
+                JsonObject arguments = new JsonObject();
+                arguments.addProperty(ARG_FORMAT, FORMAT_JSON);
+                responses.add(backend.callToolBlocking(ProjectRouter.TOOL_LIST_PROJECTS, arguments));
             }
             catch (IOException e)
             {
@@ -451,7 +481,8 @@ public final class McpProxyHandler implements HttpHandler
         {
             registry.refresh();
         }
-        sendMcpResponse(exchange, 200, FanOut.mergeListProjects(responses, requestId), null);
+        sendMcpResponse(exchange, 200,
+            FanOut.mergeListProjects(responses, requestId, jsonFormat), null);
     }
 
     /** Answers {@code router_status} / {@code router_refresh} itself via {@link RouterTools}. */

@@ -85,36 +85,11 @@ public interface IMcpTool
     
     /**
      * Executes the tool with the given parameters.
-     *
+     * 
      * @param params map of parameter name to value
      * @return result string (format depends on getResponseType())
      */
     String execute(Map<String, String> params);
-
-    /**
-     * Optional machine-readable {@code structuredContent} to emit ALONGSIDE a human-facing
-     * {@code MARKDOWN}/{@code TEXT}/{@code YAML} result, as a JSON string, or {@code null} for none.
-     * <p>
-     * The MCP {@code tools/call} result may carry both a {@code content} channel (the human
-     * rendering) and a {@code structuredContent} object (the machine payload); a JSON tool puts its
-     * data ONLY in {@code structuredContent}, but a markdown tool can ALSO expose one here so a
-     * programmatic consumer does not have to scrape the table. Example: {@code list_projects}
-     * returns its project table as markdown AND a {@code {"projects":[{"name":...}]}} object so the
-     * multi-EDT proxy can build routing without parsing text (issue #302).
-     * <p>
-     * The default is {@code null} (no structured payload). It is delivered independently of
-     * {@link #getOutputSchema()}: a tool MAY emit {@code structuredContent} without declaring an
-     * output schema, so overriding this alone does NOT change the {@code tools/list} surface.
-     * Implementations MUST be defensive (return {@code null} rather than throw) — a failure here
-     * must not sink the human result.
-     *
-     * @param params the same parameters passed to {@link #execute(Map)}
-     * @return a JSON string for {@code structuredContent}, or {@code null} when there is none
-     */
-    default String getStructuredContent(Map<String, String> params)
-    {
-        return null;
-    }
     
     /**
      * Returns the response content type for this tool.
@@ -125,6 +100,24 @@ public interface IMcpTool
     default ResponseType getResponseType()
     {
         return ResponseType.MARKDOWN;
+    }
+
+    /**
+     * The response type for ONE call, given its arguments — the per-call form of
+     * {@link #getResponseType()}. The default ignores the arguments and returns the tool's fixed
+     * {@link #getResponseType()}, so a tool with a single output format needs no override.
+     * <p>
+     * Override it for a tool that lets the caller choose the output format, e.g.
+     * {@code list_projects}' {@code format} parameter: {@code md} (the default) renders the human
+     * Markdown table, {@code json} returns the machine payload in {@code structuredContent}. The
+     * dispatcher calls THIS method (never the no-arg one) when delivering a tool result.
+     *
+     * @param params the same parameters passed to {@link #execute(Map)}
+     * @return the response type for this call
+     */
+    default ResponseType getResponseType(Map<String, String> params)
+    {
+        return getResponseType();
     }
 
     /**

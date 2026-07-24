@@ -47,6 +47,7 @@ public final class FanOut
     private static final String KEY_IS_ERROR = "isError"; //$NON-NLS-1$
     private static final String KEY_STRUCTURED_CONTENT = "structuredContent"; //$NON-NLS-1$
     private static final String KEY_PROJECTS = "projects"; //$NON-NLS-1$
+    private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
     private static final String KEY_CONTENT = "content"; //$NON-NLS-1$
     private static final String KEY_RESOURCE = "resource"; //$NON-NLS-1$
     private static final String KEY_TEXT = "text"; //$NON-NLS-1$
@@ -88,6 +89,25 @@ public final class FanOut
      */
     public static String mergeListProjects(List<String> backendResponses, Object requestId)
     {
+        return mergeListProjects(backendResponses, requestId, false);
+    }
+
+    /**
+     * As {@link #mergeListProjects(List, Object)}, but shaping the merged response to the format the
+     * CALLER asked for: {@code jsonFormat=true} keeps the machine payload
+     * ({@code structuredContent.projects}), {@code false} (the {@code format=md} default) returns the
+     * human table only, exactly like a direct {@code list_projects} call of that format. The fan-out
+     * always QUERIES the backends with {@code format=json} (the merge needs the machine list); this
+     * flag only decides what the client receives.
+     *
+     * @param backendResponses raw JSON-RPC response strings, one per backend (may be {@code null})
+     * @param requestId the client's request id to echo (String, Number, or {@code null})
+     * @param jsonFormat whether the caller asked for {@code format=json}
+     * @return the merged JSON-RPC response, never {@code null}
+     */
+    public static String mergeListProjects(List<String> backendResponses, Object requestId,
+        boolean jsonFormat)
+    {
         JsonArray mergedProjects = new JsonArray();
         JsonObject firstEnvelope = null;
 
@@ -104,19 +124,12 @@ public final class FanOut
                 {
                     firstEnvelope = envelope;
                 }
-                JsonObject result = Json.obj(envelope, KEY_RESULT);
-                if (!appendStructuredProjects(result, mergedProjects))
-                {
-                    // A content-only backend (legacy build / failed structured generation): recover its
-                    // projects with their FULL columns from the Markdown table so its live projects are
-                    // not hidden from the merged structuredContent.projects AND the rebuilt human content
-                    // keeps its state/path/open/EDT/natures (not just the name). Both channels then come
-                    // from the same table parse, so they stay consistent.
-                    for (JsonElement project : BackendRegistry.projectsFromMarkdownTable(result))
-                    {
-                        mergedProjects.add(project);
-                    }
-                }
+                // Only the MACHINE contract is merged: the fan-out asks every backend for
+                // format=json, so a response without structuredContent.projects comes from a plugin
+                // too old to support it. Such a backend contributes nothing here and is reported as
+                // an unsupported version by the registry - the proxy deliberately does NOT scrape the
+                // human Markdown as a fallback.
+                appendStructuredProjects(Json.obj(envelope, KEY_RESULT), mergedProjects);
             }
         }
 
@@ -126,33 +139,52 @@ public final class FanOut
         }
 
         JsonObject result = Json.obj(firstEnvelope, KEY_RESULT);
-        JsonObject structured = Json.obj(result, KEY_STRUCTURED_CONTENT);
-        if (structured == null)
+        // The merged human table, rebuilt from the COMPLETE merged projects (the uncapped structured
+        // source, so a large table is not truncated mid-row like a transport-capped content markdown
+        // would be) and capped, so a client reading `content` sees ALL backends - not just the first
+        // envelope's.
+        // A backend queried with format=json answers with a JSON envelope, so its content SHAPE says
+        // nothing about how a markdown call would look. Mirror a DIRECT call instead: markdown is an
+        // embedded text/markdown resource, unless the backend runs in plain-text mode (Cursor), which
+        // a direct call would also deliver as a text block.
+        boolean plainText = isPlainTextEnvelope(result);
+        String markdown = capMarkdown(renderProjectsTable(mergedProjects), jsonFormat);
+        if (jsonFormat)
         {
-            structured = new JsonObject();
-            result.add(KEY_STRUCTURED_CONTENT, structured);
+            rebuildContent(result, markdown);
         }
-        structured.add(KEY_PROJECTS, mergedProjects);
-        // Rebuild the human `content` from the COMPLETE merged projects (the uncapped structuredContent
-        // source, so a large table is not truncated mid-row like the transport-capped content markdown
-        // would be), always, so a client reading `content` sees ALL backends. A structured backend
-        // renders rich rows from its full objects; a legacy backend's projects render NAME-only (their
-        // only cross-fleet, cap-safe field) - the inherent limit of a content-only backend.
-        rebuildContent(result, capMarkdown(renderProjectsTable(mergedProjects)));
+        else if (plainText)
+        {
+            result.add(KEY_CONTENT, freshTextContent(markdown));
+        }
+        else
+        {
+            result.add(KEY_CONTENT, freshResourceContent(markdown));
+        }
+        if (jsonFormat)
+        {
+            // format=json: the caller wants the machine payload, exactly like a direct call.
+            JsonObject structured = Json.obj(result, KEY_STRUCTURED_CONTENT);
+            if (structured == null)
+            {
+                structured = new JsonObject();
+                result.add(KEY_STRUCTURED_CONTENT, structured);
+            }
+            // Keep the success flag a direct format=json call carries, even when the donating
+            // envelope came from a backend that answered without structuredContent.
+            structured.addProperty(KEY_SUCCESS, true);
+            structured.add(KEY_PROJECTS, mergedProjects);
+        }
+        else
+        {
+            // format=md (the default): the human table ONLY, mirroring a direct markdown call - a
+            // markdown response carries no structuredContent.
+            result.remove(KEY_STRUCTURED_CONTENT);
+        }
         writeId(firstEnvelope, requestId);
         return Json.compact(firstEnvelope);
     }
 
-    /**
-     * Writes {@code markdown} into {@code result.content}, PRESERVING the first content item's SHAPE so
-     * a plain-text-mode backend (Cursor compatibility) keeps its {@code type:"text"} block and a
-     * {@code text/markdown} embedded resource stays a resource. Only a TEXT resource (has {@code text},
-     * no {@code blob}) or a {@code text} block is rewritten in place; a blob/image resource, an image
-     * item, or a missing/malformed item gets a fresh embedded {@code text/markdown} resource.
-     *
-     * @param result the merged JSON-RPC {@code result} object
-     * @param markdown the rebuilt table Markdown
-     */
     /**
      * Caps the rebuilt Markdown to {@link #MAX_CONTENT_CHARS}, mirroring the plugin's own content-text
      * guard so the proxy never returns a human channel bigger than a direct {@code list_projects}
@@ -163,14 +195,19 @@ public final class FanOut
      * @param markdown the rendered table Markdown
      * @return the capped (or unchanged) Markdown
      */
-    static String capMarkdown(String markdown)
+    static String capMarkdown(String markdown, boolean jsonFormat)
     {
         if (markdown == null || markdown.length() <= MAX_CONTENT_CHARS)
         {
             return markdown;
         }
+        // Point the caller at something it can actually use: the machine list is present in THIS
+        // response only when format=json was requested; a markdown caller must re-ask for it.
+        String where = jsonFormat
+            ? "read the full list from structuredContent.projects" //$NON-NLS-1$
+            : "call list_projects again with format='json' for the full list"; //$NON-NLS-1$
         String notice = "\n\n_[truncated: the merged table exceeded " + MAX_CONTENT_CHARS //$NON-NLS-1$
-            + " characters; read the full list from structuredContent.projects]_\n"; //$NON-NLS-1$
+            + " characters; " + where + "]_\n"; //$NON-NLS-1$ //$NON-NLS-2$
         int keep = Math.max(0, MAX_CONTENT_CHARS - notice.length());
         // Cut back to the last complete line so the table never ends mid-row.
         int lastNewline = markdown.lastIndexOf('\n', keep);
@@ -276,6 +313,31 @@ public final class FanOut
         return p.has(KEY_EDT_PROJECT) ? boolCell(p, KEY_EDT_PROJECT) : "-"; //$NON-NLS-1$
     }
 
+    /**
+     * Whether this backend answered in PLAIN-TEXT mode: it carries no {@code structuredContent} yet a
+     * machine project list was recoverable from its content text. A direct markdown call to such a
+     * backend also returns a text block, so the merged markdown must keep that shape.
+     *
+     * @param result the donating backend's {@code result} object
+     * @return {@code true} when the backend runs in plain-text mode
+     */
+    private static boolean isPlainTextEnvelope(JsonObject result)
+    {
+        return Json.obj(result, KEY_STRUCTURED_CONTENT) == null
+            && BackendRegistry.machineProjects(result) != null;
+    }
+
+    /** A one-item {@code content} array carrying {@code markdown} as a plain {@code text} block. */
+    private static JsonArray freshTextContent(String markdown)
+    {
+        JsonObject item = new JsonObject();
+        item.addProperty(KEY_TYPE, TYPE_TEXT);
+        item.addProperty(KEY_TEXT, markdown);
+        JsonArray content = new JsonArray();
+        content.add(item);
+        return content;
+    }
+
     /** A one-item {@code content} array carrying {@code markdown} as an embedded {@code text/markdown} resource. */
     private static JsonArray freshResourceContent(String markdown)
     {
@@ -313,32 +375,27 @@ public final class FanOut
     }
 
     /**
-     * Appends the entries of {@code result.structuredContent.projects} to the merged array.
+     * Appends the entries of {@code result.structuredContent.projects} to the merged array. A
+     * response WITHOUT that array comes from a backend whose plugin does not support
+     * {@code format=json} (the registry reports it as an unsupported version) and contributes
+     * nothing - the proxy never scrapes the human Markdown as a fallback.
      *
      * @param result the usable backend response's {@code result} object
      * @param mergedProjects the accumulator to append to
-     * @return {@code true} when the backend exposed a {@code structuredContent.projects} ARRAY (even
-     *         empty), {@code false} when it was content-only (legacy / failed structured generation) -
-     *         the caller then recovers its names from the Markdown table and marks the merge as not
-     *         all-structured (so the human content is not rebuilt from an incomplete field set)
      */
-    private static boolean appendStructuredProjects(JsonObject result, JsonArray mergedProjects)
+    private static void appendStructuredProjects(JsonObject result, JsonArray mergedProjects)
     {
-        JsonObject structured = Json.obj(result, KEY_STRUCTURED_CONTENT);
-        if (structured == null)
+        // Shared extractor: accepts the machine list from structuredContent AND from a plain-text-mode
+        // backend (the same JSON payload delivered as content text), but never scrapes the Markdown.
+        JsonArray projects = BackendRegistry.machineProjects(result);
+        if (projects == null)
         {
-            return false;
+            return;
         }
-        JsonElement projects = structured.get(KEY_PROJECTS);
-        if (projects == null || !projects.isJsonArray())
-        {
-            return false;
-        }
-        for (JsonElement project : projects.getAsJsonArray())
+        for (JsonElement project : projects)
         {
             mergedProjects.add(project);
         }
-        return true;
     }
 
     /**

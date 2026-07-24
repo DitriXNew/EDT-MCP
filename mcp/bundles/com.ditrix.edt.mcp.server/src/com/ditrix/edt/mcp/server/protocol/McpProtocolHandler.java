@@ -470,7 +470,10 @@ public class McpProtocolHandler
     private String buildToolCallResponse(IMcpTool tool, String result, UserSignal signal,
         boolean plainTextMode, Object requestId, Map<String, String> params)
     {
-        switch (tool.getResponseType())
+        // Per-call response type: a tool whose caller can choose the output format (e.g.
+        // list_projects' format=md|json) decides from the arguments; every other tool falls back to
+        // its fixed getResponseType().
+        switch (tool.getResponseType(params))
         {
             case JSON:
                 return buildJsonToolResponse(tool, result, signal, plainTextMode, requestId);
@@ -503,15 +506,6 @@ public class McpProtocolHandler
         // are machine-detectable regardless of the declared response type.
         if (isJsonErrorPayload(result))
         {
-            // Honor the structuredContent opt-out for the error envelope too, matching the JSON path.
-            // Suppress the structuredContent payload but KEEP isError:true (with the real message in
-            // the text channel) so the failure stays machine-detectable - a suppressed structured
-            // payload must not turn an error into a success-looking result.
-            if (!clientCapabilities.get().allowsStructuredContent())
-            {
-                ToolCallResult errorResult = ToolCallResult.errorText(JsonParser.parseString(result));
-                return GsonProvider.toJson(JsonRpcResponse.success(requestId, errorResult));
-            }
             return buildToolCallJsonResponse(result, requestId, tool.getName());
         }
         // Append user signal as markdown
@@ -519,20 +513,13 @@ public class McpProtocolHandler
         {
             result = result + "\n\n---\n**USER SIGNAL:** " + signal.getMessage();
         }
-        // A markdown tool may ALSO expose a machine-readable structuredContent (issue #302); it
-        // rides alongside the human content and is null for tools that do not opt in. Honor the SAME
-        // capability gate the JSON path uses: a client that explicitly opted out of structuredContent
-        // must not receive it here either (default keeps it — the no-regression guarantee).
-        String structuredJson = clientCapabilities.get().allowsStructuredContent()
-            ? tool.getStructuredContent(params)
-            : null;
         // In plain text mode, return markdown as plain text instead of embedded resource
         if (plainTextMode)
         {
-            return buildToolCallTextResponse(result, requestId, structuredJson);
+            return buildToolCallTextResponse(result, requestId);
         }
         String fileName = tool.getResultFileName(params);
-        return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId, structuredJson);
+        return buildToolCallResourceResponse(result, MIME_TEXT_MARKDOWN, fileName, requestId);
     }
 
     /**
@@ -633,10 +620,12 @@ public class McpProtocolHandler
             // Parse JSON and add userSignal field
             result = addUserSignalToJson(result, signal);
         }
-        // In plain text mode, return markdown as plain text instead of structured content
+        // In plain text mode, return markdown as plain text instead of structured content. A FAILED
+        // payload keeps isError:true (with the real message in the text channel) - suppressing the
+        // structured payload must never make a failure look like a success.
         if (plainTextMode)
         {
-            return buildToolCallTextResponse(result, requestId);
+            return buildTextOnlyJsonResponse(result, requestId);
         }
         // Capability gate for structuredContent. By DEFAULT (no capabilities,
         // or a client that does not explicitly opt out) this is true, so the
@@ -646,9 +635,30 @@ public class McpProtocolHandler
         // then delivered as text so the data is still returned.
         if (!clientCapabilities.get().allowsStructuredContent())
         {
-            return buildToolCallTextResponse(result, requestId);
+            return buildTextOnlyJsonResponse(result, requestId);
         }
         return buildToolCallJsonResponse(result, requestId, tool.getName());
+    }
+
+    /**
+     * Delivers a JSON tool payload as TEXT (no {@code structuredContent}) for the two suppression
+     * cases on the JSON path - plain-text mode and a client that opted out of structuredContent -
+     * while PRESERVING the tool-level outcome: a {@code ToolResult.error} payload keeps
+     * {@code isError:true} with the real message in the text channel, so a suppressed structured
+     * payload can never make a failure look like a success. A success is delivered exactly as before.
+     *
+     * @param result the tool's JSON payload
+     * @param requestId the JSON-RPC request id to echo
+     * @return the serialized JSON-RPC response
+     */
+    private String buildTextOnlyJsonResponse(String result, Object requestId)
+    {
+        if (!isJsonErrorPayload(result))
+        {
+            return buildToolCallTextResponse(result, requestId);
+        }
+        ToolCallResult errorResult = ToolCallResult.errorText(JsonParser.parseString(result));
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId, errorResult));
     }
     
     /**
@@ -1016,34 +1026,8 @@ public class McpProtocolHandler
      */
     private String buildToolCallTextResponse(String result, Object requestId)
     {
-        return buildToolCallTextResponse(result, requestId, null);
-    }
-
-    /**
-     * As {@link #buildToolCallTextResponse(String, Object)}, but also attaches an optional
-     * machine-readable {@code structuredContent} JSON alongside the text (issue #302). A
-     * {@code null}/blank {@code structuredJson} yields the exact same response as the 2-arg form.
-     */
-    private String buildToolCallTextResponse(String result, Object requestId, String structuredJson)
-    {
         ToolCallResult toolResult = ToolCallResult.text(OutputSizeGuard.cap(result));
-        attachStructuredContent(toolResult, structuredJson);
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
-    }
-
-    /**
-     * Parses {@code structuredJson} and attaches it to {@code toolResult} as its structured
-     * content. A {@code null}/blank value is a no-op, so a tool that does not opt in keeps a
-     * pure content result. Kept defensive at the tool layer (a tool's
-     * {@code getStructuredContent} returns {@code null} rather than throwing), so this only ever
-     * sees valid JSON or nothing.
-     */
-    private static void attachStructuredContent(ToolCallResult toolResult, String structuredJson)
-    {
-        if (structuredJson != null && !structuredJson.isEmpty())
-        {
-            toolResult.withStructuredContent(JsonParser.parseString(structuredJson));
-        }
     }
     
     /**
@@ -1163,21 +1147,8 @@ public class McpProtocolHandler
      */
     private String buildToolCallResourceResponse(String content, String mimeType, String fileName, Object requestId)
     {
-        return buildToolCallResourceResponse(content, mimeType, fileName, requestId, null);
-    }
-
-    /**
-     * As {@link #buildToolCallResourceResponse(String, String, String, Object)}, but also
-     * attaches an optional machine-readable {@code structuredContent} JSON alongside the embedded
-     * resource (issue #302). A {@code null}/blank {@code structuredJson} yields the exact same
-     * response as the 4-arg form (the resource body stays byte-for-byte identical).
-     */
-    private String buildToolCallResourceResponse(String content, String mimeType, String fileName,
-        Object requestId, String structuredJson)
-    {
         ToolCallResult toolResult =
             ToolCallResult.resource("embedded://" + fileName, mimeType, OutputSizeGuard.cap(content)); //$NON-NLS-1$
-        attachStructuredContent(toolResult, structuredJson);
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, toolResult));
     }
     

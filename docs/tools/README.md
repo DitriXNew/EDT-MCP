@@ -18,7 +18,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_server_status`](get_server_status.md) | Self-diagnosis snapshot of the running MCP server: listening port, MCP protocol version, plugin version, EDT version, enabled/total tool counts, the plainTex… |
 | [`get_tool_guide`](get_tool_guide.md) | Get the full on-demand how-to for a tool: its description, every parameter (type, required, allowed values) and extended examples/preconditions kept OUT of t… |
 | [`list_modules`](list_modules.md) | List BSL modules in an EDT project as a table (module path, module type, parent type, parent name). Use it to discover module paths before reading or editing… |
-| [`list_projects`](list_projects.md) | List all workspace projects with properties (name, path, type, natures) |
+| [`list_projects`](list_projects.md) | List all workspace projects with properties (name, path, type, natures). format='md' (default) returns the human Markdown table; format='json' returns the ma… |
 | [`list_toolsets`](list_toolsets.md) | List the tool groups (toolsets) used by progressive tool disclosure: each toolset's id, title, description, member tools, and whether it is currently visible… |
 | [`read_module_source`](read_module_source.md) | Read BSL module source code from an EDT project, whole file or a line range. Returns YAML frontmatter (including a contentHash revision token to round-trip i… |
 | [`search_in_code`](search_in_code.md) | Literal/regex full-text search across all BSL modules in a project. Matching is purely textual and NOT ru/en dialect-aware, so a query in one BSL language wo… |
