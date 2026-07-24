@@ -50,9 +50,10 @@ public class ConstantsTest
     @Test
     public void testDisabledToolsDefault()
     {
+        // The powerful raw 'git' command tool ships DISABLED by default (opt-in), so the default
+        // disabled-tools list is exactly "git".
         assertNotNull(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
-        assertTrue("Default disabled tools should be empty",
-            PreferenceConstants.DEFAULT_DISABLED_TOOLS.isEmpty());
+        assertEquals("git", PreferenceConstants.DEFAULT_DISABLED_TOOLS);
     }
 
     @Test

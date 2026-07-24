@@ -61,6 +61,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListCommonPicturesTool;
+import com.ditrix.edt.mcp.server.tools.impl.GitTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListGitBranchesTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListConfigurationsTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListModulesTool;
@@ -144,6 +145,7 @@ public final class BuiltInToolRegistrar
         registry.register(new SwitchGitBranchTool());
         registry.register(new SetBranchInfobaseTool());
         registry.register(new CreateGitBranchTool());
+        registry.register(new GitTool());
         registry.register(new GetCheckDescriptionTool());
         registry.register(new GetContentAssistTool());
         registry.register(new GetPlatformDocumentationTool());

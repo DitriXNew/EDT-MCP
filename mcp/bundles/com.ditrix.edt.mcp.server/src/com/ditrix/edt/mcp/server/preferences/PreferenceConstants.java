@@ -78,7 +78,8 @@ public final class PreferenceConstants
     public static final String PREF_DISABLED_TOOLS = "mcpDisabledTools"; //$NON-NLS-1$
 
     /** Default: all tools enabled (empty string = no disabled tools) */
-    public static final String DEFAULT_DISABLED_TOOLS = ""; //$NON-NLS-1$
+    /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
+    public static final String DEFAULT_DISABLED_TOOLS = "git"; //$NON-NLS-1$
 
     // === Progressive tool disclosure (dynamic toolsets) ===
 
