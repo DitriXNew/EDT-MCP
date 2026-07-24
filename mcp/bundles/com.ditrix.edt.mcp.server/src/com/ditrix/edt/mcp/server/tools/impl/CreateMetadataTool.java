@@ -152,8 +152,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or " //$NON-NLS-1$
             + "'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an " //$NON-NLS-1$
             + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates " //$NON-NLS-1$
-            + "a PREDEFINED item ('Catalog.X.Predefined.ItemName' or " //$NON-NLS-1$
-            + "'ChartOfCharacteristicTypes.X.Predefined.ItemName'). " //$NON-NLS-1$
+            + "a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, " //$NON-NLS-1$
+            + "ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with " //$NON-NLS-1$
+            + "owner-specific 'properties'). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
@@ -180,10 +181,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / " //$NON-NLS-1$
                 + "'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' " //$NON-NLS-1$
                 + "(booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED " //$NON-NLS-1$
-                + "item ('...Predefined.<Item>') uses yet another vocabulary: 'description', 'code', " //$NON-NLS-1$
-                + "'isFolder', 'parent' and, for a ChartOfCharacteristicTypes item only, 'valueType' " //$NON-NLS-1$
-                + "(alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; rejected " //$NON-NLS-1$
-                + "for a Catalog item).") //$NON-NLS-1$
+                + "item ('...Predefined.<Item>') uses yet another vocabulary: common 'description' / " //$NON-NLS-1$
+                + "'code' / 'isFolder' / 'parent' plus owner-specific properties - 'valueType' (alias " //$NON-NLS-1$
+                + "'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a " //$NON-NLS-1$
+                + "ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / " //$NON-NLS-1$
+                + "'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
+                + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item " //$NON-NLS-1$
+                + "(see the guide for which apply to each owner).") //$NON-NLS-1$
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
