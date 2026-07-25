@@ -182,7 +182,7 @@ public class GitTool implements IMcpTool
     private static final Map<String, String> FILE_TAKING_SHORT_OPTIONS = Map.of(
         "diff", "O", //$NON-NLS-1$ //$NON-NLS-2$
         "blame", "S", //$NON-NLS-1$ //$NON-NLS-2$
-        "commit", "F", //$NON-NLS-1$ //$NON-NLS-2$
+        "commit", "Ft", //$NON-NLS-1$ //$NON-NLS-2$
         "tag", "F", //$NON-NLS-1$ //$NON-NLS-2$
         "merge", "F", //$NON-NLS-1$ //$NON-NLS-2$
         "ls-files", "X"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -490,9 +490,11 @@ public class GitTool implements IMcpTool
                     + "allowed: only lowercase http(s), ssh, git, ftp(s) and file remotes are accepted (git " //$NON-NLS-1$
                     + "treats any other/uppercase scheme as a remote-helper program). Use a normal remote URL."); //$NON-NLS-1$
             }
-            if (scanMessageFile && clusterCarries(token, 'F', tokens.get(0)))
+            if (scanMessageFile && (clusterCarries(token, 'F', tokens.get(0))
+                || ("commit".equals(tokens.get(0)) && clusterCarries(token, 't', tokens.get(0)))))
             {
-                throw new CommandRejectedException("'" + token + "' reads the message from a FILE, which " //$NON-NLS-1$
+                throw new CommandRejectedException("'" + token + "' reads the message or its template " //$NON-NLS-1$
+                    + "from a FILE, which " //$NON-NLS-1$
                     + "would " //$NON-NLS-1$
                     + "copy a file this tool does not govern into the repository. Pass the message " //$NON-NLS-1$
                     + "inline with -m instead."); //$NON-NLS-1$
@@ -596,15 +598,18 @@ public class GitTool implements IMcpTool
      */
     private static String urlCandidateOf(String token)
     {
-        if (token.startsWith("--")) //$NON-NLS-1$
+        // Trimmed: a quoted operand keeps its spaces (' https://host/r.git?token=x'), and the scheme
+        // pattern is anchored, so an untrimmed candidate would match nothing and pass every guard.
+        String candidate = token.strip();
+        if (candidate.startsWith("--")) //$NON-NLS-1$
         {
-            int equals = token.indexOf('=');
+            int equals = candidate.indexOf('=');
             if (equals >= 0)
             {
-                return token.substring(equals + 1);
+                return candidate.substring(equals + 1).strip();
             }
         }
-        return token;
+        return candidate;
     }
 
 
@@ -865,6 +870,10 @@ public class GitTool implements IMcpTool
         ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
         builder.directory(workTree);
         builder.redirectErrorStream(true);
+        // Started BEFORE hardenEnv: that call may run the core.sshCommand probe, whose own timeout
+        // would otherwise be added to the command's - a stalled config would push a fetch past the
+        // 120 s the guide promises.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
         hardenEnv(builder.environment(), workTree);
 
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
@@ -884,7 +893,7 @@ public class GitTool implements IMcpTool
             drain.setDaemon(true);
             drain.start();
 
-            if (!awaitExit(process, descendants))
+            if (!awaitExit(process, descendants, deadline))
             {
                 killTree(process); // destroyForcibly + wait, and the child's own descendants
                 drain.join(2000);
@@ -1702,7 +1711,7 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Waits for git to exit within {@link #TIMEOUT_SECONDS}, collecting its descendants as it runs.
+     * Waits for git to exit by the call's shared deadline, collecting its descendants as it runs.
      * <p>
      * The wait is POLLED rather than a single blocking one because a descendant can only be observed
      * while the parent is alive: once git exits, its children are re-parented and
@@ -1711,12 +1720,12 @@ public class GitTool implements IMcpTool
      *
      * @param process the git process
      * @param descendants the collected handles, appended to as they appear
+     * @param deadline the call's shared deadline in {@link System#nanoTime()} terms
      * @return {@code true} when git exited within the timeout
      */
-    private static boolean awaitExit(Process process, List<ProcessHandle> descendants)
+    private static boolean awaitExit(Process process, List<ProcessHandle> descendants, long deadline)
         throws InterruptedException
     {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
         for (long remaining = deadline - System.nanoTime(); remaining > 0;
             remaining = deadline - System.nanoTime())
         {

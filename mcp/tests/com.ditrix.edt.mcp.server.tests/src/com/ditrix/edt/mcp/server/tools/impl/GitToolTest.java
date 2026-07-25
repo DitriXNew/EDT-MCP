@@ -431,6 +431,12 @@ public class GitToolTest
         // The same URL must not even be ACCEPTED where it would be persisted.
         assertRejected("remote add origin https://example.com/r.git?access_token=ghp_secret"); //$NON-NLS-1$
         assertRejected("push https://example.com/r.git?token=x main"); //$NON-NLS-1$
+        // A quoted operand keeps its spaces, and the scheme pattern is anchored.
+        assertRejected("remote add origin \" https://example.com/r.git?access_token=secret\""); //$NON-NLS-1$
+        // 'commit -t <file>' is --template: a file option, not a plain value.
+        assertRejected("commit -t/etc/passwd"); //$NON-NLS-1$
+        assertRejected("commit -qt/etc/passwd"); //$NON-NLS-1$
+
         // Attached to an OPTION, where the anchored scheme pattern would not see it.
         assertRejected("push --repo=https://host/repo.git?access_token=secret"); //$NON-NLS-1$
         assertRejected("remote add origin https://host/r.git#access_token=secret"); //$NON-NLS-1$
