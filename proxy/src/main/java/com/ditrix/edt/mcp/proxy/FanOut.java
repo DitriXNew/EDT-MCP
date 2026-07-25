@@ -133,6 +133,7 @@ public final class FanOut
         JsonObject firstEnvelope = null;
         int supportedBackends = 0;
         int answeringBackends = 0;
+        int truncatedBackends = 0;
 
         if (backendResponses != null)
         {
@@ -153,9 +154,14 @@ public final class FanOut
                 // too old to support it. Such a backend contributes nothing here and is reported as
                 // an unsupported version by the registry - the proxy deliberately does NOT scrape the
                 // human Markdown as a fallback.
-                if (appendStructuredProjects(Json.obj(envelope, KEY_RESULT), mergedProjects))
+                JsonObject envelopeResult = Json.obj(envelope, KEY_RESULT);
+                if (appendStructuredProjects(envelopeResult, mergedProjects))
                 {
                     supportedBackends++;
+                }
+                else if (BackendRegistry.hasTruncatedMachineProjects(envelopeResult))
+                {
+                    truncatedBackends++;
                 }
             }
         }
@@ -170,11 +176,14 @@ public final class FanOut
             // empty table would read as "no projects anywhere", hiding a live EDT whose plugin is too
             // old (or whose list_projects is disabled) - the one case where an empty result is a
             // version problem rather than a fact about the workspace.
+            String cause = truncatedBackends > 0
+                ? " their project list was CUT by the output size cap (" + truncatedBackends //$NON-NLS-1$
+                    + " of them), so it no longer parses - that is a size problem, not an old plugin." //$NON-NLS-1$
+                : " their MCP plugin predates it, or list_projects is disabled there. Upgrade the" //$NON-NLS-1$
+                    + " plugin, or call list_projects on that EDT directly."; //$NON-NLS-1$
             return jsonRpcError(ERROR_NO_BACKENDS, answeringBackends
                 + " live EDT backend(s) answered, but none returned a machine-readable project list -" //$NON-NLS-1$
-                + " their MCP plugin predates it, or list_projects is disabled there. Upgrade the" //$NON-NLS-1$
-                + " plugin, or call list_projects on that EDT directly; 'router_status' names them.", //$NON-NLS-1$
-                requestId);
+                + cause + " 'router_status' names them.", requestId); //$NON-NLS-1$
         }
 
         JsonObject result = Json.obj(firstEnvelope, KEY_RESULT);
@@ -189,7 +198,11 @@ public final class FanOut
         boolean plainText = isPlainTextEnvelope(result);
         // A client that opted out of structuredContent gets the machine payload as TEXT (what a
         // direct call gives it), not the structured field it declared it cannot accept.
-        boolean structuredJson = jsonFormat && allowStructuredContent;
+        // A backend in plain-text mode (the Cursor compatibility setting) never sends
+        // structuredContent: a direct format=json call there returns the machine payload AS TEXT. The
+        // proxy mirrors what that backend would have answered, so it must not invent the field here
+        // either - the same reason the Markdown path already follows the donor's shape.
+        boolean structuredJson = jsonFormat && allowStructuredContent && !plainText;
         if (structuredJson)
         {
             rebuildContent(result, capMarkdown(renderProjectsTable(mergedProjects), true));
@@ -256,7 +269,7 @@ public final class FanOut
      * @param text the payload text
      * @return the capped (or unchanged) text
      */
-    private static String capText(String text)
+    static String capText(String text)
     {
         if (text == null || text.length() <= MAX_CONTENT_CHARS)
         {
@@ -410,6 +423,11 @@ public final class FanOut
     }
 
     /** A one-item {@code content} array carrying {@code markdown} as a plain {@code text} block. */
+    static JsonArray textContent(String text)
+    {
+        return freshTextContent(text);
+    }
+
     private static JsonArray freshTextContent(String markdown)
     {
         JsonObject item = new JsonObject();

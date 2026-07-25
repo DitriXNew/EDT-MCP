@@ -235,6 +235,123 @@ public class ProxyRoutingIT
     }
 
     /**
+     * A routed call to a BACKEND must honour the opt-out too. The backends share one handshake, made
+     * by the proxy with its own capabilities, so a backend cannot know this client opted out - a
+     * byte-for-byte relay would hand it the structuredContent it rejected.
+     */
+    @Test
+    public void testStructuredContentOptOutAppliesToBackendRoutedCalls() throws Exception
+    {
+        JsonObject experimental = new JsonObject();
+        experimental.addProperty("structuredContent", false); //$NON-NLS-1$
+        JsonObject capabilities = new JsonObject();
+        capabilities.add("experimental", experimental); //$NON-NLS-1$
+        McpTestClient optedOut = new McpTestClient(proxy.port());
+        optedOut.handshake(capabilities);
+
+        JsonObject args = new JsonObject();
+        args.addProperty("projectName", PROJECT_A); //$NON-NLS-1$
+        JsonObject response = optedOut.callTool("echo_port", args); //$NON-NLS-1$
+
+        assertFalse("the routed call must still succeed: " + response, isToolError(response)); //$NON-NLS-1$
+        JsonObject result = response.getAsJsonObject("result"); //$NON-NLS-1$
+        assertFalse("an opted-out client must not receive structuredContent: " + result, //$NON-NLS-1$
+            result.has("structuredContent")); //$NON-NLS-1$
+        // The DATA must survive: the backend's payload moves into the text channel.
+        String text = result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the payload must still name the serving backend: " + text, //$NON-NLS-1$
+            text.contains(String.valueOf(portA)));
+
+        // No regression for everyone else: a client that did not opt out still gets the field.
+        assertTrue("a default client must still receive structuredContent", //$NON-NLS-1$
+            client.callTool("echo_port", args).getAsJsonObject("result").has("structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The opt-out rewrite must preserve an SSE body with SEVERAL events: every event keeps its place
+     * and its framing, and only the structured payloads inside them are moved into the text channel.
+     */
+    @Test
+    public void testOptOutRewriteKeepsEveryEventOfAnSseBody() throws Exception
+    {
+        String body = "event: message\nid: 1\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"," //$NON-NLS-1$
+            + "\"params\":{\"progress\":1}}\n\nevent: message\nid: 2\ndata: {\"jsonrpc\":\"2.0\",\"id\":7," //$NON-NLS-1$
+            + "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Done\"}],\"structuredContent\":" //$NON-NLS-1$
+            + "{\"success\":true,\"port\":123}}}\n\n"; //$NON-NLS-1$
+
+        String rewritten = McpProxyHandler.rewriteEnvelopesForTest(body);
+
+        assertTrue("the progress notification must survive verbatim: " + rewritten, //$NON-NLS-1$
+            rewritten.contains("notifications/progress")); //$NON-NLS-1$
+        assertTrue("the framing must survive: " + rewritten, //$NON-NLS-1$
+            rewritten.contains("event: message") && rewritten.contains("id: 1") //$NON-NLS-1$ //$NON-NLS-2$
+                && rewritten.contains("id: 2")); //$NON-NLS-1$
+        assertFalse("the structured field must be gone: " + rewritten, //$NON-NLS-1$
+            rewritten.contains("\"structuredContent\"")); //$NON-NLS-1$
+        assertTrue("the payload must survive in the text channel: " + rewritten, //$NON-NLS-1$
+            rewritten.contains("\\\"port\\\":123")); //$NON-NLS-1$
+    }
+
+    /**
+     * An event whose payload arrives as SEVERAL {@code data:} lines (the SSE spec allows it, the
+     * client joins them with a newline) must be rewritten as ONE envelope - parsing the fragments
+     * separately would parse nothing and the opted-out field would survive. CRLF bodies too.
+     */
+    @Test
+    public void testOptOutRewriteHandlesMultiLineAndCrlfSseData() throws Exception
+    {
+        String multiLine = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":\ndata: " //$NON-NLS-1$
+            + "{\"content\":[],\"structuredContent\":{\"success\":true,\"port\":123}}}\n\n"; //$NON-NLS-1$
+
+        String rewritten = McpProxyHandler.rewriteEnvelopesForTest(multiLine);
+
+        assertFalse("a split envelope must still lose the field: " + rewritten, //$NON-NLS-1$
+            rewritten.contains("\"structuredContent\"")); //$NON-NLS-1$
+        assertTrue("its payload must survive in the text channel: " + rewritten, //$NON-NLS-1$
+            rewritten.contains("\\\"port\\\":123")); //$NON-NLS-1$
+
+        String crlf = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"content\":[]," //$NON-NLS-1$
+            + "\"structuredContent\":{\"success\":true}}}\r\n\r\n"; //$NON-NLS-1$
+
+        String rewrittenCrlf = McpProxyHandler.rewriteEnvelopesForTest(crlf);
+
+        // 'id:'/'event:' do NOT end an event, so a field line BETWEEN two data fragments must not
+        // split the envelope - only a blank line ends it.
+        String interleaved = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":\nid: 9\n" //$NON-NLS-1$
+            + "data: {\"content\":[],\"structuredContent\":{\"success\":true,\"port\":123}}}\n\n"; //$NON-NLS-1$
+        String rewrittenInterleaved = McpProxyHandler.rewriteEnvelopesForTest(interleaved);
+        assertFalse("a field line between fragments must not split the envelope: " //$NON-NLS-1$
+            + rewrittenInterleaved, rewrittenInterleaved.contains("\"structuredContent\"")); //$NON-NLS-1$
+        assertTrue("the id line must survive: " + rewrittenInterleaved, //$NON-NLS-1$
+            rewrittenInterleaved.contains("id: 9")); //$NON-NLS-1$
+
+        // A multiline payload that needs NO rewrite must keep its separate data lines: joining it
+        // into one would push a raw newline into the field and cut the event short.
+        String untouched = "event: message\ndata: {\"jsonrpc\":\"2.0\",\n" //$NON-NLS-1$
+            + "data: \"method\":\"notifications/progress\"}\n\n"; //$NON-NLS-1$
+        assertEquals("an untouched event must survive verbatim", untouched, //$NON-NLS-1$
+            McpProxyHandler.rewriteEnvelopesForTest(untouched));
+
+        // An UNTOUCHED event keeps every line where it was, data lines included - they must not be
+        // regrouped just because the event was buffered.
+        String interleavedUntouched = "data: {\"jsonrpc\":\"2.0\",\nid: 9\ndata: \"method\":\"x\"}\n\n"; //$NON-NLS-1$
+        assertEquals("an untouched event must keep its line order", interleavedUntouched, //$NON-NLS-1$
+            McpProxyHandler.rewriteEnvelopesForTest(interleavedUntouched));
+
+        // A body that ends exactly on a data line must not gain a trailing newline.
+        String noTrailingNewline = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[]}}"; //$NON-NLS-1$
+        assertEquals("a body without a trailing newline must keep it that way", //$NON-NLS-1$
+            noTrailingNewline, McpProxyHandler.rewriteEnvelopesForTest(noTrailingNewline));
+
+        assertFalse("CRLF body must lose the field too: " + rewrittenCrlf, //$NON-NLS-1$
+            rewrittenCrlf.contains("\"structuredContent\"")); //$NON-NLS-1$
+        assertFalse("no doubled carriage return: " + rewrittenCrlf, //$NON-NLS-1$
+            rewrittenCrlf.contains("\r\r")); //$NON-NLS-1$
+        assertTrue("CRLF framing must be preserved: " + rewrittenCrlf, //$NON-NLS-1$
+            rewrittenCrlf.contains("\r\n")); //$NON-NLS-1$
+    }
+
+    /**
      * {@code tools/list} through the proxy = the first backend's tools (the fake serves two)
      * with the two {@code router_*} descriptors injected on top.
      */

@@ -389,7 +389,11 @@ public final class RouterTools
         textItem.addProperty(KEY_TYPE, KEY_TEXT);
         // A client that opted out still needs the DATA: it goes into the text channel, which is what
         // a backend gives such a client, instead of the one-line digest.
-        textItem.addProperty(KEY_TEXT, allowStructuredContent ? text : Json.compact(structuredContent));
+        // Capped like every other text channel: the direct backend path and the fan-out both bound
+        // what they put in content, so the proxy's own tools must not return an unbounded payload
+        // to an opted-out client just because the registry grew.
+        textItem.addProperty(KEY_TEXT,
+            allowStructuredContent ? text : FanOut.capText(Json.compact(structuredContent)));
         JsonArray content = new JsonArray();
         content.add(textItem);
 

@@ -510,6 +510,54 @@ public final class BackendRegistry
         return null;
     }
 
+    /** The notice the plugin appends when its output size guard cuts a result. */
+    private static final String TRUNCATION_MARKER = "[OUTPUT TRUNCATED]"; //$NON-NLS-1$
+
+    /**
+     * Whether a result carries a machine payload that was CUT by the output cap: the content text
+     * begins like the {@code {"success":...,"projects":[...]}} envelope but no longer parses.
+     * <p>
+     * Only a plain-text-mode backend can hit this - there the payload travels as content text and is
+     * capped like any other text. Such a backend is NOT an old plugin without the machine list, and
+     * saying so would send the operator after the wrong problem.
+     *
+     * @param result the {@code result} object of a {@code list_projects} response
+     * @return {@code true} when a machine payload is present but unparseable
+     */
+    static boolean hasTruncatedMachineProjects(JsonObject result)
+    {
+        if (result == null || machineProjects(result) != null)
+        {
+            return false;
+        }
+        JsonElement content = result.get("content"); //$NON-NLS-1$
+        if (content == null || !content.isJsonArray())
+        {
+            return false;
+        }
+        for (JsonElement item : content.getAsJsonArray())
+        {
+            if (!item.isJsonObject())
+            {
+                continue;
+            }
+            String text = Json.str(item.getAsJsonObject(), "text"); //$NON-NLS-1$
+            if (text == null)
+            {
+                continue;
+            }
+            // Both halves are required: the machine envelope's opening AND the plugin's own
+            // truncation marker. Text that merely fails to parse is not evidence of a size cut.
+            String head = text.stripLeading();
+            if (head.startsWith("{") && head.contains("\"projects\"") //$NON-NLS-1$ //$NON-NLS-2$
+                && text.contains(TRUNCATION_MARKER))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** The {@code projects} array of a payload object, or {@code null} when absent/not an array. */
     private static JsonArray projectsArray(JsonObject payload)
     {

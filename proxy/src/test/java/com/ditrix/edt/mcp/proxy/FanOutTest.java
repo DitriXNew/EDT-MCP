@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.proxy;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -244,6 +245,41 @@ public class FanOutTest
 
         assertFalse("zero projects is a fact, not an error: " + parsed, parsed.has("error")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(0, projectNamesOf(parsed).size());
+    }
+
+    @Test
+    public void testPlainTextBackendKeepsItsJsonAnswerInTheTextChannel()
+    {
+        // A backend in plain-text mode never sends structuredContent: a DIRECT format=json call there
+        // returns the machine payload as text. The proxy must mirror that backend, not invent a field
+        // it would never have produced.
+        String plainText = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\"," //$NON-NLS-1$
+            + "\"text\":\"{\\\"success\\\":true,\\\"projects\\\":[{\\\"name\\\":\\\"P\\\"}]}\"}]}}"; //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(plainText), 1, true));
+
+        assertNull("a plain-text backend's answer must not gain structuredContent", //$NON-NLS-1$
+            Json.obj(Json.obj(parsed, "result"), "structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject payload = Json.parseObject(contentTextOf(parsed));
+        assertNotNull("the machine payload must survive in the text channel", payload); //$NON-NLS-1$
+        assertEquals(1, payload.getAsJsonArray("projects").size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATruncatedPayloadIsReportedAsASizeProblemNotAnOldPlugin()
+    {
+        // A plain-text backend's payload travels as content text and is capped like any other text;
+        // the cut JSON no longer parses. Calling that "an old plugin" sends the operator after the
+        // wrong problem.
+        String truncated = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\"," //$NON-NLS-1$
+            + "\"text\":\"{\\\"success\\\":true,\\\"projects\\\":[{\\\"name\\\":\\\"Pro" //$NON-NLS-1$
+            + "\n\n---\n[OUTPUT TRUNCATED] This result exceeded the maximum output size\"}]}}"; //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(truncated), 1, true));
+
+        String message = parsed.getAsJsonObject("error").get("message").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must name the real cause: " + message, //$NON-NLS-1$
+            message.contains("CUT by the output size cap")); //$NON-NLS-1$
     }
 
     @Test
