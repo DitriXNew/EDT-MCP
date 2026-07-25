@@ -224,4 +224,43 @@ public class RouterToolsTest
         assertTrue("a fresh refresh must record a timestamp", //$NON-NLS-1$
             structured.get("lastRefreshMs").getAsLong() > 0); //$NON-NLS-1$
     }
+
+    /**
+     * The proxy's OWN tools must honour the client's structuredContent opt-out too: the proxy
+     * terminates the handshake, so nothing else can apply that gate for them.
+     */
+    @Test
+    public void testRouterStatusHonoursTheStructuredContentOptOut()
+    {
+        BackendRegistry registry = new BackendRegistry(ProxyConfig.parse(new String[0], Map.of()));
+
+        JsonObject optedOut = Json.parseObject(RouterTools.routerStatus(registry, 1, false));
+        JsonObject result = optedOut.getAsJsonObject("result"); //$NON-NLS-1$
+
+        assertFalse("an opted-out client must not receive structuredContent: " + result, //$NON-NLS-1$
+            result.has("structuredContent")); //$NON-NLS-1$
+        // The DATA must survive the downgrade - it moves into the text channel.
+        JsonObject payload = Json.parseObject(
+            result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the text payload must carry the status: " + payload, payload.has("success")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // No regression for everyone else.
+        assertTrue("a default client must still receive structuredContent", //$NON-NLS-1$
+            Json.parseObject(RouterTools.routerStatus(registry, 1))
+                .getAsJsonObject("result").has("structuredContent")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testToolCallErrorHonoursTheStructuredContentOptOut()
+    {
+        JsonObject optedOut =
+            Json.parseObject(RouterTools.toolCallError("no route for 'X'", 7, false)); //$NON-NLS-1$
+        JsonObject result = optedOut.getAsJsonObject("result"); //$NON-NLS-1$
+
+        assertFalse("an opted-out client must not receive structuredContent: " + result, //$NON-NLS-1$
+            result.has("structuredContent")); //$NON-NLS-1$
+        assertTrue("the error must stay flagged", result.get("isError").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("no route for 'X'", //$NON-NLS-1$
+            result.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

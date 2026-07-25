@@ -217,6 +217,36 @@ public class FanOutTest
     }
 
     @Test
+    public void testBackendsThatAllLackTheMachineListAreReportedNotHiddenAsEmpty()
+    {
+        // A live backend whose plugin predates the machine list answers without one. Merging that into
+        // a cheerful success would read as "no projects anywhere" and hide a whole EDT.
+        String contentOnly = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":" //$NON-NLS-1$
+            + "[{\"type\":\"text\",\"text\":\"| Project |\n|---|\n| Legacy |\"}]}}"; //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(contentOnly), 1, true));
+
+        assertTrue("an unsupported-only fan-out must be an error: " + parsed, parsed.has("error")); //$NON-NLS-1$ //$NON-NLS-2$
+        String message = parsed.getAsJsonObject("error").get("message").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must say what to do: " + message, //$NON-NLS-1$
+            message.contains("machine-readable") && message.contains("router_status")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testABackendWithZeroProjectsIsNotMistakenForAnUnsupportedOne()
+    {
+        // An EMPTY projects array is authoritative: that EDT really has no projects, and the merge
+        // must stay a success.
+        String empty = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\"," //$NON-NLS-1$
+            + "\"text\":\"Done\"}],\"structuredContent\":{\"success\":true,\"projects\":[]}}}"; //$NON-NLS-1$
+
+        JsonObject parsed = Json.parseObject(FanOut.mergeListProjects(List.of(empty), 1, true));
+
+        assertFalse("zero projects is a fact, not an error: " + parsed, parsed.has("error")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(0, projectNamesOf(parsed).size());
+    }
+
+    @Test
     public void testDefaultMdFormatReturnsNoStructuredContent()
     {
         // format=md (the default) must look like a DIRECT markdown call: the human table only, with

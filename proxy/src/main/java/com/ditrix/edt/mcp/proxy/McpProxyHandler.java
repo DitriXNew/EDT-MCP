@@ -383,18 +383,19 @@ public final class McpProxyHandler implements HttpHandler
         switch (route.kind)
         {
             case BACKEND:
-                forwardToBackend(exchange, route.backend, rawBody, isToolCall, requestId);
+                forwardToBackend(exchange, route.backend, rawBody, isToolCall, requestId,
+                    allowStructuredContent);
                 break;
             case FAN_OUT_LIST_PROJECTS:
                 handleFanOut(exchange, requestId, wantsJsonFormat(requestJson), allowStructuredContent);
                 break;
             case PROXY_SELF:
-                handleProxySelf(exchange, requestJson, requestId);
+                handleProxySelf(exchange, requestJson, requestId, allowStructuredContent);
                 break;
             case ERROR:
             default:
                 String body = isToolCall
-                    ? RouterTools.toolCallError(route.errorMessage, requestId)
+                    ? RouterTools.toolCallError(route.errorMessage, requestId, allowStructuredContent)
                     : buildJsonRpcError(ERROR_BACKEND_UNREACHABLE, route.errorMessage, requestId);
                 sendMcpResponse(exchange, 200, body, null);
                 break;
@@ -410,7 +411,7 @@ public final class McpProxyHandler implements HttpHandler
      * (in the tool-call error shape for a {@code tools/call}, a plain JSON-RPC error otherwise).
      */
     private void forwardToBackend(HttpExchange exchange, Backend backend, String rawBody, boolean isToolCall,
-        Object requestId) throws IOException
+        Object requestId, boolean allowStructuredContent) throws IOException
     {
         try
         {
@@ -423,7 +424,7 @@ public final class McpProxyHandler implements HttpHandler
             registry.refresh();
             String message = deadBackendMessage(backend.getPort());
             String body = isToolCall
-                ? RouterTools.toolCallError(message, requestId)
+                ? RouterTools.toolCallError(message, requestId, allowStructuredContent)
                 : buildJsonRpcError(ERROR_BACKEND_UNREACHABLE, message, requestId);
             sendMcpResponse(exchange, 200, body, null);
         }
@@ -521,12 +522,13 @@ public final class McpProxyHandler implements HttpHandler
     }
 
     /** Answers {@code router_status} / {@code router_refresh} itself via {@link RouterTools}. */
-    private void handleProxySelf(HttpExchange exchange, JsonObject requestJson, Object requestId) throws IOException
+    private void handleProxySelf(HttpExchange exchange, JsonObject requestJson, Object requestId,
+        boolean allowStructuredContent) throws IOException
     {
         String toolName = Json.str(Json.obj(requestJson, KEY_PARAMS), KEY_NAME);
         String body = ProjectRouter.TOOL_ROUTER_REFRESH.equals(toolName)
-            ? RouterTools.routerRefresh(registry, requestId)
-            : RouterTools.routerStatus(registry, requestId);
+            ? RouterTools.routerRefresh(registry, requestId, allowStructuredContent)
+            : RouterTools.routerStatus(registry, requestId, allowStructuredContent);
         sendMcpResponse(exchange, 200, body, null);
     }
 

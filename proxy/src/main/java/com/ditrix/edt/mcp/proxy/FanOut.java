@@ -131,6 +131,8 @@ public final class FanOut
     {
         JsonArray mergedProjects = new JsonArray();
         JsonObject firstEnvelope = null;
+        int supportedBackends = 0;
+        int answeringBackends = 0;
 
         if (backendResponses != null)
         {
@@ -141,6 +143,7 @@ public final class FanOut
                 {
                     continue;
                 }
+                answeringBackends++;
                 if (firstEnvelope == null)
                 {
                     firstEnvelope = envelope;
@@ -150,13 +153,28 @@ public final class FanOut
                 // too old to support it. Such a backend contributes nothing here and is reported as
                 // an unsupported version by the registry - the proxy deliberately does NOT scrape the
                 // human Markdown as a fallback.
-                appendStructuredProjects(Json.obj(envelope, KEY_RESULT), mergedProjects);
+                if (appendStructuredProjects(Json.obj(envelope, KEY_RESULT), mergedProjects))
+                {
+                    supportedBackends++;
+                }
             }
         }
 
         if (firstEnvelope == null)
         {
             return jsonRpcError(ERROR_NO_BACKENDS, MSG_NO_BACKENDS, requestId);
+        }
+        if (supportedBackends == 0)
+        {
+            // Backends ANSWERED, but none returned a machine-readable list. Reporting success with an
+            // empty table would read as "no projects anywhere", hiding a live EDT whose plugin is too
+            // old (or whose list_projects is disabled) - the one case where an empty result is a
+            // version problem rather than a fact about the workspace.
+            return jsonRpcError(ERROR_NO_BACKENDS, answeringBackends
+                + " live EDT backend(s) answered, but none returned a machine-readable project list -" //$NON-NLS-1$
+                + " their MCP plugin predates it, or list_projects is disabled there. Upgrade the" //$NON-NLS-1$
+                + " plugin, or call list_projects on that EDT directly; 'router_status' names them.", //$NON-NLS-1$
+                requestId);
         }
 
         JsonObject result = Json.obj(firstEnvelope, KEY_RESULT);
@@ -439,7 +457,9 @@ public final class FanOut
     }
 
     /**
-     * Appends the entries of {@code result.structuredContent.projects} to the merged array. A
+     * Appends the machine project list to the merged array and reports whether that payload was
+     * present at all - accepted from {@code structuredContent.projects} AND from the same JSON
+     * delivered as content text by a plain-text-mode backend, but never scraped from the Markdown. A
      * response WITHOUT that array comes from a backend whose plugin does not support
      * {@code format=json} (the registry reports it as an unsupported version) and contributes
      * nothing - the proxy never scrapes the human Markdown as a fallback.
@@ -447,19 +467,22 @@ public final class FanOut
      * @param result the usable backend response's {@code result} object
      * @param mergedProjects the accumulator to append to
      */
-    private static void appendStructuredProjects(JsonObject result, JsonArray mergedProjects)
+    private static boolean appendStructuredProjects(JsonObject result, JsonArray mergedProjects)
     {
         // Shared extractor: accepts the machine list from structuredContent AND from a plain-text-mode
         // backend (the same JSON payload delivered as content text), but never scrapes the Markdown.
         JsonArray projects = BackendRegistry.machineProjects(result);
         if (projects == null)
         {
-            return;
+            // No machine payload at all - a backend too old for it, NOT a backend with zero projects
+            // (that one answers with an empty array, which is authoritative).
+            return false;
         }
         for (JsonElement project : projects)
         {
             mergedProjects.add(project);
         }
+        return true;
     }
 
     /**
