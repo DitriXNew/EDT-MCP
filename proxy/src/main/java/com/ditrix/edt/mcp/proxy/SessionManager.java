@@ -83,11 +83,24 @@ public final class SessionManager
      */
     public boolean allowsStructuredContent(String sessionId)
     {
+        return !Boolean.FALSE.equals(capabilityOf(sessionId));
+    }
+
+    /**
+     * Looks a session up ONCE, answering both "is it open?" and "does its client accept
+     * {@code structuredContent}?" - so a concurrent {@code DELETE} cannot land between the two
+     * questions and turn an opted-out session into a permissive unknown one.
+     *
+     * @param sessionId the session id from the {@code Mcp-Session-Id} header (may be {@code null})
+     * @return {@code TRUE}/{@code FALSE} for an open session, or {@code null} when the id is unknown
+     */
+    public Boolean capabilityOf(String sessionId)
+    {
         if (sessionId == null)
         {
-            return true;
+            return null;
         }
-        return !Boolean.FALSE.equals(sessions.get(sessionId));
+        return sessions.get(sessionId);
     }
 
     /**

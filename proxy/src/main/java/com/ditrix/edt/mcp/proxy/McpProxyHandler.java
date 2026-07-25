@@ -218,7 +218,9 @@ public final class McpProxyHandler implements HttpHandler
 
         String jsonRpcMethod = Json.str(requestJson, KEY_METHOD);
         boolean isInitialize = METHOD_INITIALIZE.equals(jsonRpcMethod);
-        if (!isInitialize && !requireValidSession(exchange, requestId))
+        Boolean sessionCapability = isInitialize ? null
+            : sessions.capabilityOf(exchange.getRequestHeaders().getFirst(HEADER_SESSION_ID));
+        if (!isInitialize && !requireValidSession(exchange, requestId, sessionCapability))
         {
             return;
         }
@@ -243,7 +245,8 @@ public final class McpProxyHandler implements HttpHandler
             handleToolsList(exchange, rawBody, requestId);
             return;
         }
-        handleRouted(exchange, jsonRpcMethod, rawBody, requestJson, requestId);
+        handleRouted(exchange, jsonRpcMethod, rawBody, requestJson, requestId,
+            !Boolean.FALSE.equals(sessionCapability));
     }
 
     /**
@@ -254,7 +257,8 @@ public final class McpProxyHandler implements HttpHandler
      *
      * @return {@code true} when the session is valid and dispatch should continue
      */
-    private boolean requireValidSession(HttpExchange exchange, Object requestId) throws IOException
+    private boolean requireValidSession(HttpExchange exchange, Object requestId, Boolean capability)
+        throws IOException
     {
         String sessionId = exchange.getRequestHeaders().getFirst(HEADER_SESSION_ID);
         if (sessionId == null || sessionId.isBlank())
@@ -263,7 +267,9 @@ public final class McpProxyHandler implements HttpHandler
                 "Missing " + HEADER_SESSION_ID + " header - call initialize first.", requestId)); //$NON-NLS-1$ //$NON-NLS-2$
             return false;
         }
-        if (!sessions.isValid(sessionId))
+        // Judged by the SAME lookup whose value the request will use, so a session closed
+        // concurrently cannot be validated here and then read as an unknown (permissive) one later.
+        if (capability == null)
         {
             sendPlain(exchange, 404, buildJsonRpcError(ERROR_INVALID_REQUEST,
                 "Unknown or expired session '" + sessionId + "' - call initialize again.", requestId)); //$NON-NLS-1$ //$NON-NLS-2$
@@ -370,7 +376,7 @@ public final class McpProxyHandler implements HttpHandler
      * error for any other method.
      */
     private void handleRouted(HttpExchange exchange, String jsonRpcMethod, String rawBody, JsonObject requestJson,
-        Object requestId) throws IOException
+        Object requestId, boolean allowStructuredContent) throws IOException
     {
         boolean isToolCall = METHOD_TOOLS_CALL.equals(jsonRpcMethod);
         ProjectRouter.RouteResult route = router.route(jsonRpcMethod, requestJson);
@@ -380,9 +386,7 @@ public final class McpProxyHandler implements HttpHandler
                 forwardToBackend(exchange, route.backend, rawBody, isToolCall, requestId);
                 break;
             case FAN_OUT_LIST_PROJECTS:
-                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson),
-                    sessions.allowsStructuredContent(
-                        exchange.getRequestHeaders().getFirst(HEADER_SESSION_ID)));
+                handleFanOut(exchange, requestId, wantsJsonFormat(requestJson), allowStructuredContent);
                 break;
             case PROXY_SELF:
                 handleProxySelf(exchange, requestJson, requestId);
@@ -440,6 +444,13 @@ public final class McpProxyHandler implements HttpHandler
      * @param requestJson the parsed JSON-RPC request
      * @return {@code true} when the caller passed {@code format=json}
      */
+    private static boolean wantsJsonFormat(JsonObject requestJson)
+    {
+        JsonObject arguments = Json.obj(Json.obj(requestJson, KEY_PARAMS), KEY_ARGUMENTS);
+        String format = Json.str(arguments, ARG_FORMAT);
+        return format != null && FORMAT_JSON.equalsIgnoreCase(format.trim());
+    }
+
     /**
      * Whether the client's {@code initialize} allows {@code structuredContent}. Only an explicit
      * {@code capabilities.experimental.structuredContent == false} opts out - an absent block, an empty
@@ -462,13 +473,6 @@ public final class McpProxyHandler implements HttpHandler
             return true;
         }
         return flag.getAsBoolean();
-    }
-
-    private static boolean wantsJsonFormat(JsonObject requestJson)
-    {
-        JsonObject arguments = Json.obj(Json.obj(requestJson, KEY_PARAMS), KEY_ARGUMENTS);
-        String format = Json.str(arguments, ARG_FORMAT);
-        return format != null && FORMAT_JSON.equalsIgnoreCase(format.trim());
     }
 
     /**

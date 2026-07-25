@@ -209,4 +209,23 @@ public class SessionManagerTest
         assertTrue("a missing session header must not suppress the field", //$NON-NLS-1$
             sessions.allowsStructuredContent(null));
     }
+
+    /**
+     * Validation and the capability must come from ONE lookup: a session closed in between would
+     * otherwise pass validation and then read back as an unknown - i.e. permissive - session.
+     */
+    @Test
+    public void testCapabilityOfDistinguishesClosedFromOptedOut()
+    {
+        SessionManager sessions = new SessionManager();
+        String optedOut = sessions.create(false);
+
+        assertEquals(Boolean.FALSE, sessions.capabilityOf(optedOut));
+
+        sessions.close(optedOut);
+
+        assertNull("a closed session must be reported as unknown, not as permissive", //$NON-NLS-1$
+            sessions.capabilityOf(optedOut));
+        assertNull("a null id must be reported as unknown", sessions.capabilityOf(null)); //$NON-NLS-1$
+    }
 }

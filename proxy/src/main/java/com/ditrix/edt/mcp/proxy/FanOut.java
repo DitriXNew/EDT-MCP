@@ -172,22 +172,21 @@ public final class FanOut
         // A client that opted out of structuredContent gets the machine payload as TEXT (what a
         // direct call gives it), not the structured field it declared it cannot accept.
         boolean structuredJson = jsonFormat && allowStructuredContent;
-        String markdown = capMarkdown(renderProjectsTable(mergedProjects), jsonFormat);
         if (structuredJson)
         {
-            rebuildContent(result, markdown);
+            rebuildContent(result, capMarkdown(renderProjectsTable(mergedProjects), true));
         }
         else if (jsonFormat)
         {
+            // Opted out: the machine payload as text - the table would be rendered only to be thrown
+            // away, and its "read the full list from structuredContent" hint would name a field this
+            // response deliberately omits.
             result.add(KEY_CONTENT, freshTextContent(capText(machinePayload(mergedProjects))));
-        }
-        else if (plainText)
-        {
-            result.add(KEY_CONTENT, freshTextContent(markdown));
         }
         else
         {
-            result.add(KEY_CONTENT, freshResourceContent(markdown));
+            String markdown = capMarkdown(renderProjectsTable(mergedProjects), false);
+            result.add(KEY_CONTENT, plainText ? freshTextContent(markdown) : freshResourceContent(markdown));
         }
         if (structuredJson)
         {
