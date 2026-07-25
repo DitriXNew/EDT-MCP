@@ -157,6 +157,9 @@ public class GitTool implements IMcpTool
     /** The {@code ://} that separates a URL scheme from its authority. */
     private static final String SCHEME_SEPARATOR = "://"; //$NON-NLS-1$
 
+    /** How often the run loop looks for new child processes while git is alive. */
+    private static final long DESCENDANT_POLL_MILLIS = 250;
+
     /** Seconds the {@code git config --get core.sshCommand} probe may take before it is killed. */
     private static final int CONFIG_PROBE_TIMEOUT_SECONDS = 5;
 
@@ -403,6 +406,10 @@ public class GitTool implements IMcpTool
         // A credential URL only matters where git can turn the token into a REMOTE. Restricting the
         // scan to those subcommands is what keeps a legitimate value - a commit message or a
         // 'log -S<text>' / '--grep=' search string that merely contains a URL - from being refused.
+        // The remote-URL guards (credential URL, transport helper, unsafe scheme) run only where a
+        // token can actually BECOME a remote. Elsewhere such a string is ordinary text - a commit
+        // message may legitimately carry 'vscode://file/...' or an 'ext::' prefix, and rejecting it
+        // would be a false alarm about a value git never resolves.
         boolean scanUrls = REMOTE_SUBCOMMANDS.contains(tokens.get(0));
         boolean scanMessageFile = MESSAGE_FILE_SUBCOMMANDS.contains(tokens.get(0));
         // The SHORT spellings of the file-reading options, each meaningful only for one subcommand:
@@ -428,14 +435,14 @@ public class GitTool implements IMcpTool
                     + "git run an arbitrary program, read/write files outside the repository, or operate on " //$NON-NLS-1$
                     + "a different repository. Remove it and retry."); //$NON-NLS-1$
             }
-            if (TRANSPORT_HELPER.matcher(token).find())
+            if (scanUrls && TRANSPORT_HELPER.matcher(token).find())
             {
                 throw new CommandRejectedException("A transport-helper URL ('<helper>::...', e.g. 'ext::' / " //$NON-NLS-1$
                     + "'fd::') is not allowed: it runs an arbitrary command, and 'remote add'/'set-url' would " //$NON-NLS-1$
                     + "even persist it. Use a normal https:// or ssh remote."); //$NON-NLS-1$
             }
             java.util.regex.Matcher scheme = URL_SCHEME.matcher(token);
-            if (scheme.find() && !SAFE_URL_SCHEMES.contains(scheme.group(1)))
+            if (scanUrls && scheme.find() && !SAFE_URL_SCHEMES.contains(scheme.group(1)))
             {
                 throw new CommandRejectedException("The URL scheme '" + scheme.group(1) + "://' is not " //$NON-NLS-1$ //$NON-NLS-2$
                     + "allowed: only lowercase http(s), ssh, git, ftp(s) and file remotes are accepted (git " //$NON-NLS-1$
@@ -671,6 +678,9 @@ public class GitTool implements IMcpTool
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
         Process process = null;
         Thread drain = null;
+        // Snapshotted WHILE git runs: once the parent exits its children are re-parented and
+        // process.descendants() no longer reports them, so a late capture would find nothing.
+        List<ProcessHandle> descendants = new ArrayList<>();
         StringBuilder out = new StringBuilder();
         boolean[] truncated = {false};
         try
@@ -682,7 +692,7 @@ public class GitTool implements IMcpTool
             drain.setDaemon(true);
             drain.start();
 
-            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            if (!awaitExit(process, descendants))
             {
                 killTree(process); // destroyForcibly + wait, and the child's own descendants
                 drain.join(2000);
@@ -723,10 +733,64 @@ public class GitTool implements IMcpTool
         }
         finally
         {
-            if (process != null && process.isAlive())
+            if (process != null)
             {
-                killTree(process); // never leak the process on an early return / exception
+                captureDescendants(process, descendants);
+                // Kill the parent when it is still running (an early return / exception), and in any
+                // case the descendants captured while it ran: a hook, filter, credential helper or ssh
+                // wrapper can BACKGROUND a child that inherits the output pipe and outlives git.
+                if (process.isAlive())
+                {
+                    killTree(process);
+                }
+                // Always the captured handles too: a child that DETACHED before this point is no
+                // longer a descendant of the parent, so killTree alone would leave it running.
+                killAll(descendants);
+                if (drain != null && drain.isAlive())
+                {
+                    // Something still holds the write end, so the drain would block forever. Closing
+                    // our read end ends that thread; a re-parented grandchild we can no longer
+                    // identify is out of reach, but it costs us no thread and no pipe from here on.
+                    closeQuietly(process.getInputStream());
+                }
             }
+        }
+    }
+
+    /**
+     * Force-kills every handle that is still alive. Best-effort: a process that is already gone, or
+     * that we may not signal, is skipped.
+     *
+     * @param handles the process handles to kill
+     */
+    private static void killAll(List<ProcessHandle> handles)
+    {
+        for (ProcessHandle handle : handles)
+        {
+            try
+            {
+                if (handle.isAlive())
+                {
+                    handle.destroyForcibly();
+                }
+            }
+            catch (RuntimeException e) // NOSONAR cleanup must never replace the command's result
+            {
+                Activator.logError("git: killing a child process failed", e); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /** Closes a stream, ignoring any failure - used only to unblock a reader. */
+    private static void closeQuietly(java.io.Closeable stream)
+    {
+        try
+        {
+            stream.close();
+        }
+        catch (IOException e) // NOSONAR closing is best-effort: the reader is what matters
+        {
+            Activator.logError("git: closing the output pipe failed", e); //$NON-NLS-1$
         }
     }
 
@@ -1221,6 +1285,62 @@ public class GitTool implements IMcpTool
             }
         }
         return text.substring(0, marker) + "[... url truncated]"; //$NON-NLS-1$
+    }
+
+    /**
+     * Waits for git to exit within {@link #TIMEOUT_SECONDS}, collecting its descendants as it runs.
+     * <p>
+     * The wait is POLLED rather than a single blocking one because a descendant can only be observed
+     * while the parent is alive: once git exits, its children are re-parented and
+     * {@link Process#descendants()} no longer reports them - and a hook, filter, credential helper or
+     * ssh wrapper may background exactly such a child, which would then hold the output pipe forever.
+     *
+     * @param process the git process
+     * @param descendants the collected handles, appended to as they appear
+     * @return {@code true} when git exited within the timeout
+     */
+    private static boolean awaitExit(Process process, List<ProcessHandle> descendants)
+        throws InterruptedException
+    {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
+        for (long remaining = deadline - System.nanoTime(); remaining > 0;
+            remaining = deadline - System.nanoTime())
+        {
+            captureDescendants(process, descendants);
+            // The last slice is clamped to what is LEFT of the budget, so polling can never stretch
+            // the timeout past TIMEOUT_SECONDS.
+            long slice = Math.min(DESCENDANT_POLL_MILLIS, TimeUnit.NANOSECONDS.toMillis(remaining) + 1);
+            if (process.waitFor(slice, TimeUnit.MILLISECONDS))
+            {
+                return true;
+            }
+        }
+        return !process.isAlive();
+    }
+
+    /**
+     * Adds the process' current descendants to {@code sink}, ignoring the ones already there.
+     * Best-effort: on a platform (or under a security manager) where the JVM refuses to enumerate
+     * them, the command's own result must not be lost over it.
+     *
+     * @param process the git process
+     * @param sink the collected handles
+     */
+    private static void captureDescendants(Process process, List<ProcessHandle> sink)
+    {
+        try
+        {
+            process.descendants().forEach(handle -> {
+                if (!sink.contains(handle))
+                {
+                    sink.add(handle);
+                }
+            });
+        }
+        catch (RuntimeException e) // NOSONAR cleanup is best-effort by contract
+        {
+            Activator.logError("git: listing child processes failed", e); //$NON-NLS-1$
+        }
     }
 
     /**

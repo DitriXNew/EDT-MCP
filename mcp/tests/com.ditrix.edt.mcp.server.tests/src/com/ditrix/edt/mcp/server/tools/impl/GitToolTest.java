@@ -371,6 +371,21 @@ public class GitToolTest
     }
 
     @Test
+    public void testRemoteUrlGuardsOnlyApplyWhereATokenCanBecomeARemote()
+    {
+        // A commit message is TEXT: git never resolves it as a remote, so an app URL or an
+        // "ext::"-looking prefix inside one must not be refused.
+        assertAccepted("commit -m \"see vscode://file/c:/x\""); //$NON-NLS-1$
+        assertAccepted("commit -m \"ext::note about helpers\""); //$NON-NLS-1$
+        assertAccepted("tag -a v1.0 -m \"see myapp://release\""); //$NON-NLS-1$
+
+        // Where a token CAN select or persist a remote, the guards stay.
+        assertRejected("remote add origin ext::sh -c payload"); //$NON-NLS-1$
+        assertRejected("push vscode://file/c:/x main"); //$NON-NLS-1$
+        assertRejected("fetch fd::7"); //$NON-NLS-1$
+    }
+
+    @Test
     public void testMoreFileReadingOptionsAreRejected()
     {
         assertRejected("blame --ignore-revs-file /etc/passwd -- tracked.txt"); //$NON-NLS-1$
