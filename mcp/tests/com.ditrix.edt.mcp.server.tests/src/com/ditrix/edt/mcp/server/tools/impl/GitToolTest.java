@@ -395,6 +395,11 @@ public class GitToolTest
         assertRejected("tag -aF/etc/passwd v1"); //$NON-NLS-1$
         assertRejected("blame -wS/etc/passwd -- tracked.bsl"); //$NON-NLS-1$
 
+        // The parser lets these through - the path guard below decides them, because whether a path
+        // is outside the repository can only be answered against a real work tree.
+        assertAccepted("diff -pO/etc/passwd"); //$NON-NLS-1$
+        assertAccepted("log -Sfoo/etc/passwd"); //$NON-NLS-1$
+
         // The SAME letter differs per subcommand: '-c' takes a commit for commit but is --cached for
         // ls-files/blame, so a cluster must not stop there.
         assertRejected("ls-files -cXC:/secret"); //$NON-NLS-1$
@@ -426,6 +431,9 @@ public class GitToolTest
         // The same URL must not even be ACCEPTED where it would be persisted.
         assertRejected("remote add origin https://example.com/r.git?access_token=ghp_secret"); //$NON-NLS-1$
         assertRejected("push https://example.com/r.git?token=x main"); //$NON-NLS-1$
+        // Attached to an OPTION, where the anchored scheme pattern would not see it.
+        assertRejected("push --repo=https://host/repo.git?access_token=secret"); //$NON-NLS-1$
+        assertRejected("remote add origin https://host/r.git#access_token=secret"); //$NON-NLS-1$
         // A '?' outside a URL (a commit message, a pathspec) is untouched.
         assertAccepted("commit -m \"why? because\""); //$NON-NLS-1$
 
@@ -433,6 +441,18 @@ public class GitToolTest
         String twoUrls = GitTool.redactCredentialUrls("https://a@h/x,https://secret@h/y?k=v"); //$NON-NLS-1$
         assertFalse("neither credential may survive: " + twoUrls, //$NON-NLS-1$
             twoUrls.contains("secret") || twoUrls.contains("k=v")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A '?' INSIDE a fragment must not push the redaction past the secret.
+        String fragmentThenQuery =
+            GitTool.redactCredentialUrls("https://h/r.git#access_token=ghp_secret?x=y"); //$NON-NLS-1$
+        assertFalse("the fragment secret must not survive: " + fragmentThenQuery, //$NON-NLS-1$
+            fragmentThenQuery.contains("ghp_secret")); //$NON-NLS-1$
+
+        // A FRAGMENT hides a credential just as well, and carries neither '@' nor '?'.
+        String fragment = GitTool.redactCredentialUrls("origin	https://example.com/r.git#access_token=ghp_secret (fetch)"); //$NON-NLS-1$
+        assertFalse("the fragment secret must not survive: " + fragment, //$NON-NLS-1$
+            fragment.contains("ghp_secret")); //$NON-NLS-1$
+        assertTrue("what follows must survive: " + fragment, fragment.contains("(fetch)")); //$NON-NLS-1$ //$NON-NLS-2$
 
         // A '://' inside a query VALUE is not the next URL: the redaction must cover the whole query.
         String schemeInValue = GitTool.redactCredentialUrls("https://h/x?token=secret://tail"); //$NON-NLS-1$
@@ -528,6 +548,39 @@ public class GitToolTest
     {
         assertTrue("the git tool must be gated", //$NON-NLS-1$
             DestructiveConsentGate.GATED_TOOLS.contains(GitTool.NAME));
+    }
+
+    @Test
+    public void testClusteredFileOptionValueIsCheckedAgainstTheWorkTree()
+        throws java.io.IOException
+    {
+        // 'diff -pO<file>' is '-p -O <file>': git reads that order file, so the value inside the
+        // cluster must be checked - while a value that merely CONTAINS a path (a pickaxe string)
+        // must not be, or an ordinary search would be refused.
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("edt-mcp-git-root"); //$NON-NLS-1$
+        java.nio.file.Path outside = java.nio.file.Files.createTempFile("edt-mcp-outside", ".txt"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            java.nio.file.Path canonicalRoot = root.toRealPath();
+            String outsidePath = outside.toRealPath().toString();
+
+            assertNotNull("an order file outside the repository must be caught inside a cluster", //$NON-NLS-1$
+                GitTool.escapingCandidate("-pO" + outsidePath, "diff", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNotNull("the separated-looking attached form too", //$NON-NLS-1$
+                GitTool.escapingCandidate("-O" + outsidePath, "diff", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull("a value-taking letter ends the scan: '-S' consumes the rest as a search string", //$NON-NLS-1$
+                GitTool.escapingCandidate("-Sfoo" + outsidePath, "diff", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull("'log' has no file-taking short option, so a pickaxe value is left alone", //$NON-NLS-1$
+                GitTool.escapingCandidate("-Sfoo" + outsidePath, "log", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull("a path INSIDE the repository is fine", //$NON-NLS-1$
+                GitTool.escapingCandidate("-O" + canonicalRoot.resolve("order.txt"), "diff", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    canonicalRoot));
+        }
+        finally
+        {
+            java.nio.file.Files.deleteIfExists(outside);
+            java.nio.file.Files.deleteIfExists(root);
+        }
     }
 
     private static List<String> argv(String... tokens)

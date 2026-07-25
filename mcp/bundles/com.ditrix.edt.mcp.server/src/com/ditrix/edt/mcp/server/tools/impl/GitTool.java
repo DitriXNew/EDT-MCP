@@ -173,7 +173,22 @@ public class GitTool implements IMcpTool
      * Only the subcommands whose clusters are scanned appear here; an unlisted one stops at nothing,
      * which errs toward refusing a cluster rather than letting a file/strategy option through.
      */
+    /**
+     * The short options that take a FILE for the subcommands whose operands are scanned:
+     * {@code diff -O<order-file>}, {@code blame -S<revs-file>}, {@code commit}/{@code tag}/
+     * {@code merge -F<message-file>}, {@code ls-files -X<exclude-file>}. Their separated spellings
+     * are refused outright by the parser; this map is what finds the value ATTACHED inside a cluster.
+     */
+    private static final Map<String, String> FILE_TAKING_SHORT_OPTIONS = Map.of(
+        "diff", "O", //$NON-NLS-1$ //$NON-NLS-2$
+        "blame", "S", //$NON-NLS-1$ //$NON-NLS-2$
+        "commit", "F", //$NON-NLS-1$ //$NON-NLS-2$
+        "tag", "F", //$NON-NLS-1$ //$NON-NLS-2$
+        "merge", "F", //$NON-NLS-1$ //$NON-NLS-2$
+        "ls-files", "X"); //$NON-NLS-1$ //$NON-NLS-2$
+
     private static final Map<String, String> VALUE_TAKING_SHORT_OPTIONS = Map.of(
+        "diff", "SGLU", //$NON-NLS-1$ //$NON-NLS-2$
         "commit", "mcCuSt", //$NON-NLS-1$ //$NON-NLS-2$
         "tag", "mnu", //$NON-NLS-1$ //$NON-NLS-2$
         "merge", "mXS", //$NON-NLS-1$ //$NON-NLS-2$
@@ -339,7 +354,6 @@ public class GitTool implements IMcpTool
             return ToolResult.error(e.getMessage()).toJson();
         }
 
-        long startedAt = System.nanoTime();
         GitRepositoryResolver.Resolution resolution = null;
         try
         {
@@ -363,6 +377,9 @@ public class GitTool implements IMcpTool
             {
                 return consentError;
             }
+            // The refresh budget starts HERE, not before the consent prompt: an operator taking a
+            // minute to approve must not eat the wait the workspace refresh needs afterwards.
+            long startedAt = System.nanoTime();
             String output = runGit(argv, workTree);
             // A command that rewrites the working tree changed files behind Eclipse's back: refresh the
             // project so the workspace - and the EDT model built on it - sees them. Refreshed on ANY
@@ -463,7 +480,10 @@ public class GitTool implements IMcpTool
                     + "'fd::') is not allowed: it runs an arbitrary command, and 'remote add'/'set-url' would " //$NON-NLS-1$
                     + "even persist it. Use a normal https:// or ssh remote."); //$NON-NLS-1$
             }
-            java.util.regex.Matcher scheme = URL_SCHEME.matcher(token);
+            // A URL can arrive as an option's VALUE ('--repo=https://host/r.git'), and the scheme
+            // pattern is anchored, so the guards below run on the value rather than the raw token.
+            String urlCandidate = urlCandidateOf(token);
+            java.util.regex.Matcher scheme = URL_SCHEME.matcher(urlCandidate);
             if (scanUrls && scheme.find() && !SAFE_URL_SCHEMES.contains(scheme.group(1)))
             {
                 throw new CommandRejectedException("The URL scheme '" + scheme.group(1) + "://' is not " //$NON-NLS-1$ //$NON-NLS-2$
@@ -494,11 +514,13 @@ public class GitTool implements IMcpTool
                     + "reports back, so this option is refused whatever the path - drop it, or read " //$NON-NLS-1$
                     + "the file with read_module_source if it belongs to the project."); //$NON-NLS-1$
             }
-            if (scanUrls && scheme.find(0) && token.indexOf('?') > 0)
+            if (scanUrls && scheme.find(0)
+                && (urlCandidate.indexOf('?') > 0 || urlCandidate.indexOf('#') > 0))
             {
-                throw new CommandRejectedException("A remote URL with a query string is not accepted: " //$NON-NLS-1$
-                    + "a credential is commonly passed that way ('...repo.git?access_token=<secret>') " //$NON-NLS-1$
-                    + "and 'remote add' / 'set-url' would persist it in the repository config. Use a " //$NON-NLS-1$
+                throw new CommandRejectedException("A remote URL with a query string or fragment is " //$NON-NLS-1$
+                    + "not accepted: a credential is commonly passed that way " //$NON-NLS-1$
+                    + "('...repo.git?access_token=<secret>', '...repo.git#token=<secret>') and " //$NON-NLS-1$
+                    + "'remote add' / 'set-url' would persist it in the repository config. Use a " //$NON-NLS-1$
                     + "credential helper or an ssh remote."); //$NON-NLS-1$
             }
             if (scanUrls && hasCredentialUrl(token))
@@ -562,6 +584,27 @@ public class GitTool implements IMcpTool
             }
         }
         return false;
+    }
+
+    /**
+     * The part of a token the URL guards must examine: a LONG option's value ({@code --repo=<url>}),
+     * or the token itself. The scheme pattern is anchored, so an attached URL would otherwise slip
+     * past every check that starts from it.
+     *
+     * @param token the raw token
+     * @return the text to test as a URL
+     */
+    private static String urlCandidateOf(String token)
+    {
+        if (token.startsWith("--")) //$NON-NLS-1$
+        {
+            int equals = token.indexOf('=');
+            if (equals >= 0)
+            {
+                return token.substring(equals + 1);
+            }
+        }
+        return token;
     }
 
 
@@ -761,21 +804,43 @@ public class GitTool implements IMcpTool
             {
                 continue;
             }
-            try
+            Path projectPath = bestEffortRealPath(location.toFile().toPath());
+            if (projectPath.startsWith(root))
             {
-                Path projectPath = location.toFile().toPath().toRealPath();
-                if (projectPath.startsWith(root))
-                {
-                    inside.add(project);
-                }
-            }
-            catch (IOException e) // NOSONAR a project we cannot canonicalize is simply not refreshed
-            {
-                Activator.logError("git: resolving the location of '" + project.getName() //$NON-NLS-1$
-                    + "' failed", e); //$NON-NLS-1$
+                inside.add(project);
             }
         }
         return inside;
+    }
+
+    /**
+     * Canonicalizes as much of a path as still EXISTS, then appends the rest lexically.
+     * <p>
+     * A checkout can DELETE a project's directory - exactly the project whose model must be
+     * refreshed - so plain canonicalization is not available. Resolving the nearest existing ancestor
+     * first keeps a symlinked ancestor from smuggling an OUTSIDE location past the containment test,
+     * which a purely lexical path would allow.
+     *
+     * @param path the path to resolve
+     * @return the best canonical form available
+     */
+    private static Path bestEffortRealPath(Path path)
+    {
+        Path absolute = path.toAbsolutePath().normalize();
+        for (Path existing = absolute; existing != null; existing = existing.getParent())
+        {
+            try
+            {
+                Path real = existing.toRealPath();
+                Path missing = existing.relativize(absolute);
+                return missing.toString().isEmpty() ? real : real.resolve(missing);
+            }
+            catch (IOException e) // NOSONAR walk further up: this ancestor is gone too
+            {
+                continue;
+            }
+        }
+        return absolute;
     }
 
     private static void refreshProject(IProject project, IProgressMonitor monitor)
@@ -1138,19 +1203,20 @@ public class GitTool implements IMcpTool
      * Two spellings do that. {@code diff} applies its filesystem-compare form IMPLICITLY when a path
      * lies outside the work tree ({@code --no-index} is refused, but not needed), and several options
      * take a FILE as their value - {@code blame --contents}/{@code -S}, {@code commit -F},
-     * {@code ls-files -X}. The blocked-flag list names the ones known today; this guard is the
-     * structural backstop, and it works WITHOUT knowing git's option grammar: every token is examined,
-     * together with the value attached to it ({@code --opt=value}, {@code -Xvalue}).
+     * {@code ls-files -X}, {@code diff -O}. The blocked-flag list refuses their separated spellings;
+     * this guard is the structural backstop for the ATTACHED ones, examining every operand together
+     * with the value carried by an option ({@code --opt=value}, and the tail that follows a
+     * file-taking letter inside a short cluster).
      * <p>
      * A token is judged by what it could actually READ - refused only when an EXISTING file or
      * directory outside the work tree sits at that path - so revisions ({@code HEAD~1},
      * {@code main..feature}), messages and search strings pass untouched. Past the pathspec
      * {@code --} every token is a path, so one that leaves the work tree is refused outright.
      * <p>
-     * Two limits are deliberate. A value that happens to NAME a real outside file ({@code -m ../x})
-     * is refused: telling a value from an operand would mean reimplementing git's per-option arity,
-     * and the error says how to proceed. And an existence check is not atomic with git's open, so a
-     * path created or re-pointed in between is not covered - a strict guarantee would need OS-level
+     * Two limits are deliberate. Only the file options git documents are followed into a cluster: an
+     * unknown short one that takes a file would be missed rather than guessed at, since guessing
+     * means reimplementing git's per-option arity. And an existence check is not atomic with git's
+     * open, so a path created or re-pointed in between is not covered - a strict guarantee would need OS-level
      * containment, which is out of scope for a tool the operator enables deliberately.
      *
      * @param argv the validated argument vector ({@code argv[0]} is git, {@code argv[1]} the subcommand)
@@ -1172,6 +1238,7 @@ public class GitTool implements IMcpTool
         {
             root = workTree.toPath().toAbsolutePath().normalize();
         }
+        String subcommand = argv.get(1);
         boolean afterPathspecSeparator = false;
         for (int i = 2; i < argv.size(); i++)
         {
@@ -1181,8 +1248,12 @@ public class GitTool implements IMcpTool
                 afterPathspecSeparator = true;
                 continue;
             }
-            String candidate = afterPathspecSeparator ? token : attachedValueOf(token);
-            if (!escapesRepository(candidate, root, afterPathspecSeparator))
+            String candidate = afterPathspecSeparator ? token : escapingCandidate(token, subcommand, root);
+            if (candidate == null)
+            {
+                continue;
+            }
+            if (afterPathspecSeparator && !escapesRepository(candidate, root, true))
             {
                 continue;
             }
@@ -1196,55 +1267,53 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * The part of a token git would treat as a path: the token itself for an operand, or the value
-     * attached to an option ({@code --contents=<file>}, {@code -F<file>}). A bare option carries no
-     * path, so it maps to the empty string, which never escapes. For a SHORT option {@code =} is part
-     * of the value, not a separator, so only {@code --long=value} is split there.
+     * The part of a token that would make git read OUTSIDE the repository, or {@code null} when none
+     * does.
+     * <p>
+     * An operand is tested as itself; a long option's value after its {@code =}; and, for a short
+     * one, the tail that follows a FILE-taking letter of this subcommand ({@code diff -O<order-file>},
+     * {@code blame -S<revs-file>}, {@code commit -F<message-file>}, {@code ls-files -X<exclude-file>}),
+     * which git accepts inside a cluster ({@code diff -pO<file>} is {@code -p -O <file>}). Testing
+     * every suffix instead would reject a legitimate value that merely CONTAINS a path
+     * ({@code log -Sfoo/etc/passwd} is a pickaxe string), so the letter is what anchors the scan.
      *
      * @param token the raw token
-     * @return the candidate path text (never {@code null})
+     * @param subcommand the git subcommand, which decides which letters take a file
+     * @param root the canonical repository work tree
+     * @return the offending path, or {@code null} when the token stays inside
      */
-    private static String attachedValueOf(String token)
+    static String escapingCandidate(String token, String subcommand, Path root)
     {
         if (!token.startsWith("-")) //$NON-NLS-1$
         {
-            return token;
+            return escapesRepository(token, root, false) ? token : null;
         }
-        if (token.length() > 2 && token.charAt(1) != '-')
+        if (token.startsWith("--")) //$NON-NLS-1$
         {
-            // A SHORT option with its value attached ('-F/etc/passwd'). Checked BEFORE any '=' split:
-            // the value may itself contain one ('-FC:\\out\\a=b.txt'), and splitting there would hide
-            // the real path. A leading '=' ('-F=/etc/passwd') is part of the separator, not the path.
-            // No '=' stripping here: for a SHORT option git treats '=' as part of the value, so
-            // '-S=/etc/passwd' opens the repo-relative '=/etc/passwd', not the host path.
-            String tail = token.substring(2);
-            // Only a tail that LOOKS like a path is treated as one: a bundle ('-sb') or a count
-            // ('-10') is not a file operand, and testing it could reject an ordinary command over a
-            // same-named symlink inside the repository.
-            return looksLikePath(tail) ? tail : ""; //$NON-NLS-1$
+            int equals = token.indexOf('=');
+            String value = equals >= 0 ? token.substring(equals + 1) : ""; //$NON-NLS-1$
+            return escapesRepository(value, root, false) ? value : null;
         }
-        int equals = token.indexOf('=');
-        if (equals >= 0)
+        String fileLetters = FILE_TAKING_SHORT_OPTIONS.getOrDefault(subcommand, ""); //$NON-NLS-1$
+        String valueTaking = VALUE_TAKING_SHORT_OPTIONS.getOrDefault(subcommand, ""); //$NON-NLS-1$
+        for (int i = 1; i < token.length(); i++)
         {
-            // A LONG option's value ('--contents=<file>').
-            return token.substring(equals + 1);
+            char c = token.charAt(i);
+            if (fileLetters.indexOf(c) >= 0)
+            {
+                String tail = token.substring(i + 1);
+                return escapesRepository(tail, root, false) ? tail : null;
+            }
+            if (valueTaking.indexOf(c) >= 0)
+            {
+                // The rest is THIS option's value, not another flag: 'diff -SfooO<path>' searches for
+                // the string "fooO<path>", it does not open an order file.
+                return null;
+            }
         }
-        return ""; //$NON-NLS-1$
+        return null;
     }
 
-    /**
-     * Whether a short option's attached value is shaped like a filesystem path - it carries a
-     * separator, a drive letter or a leading dot. A bare word is not: relative to the work tree it
-     * cannot name anything outside it.
-     *
-     * @param value the attached value
-     * @return {@code true} when the value is worth testing as a path
-     */
-    private static boolean looksLikePath(String value)
-    {
-        return value.indexOf('/') >= 0 || value.indexOf('\\') >= 0 || value.indexOf(':') >= 0
-            || value.startsWith("."); //$NON-NLS-1$
-    }
 
     /**
      * Whether a candidate path resolves outside {@code root}.
@@ -1325,7 +1394,7 @@ public class GitTool implements IMcpTool
      */
     static String redactCredentialUrls(String text)
     {
-        if (text == null || (text.indexOf('@') < 0 && text.indexOf('?') < 0))
+        if (text == null || (text.indexOf('@') < 0 && text.indexOf('?') < 0 && text.indexOf('#') < 0))
         {
             return text;
         }
@@ -1358,7 +1427,11 @@ public class GitTool implements IMcpTool
             // A credential can also ride in the QUERY ('...repo.git?access_token=<secret>'), where
             // there is no '@' at all. The whole query is replaced: telling a secret parameter from a
             // harmless one would mean keeping a list of every service's parameter names.
-            int queryStart = queryStart(text, Math.max(copiedUpTo, authorityStart), limit);
+            // From the EARLIEST of '?' and '#': a fragment hides a credential just as well
+            // ('...repo.git#access_token=<secret>'), and a '?' INSIDE that fragment must not make the
+            // redaction start after the secret.
+            int scanFrom = Math.max(copiedUpTo, authorityStart);
+            int queryStart = earliest(queryStart(text, scanFrom, limit), fragmentStart(text, scanFrom, limit));
             if (queryStart >= 0)
             {
                 if (redacted == null)
@@ -1413,6 +1486,26 @@ public class GitTool implements IMcpTool
     }
 
     /**
+     * The first of two optional indexes ({@code -1} meaning absent).
+     *
+     * @param first one index, or {@code -1}
+     * @param second the other index, or {@code -1}
+     * @return the smaller present index, or {@code -1} when both are absent
+     */
+    private static int earliest(int first, int second)
+    {
+        if (first < 0)
+        {
+            return second;
+        }
+        if (second < 0)
+        {
+            return first;
+        }
+        return Math.min(first, second);
+    }
+
+    /**
      * Finds the {@code ?} that opens this URL's query, or {@code -1} when it has none. The search
      * stops at whitespace and at the next URL: a query belongs to the URL being scanned.
      *
@@ -1423,10 +1516,37 @@ public class GitTool implements IMcpTool
      */
     private static int queryStart(String text, int from, int limit)
     {
+        return delimiterStart(text, from, limit, '?');
+    }
+
+    /**
+     * Finds the {@code #} that opens this URL's fragment, or {@code -1} when it has none.
+     *
+     * @param text the output being scanned
+     * @param from the index to start at (inside the URL)
+     * @param limit where this URL stops (see {@link #urlLimit})
+     * @return the index of the {@code #}, or {@code -1}
+     */
+    private static int fragmentStart(String text, int from, int limit)
+    {
+        return delimiterStart(text, from, limit, '#');
+    }
+
+    /**
+     * Finds {@code delimiter} inside the current URL.
+     *
+     * @param text the output being scanned
+     * @param from the index to start at (inside the URL)
+     * @param limit where this URL stops (see {@link #urlLimit})
+     * @param delimiter the character to find
+     * @return its index, or {@code -1} when the URL ends first
+     */
+    private static int delimiterStart(String text, int from, int limit, char delimiter)
+    {
         for (int i = from; i < limit; i++)
         {
             char c = text.charAt(i);
-            if (c == '?')
+            if (c == delimiter)
             {
                 return i;
             }
