@@ -65,8 +65,18 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
  * <b>disabled by default</b> - the operator opts in by checking it in the MCP Server Tools preference tab
  * (it is disabled at the TOOL level, so {@code enable_toolset}, which only affects progressive-disclosure
  * visibility, does not turn it on). Runs on a bounded ({@link #TIMEOUT_SECONDS}s) external process off the
- * UI thread; a timeout kills the process tree. It hardens against command-string injection but TRUSTS the
- * repository's own git config (hooks/filters/aliases) exactly like the developer's terminal.
+ * UI thread; a timeout kills the process tree.
+ * <p>
+ * <b>Trust boundary.</b> This is a terminal-equivalent convenience, NOT a sandbox. What it guarantees
+ * is the list above: no shell, a whitelisted subcommand, consent before a write, nothing that waits
+ * for a human, one bounded process with its children, a capped output. Everything else here - the
+ * blocked-option list, the checks that keep a path inside the repository, the credential redaction -
+ * is a best-effort guardrail against a common mistake. Git owns the option grammar (values attach,
+ * cluster and abbreviate) and the output format, so those guardrails cannot be complete, and the
+ * repository's own config (hooks, filters, credential helpers, {@code core.sshCommand}) runs with the
+ * EDT user's authority exactly as it does in the developer's terminal. Extend them when a real
+ * spelling is found - but do not present them as containment: the honest answer for an unattended,
+ * hostile-input setting is a structured tool with fixed argument vectors, not a wider denylist.
  * <p>
  * GPG signing is neutralized in the executed COMMAND (the signing config is off and no usable
  * {@code gpg.*program} remains), not by inspecting tokens: git accepts too many spellings of a signing

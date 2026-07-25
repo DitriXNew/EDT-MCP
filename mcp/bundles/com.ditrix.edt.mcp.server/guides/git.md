@@ -14,6 +14,30 @@ There is deliberately **no** credential handling here. `git` uses whatever the m
 
 It does **not** sandbox the machine or the repository's own configuration: the `git` executable is resolved from the machine's `PATH`; a repository's hooks, filters, aliases and merge drivers run with your privileges; and operand paths are not confined to the work tree - **exactly as they would in your terminal**. Only enable this tool for a machine and repositories you already trust to run git in, as you do when you `cd` into them yourself.
 
+## What this tool is - and what it is not
+
+It is a **terminal-equivalent convenience**, not a sandbox. Enabling it grants git - and whatever the
+repository's and the machine's configuration make git run (hooks, filters, credential helpers,
+`core.sshCommand`, a pager) - the same authority the EDT user already has. That is the same authority
+you give git when you type the command yourself, which is exactly the point.
+
+What the tool **does** guarantee, and what the checks below are for:
+
+- the command never reaches a **shell** - it is executed as an argument vector, so there is no
+  command-injection surface in the string you send;
+- only **whitelisted subcommands** run, and every write-capable one asks for consent;
+- it never **hangs**: stdin is closed and the editor, pager, askpass, credential prompt and signing
+  are all disabled, so anything that would wait for a human fails fast instead;
+- one **bounded** process (see the timeout below) whose children are killed with it, and a capped
+  output.
+
+The rest - the blocked-option list, the checks that keep a path inside the repository, and the
+credential redaction in the output - are **best-effort guardrails against a common mistake**, not a
+containment boundary. Git owns the option grammar (a value can be attached, clustered or abbreviated)
+and the output format, so a determined caller, or a repository configured to run its own programs,
+can work around them. Treat this tool as you would a terminal you handed to the agent: enable it for
+repositories you trust, and rely on the consent gate for anything that writes.
+
 ## Supported subcommands (whitelist)
 A minimal, deliberately-small set - inspection and the dev loop:
 `add`, `blame`, `branch`, `checkout`, `cherry-pick`, `commit`, `describe`, `diff`, `fetch`, `log`, `ls-files`, `merge`, `pull`, `push`, `remote`, `restore`, `rev-parse`, `revert`, `show`, `stash`, `status`, `switch`, `tag`.
