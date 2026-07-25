@@ -348,6 +348,29 @@ public class GitToolTest
     }
 
     @Test
+    public void testStrategyOptionIsRejectedBecauseItNamesAProgram()
+    {
+        // git runs 'git-<strategy>' from PATH, so a strategy name is an arbitrary program.
+        assertRejected("merge --no-ff -s pwn other"); //$NON-NLS-1$
+        assertRejected("merge --strategy=pwn other"); //$NON-NLS-1$
+        assertRejected("pull -spwn origin main"); //$NON-NLS-1$
+        assertRejected("merge -nspwn other"); // a CLUSTER: git reads '-n -s pwn' //$NON-NLS-1$
+
+        // 'cherry-pick -s' / 'revert -s' are --signoff, not --strategy: they must keep working.
+        assertAccepted("cherry-pick -s abc123"); //$NON-NLS-1$
+        assertAccepted("revert -s abc123"); //$NON-NLS-1$
+
+        // '-s' means --no-patch for log/show, and -X only configures the built-in strategy.
+        assertAccepted("log -s"); //$NON-NLS-1$
+        assertAccepted("show -s HEAD"); //$NON-NLS-1$
+        assertAccepted("merge -X ours other"); //$NON-NLS-1$
+        // An ATTACHED strategy-option value carries an 's' but no flag after it.
+        assertAccepted("merge -Xours other"); //$NON-NLS-1$
+        assertAccepted("pull -Xtheirs origin main"); //$NON-NLS-1$
+        assertAccepted("merge -mfixes other"); //$NON-NLS-1$
+    }
+
+    @Test
     public void testMoreFileReadingOptionsAreRejected()
     {
         assertRejected("blame --ignore-revs-file /etc/passwd -- tracked.txt"); //$NON-NLS-1$

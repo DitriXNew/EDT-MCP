@@ -124,7 +124,12 @@ public class GitTool implements IMcpTool
         // --file <file>' copies it into the message, where 'log' reads it straight back out. The
         // diff-operand guard cannot see these - the path is an option VALUE, not an operand.
         "--contents", "--file", "--template", "--pathspec-from-file", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "--ignore-revs-file", "--exclude-from"); //$NON-NLS-1$ //$NON-NLS-2$
+        "--ignore-revs-file", "--exclude-from", //$NON-NLS-1$ //$NON-NLS-2$
+        // A merge strategy is a PROGRAM: git runs 'git-<strategy>' from PATH, so '-s pwn' is an
+        // arbitrary-program option in the same class as --upload-pack. The default strategy needs no
+        // flag, so refusing the option costs nothing here. ('-X'/--strategy-option only configures
+        // the built-in strategy and stays allowed.)
+        "--strategy"); //$NON-NLS-1$
 
     /**
      * A URL carrying USERINFO ({@code scheme://user@host}, with or without a {@code :password}) -
@@ -163,6 +168,14 @@ public class GitTool implements IMcpTool
      * file). Scoped, because {@code -F} means {@code --fixed-strings} for {@code log}, which is
      * legitimate.
      */
+    /**
+     * Subcommands whose {@code -s} is the short spelling of {@code --strategy} (a PROGRAM name).
+     * NOT {@code cherry-pick} / {@code revert}: there {@code -s} is {@code --signoff}, which is
+     * harmless - their {@code --strategy} is blocked by the long-option list like everywhere else.
+     */
+    private static final Set<String> STRATEGY_SUBCOMMANDS =
+        Set.of("merge", "pull"); //$NON-NLS-1$ //$NON-NLS-2$
+
     private static final Set<String> MESSAGE_FILE_SUBCOMMANDS =
         Set.of("commit", "tag", "merge"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
@@ -395,6 +408,9 @@ public class GitTool implements IMcpTool
         // The SHORT spellings of the file-reading options, each meaningful only for one subcommand:
         // 'blame -S <revs-file>' and 'ls-files -X <exclude-file>'. Both letters mean something else
         // elsewhere ('log -S' is the pickaxe, 'merge -X' a strategy option), so they are scoped.
+        // '-s' is the short --strategy for the merge-like subcommands; elsewhere ('log -s',
+        // 'show -s') it means --no-patch, which is harmless.
+        boolean scanStrategy = STRATEGY_SUBCOMMANDS.contains(tokens.get(0));
         String shortFileFlag = null;
         if ("blame".equals(tokens.get(0))) //$NON-NLS-1$
         {
@@ -431,6 +447,17 @@ public class GitTool implements IMcpTool
                     + "would " //$NON-NLS-1$
                     + "copy a file this tool does not govern into the repository. Pass the message " //$NON-NLS-1$
                     + "inline with -m instead."); //$NON-NLS-1$
+            }
+            if (scanStrategy && selectsStrategy(token))
+            {
+                // Any single-dash token carrying 's', not just a leading '-s': git reads '-nspwn' as
+                // '-n -s pwn'. Telling a clustered FLAG from a letter inside an attached value would
+                // mean reimplementing git's per-subcommand option arity, so the whole cluster is
+                // refused - pass the message separately (-m "...") if that is what carried the 's'.
+                throw new CommandRejectedException("'" + token + "' can select a merge STRATEGY, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "which git runs as the program 'git-<strategy>' from PATH - this tool does not " //$NON-NLS-1$
+                    + "run arbitrary programs. Drop '-s' (git's default strategy needs no flag) and " //$NON-NLS-1$
+                    + "pass any message as a separate -m \"...\" argument."); //$NON-NLS-1$
             }
             if (shortFileFlag != null && token.startsWith(shortFileFlag))
             {
@@ -662,7 +689,7 @@ public class GitTool implements IMcpTool
                 ToolResult timeout = ToolResult.error("'" + shellForm + "' timed out after " + TIMEOUT_SECONDS //$NON-NLS-1$ //$NON-NLS-2$
                     + " seconds and was killed. Check network connectivity / the remote, or run a smaller " //$NON-NLS-1$
                     + "command.") //$NON-NLS-1$
-                    .put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out));
+                    .put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out, truncated));
                 if (truncated[0])
                 {
                     timeout.put(KEY_TRUNCATED, true);
@@ -675,7 +702,7 @@ public class GitTool implements IMcpTool
                 ? ToolResult.success()
                 : ToolResult.error("git exited with code " + exitCode + " for '" + shellForm //$NON-NLS-1$ //$NON-NLS-2$
                     + "'. See 'output' for git's own message."); //$NON-NLS-1$
-            result.put(KEY_EXIT_CODE, exitCode).put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out));
+            result.put(KEY_EXIT_CODE, exitCode).put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out, truncated));
             if (truncated[0])
             {
                 result.put(KEY_TRUNCATED, true);
@@ -686,7 +713,7 @@ public class GitTool implements IMcpTool
         {
             Activator.logError("git: failed to run '" + shellForm + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
             return ToolResult.error("Failed to run '" + shellForm + "': " + e.getMessage()) //$NON-NLS-1$ //$NON-NLS-2$
-                .put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out)).toJson();
+                .put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out, truncated)).toJson();
         }
         catch (InterruptedException e)
         {
@@ -833,6 +860,37 @@ public class GitTool implements IMcpTool
         }
         String subcommand = argv.get(1);
         return READ_ONLY_SUBCOMMANDS.contains(subcommand) ? null : subcommand;
+    }
+
+    /**
+     * Whether a single-dash token can carry {@code -s} (the strategy PROGRAM) for a merge-like
+     * subcommand. The cluster is read left to right and STOPS at the first letter that takes a value
+     * ({@code -m} a message, {@code -X} a strategy option): everything after it is that value, not
+     * more flags, so {@code merge -Xours} and {@code merge -mfixes} stay accepted while
+     * {@code merge -nspwn} (git reads {@code -n -s pwn}) does not.
+     *
+     * @param token the token to inspect
+     * @return {@code true} when the token can select a strategy
+     */
+    private static boolean selectsStrategy(String token)
+    {
+        if (token.length() < 2 || token.charAt(0) != '-' || token.charAt(1) == '-')
+        {
+            return false;
+        }
+        for (int i = 1; i < token.length(); i++)
+        {
+            char c = token.charAt(i);
+            if (c == 's')
+            {
+                return true;
+            }
+            if (c == 'm' || c == 'X')
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1121,12 +1179,48 @@ public class GitTool implements IMcpTool
     }
 
     /** @return a thread-safe snapshot of the drained output so far. */
-    private static String snapshot(StringBuilder out)
+    private static String snapshot(StringBuilder out, boolean[] truncated)
     {
         synchronized (out)
         {
-            return redactCredentialUrls(out.toString());
+            // The flag is read under the SAME lock the drain thread appends (and sets it) with: a
+            // plain read could still see 'false' for a drain that is alive past join(), and the
+            // half-written URL that flag guards would then be returned unredacted.
+            String text = out.toString();
+            return redactCredentialUrls(truncated[0] ? dropTruncatedUrlTail(text) : text);
         }
+    }
+
+    /**
+     * Cuts a URL that the output cap split in half.
+     * <p>
+     * The cap can fall between a credential and the {@code @} that ends it, leaving
+     * {@code https://ghp_secret} with no separator behind - which the redaction scan cannot recognise
+     * as userinfo, so the secret would be returned verbatim. When the output WAS truncated, any
+     * trailing {@code scheme://...} whose authority never ended is therefore dropped before redaction
+     * runs. An {@code @} does NOT count as an end here: a split
+     * {@code https://user@example.com:ghp_secret} carries one and still hides a secret behind it.
+     *
+     * @param text the captured output
+     * @return the output without a dangling, possibly half-written URL
+     */
+    private static String dropTruncatedUrlTail(String text)
+    {
+        int marker = text.lastIndexOf(SCHEME_SEPARATOR);
+        if (marker < 0)
+        {
+            return text;
+        }
+        for (int i = marker + SCHEME_SEPARATOR.length(); i < text.length(); i++)
+        {
+            char c = text.charAt(i);
+            if (c == '/' || c == '?' || c == '#' || isAsciiWhitespace(c))
+            {
+                // The authority ended, so the URL is complete whatever follows.
+                return text;
+            }
+        }
+        return text.substring(0, marker) + "[... url truncated]"; //$NON-NLS-1$
     }
 
     /**
