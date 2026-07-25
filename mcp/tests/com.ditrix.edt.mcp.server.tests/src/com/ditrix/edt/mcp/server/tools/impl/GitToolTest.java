@@ -10,14 +10,18 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.tools.impl.GitTool.CommandRejectedException;
 
 /**
@@ -249,7 +253,8 @@ public class GitToolTest
         assertAccepted("log -Spassword"); //$NON-NLS-1$
         assertAccepted("log -S \"needle\""); //$NON-NLS-1$
         assertAccepted("diff -Sneedle"); //$NON-NLS-1$
-        assertAccepted("blame -S file.txt"); //$NON-NLS-1$
+        // NOT 'blame -S': there it is --ignore-revs-file, i.e. a file operand (see
+        // testMoreFileReadingOptionsAreRejected). The pickaxe spellings above stay accepted.
         // 'commit -s' is --signoff, not signing.
         assertAccepted("commit -s -m msg"); //$NON-NLS-1$
         // A URL inside ordinary text (a commit message) is not a remote and must not be refused.
@@ -324,6 +329,116 @@ public class GitToolTest
         assertFalse("the secret must not survive: " + redacted, redacted.contains("secret")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the host must stay readable: " + redacted, //$NON-NLS-1$
             redacted.contains("https://***@example.com/r.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFileReadingOptionsAreRejectedOnAllowlistedSubcommands()
+    {
+        // The diff-operand guard cannot see these: the path is an option VALUE, not an operand.
+        assertRejected("blame --contents /etc/passwd -- tracked.txt"); //$NON-NLS-1$
+        assertRejected("blame --contents=/etc/passwd -- tracked.txt"); //$NON-NLS-1$
+        assertRejected("commit --file /etc/passwd"); //$NON-NLS-1$
+        assertRejected("commit -F /etc/passwd"); //$NON-NLS-1$
+        assertRejected("tag -F /etc/passwd v1.0"); //$NON-NLS-1$
+        assertRejected("add --pathspec-from-file /etc/passwd"); //$NON-NLS-1$
+
+        // '-F' means --fixed-strings for log, which must keep working.
+        assertAccepted("log -F --grep=needle"); //$NON-NLS-1$
+        assertAccepted("blame -- tracked.txt"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMoreFileReadingOptionsAreRejected()
+    {
+        assertRejected("blame --ignore-revs-file /etc/passwd -- tracked.txt"); //$NON-NLS-1$
+        assertRejected("blame -S /etc/passwd -- tracked.txt"); //$NON-NLS-1$
+        assertRejected("ls-files -X /etc/passwd"); //$NON-NLS-1$
+        assertRejected("ls-files --exclude-from=/etc/passwd"); //$NON-NLS-1$
+        // The ATTACHED spellings too - including a bare name, which can be a symlink out of the repo.
+        assertRejected("blame -S/etc/passwd -- tracked.txt"); //$NON-NLS-1$
+        assertRejected("blame -Soutside -- tracked.txt"); //$NON-NLS-1$
+        assertRejected("ls-files -X/etc/passwd"); //$NON-NLS-1$
+        assertRejected("commit -F/etc/passwd"); //$NON-NLS-1$
+
+        // The same letters mean something else elsewhere and must keep working.
+        assertAccepted("log -S needle"); //$NON-NLS-1$
+        assertAccepted("log -Sneedle"); //$NON-NLS-1$
+        assertAccepted("merge -X ours other"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAdjacentUrlsAreRedactedIndependently()
+    {
+        // The scan walks to the LAST '@' of ONE authority: the '/' that opens the next URL ends it,
+        // so two comma-separated remotes must not be merged into one redaction.
+        assertEquals("https://***@one,https://***@two/x", //$NON-NLS-1$
+            GitTool.redactCredentialUrls("https://a@one,https://b@two/x")); //$NON-NLS-1$
+
+        // A URL WITHOUT userinfo followed by one that has it must leave the first intact.
+        assertEquals("https://plain/host https://***@secret/r", //$NON-NLS-1$
+            GitTool.redactCredentialUrls("https://plain/host https://tok@secret/r")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRedactionCoversAnEmailStyleUserName()
+    {
+        // git accepts an email-style user name, so the REAL userinfo separator is the LAST '@';
+        // stopping at the first would leave the token in the output.
+        String output = "origin\thttps://user@example.com:ghp_secrettoken@host/acme/repo.git (fetch)"; //$NON-NLS-1$
+
+        String redacted = GitTool.redactCredentialUrls(output);
+
+        assertFalse("the token must not survive: " + redacted, //$NON-NLS-1$
+            redacted.contains("ghp_secrettoken")); //$NON-NLS-1$
+        assertFalse("the user name must not survive either: " + redacted, //$NON-NLS-1$
+            redacted.contains("user@example.com")); //$NON-NLS-1$
+        assertTrue("the host must stay readable: " + redacted, //$NON-NLS-1$
+            redacted.contains("https://***@host/acme/repo.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentIsAskedForEveryWriteAndForNoRead()
+    {
+        // Reading never asks, so an agent can inspect the repository freely.
+        for (String readOnly : new String[]{"status", "diff", "log", "show", "blame", "ls-files", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "rev-parse", "describe"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertNull(readOnly + " must not ask for consent", GitTool.destructiveForm(argv(readOnly))); //$NON-NLS-1$
+        }
+
+        // Everything that WRITES asks - deliberately NOT flag-driven: bundles (-fq), attached values
+        // (-bfeature) and git's accepted abbreviations (--forc) make an option-level rule both leaky
+        // (push +main:main, merge --abort) and over-eager.
+        for (String subcommand : GitTool.ALLOWED_SUBCOMMANDS)
+        {
+            if (GitTool.destructiveForm(argv(subcommand)) == null)
+            {
+                assertTrue(subcommand + " is not read-only, so it must ask for consent", //$NON-NLS-1$
+                    List.of("status", "diff", "log", "show", "blame", "ls-files", "rev-parse", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+                        "describe").contains(subcommand)); //$NON-NLS-1$
+            }
+        }
+
+        // The forms an option-level rule kept missing are covered by construction.
+        assertNotNull(GitTool.destructiveForm(argv("push", "origin", "+main:main"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(GitTool.destructiveForm(argv("checkout", "--forc", "main"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(GitTool.destructiveForm(argv("merge", "--abort"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(GitTool.destructiveForm(argv("stash", "pop"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testConsentGateAndAnnotationListsAgreeOnGit()
+    {
+        assertTrue("the git tool must be gated", //$NON-NLS-1$
+            DestructiveConsentGate.GATED_TOOLS.contains(GitTool.NAME));
+    }
+
+    private static List<String> argv(String... tokens)
+    {
+        List<String> argv = new ArrayList<>();
+        argv.add("git"); //$NON-NLS-1$
+        argv.addAll(Arrays.asList(tokens));
+        return argv;
     }
 
     @Test

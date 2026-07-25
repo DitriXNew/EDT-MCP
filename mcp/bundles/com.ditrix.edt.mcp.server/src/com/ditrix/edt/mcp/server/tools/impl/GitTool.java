@@ -21,6 +21,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -37,6 +38,8 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
 /**
@@ -115,7 +118,13 @@ public class GitTool implements IMcpTool
         "--upload-pack", "--receive-pack", "--exec", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "--config", "--config-env", //$NON-NLS-1$ //$NON-NLS-2$
         "--git-dir", "--work-tree", "--exec-path", "--namespace", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "--ext-diff", "--output", "--help", "--no-index"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "--ext-diff", "--output", "--help", "--no-index", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // Options that take an ARBITRARY FILE as their operand on an otherwise allowlisted
+        // subcommand: 'blame --contents <file>' prints that file's lines, and 'commit/tag/merge
+        // --file <file>' copies it into the message, where 'log' reads it straight back out. The
+        // diff-operand guard cannot see these - the path is an option VALUE, not an operand.
+        "--contents", "--file", "--template", "--pathspec-from-file", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "--ignore-revs-file", "--exclude-from"); //$NON-NLS-1$ //$NON-NLS-2$
 
     /**
      * A URL carrying USERINFO ({@code scheme://user@host}, with or without a {@code :password}) -
@@ -148,6 +157,22 @@ public class GitTool implements IMcpTool
 
     /** Milliseconds to wait for the probe's drain thread after the process itself has ended. */
     private static final long DRAIN_JOIN_MILLIS = 1000;
+
+    /**
+     * Subcommands whose {@code -F} is the short spelling of {@code --file} (read the message from a
+     * file). Scoped, because {@code -F} means {@code --fixed-strings} for {@code log}, which is
+     * legitimate.
+     */
+    private static final Set<String> MESSAGE_FILE_SUBCOMMANDS =
+        Set.of("commit", "tag", "merge"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
+     * The subcommands that only READ. Everything else in {@link #ALLOWED_SUBCOMMANDS} is
+     * write-capable and therefore asks for consent - including a read-only FORM of one, such as
+     * {@code remote -v} - see {@link #destructiveForm}.
+     */
+    private static final Set<String> READ_ONLY_SUBCOMMANDS = Set.of(
+        "status", "diff", "log", "show", "blame", "ls-files", "rev-parse", "describe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
 
     /** Subcommands that can turn a token into a REMOTE, i.e. where a credential URL is refused. */
     private static final Set<String> REMOTE_SUBCOMMANDS =
@@ -271,6 +296,20 @@ public class GitTool implements IMcpTool
             return ToolResult.error(e.getMessage()).toJson();
         }
 
+        String destructiveForm = destructiveForm(argv);
+        if (destructiveForm != null)
+        {
+            ConsentPreview preview = new ConsentPreview("git " + destructiveForm, //$NON-NLS-1$
+                "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
+            DestructiveConsentGate.ConsentDecision decision =
+                DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+            if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+            }
+        }
+
         GitRepositoryResolver.Resolution resolution = null;
         try
         {
@@ -352,6 +391,19 @@ public class GitTool implements IMcpTool
         // scan to those subcommands is what keeps a legitimate value - a commit message or a
         // 'log -S<text>' / '--grep=' search string that merely contains a URL - from being refused.
         boolean scanUrls = REMOTE_SUBCOMMANDS.contains(tokens.get(0));
+        boolean scanMessageFile = MESSAGE_FILE_SUBCOMMANDS.contains(tokens.get(0));
+        // The SHORT spellings of the file-reading options, each meaningful only for one subcommand:
+        // 'blame -S <revs-file>' and 'ls-files -X <exclude-file>'. Both letters mean something else
+        // elsewhere ('log -S' is the pickaxe, 'merge -X' a strategy option), so they are scoped.
+        String shortFileFlag = null;
+        if ("blame".equals(tokens.get(0))) //$NON-NLS-1$
+        {
+            shortFileFlag = "-S"; //$NON-NLS-1$
+        }
+        else if ("ls-files".equals(tokens.get(0))) //$NON-NLS-1$
+        {
+            shortFileFlag = "-X"; //$NON-NLS-1$
+        }
         for (String token : tokens)
         {
             if (isBlockedFlag(token))
@@ -372,6 +424,19 @@ public class GitTool implements IMcpTool
                 throw new CommandRejectedException("The URL scheme '" + scheme.group(1) + "://' is not " //$NON-NLS-1$ //$NON-NLS-2$
                     + "allowed: only lowercase http(s), ssh, git, ftp(s) and file remotes are accepted (git " //$NON-NLS-1$
                     + "treats any other/uppercase scheme as a remote-helper program). Use a normal remote URL."); //$NON-NLS-1$
+            }
+            if (scanMessageFile && token.startsWith("-F")) //$NON-NLS-1$
+            {
+                throw new CommandRejectedException("'" + token + "' reads the message from a FILE, which " //$NON-NLS-1$
+                    + "would " //$NON-NLS-1$
+                    + "copy a file this tool does not govern into the repository. Pass the message " //$NON-NLS-1$
+                    + "inline with -m instead."); //$NON-NLS-1$
+            }
+            if (shortFileFlag != null && token.startsWith(shortFileFlag))
+            {
+                throw new CommandRejectedException("'" + token + "' takes a FILE whose contents git " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "reports back, so this option is refused whatever the path - drop it, or read " //$NON-NLS-1$
+                    + "the file with read_module_source if it belongs to the project."); //$NON-NLS-1$
             }
             if (scanUrls && hasCredentialUrl(token))
             {
@@ -741,32 +806,63 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Rejects a {@code diff} operand that points OUTSIDE the repository.
+     * Names the subcommand when it is WRITE-CAPABLE, or {@code null} when it only reads.
      * <p>
-     * {@code --no-index} is refused by the flag guard, but git applies that filesystem-compare form
-     * IMPLICITLY when a path lies outside the work tree - so {@code git diff /etc/passwd tracked.txt}
-     * would print a file this tool does not govern.
+     * The rule is deliberately coarse: every WRITE-CAPABLE subcommand asks, only the read-only ones
+     * are silent - so a read-only FORM of a write-capable subcommand ({@code remote -v},
+     * {@code branch --list}, {@code stash list}) prompts too. Whether a
+     * given {@code push}, {@code checkout} or {@code merge} actually destroys work depends on options
+     * git resolves per subcommand, with bundles ({@code -fq}), attached values ({@code -bfeature})
+     * and accepted abbreviations ({@code --forc}); every attempt to classify at that level both
+     * missed real forms ({@code push +main:main}, {@code merge --abort} discarding conflict
+     * resolutions) and prompted for safe ones. Under-asking loses work that git cannot bring back;
+     * over-asking costs one click - or none, once the operator sets the destructive-consent level
+     * (the preference, or {@code EDT_MCP_DESTRUCTIVE_CONSENT} at launch) for unattended use.
      * <p>
-     * Past the pathspec {@code --} every token is a path, so one that leaves the work tree is refused
-     * outright. Before it, a token is judged by what it could actually READ - refused only when an
-     * EXISTING file or directory outside the work tree sits at that path - so a revision
-     * ({@code HEAD~1}, {@code main..feature}) and a {@code -S}/{@code -G} search string such as
-     * {@code ../needle} pass untouched.
+     * Reading never asks, so an agent can inspect the repository freely; for listing branches there
+     * is the dedicated {@code list_git_branches} tool.
+     *
+     * @param argv the validated argument vector ({@code argv[0]} is git, {@code argv[1]} the subcommand)
+     * @return the subcommand when it writes, or {@code null} when it only reads
+     */
+    static String destructiveForm(List<String> argv)
+    {
+        if (argv.size() < 2)
+        {
+            return null;
+        }
+        String subcommand = argv.get(1);
+        return READ_ONLY_SUBCOMMANDS.contains(subcommand) ? null : subcommand;
+    }
+
+    /**
+     * Rejects a token that would make git read a file OUTSIDE the repository.
      * <p>
-     * Two limits are deliberate. A separated option VALUE that happens to name a real outside file
-     * ({@code -S ../existing}) is refused: telling a value from an operand would mean reimplementing
-     * git's per-option arity, and the error says how to proceed. And an existence check is not
-     * atomic with git's open, so a path created or re-pointed in between is not covered - a strict
-     * guarantee would need OS-level containment, which is out of scope for a tool the operator
-     * enables deliberately.
+     * Two spellings do that. {@code diff} applies its filesystem-compare form IMPLICITLY when a path
+     * lies outside the work tree ({@code --no-index} is refused, but not needed), and several options
+     * take a FILE as their value - {@code blame --contents}/{@code -S}, {@code commit -F},
+     * {@code ls-files -X}. The blocked-flag list names the ones known today; this guard is the
+     * structural backstop, and it works WITHOUT knowing git's option grammar: every token is examined,
+     * together with the value attached to it ({@code --opt=value}, {@code -Xvalue}).
+     * <p>
+     * A token is judged by what it could actually READ - refused only when an EXISTING file or
+     * directory outside the work tree sits at that path - so revisions ({@code HEAD~1},
+     * {@code main..feature}), messages and search strings pass untouched. Past the pathspec
+     * {@code --} every token is a path, so one that leaves the work tree is refused outright.
+     * <p>
+     * Two limits are deliberate. A value that happens to NAME a real outside file ({@code -m ../x})
+     * is refused: telling a value from an operand would mean reimplementing git's per-option arity,
+     * and the error says how to proceed. And an existence check is not atomic with git's open, so a
+     * path created or re-pointed in between is not covered - a strict guarantee would need OS-level
+     * containment, which is out of scope for a tool the operator enables deliberately.
      *
      * @param argv the validated argument vector ({@code argv[0]} is git, {@code argv[1]} the subcommand)
      * @param workTree the repository work tree
-     * @return an actionable error message, or {@code null} when every operand stays inside
+     * @return an actionable error message, or {@code null} when every token stays inside
      */
     private static String outsideRepositoryOperand(List<String> argv, File workTree)
     {
-        if (argv.size() < 2 || !"diff".equals(argv.get(1))) //$NON-NLS-1$
+        if (argv.size() < 2)
         {
             return null;
         }
@@ -783,31 +879,78 @@ public class GitTool implements IMcpTool
         for (int i = 2; i < argv.size(); i++)
         {
             String token = argv.get(i);
-            if (!afterPathspecSeparator)
+            if (!afterPathspecSeparator && "--".equals(token)) //$NON-NLS-1$
             {
-                if ("--".equals(token)) //$NON-NLS-1$
-                {
-                    afterPathspecSeparator = true;
-                    continue;
-                }
-                if (token.startsWith("-")) //$NON-NLS-1$
-                {
-                    continue;
-                }
+                afterPathspecSeparator = true;
+                continue;
             }
-            if (!escapesRepository(token, root, afterPathspecSeparator))
+            String candidate = afterPathspecSeparator ? token : attachedValueOf(token);
+            if (!escapesRepository(candidate, root, afterPathspecSeparator))
             {
                 continue;
             }
+            token = candidate;
             return "'" + token + "' points outside the repository '" + root //$NON-NLS-1$ //$NON-NLS-2$
-                + "'. git diff compares files on disk when a path lies outside the work tree, which " //$NON-NLS-1$
-                + "would read a file this tool does not govern - pass a path inside the project."; //$NON-NLS-1$
+                + "'. git would read that file - 'diff' compares it on disk, and options such as " //$NON-NLS-1$
+                + "'blame --contents' or 'commit -F' take it as their value - and this tool governs " //$NON-NLS-1$
+                + "only the project. Pass a path inside the project."; //$NON-NLS-1$
         }
         return null;
     }
 
     /**
-     * Whether a {@code diff} operand resolves outside {@code root}.
+     * The part of a token git would treat as a path: the token itself for an operand, or the value
+     * attached to an option ({@code --contents=<file>}, {@code -F<file>}). A bare option carries no
+     * path, so it maps to the empty string, which never escapes. For a SHORT option {@code =} is part
+     * of the value, not a separator, so only {@code --long=value} is split there.
+     *
+     * @param token the raw token
+     * @return the candidate path text (never {@code null})
+     */
+    private static String attachedValueOf(String token)
+    {
+        if (!token.startsWith("-")) //$NON-NLS-1$
+        {
+            return token;
+        }
+        if (token.length() > 2 && token.charAt(1) != '-')
+        {
+            // A SHORT option with its value attached ('-F/etc/passwd'). Checked BEFORE any '=' split:
+            // the value may itself contain one ('-FC:\\out\\a=b.txt'), and splitting there would hide
+            // the real path. A leading '=' ('-F=/etc/passwd') is part of the separator, not the path.
+            // No '=' stripping here: for a SHORT option git treats '=' as part of the value, so
+            // '-S=/etc/passwd' opens the repo-relative '=/etc/passwd', not the host path.
+            String tail = token.substring(2);
+            // Only a tail that LOOKS like a path is treated as one: a bundle ('-sb') or a count
+            // ('-10') is not a file operand, and testing it could reject an ordinary command over a
+            // same-named symlink inside the repository.
+            return looksLikePath(tail) ? tail : ""; //$NON-NLS-1$
+        }
+        int equals = token.indexOf('=');
+        if (equals >= 0)
+        {
+            // A LONG option's value ('--contents=<file>').
+            return token.substring(equals + 1);
+        }
+        return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a short option's attached value is shaped like a filesystem path - it carries a
+     * separator, a drive letter or a leading dot. A bare word is not: relative to the work tree it
+     * cannot name anything outside it.
+     *
+     * @param value the attached value
+     * @return {@code true} when the value is worth testing as a path
+     */
+    private static boolean looksLikePath(String value)
+    {
+        return value.indexOf('/') >= 0 || value.indexOf('\\') >= 0 || value.indexOf(':') >= 0
+            || value.startsWith("."); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a candidate path resolves outside {@code root}.
      *
      * @param token the operand to test
      * @param root the canonical repository work tree
@@ -952,23 +1095,29 @@ public class GitTool implements IMcpTool
      *
      * @param text the output being scanned
      * @param from the index just after {@value #SCHEME_SEPARATOR}
-     * @return the index of the closing {@code @}, or {@code -1} when this URL carries no userinfo
+     * @return the index of the LAST {@code @} before the authority ends, or {@code -1} when this URL
+     *         carries no userinfo
      */
     private static int userinfoEnd(String text, int from)
     {
+        int lastAt = -1;
         for (int i = from; i < text.length(); i++)
         {
             char c = text.charAt(i);
             if (c == '@')
             {
-                return i;
+                // Keep going: git accepts an email-style user name, so
+                // 'https://user@example.com:token@host/r.git' has its REAL separator at the last '@'.
+                // Stopping at the first would leave ':token' in the output.
+                lastAt = i;
+                continue;
             }
             if (c == '/' || c == '?' || c == '#' || isAsciiWhitespace(c))
             {
-                return -1;
+                return lastAt;
             }
         }
-        return -1;
+        return lastAt;
     }
 
     /** @return a thread-safe snapshot of the drained output so far. */
@@ -1209,7 +1358,7 @@ public class GitTool implements IMcpTool
             "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_NAMESPACE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXEC_PATH", "GIT_SHALLOW_FILE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_TRACE", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", //$NON-NLS-1$ //$NON-NLS-2$
             // An askpass helper would pop a GUI credential dialog in a desktop EDT session (git tries
             // GIT_ASKPASS, then core.askPass, then SSH_ASKPASS) - drop the env ones here; the config
             // one is neutralized per-call with '-c core.askPass=' (see buildCommand).
@@ -1217,6 +1366,12 @@ public class GitTool implements IMcpTool
         {
             env.remove(redirect);
         }
+        // The whole GIT_TRACE* family, not just the legacy variable: a Trace2 target
+        // (GIT_TRACE2 / GIT_TRACE2_EVENT / GIT_TRACE2_PERF) may be an absolute path or a socket, so
+        // an inherited one would write every command's argv outside the repository.
+        // Case-insensitively: Windows environment lookup ignores case, so an inherited
+        // 'Git_Trace2_Event' would survive an exact-prefix test and still write outside the repo.
+        env.keySet().removeIf(name -> name.toUpperCase(Locale.ROOT).startsWith("GIT_TRACE")); //$NON-NLS-1$
     }
 
     /** Drains the process' combined output into {@code out}, stopping appends at {@link #MAX_OUTPUT_CHARS}. */

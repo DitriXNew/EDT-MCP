@@ -163,27 +163,29 @@ public class DestructiveConsentGateTest
     // =====================================================================
 
     @Test
-    public void gatedToolsAreTheFrozenSix()
+    public void gatedToolsAreTheFrozenSet()
     {
-        assertEquals("GATED_TOOLS must be exactly the frozen six", //$NON-NLS-1$
+        assertEquals("GATED_TOOLS must be exactly the frozen set", //$NON-NLS-1$
             Set.of("delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "delete_infobase", "update_database", "modify_metadata"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "delete_infobase", "update_database", "modify_metadata", "git"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
     @Test
     public void everyGatedToolExceptModifyMetadataIsClassifiedDestructive()
     {
-        // Every gated tool is a destructive MCP write EXCEPT modify_metadata, whose
-        // destructiveness is conditional (only a type/composite-type change), so it is
+        // Every gated tool is a destructive MCP write EXCEPT the CONDITIONALLY destructive ones:
+        // modify_metadata (only a type/composite-type change) and git (only the commands that
+        // destroy work - see GitTool.destructiveForm). Those two carry their own annotations and are
         // deliberately NOT in the always-destructive classifier list.
+        Set<String> conditionallyDestructive = Set.of("modify_metadata", "git"); //$NON-NLS-1$ //$NON-NLS-2$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
         {
             boolean classifiedDestructive =
                 Boolean.TRUE.equals(ToolAnnotationClassifier.classify(tool).getDestructiveHint());
-            if ("modify_metadata".equals(tool)) //$NON-NLS-1$
+            if (conditionallyDestructive.contains(tool))
             {
-                assertFalse("modify_metadata must NOT be an always-destructive tool", //$NON-NLS-1$
+                assertFalse(tool + " must NOT be an always-destructive tool", //$NON-NLS-1$
                     classifiedDestructive);
             }
             else

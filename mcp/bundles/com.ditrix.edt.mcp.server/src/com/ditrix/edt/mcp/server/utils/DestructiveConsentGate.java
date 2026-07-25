@@ -129,7 +129,12 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "delete_project", //$NON-NLS-1$
         "delete_infobase", //$NON-NLS-1$
         "update_database", //$NON-NLS-1$
-        "modify_metadata" //$NON-NLS-1$
+        "modify_metadata", //$NON-NLS-1$
+        // Conditionally destructive like modify_metadata: the tool asks for its WRITE-CAPABLE
+        // subcommands (everything but status/diff/log/show/blame/ls-files/rev-parse/describe), since
+        // whether one destroys work depends on git's per-subcommand option grammar - see
+        // GitTool.destructiveForm.
+        "git" //$NON-NLS-1$
     );
 
     private static final DestructiveConsentGate INSTANCE = new DestructiveConsentGate();
