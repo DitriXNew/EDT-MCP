@@ -259,8 +259,10 @@ public class GitToolTest
         assertAccepted("commit -s -m msg"); //$NON-NLS-1$
         // A URL inside ordinary text (a commit message) is not a remote and must not be refused.
         assertAccepted("commit -m \"see https://user@example.com for details\""); //$NON-NLS-1$
-        // A '@' in a query string is not userinfo.
-        assertAccepted("push https://example.com/r.git?ref=user@host"); //$NON-NLS-1$
+        // A remote URL with a QUERY is refused outright now (a token rides there just as well as in
+        // the userinfo, and remote add/set-url would persist it) - see
+        // testCredentialsInAUrlQueryAreRedacted.
+        assertRejected("push https://example.com/r.git?ref=user@host"); //$NON-NLS-1$
         // A search string or a message is never a remote, so a URL inside one is not refused.
         assertAccepted("log -S https://user@example.com"); //$NON-NLS-1$
         assertAccepted("log --grep=https://user@example.com"); //$NON-NLS-1$
@@ -386,6 +388,63 @@ public class GitToolTest
     }
 
     @Test
+    public void testClusteredFileOptionsAreRejected()
+    {
+        // git accepts short-option CLUSTERS, so the file option can hide behind another flag.
+        assertRejected("commit -qF/etc/passwd"); //$NON-NLS-1$
+        assertRejected("tag -aF/etc/passwd v1"); //$NON-NLS-1$
+        assertRejected("blame -wS/etc/passwd -- tracked.bsl"); //$NON-NLS-1$
+
+        // The SAME letter differs per subcommand: '-c' takes a commit for commit but is --cached for
+        // ls-files/blame, so a cluster must not stop there.
+        assertRejected("ls-files -cXC:/secret"); //$NON-NLS-1$
+        assertRejected("blame -cS/etc/passwd -- tracked.bsl"); //$NON-NLS-1$
+        assertAccepted("commit -cHEAD~1 --amend"); //$NON-NLS-1$
+
+        // A value-taking letter ENDS the cluster: what follows is its value, not another flag.
+        assertAccepted("commit -m \"Fixed\""); //$NON-NLS-1$
+        assertAccepted("commit -mFixed"); //$NON-NLS-1$
+        assertAccepted("tag -a v1.0 -mFine"); //$NON-NLS-1$
+        assertAccepted("commit -qam \"msg\""); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCredentialsInAUrlQueryAreRedacted()
+    {
+        // A stored remote can carry its secret in the QUERY, where there is no userinfo at all.
+        String output = "origin\thttps://example.com/repo.git?access_token=ghp_secret (fetch)"; //$NON-NLS-1$
+
+        String redacted = GitTool.redactCredentialUrls(output);
+
+        assertFalse("the token must not survive: " + redacted, //$NON-NLS-1$
+            redacted.contains("ghp_secret")); //$NON-NLS-1$
+        assertTrue("the remote must stay readable: " + redacted, //$NON-NLS-1$
+            redacted.contains("https://example.com/repo.git?***")); //$NON-NLS-1$
+        assertTrue("what follows the URL must survive: " + redacted, //$NON-NLS-1$
+            redacted.contains("(fetch)")); //$NON-NLS-1$
+
+        // The same URL must not even be ACCEPTED where it would be persisted.
+        assertRejected("remote add origin https://example.com/r.git?access_token=ghp_secret"); //$NON-NLS-1$
+        assertRejected("push https://example.com/r.git?token=x main"); //$NON-NLS-1$
+        // A '?' outside a URL (a commit message, a pathspec) is untouched.
+        assertAccepted("commit -m \"why? because\""); //$NON-NLS-1$
+
+        // Two URLs in one line: the first must not swallow the second's query - or its credential.
+        String twoUrls = GitTool.redactCredentialUrls("https://a@h/x,https://secret@h/y?k=v"); //$NON-NLS-1$
+        assertFalse("neither credential may survive: " + twoUrls, //$NON-NLS-1$
+            twoUrls.contains("secret") || twoUrls.contains("k=v")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A '://' inside a query VALUE is not the next URL: the redaction must cover the whole query.
+        String schemeInValue = GitTool.redactCredentialUrls("https://h/x?token=secret://tail"); //$NON-NLS-1$
+        assertFalse("the secret must not survive: " + schemeInValue, //$NON-NLS-1$
+            schemeInValue.contains("secret")); //$NON-NLS-1$
+
+        // Userinfo AND query together.
+        String both = GitTool.redactCredentialUrls("https://tok@host/r.git?k=v"); //$NON-NLS-1$
+        assertFalse("neither may survive: " + both, both.contains("tok") || both.contains("k=v")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
     public void testMoreFileReadingOptionsAreRejected()
     {
         assertRejected("blame --ignore-revs-file /etc/passwd -- tracked.txt"); //$NON-NLS-1$
@@ -496,6 +555,24 @@ public class GitToolTest
         long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
 
         assertEquals("nothing to redact here", hostile.toString(), result); //$NON-NLS-1$
+        assertTrue("redaction must stay linear, took " + elapsedMillis + " ms", elapsedMillis < 2000); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRedactionStaysLinearOnManyUrlLikeFragments()
+    {
+        // The URL-boundary scan must be computed ONCE per URL: recomputing it inside every scanner
+        // would rescan the rest of the output for each fragment, which is quadratic.
+        StringBuilder hostile = new StringBuilder(120_000);
+        for (int i = 0; i < 12_000; i++)
+        {
+            hostile.append("?a://x=a://x="); //$NON-NLS-1$
+        }
+
+        long startedAt = System.nanoTime();
+        GitTool.redactCredentialUrls(hostile.toString());
+        long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
+
         assertTrue("redaction must stay linear, took " + elapsedMillis + " ms", elapsedMillis < 2000); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

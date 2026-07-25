@@ -9,7 +9,12 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.OperationCanceledException;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -39,6 +44,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
@@ -156,6 +162,27 @@ public class GitTool implements IMcpTool
 
     /** The {@code ://} that separates a URL scheme from its authority. */
     private static final String SCHEME_SEPARATOR = "://"; //$NON-NLS-1$
+
+    /**
+     * The short options that consume the REST of their cluster as a value, PER SUBCOMMAND - the same
+     * letter differs: {@code -c} takes a commit for {@code commit} but is the value-less
+     * {@code --cached} for {@code ls-files} and {@code blame}, and {@code -n} is a line count for
+     * {@code tag} but {@code --no-stat} for {@code merge}. A cluster scan stops at one of these,
+     * because everything after it is that option's value rather than another flag.
+     * <p>
+     * Only the subcommands whose clusters are scanned appear here; an unlisted one stops at nothing,
+     * which errs toward refusing a cluster rather than letting a file/strategy option through.
+     */
+    private static final Map<String, String> VALUE_TAKING_SHORT_OPTIONS = Map.of(
+        "commit", "mcCuSt", //$NON-NLS-1$ //$NON-NLS-2$
+        "tag", "mnu", //$NON-NLS-1$ //$NON-NLS-2$
+        "merge", "mXS", //$NON-NLS-1$ //$NON-NLS-2$
+        "pull", "mXSjor", //$NON-NLS-1$ //$NON-NLS-2$
+        "blame", "LCM", //$NON-NLS-1$ //$NON-NLS-2$
+        "ls-files", "x"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** How long the MCP call waits for the post-command workspace refresh before returning. */
+    private static final long REFRESH_WAIT_SECONDS = 30;
 
     /** How often the run loop looks for new child processes while git is alive. */
     private static final long DESCENDANT_POLL_MILLIS = 250;
@@ -312,20 +339,7 @@ public class GitTool implements IMcpTool
             return ToolResult.error(e.getMessage()).toJson();
         }
 
-        String destructiveForm = destructiveForm(argv);
-        if (destructiveForm != null)
-        {
-            ConsentPreview preview = new ConsentPreview("git " + destructiveForm, //$NON-NLS-1$
-                "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
-                List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
-            DestructiveConsentGate.ConsentDecision decision =
-                DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-            if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
-            {
-                return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
-            }
-        }
-
+        long startedAt = System.nanoTime();
         GitRepositoryResolver.Resolution resolution = null;
         try
         {
@@ -341,6 +355,14 @@ public class GitTool implements IMcpTool
             {
                 return ToolResult.error(outsideOperand).toJson();
             }
+            // Consent LAST, after every read-only check has passed: a stale project name or a command
+            // this tool would refuse anyway must fail on its own error, not sit in front of a human
+            // (or burn the consent timeout) for a call that could never run.
+            String consentError = requireConsentFor(argv);
+            if (consentError != null)
+            {
+                return consentError;
+            }
             String output = runGit(argv, workTree);
             // A command that rewrites the working tree changed files behind Eclipse's back: refresh the
             // project so the workspace - and the EDT model built on it - sees them. Refreshed on ANY
@@ -350,7 +372,7 @@ public class GitTool implements IMcpTool
             // failure is logged, never turned into a failed git result.
             if (changesWorkTree(argv))
             {
-                refreshProject(resolution.project());
+                refreshWorkTree(workTree, startedAt);
             }
             return output;
         }
@@ -448,14 +470,14 @@ public class GitTool implements IMcpTool
                     + "allowed: only lowercase http(s), ssh, git, ftp(s) and file remotes are accepted (git " //$NON-NLS-1$
                     + "treats any other/uppercase scheme as a remote-helper program). Use a normal remote URL."); //$NON-NLS-1$
             }
-            if (scanMessageFile && token.startsWith("-F")) //$NON-NLS-1$
+            if (scanMessageFile && clusterCarries(token, 'F', tokens.get(0)))
             {
                 throw new CommandRejectedException("'" + token + "' reads the message from a FILE, which " //$NON-NLS-1$
                     + "would " //$NON-NLS-1$
                     + "copy a file this tool does not govern into the repository. Pass the message " //$NON-NLS-1$
                     + "inline with -m instead."); //$NON-NLS-1$
             }
-            if (scanStrategy && selectsStrategy(token))
+            if (scanStrategy && selectsStrategy(token, tokens.get(0)))
             {
                 // Any single-dash token carrying 's', not just a leading '-s': git reads '-nspwn' as
                 // '-n -s pwn'. Telling a clustered FLAG from a letter inside an attached value would
@@ -466,11 +488,18 @@ public class GitTool implements IMcpTool
                     + "run arbitrary programs. Drop '-s' (git's default strategy needs no flag) and " //$NON-NLS-1$
                     + "pass any message as a separate -m \"...\" argument."); //$NON-NLS-1$
             }
-            if (shortFileFlag != null && token.startsWith(shortFileFlag))
+            if (shortFileFlag != null && clusterCarries(token, shortFileFlag.charAt(1), tokens.get(0)))
             {
                 throw new CommandRejectedException("'" + token + "' takes a FILE whose contents git " //$NON-NLS-1$ //$NON-NLS-2$
                     + "reports back, so this option is refused whatever the path - drop it, or read " //$NON-NLS-1$
                     + "the file with read_module_source if it belongs to the project."); //$NON-NLS-1$
+            }
+            if (scanUrls && scheme.find(0) && token.indexOf('?') > 0)
+            {
+                throw new CommandRejectedException("A remote URL with a query string is not accepted: " //$NON-NLS-1$
+                    + "a credential is commonly passed that way ('...repo.git?access_token=<secret>') " //$NON-NLS-1$
+                    + "and 'remote add' / 'set-url' would persist it in the repository config. Use a " //$NON-NLS-1$
+                    + "credential helper or an ssh remote."); //$NON-NLS-1$
             }
             if (scanUrls && hasCredentialUrl(token))
             {
@@ -646,12 +675,110 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Refreshes {@code project} so the workspace picks up files git changed on disk. Best-effort: a
-     * failure is logged and never propagated - the git command itself already succeeded.
+     * Refreshes every workspace project inside {@code workTree} so Eclipse - and the EDT model built
+     * on it - picks up the files git changed on disk. Runs on ANY outcome, not just a successful one:
+     * a merge or cherry-pick that hit conflicts, failed late or timed out has usually already updated
+     * the worktree. Best-effort: a failure is logged and never turned into a failed git result.
      *
-     * @param project the project to refresh (may be {@code null} for a non-workspace repository)
+     * @param workTree the repository work tree whose projects must be refreshed
+     * @param startedAt the call's start timestamp, so the wait shares the command's own budget
      */
-    private static void refreshProject(IProject project)
+    private static void refreshWorkTree(File workTree, long startedAt)
+    {
+        List<IProject> projects = projectsInside(workTree);
+        if (projects.isEmpty())
+        {
+            return;
+        }
+        Job refresh = new Job("Refresh projects after a git command") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                for (IProject project : projects)
+                {
+                    if (monitor.isCanceled())
+                    {
+                        return Status.CANCEL_STATUS;
+                    }
+                    refreshProject(project, monitor);
+                }
+                return Status.OK_STATUS;
+            }
+        };
+        refresh.setUser(false);
+        refresh.schedule();
+        try
+        {
+            // Bounded by what is LEFT of the call's own budget, so a slow refresh cannot push the
+            // response past the timeout the git process already respects. The Job keeps running
+            // after the wait expires, so the workspace still catches up - the caller simply is not
+            // made to wait for it.
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+            long budgetMillis = TIMEOUT_SECONDS * 1000L - elapsedMillis;
+            long waitMillis = Math.min(REFRESH_WAIT_SECONDS * 1000L, budgetMillis);
+            if (waitMillis > 0)
+            {
+                refresh.join(waitMillis, null);
+            }
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+        catch (OperationCanceledException e) // NOSONAR the refresh is best-effort
+        {
+            Activator.logError("git: the post-command refresh was cancelled", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The OPEN workspace projects whose location lies inside {@code workTree}.
+     * <p>
+     * Several Eclipse projects can share one git worktree, and a command runs from its ROOT: a
+     * checkout or pull changes the siblings too, so refreshing only the addressed project would leave
+     * their models stale for the next MCP call.
+     *
+     * @param workTree the repository work tree
+     * @return the projects to refresh (never {@code null})
+     */
+    private static List<IProject> projectsInside(File workTree)
+    {
+        List<IProject> inside = new ArrayList<>();
+        Path root;
+        try
+        {
+            root = workTree.toPath().toRealPath();
+        }
+        catch (IOException e)
+        {
+            root = workTree.toPath().toAbsolutePath().normalize();
+        }
+        for (IProject project : ProjectContext.allProjects())
+        {
+            IPath location = project.getLocation();
+            if (!project.isOpen() || location == null)
+            {
+                continue;
+            }
+            try
+            {
+                Path projectPath = location.toFile().toPath().toRealPath();
+                if (projectPath.startsWith(root))
+                {
+                    inside.add(project);
+                }
+            }
+            catch (IOException e) // NOSONAR a project we cannot canonicalize is simply not refreshed
+            {
+                Activator.logError("git: resolving the location of '" + project.getName() //$NON-NLS-1$
+                    + "' failed", e); //$NON-NLS-1$
+            }
+        }
+        return inside;
+    }
+
+    private static void refreshProject(IProject project, IProgressMonitor monitor)
     {
         if (project == null || !project.exists())
         {
@@ -659,7 +786,7 @@ public class GitTool implements IMcpTool
         }
         try
         {
-            project.refreshLocal(IResource.DEPTH_INFINITE, new NullProgressMonitor());
+            project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
         }
         catch (CoreException e)
         {
@@ -897,6 +1024,31 @@ public class GitTool implements IMcpTool
     }
 
     /**
+     * Asks the destructive-consent gate when the command is write-capable.
+     *
+     * @param argv the validated argument vector
+     * @return an error JSON when consent was refused, or {@code null} when the command may run
+     */
+    private static String requireConsentFor(List<String> argv)
+    {
+        String destructiveForm = destructiveForm(argv);
+        if (destructiveForm == null)
+        {
+            return null;
+        }
+        ConsentPreview preview = new ConsentPreview("git " + destructiveForm, //$NON-NLS-1$
+            "'git " + destructiveForm + "' is a write-capable subcommand.", 1, //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(String.join(" ", argv.subList(1, argv.size())))); //$NON-NLS-1$
+        DestructiveConsentGate.ConsentDecision decision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (decision == DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return null;
+        }
+        return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+    }
+
+    /**
      * Names the subcommand when it is WRITE-CAPABLE, or {@code null} when it only reads.
      * <p>
      * The rule is deliberately coarse: every WRITE-CAPABLE subcommand asks, only the read-only ones
@@ -936,20 +1088,43 @@ public class GitTool implements IMcpTool
      * @param token the token to inspect
      * @return {@code true} when the token can select a strategy
      */
-    private static boolean selectsStrategy(String token)
+    private static boolean selectsStrategy(String token, String subcommand)
+    {
+        return clusterCarries(token, 's', subcommand);
+    }
+
+    /**
+     * Whether a single-dash token carries {@code flag} as an OPTION - including inside a cluster
+     * ({@code -qF<file>} is {@code -q -F <file>}).
+     * <p>
+     * The cluster is read left to right and STOPS at the first letter that takes a value
+     * ({@link #VALUE_TAKING_SHORT_OPTIONS}): everything after such a letter is that value, not more
+     * flags, so {@code merge -Xours}, {@code commit -mfixes} and {@code tag -mFine} are not mistaken
+     * for it. Telling every value-taking letter of every subcommand apart would mean reimplementing
+     * git's option arity; this short list covers the ones that can precede a file/strategy flag in
+     * the subcommands where those flags exist, and an unexpected cluster is refused rather than
+     * silently allowed.
+     *
+     * @param token the token to inspect
+     * @param flag the option letter to look for
+     * @param subcommand the git subcommand, which decides which letters take a value
+     * @return {@code true} when the token can carry that option
+     */
+    private static boolean clusterCarries(String token, char flag, String subcommand)
     {
         if (token.length() < 2 || token.charAt(0) != '-' || token.charAt(1) == '-')
         {
             return false;
         }
+        String valueTaking = VALUE_TAKING_SHORT_OPTIONS.getOrDefault(subcommand, ""); //$NON-NLS-1$
         for (int i = 1; i < token.length(); i++)
         {
             char c = token.charAt(i);
-            if (c == 's')
+            if (c == flag)
             {
                 return true;
             }
-            if (c == 'm' || c == 'X')
+            if (valueTaking.indexOf(c) >= 0)
             {
                 return false;
             }
@@ -1131,9 +1306,12 @@ public class GitTool implements IMcpTool
     /**
      * Replaces the {@code userinfo@} of every URL in git's own output with {@code ***@}.
      * <p>
-     * A repository can already hold a credential-bearing remote ({@code https://<token>@host/repo}),
+     * A repository can already hold a credential-bearing remote - {@code https://<token>@host/repo},
+     * or {@code https://host/repo.git?access_token=<token>}, which carries no {@code @} at all -
      * and {@code remote -v} / {@code push} print it verbatim - handing an agent a token that was
-     * merely stored on disk. The whole userinfo is redacted, not just a password: a bare
+     * merely stored on disk. The whole userinfo is redacted, not just a password - and the whole
+     * query with it, harmless parameters included, since telling a secret one from the rest would
+     * mean keeping a list of every service's parameter names: a bare
      * {@code https://ghp_xxx@host} carries the secret AS the user name. A plain ssh user name
      * ({@code ssh://git@host}) is redacted too - over-redacting a public name is the safe side of
      * that trade, and the host and path stay readable.
@@ -1147,7 +1325,7 @@ public class GitTool implements IMcpTool
      */
     static String redactCredentialUrls(String text)
     {
-        if (text == null || text.indexOf('@') < 0)
+        if (text == null || (text.indexOf('@') < 0 && text.indexOf('?') < 0))
         {
             return text;
         }
@@ -1156,19 +1334,41 @@ public class GitTool implements IMcpTool
         int marker = text.indexOf(SCHEME_SEPARATOR);
         while (marker >= 0)
         {
-            int userinfoEnd = userinfoEnd(text, marker + SCHEME_SEPARATOR.length());
-            if (userinfoEnd < 0 || !hasSchemeBefore(text, marker))
+            if (!hasSchemeBefore(text, marker))
             {
                 marker = text.indexOf(SCHEME_SEPARATOR, marker + SCHEME_SEPARATOR.length());
                 continue;
             }
-            if (redacted == null)
+            int authorityStart = marker + SCHEME_SEPARATOR.length();
+            // Computed ONCE per URL and handed to every scanner below: recomputing it inside each of
+            // them would rescan the rest of the output for every URL, which is quadratic on a long
+            // one. The loop then jumps straight to this boundary, so each character is visited a
+            // bounded number of times.
+            int limit = urlLimit(text, authorityStart);
+            int userinfoEnd = userinfoEnd(text, authorityStart, limit);
+            if (userinfoEnd >= 0)
             {
-                redacted = new StringBuilder(text.length());
+                if (redacted == null)
+                {
+                    redacted = new StringBuilder(text.length());
+                }
+                redacted.append(text, copiedUpTo, authorityStart).append("***@"); //$NON-NLS-1$
+                copiedUpTo = userinfoEnd + 1;
             }
-            redacted.append(text, copiedUpTo, marker + SCHEME_SEPARATOR.length()).append("***@"); //$NON-NLS-1$
-            copiedUpTo = userinfoEnd + 1;
-            marker = text.indexOf(SCHEME_SEPARATOR, copiedUpTo);
+            // A credential can also ride in the QUERY ('...repo.git?access_token=<secret>'), where
+            // there is no '@' at all. The whole query is replaced: telling a secret parameter from a
+            // harmless one would mean keeping a list of every service's parameter names.
+            int queryStart = queryStart(text, Math.max(copiedUpTo, authorityStart), limit);
+            if (queryStart >= 0)
+            {
+                if (redacted == null)
+                {
+                    redacted = new StringBuilder(text.length());
+                }
+                redacted.append(text, copiedUpTo, queryStart + 1).append("***"); //$NON-NLS-1$
+                copiedUpTo = queryEnd(text, queryStart + 1, limit);
+            }
+            marker = text.indexOf(SCHEME_SEPARATOR, Math.max(copiedUpTo, limit));
         }
         if (redacted == null)
         {
@@ -1203,7 +1403,7 @@ public class GitTool implements IMcpTool
         for (int i = marker - 1; i >= 0; i--)
         {
             char c = text.charAt(i);
-            if (!(Character.isLetterOrDigit(c) && c < 128) && c != '+' && c != '.' && c != '-')
+            if (!isSchemeChar(c))
             {
                 break;
             }
@@ -1213,17 +1413,111 @@ public class GitTool implements IMcpTool
     }
 
     /**
+     * Finds the {@code ?} that opens this URL's query, or {@code -1} when it has none. The search
+     * stops at whitespace and at the next URL: a query belongs to the URL being scanned.
+     *
+     * @param text the output being scanned
+     * @param from the index to start at (inside the URL)
+     * @param limit where this URL stops (see {@link #urlLimit})
+     * @return the index of the {@code ?}, or {@code -1}
+     */
+    private static int queryStart(String text, int from, int limit)
+    {
+        for (int i = from; i < limit; i++)
+        {
+            char c = text.charAt(i);
+            if (c == '?')
+            {
+                return i;
+            }
+            if (isAsciiWhitespace(c))
+            {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Where the URL that starts at {@code from} must stop being scanned: at the scheme of the NEXT
+     * URL, if one follows without whitespace between them ({@code https://a/x,https://b/y}), else at
+     * the end of the text. Without this bound a query search would run into the next URL and swallow
+     * it - along with the credential it may carry.
+     *
+     * @param text the output being scanned
+     * @param from the index inside the current URL
+     * @return the exclusive upper bound for this URL
+     */
+    private static int urlLimit(String text, int from)
+    {
+        for (int marker = text.indexOf(SCHEME_SEPARATOR, from); marker >= 0;
+            marker = text.indexOf(SCHEME_SEPARATOR, marker + SCHEME_SEPARATOR.length()))
+        {
+            int schemeStart = marker;
+            while (schemeStart > 0 && isSchemeChar(text.charAt(schemeStart - 1)))
+            {
+                schemeStart--;
+            }
+            // A NEW url only starts after something that can separate two of them. A '://' preceded
+            // by '=' or '&' lives INSIDE the current URL's query ('?token=secret://tail'), and
+            // treating it as a boundary would end the redaction right before the secret.
+            if (schemeStart > from && isUrlSeparator(text.charAt(schemeStart - 1)))
+            {
+                return schemeStart;
+            }
+        }
+        return text.length();
+    }
+
+    /** Whether a character can separate two URLs in git's output. */
+    private static boolean isUrlSeparator(char c)
+    {
+        return isAsciiWhitespace(c) || c == ',' || c == ';' || c == '(' || c == ')' || c == '<'
+            || c == '>' || c == '"' || c == '\'' || c == '[' || c == ']' || c == '|';
+    }
+
+    /** Whether a character may appear in a URL scheme. */
+    private static boolean isSchemeChar(char c)
+    {
+        return (Character.isLetterOrDigit(c) && c < 128) || c == '+' || c == '.' || c == '-';
+    }
+
+    /**
+     * Finds where a URL's query ends - at whitespace, at the start of the NEXT URL, or at the end of
+     * the text.
+     *
+     * @param text the output being scanned
+     * @param from the index just after the {@code ?}
+     * @param limit where this URL stops (see {@link #urlLimit})
+     * @return the index of the first character that is no longer part of the query
+     */
+    private static int queryEnd(String text, int from, int limit)
+    {
+        for (int i = from; i < limit; i++)
+        {
+            if (isAsciiWhitespace(text.charAt(i)))
+            {
+                return i;
+            }
+        }
+        return limit;
+    }
+
+    /**
      * Finds the {@code @} that closes a URL's userinfo.
      *
      * @param text the output being scanned
      * @param from the index just after {@value #SCHEME_SEPARATOR}
+     * @param limit where this URL stops (see {@link #urlLimit})
+     * @param limit where this URL stops (see {@link #urlLimit})
+     * @param limit where this URL stops (see {@link #urlLimit})
      * @return the index of the LAST {@code @} before the authority ends, or {@code -1} when this URL
      *         carries no userinfo
      */
-    private static int userinfoEnd(String text, int from)
+    private static int userinfoEnd(String text, int from, int limit)
     {
         int lastAt = -1;
-        for (int i = from; i < text.length(); i++)
+        for (int i = from; i < limit; i++)
         {
             char c = text.charAt(i);
             if (c == '@')
