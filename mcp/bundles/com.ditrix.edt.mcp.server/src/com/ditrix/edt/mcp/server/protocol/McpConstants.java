@@ -56,6 +56,19 @@ public final class McpConstants
     
     /** Plugin author */
     public static final String AUTHOR = "DitriX, Diversus23, Jimmo910"; //$NON-NLS-1$
+
+    /**
+     * Server-wide guidance returned in the MCP initialize result.
+     * Keep the first 512 characters self-contained so Codex can use the
+     * essential safety and workflow rules while selecting tools.
+     */
+    public static final String SERVER_INSTRUCTIONS =
+        "This server controls a live 1C:EDT workspace. Start with list_projects and " //$NON-NLS-1$
+        + "get_project_errors. Read the current module or metadata object before changing it. " //$NON-NLS-1$
+        + "Prefer test infobases. Use destructive tools, update_database, rename_metadata_object, " //$NON-NLS-1$
+        + "delete tools, or evaluate_expression only when the user explicitly requests that action. " //$NON-NLS-1$
+        + "After writes, revalidate affected objects and report remaining errors. For extensions, " //$NON-NLS-1$
+        + "modify the extension project, not the base configuration, unless explicitly instructed."; //$NON-NLS-1$
     
     /** Plugin version - read from Bundle-Version at runtime, set by tycho-versions-plugin */
     public static final String PLUGIN_VERSION;

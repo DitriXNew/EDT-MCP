@@ -29,6 +29,7 @@ public class InitializeResultAndErrorTest
         assertEquals("2025-11-25", result.getProtocolVersion());
         assertNotNull(result.getCapabilities());
         assertNotNull(result.getServerInfo());
+        assertEquals(McpConstants.SERVER_INSTRUCTIONS, result.getInstructions());
     }
 
     @Test
@@ -61,6 +62,8 @@ public class InitializeResultAndErrorTest
             parsed.get("protocolVersion").getAsString());
         assertNotNull(parsed.get("capabilities"));
         assertNotNull(parsed.get("serverInfo"));
+        assertEquals(McpConstants.SERVER_INSTRUCTIONS,
+            parsed.get("instructions").getAsString());
 
         JsonObject info = parsed.getAsJsonObject("serverInfo");
         assertEquals("Test", info.get("name").getAsString());

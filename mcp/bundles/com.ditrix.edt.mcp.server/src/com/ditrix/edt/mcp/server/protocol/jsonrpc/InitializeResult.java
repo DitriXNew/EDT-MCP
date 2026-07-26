@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.protocol.jsonrpc;
 
+import com.ditrix.edt.mcp.server.protocol.McpConstants;
+
 /**
  * MCP initialize response result.
  */
@@ -14,12 +16,14 @@ public class InitializeResult
     private String protocolVersion;
     private Capabilities capabilities;
     private ServerInfo serverInfo;
+    private String instructions;
     
     public InitializeResult(String protocolVersion, String serverName, String serverVersion, String author)
     {
         this.protocolVersion = protocolVersion;
         this.capabilities = new Capabilities();
         this.serverInfo = new ServerInfo(serverName, serverVersion, author);
+        this.instructions = McpConstants.SERVER_INSTRUCTIONS;
     }
     
     public String getProtocolVersion()
@@ -35,6 +39,11 @@ public class InitializeResult
     public ServerInfo getServerInfo()
     {
         return serverInfo;
+    }
+
+    public String getInstructions()
+    {
+        return instructions;
     }
     
     /**
