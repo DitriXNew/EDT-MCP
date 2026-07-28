@@ -104,6 +104,13 @@ public class GitTool implements IMcpTool
     static final int MAX_OUTPUT_CHARS = 100_000;
 
     /**
+     * Upper bound on the command STRING. Everything reflected back - the rejection text, the echoed
+     * {@code command}, the consent preview - is derived from it, so an unbounded one would let a
+     * multi-megabyte argument flood the response, the log and the consent dialog.
+     */
+    static final int MAX_COMMAND_CHARS = 4_000;
+
+    /**
      * The git subcommands the parser accepts - a minimal dev-loop + inspection set. Anything else is
      * rejected with an actionable error (extend deliberately). Deliberately EXCLUDED: {@code config}
      * (sets {@code core.sshCommand} / aliases = arbitrary exec), {@code clean} / {@code gc} /
@@ -147,7 +154,14 @@ public class GitTool implements IMcpTool
         // arbitrary-program option in the same class as --upload-pack. The default strategy needs no
         // flag, so refusing the option costs nothing here. ('-X'/--strategy-option only configures
         // the built-in strategy and stays allowed.)
-        "--strategy"); //$NON-NLS-1$
+        "--strategy", //$NON-NLS-1$
+        // --exclude-per-directory is resolved by git RELATIVE TO EVERY DIRECTORY it walks, so
+        // '../../secret.rules' escapes the work tree from a nested one - the containment check can
+        // only resolve against the root.
+        "--exclude-per-directory", //$NON-NLS-1$
+        // --encoding=UTF-16 (or any non-UTF-8) makes git emit bytes this tool decodes as UTF-8, so a
+        // credential in the output no longer looks like a URL to the redaction and passes through.
+        "--encoding"); //$NON-NLS-1$
 
     /**
      * A URL carrying USERINFO ({@code scheme://user@host}, with or without a {@code :password}) -
@@ -194,6 +208,8 @@ public class GitTool implements IMcpTool
      */
     private static final Map<String, String> FILE_TAKING_SHORT_OPTIONS = Map.of(
         "diff", "O", //$NON-NLS-1$ //$NON-NLS-2$
+        "log", "O", //$NON-NLS-1$ //$NON-NLS-2$
+        "show", "O", //$NON-NLS-1$ //$NON-NLS-2$
         "blame", "S", //$NON-NLS-1$ //$NON-NLS-2$
         "commit", "Ft", //$NON-NLS-1$ //$NON-NLS-2$
         "tag", "F", //$NON-NLS-1$ //$NON-NLS-2$
@@ -201,16 +217,21 @@ public class GitTool implements IMcpTool
         "ls-files", "X"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private static final Map<String, String> VALUE_TAKING_SHORT_OPTIONS = Map.of(
-        "diff", "SGLU", //$NON-NLS-1$ //$NON-NLS-2$
+        "diff", "SGlU", //$NON-NLS-1$ //$NON-NLS-2$
+        "log", "SGLnU", //$NON-NLS-1$ //$NON-NLS-2$
+        "show", "SGU", //$NON-NLS-1$ //$NON-NLS-2$
         "commit", "mcCuSt", //$NON-NLS-1$ //$NON-NLS-2$
         "tag", "mnu", //$NON-NLS-1$ //$NON-NLS-2$
         "merge", "mXS", //$NON-NLS-1$ //$NON-NLS-2$
-        "pull", "mXSjor", //$NON-NLS-1$ //$NON-NLS-2$
+        "pull", "XSjor", //$NON-NLS-1$ //$NON-NLS-2$
         "blame", "LCM", //$NON-NLS-1$ //$NON-NLS-2$
         "ls-files", "x"); //$NON-NLS-1$ //$NON-NLS-2$
 
     /** How long the MCP call waits for the post-command workspace refresh before returning. */
     private static final long REFRESH_WAIT_SECONDS = 30;
+
+    /** Grace period for a kill when the caller has no deadline of its own to share. */
+    private static final long KILL_GRACE_SECONDS = 5;
 
     /** How often the run loop looks for new child processes while git is alive. */
     private static final long DESCENDANT_POLL_MILLIS = 250;
@@ -276,9 +297,14 @@ public class GitTool implements IMcpTool
      * the scheme case-SENSITIVELY: an unknown or non-canonical-case scheme (e.g. {@code ext://},
      * {@code 9foo://}, {@code HTTPS://}) is rejected, even though {@link #TRANSPORT_HELPER} (the
      * {@code scheme::} form) does not match it. {@code remote add}/{@code set-url} would otherwise persist it.
+     * <p>
+     * {@code file://} is deliberately NOT here: git would read - and on a push WRITE - a repository
+     * anywhere on disk, and the containment check cannot see that path (it lives inside a URI, not in
+     * an operand). A local remote without a scheme ({@code ../other-repo}) needs no exception: the
+     * containment check already refuses one that leaves the work tree.
      */
     private static final Set<String> SAFE_URL_SCHEMES = Set.of(
-        "http", "https", "ssh", "git", "ftp", "ftps", "file", "git+ssh", "ssh+git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$ //$NON-NLS-9$
+        "http", "https", "ssh", "git", "ftp", "ftps", "git+ssh", "ssh+git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
 
     @Override
     public String getName()
@@ -441,6 +467,12 @@ public class GitTool implements IMcpTool
      */
     static List<String> parseCommand(String command) throws CommandRejectedException
     {
+        if (command != null && command.length() > MAX_COMMAND_CHARS)
+        {
+            throw new CommandRejectedException("The command is longer than " + MAX_COMMAND_CHARS //$NON-NLS-1$
+                + " characters. Everything this tool reports back is derived from it (the echoed " //$NON-NLS-1$
+                + "command, errors, the consent preview), so send a shorter one."); //$NON-NLS-1$
+        }
         List<String> tokens = tokenize(command);
         if (!tokens.isEmpty() && "git".equals(tokens.get(0))) //$NON-NLS-1$
         {
@@ -481,28 +513,43 @@ public class GitTool implements IMcpTool
         }
         for (String token : tokens)
         {
-            if (isBlockedFlag(token))
+            // A URL can arrive as an option's VALUE ('--repo=https://host/r.git'), and the scheme
+            // pattern is anchored, so every URL guard runs on the value rather than the raw token.
+            String urlCandidate = urlCandidateOf(token);
+            if (scanUrls && URL_SCHEME.matcher(urlCandidate).find(0) && hasControlCharacter(urlCandidate))
+            {
+                // A newline (or any C0 control) inside the authority ends '\\s'-based scanning before
+                // the '@', so a credential URL would pass the guard AND be persisted, while the
+                // output redaction stops at the same character. Git itself still accepts the URL.
+                throw new CommandRejectedException("A remote URL must not contain control characters " //$NON-NLS-1$
+                    + "(a newline or tab inside it hides the rest of the URL from this tool's checks). " //$NON-NLS-1$
+                    + "Pass the URL on one line."); //$NON-NLS-1$
+            }
+            // 'rev-parse --git-dir' just PRINTS the resolved .git path - it redirects nothing, and
+            // it is the documented way to ask where the repository is. Only the exact spelling, and
+            // only for that subcommand; '--git-dir=<path>' stays blocked everywhere.
+            boolean revParseGitDir = "rev-parse".equals(tokens.get(0)) && "--git-dir".equals(token); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!revParseGitDir && isBlockedFlag(token))
             {
                 throw new CommandRejectedException("The option '" + safeToken(token) //$NON-NLS-1$
                     + "' is not allowed: it could make " //$NON-NLS-1$
                     + "git run an arbitrary program, read/write files outside the repository, or operate on " //$NON-NLS-1$
                     + "a different repository. Remove it and retry."); //$NON-NLS-1$
             }
-            if (scanUrls && TRANSPORT_HELPER.matcher(token).find())
+            if (scanUrls && TRANSPORT_HELPER.matcher(urlCandidateOf(token)).find())
             {
                 throw new CommandRejectedException("A transport-helper URL ('<helper>::...', e.g. 'ext::' / " //$NON-NLS-1$
                     + "'fd::') is not allowed: it runs an arbitrary command, and 'remote add'/'set-url' would " //$NON-NLS-1$
                     + "even persist it. Use a normal https:// or ssh remote."); //$NON-NLS-1$
             }
-            // A URL can arrive as an option's VALUE ('--repo=https://host/r.git'), and the scheme
-            // pattern is anchored, so the guards below run on the value rather than the raw token.
-            String urlCandidate = urlCandidateOf(token);
             java.util.regex.Matcher scheme = URL_SCHEME.matcher(urlCandidate);
             if (scanUrls && scheme.find() && !SAFE_URL_SCHEMES.contains(scheme.group(1)))
             {
                 throw new CommandRejectedException("The URL scheme '" + scheme.group(1) + "://' is not " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "allowed: only lowercase http(s), ssh, git, ftp(s) and file remotes are accepted (git " //$NON-NLS-1$
-                    + "treats any other/uppercase scheme as a remote-helper program). Use a normal remote URL."); //$NON-NLS-1$
+                    + "allowed: only lowercase http(s), ssh, git and ftp(s) remotes are accepted (git " //$NON-NLS-1$
+                    + "treats any other/uppercase scheme as a remote-helper program, and a 'file://' " //$NON-NLS-1$
+                    + "remote would read or WRITE a repository outside this project). Use a normal " //$NON-NLS-1$
+                    + "remote URL, or a path inside the project."); //$NON-NLS-1$
             }
             if (scanMessageFile && (clusterCarries(token, 'F', tokens.get(0))
                 || ("commit".equals(tokens.get(0)) && clusterCarries(token, 't', tokens.get(0)))))
@@ -588,6 +635,10 @@ public class GitTool implements IMcpTool
      */
     private static boolean hasCredentialUrl(String token)
     {
+        // Normalized exactly like every other URL guard: strip() removes Unicode spaces that trim()
+        // leaves behind, and a token padded with U+2003 would otherwise pass this check while the
+        // scheme check (which uses strip()) saw the URL.
+        token = token.strip();
         // Leading/trailing whitespace must not hide the URL: git would still persist the value.
         String value = token.trim();
         if (CREDENTIAL_URL.matcher(value).lookingAt())
@@ -602,6 +653,25 @@ public class GitTool implements IMcpTool
             {
                 String attached = value.substring(eq + 1).trim();
                 return CREDENTIAL_URL.matcher(attached).lookingAt() && !isPlainSshUser(attached);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the text carries a C0 control character or DEL.
+     *
+     * @param value the text to inspect
+     * @return {@code true} when a control character is present
+     */
+    private static boolean hasControlCharacter(String value)
+    {
+        for (int i = 0; i < value.length(); i++)
+        {
+            char c = value.charAt(i);
+            if (c < 0x20 || c == 0x7F)
+            {
+                return true;
             }
         }
         return false;
@@ -827,6 +897,21 @@ public class GitTool implements IMcpTool
      */
     private static void refreshWorkTree(File workTree, long startedAt)
     {
+        try
+        {
+            refreshWorkTreeUnguarded(workTree, startedAt);
+        }
+        catch (RuntimeException e) // NOSONAR the git command already succeeded; a refresh never fails it
+        {
+            // Enumerating the workspace can throw while it is closing. The contract above says a
+            // refresh failure is logged and never turned into a failed git result - without this it
+            // would propagate into execute()'s catch and discard an ALREADY SUCCESSFUL command.
+            Activator.logError("git: refreshing the work tree after the command failed", e); //$NON-NLS-1$
+        }
+    }
+
+    private static void refreshWorkTreeUnguarded(File workTree, long startedAt)
+    {
         List<IProject> projects = projectsInside(workTree);
         if (projects.isEmpty())
         {
@@ -952,8 +1037,10 @@ public class GitTool implements IMcpTool
         {
             project.refreshLocal(IResource.DEPTH_INFINITE, monitor);
         }
-        catch (CoreException e)
+        catch (CoreException | RuntimeException e) // NOSONAR logged here, or it is lost in the Job
         {
+            // RuntimeException too: inside a Job it would otherwise be swallowed by Eclipse's own
+            // generic handler, and a shutdown-time failure would not show in THIS tool's log.
             Activator.logError("git: refreshing project '" + project.getName() //$NON-NLS-1$
                 + "' after a worktree-changing command failed", e); //$NON-NLS-1$
         }
@@ -971,11 +1058,15 @@ public class GitTool implements IMcpTool
         hardenEnv(builder.environment(), workTree);
 
         String shellForm = String.join(" ", argv); //$NON-NLS-1$
+        // Echoed back in every result and error: redacted like the output, so a credential that
+        // reached argv through a spelling the parser allows cannot ride the 'command' field out.
+        String safeCommand = redactCredentialUrls(shellForm);
         Process process = null;
         Thread drain = null;
         // Snapshotted WHILE git runs: once the parent exits its children are re-parented and
         // process.descendants() no longer reports them, so a late capture would find nothing.
         List<ProcessHandle> descendants = new ArrayList<>();
+        boolean drainFinished = false;
         StringBuilder out = new StringBuilder();
         boolean[] truncated = {false};
         try
@@ -989,26 +1080,31 @@ public class GitTool implements IMcpTool
 
             if (!awaitExit(process, descendants, deadline))
             {
-                killTree(process); // destroyForcibly + wait, and the child's own descendants
-                drain.join(2000);
-                ToolResult timeout = ToolResult.error("'" + shellForm + "' timed out after " + TIMEOUT_SECONDS //$NON-NLS-1$ //$NON-NLS-2$
+                killTree(process, deadline); // shares the call's budget, not a fresh one
+                closeQuietly(process.getInputStream()); // unblock a drain a survivor still feeds
+                drain.join(DRAIN_JOIN_MILLIS);
+                drainFinished = !drain.isAlive();
+                Capture captured = capture(out, truncated, drainFinished);
+                ToolResult timeout = ToolResult.error("'" + safeCommand + "' timed out after " + TIMEOUT_SECONDS //$NON-NLS-1$ //$NON-NLS-2$
                     + " seconds and was killed. Check network connectivity / the remote, or run a smaller " //$NON-NLS-1$
                     + "command.") //$NON-NLS-1$
-                    .put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out, truncated));
-                if (truncated[0])
+                    .put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, captured.text);
+                if (captured.truncated)
                 {
                     timeout.put(KEY_TRUNCATED, true);
                 }
                 return timeout.toJson();
             }
-            drain.join(2000);
+            drain.join(DRAIN_JOIN_MILLIS);
+            drainFinished = !drain.isAlive();
             int exitCode = process.exitValue();
+            Capture captured = capture(out, truncated, drainFinished);
             ToolResult result = exitCode == 0
                 ? ToolResult.success()
-                : ToolResult.error("git exited with code " + exitCode + " for '" + shellForm //$NON-NLS-1$ //$NON-NLS-2$
+                : ToolResult.error("git exited with code " + exitCode + " for '" + safeCommand //$NON-NLS-1$ //$NON-NLS-2$
                     + "'. See 'output' for git's own message."); //$NON-NLS-1$
-            result.put(KEY_EXIT_CODE, exitCode).put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out, truncated));
-            if (truncated[0])
+            result.put(KEY_EXIT_CODE, exitCode).put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, captured.text);
+            if (captured.truncated)
             {
                 result.put(KEY_TRUNCATED, true);
             }
@@ -1016,15 +1112,23 @@ public class GitTool implements IMcpTool
         }
         catch (IOException e)
         {
-            Activator.logError("git: failed to run '" + shellForm + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
-            return ToolResult.error("Failed to run '" + shellForm + "': " + e.getMessage()) //$NON-NLS-1$ //$NON-NLS-2$
-                .put(KEY_COMMAND, shellForm).put(KEY_OUTPUT, snapshot(out, truncated)).toJson();
+            Activator.logError("git: failed to run '" + safeCommand + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
+            return ToolResult.error("Failed to run '" + safeCommand + "': " + e.getMessage()) //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, snapshot(out, truncated)).toJson();
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt(); // restore the interrupt flag
-            return ToolResult.error("'" + shellForm + "' was interrupted.") //$NON-NLS-1$ //$NON-NLS-2$
-                .put(KEY_COMMAND, shellForm).toJson();
+            // Carries the output like every other exit path: an interrupt can land AFTER git already
+            // produced everything, and dropping it would hide what actually happened.
+            Capture captured = capture(out, truncated, false);
+            ToolResult interrupted = ToolResult.error("'" + safeCommand + "' was interrupted.") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(KEY_COMMAND, safeCommand).put(KEY_OUTPUT, captured.text);
+            if (captured.truncated)
+            {
+                interrupted.put(KEY_TRUNCATED, true);
+            }
+            return interrupted.toJson();
         }
         finally
         {
@@ -1036,11 +1140,11 @@ public class GitTool implements IMcpTool
                 // wrapper can BACKGROUND a child that inherits the output pipe and outlives git.
                 if (process.isAlive())
                 {
-                    killTree(process);
+                    killTree(process, deadline);
                 }
                 // Always the captured handles too: a child that DETACHED before this point is no
                 // longer a descendant of the parent, so killTree alone would leave it running.
-                killAll(descendants);
+                killAll(descendants, deadline);
                 if (drain != null && drain.isAlive())
                 {
                     // Something still holds the write end, so the drain would block forever. Closing
@@ -1060,6 +1164,20 @@ public class GitTool implements IMcpTool
      */
     private static void killAll(List<ProcessHandle> handles)
     {
+        killAll(handles, System.nanoTime() + TimeUnit.SECONDS.toNanos(KILL_GRACE_SECONDS));
+    }
+
+    /**
+     * As {@link #killAll(List)}, but bounded by an EXISTING deadline so cleanup cannot be added on
+     * top of a budget the call already spent.
+     *
+     * @param handles the process handles to kill
+     * @param callDeadlineNanos the call's deadline in {@link System#nanoTime()} terms
+     */
+    private static void killAll(List<ProcessHandle> handles, long callDeadlineNanos)
+    {
+        long deadlineNanos = Math.min(callDeadlineNanos,
+            System.nanoTime() + TimeUnit.SECONDS.toNanos(KILL_GRACE_SECONDS));
         for (ProcessHandle handle : handles)
         {
             try
@@ -1073,6 +1191,12 @@ public class GitTool implements IMcpTool
             {
                 Activator.logError("git: killing a child process failed", e); //$NON-NLS-1$
             }
+        }
+        // destroyForcibly() is ASYNCHRONOUS: without awaiting, the tool could return while a child it
+        // did sample is still running. Bounded by one shared grace period for the whole list.
+        for (ProcessHandle handle : handles)
+        {
+            awaitExitQuietly(handle, deadlineNanos);
         }
     }
 
@@ -1136,13 +1260,18 @@ public class GitTool implements IMcpTool
             drain.start();
             if (!process.waitFor(CONFIG_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS))
             {
-                killTree(process); // closes the pipe, so the drain ends on its own
+                killTree(process);
+                // killTree only signals the process - it never closes OUR read end, so a drain still
+                // blocked on a pipe a surviving grandchild holds needs this to finish.
                 joinDrain(drain);
+                closeQuietly(process.getInputStream());
                 return null;
             }
             if (!joinDrain(drain))
             {
-                // Still stuck on the pipe: there is no value here we could trust.
+                // Still stuck on the pipe: there is no value here we could trust - and the reader
+                // must not be left blocked forever, so close our end the way runGit does.
+                closeQuietly(process.getInputStream());
                 return null;
             }
             String value = firstLine.get();
@@ -1164,9 +1293,13 @@ public class GitTool implements IMcpTool
         }
         finally
         {
-            if (process != null && process.isAlive())
+            if (process != null)
             {
-                killTree(process);
+                if (process.isAlive())
+                {
+                    killTree(process);
+                }
+                closeQuietly(process.getInputStream());
             }
         }
     }
@@ -1356,7 +1489,7 @@ public class GitTool implements IMcpTool
             {
                 continue;
             }
-            if (afterPathspecSeparator && !escapesRepository(candidate, root, true))
+            if (afterPathspecSeparator && !escapesRepository(candidate, root, true, true))
             {
                 continue;
             }
@@ -1389,13 +1522,15 @@ public class GitTool implements IMcpTool
     {
         if (!token.startsWith("-")) //$NON-NLS-1$
         {
-            return escapesRepository(token, root, false) ? token : null;
+            // A plain operand: a path only if it resolves to something real outside the tree.
+            return escapesRepository(token, root, false, false) ? token : null;
         }
         if (token.startsWith("--")) //$NON-NLS-1$
         {
             int equals = token.indexOf('=');
             String value = equals >= 0 ? token.substring(equals + 1) : ""; //$NON-NLS-1$
-            return escapesRepository(value, root, false) ? value : null;
+            // A long option's value is not necessarily a path either ('--grep=/api/v1').
+            return escapesRepository(value, root, false, false) ? value : null;
         }
         String fileLetters = FILE_TAKING_SHORT_OPTIONS.getOrDefault(subcommand, ""); //$NON-NLS-1$
         String valueTaking = VALUE_TAKING_SHORT_OPTIONS.getOrDefault(subcommand, ""); //$NON-NLS-1$
@@ -1405,7 +1540,8 @@ public class GitTool implements IMcpTool
             if (fileLetters.indexOf(c) >= 0)
             {
                 String tail = token.substring(i + 1);
-                return escapesRepository(tail, root, false) ? tail : null;
+                // This one IS a path: the letter in front of it takes a file.
+                return escapesRepository(tail, root, false, true) ? tail : null;
             }
             if (valueTaking.indexOf(c) >= 0)
             {
@@ -1425,9 +1561,13 @@ public class GitTool implements IMcpTool
      * @param root the canonical repository work tree
      * @param lexicalToo whether a path that leaves the repository is refused even when nothing
      *            exists there yet - true past the pathspec {@code --}, where every token IS a path
+     * @param knownPath whether the token is KNOWN to be a path (a file-taking option's value, or an
+     *            operand past {@code --}); an ordinary value that merely starts with {@code /} is
+     *            not one, and must be judged by what it actually resolves to
      * @return {@code true} when the token is a path that leaves the repository
      */
-    private static boolean escapesRepository(String token, Path root, boolean lexicalToo)
+    private static boolean escapesRepository(String token, Path root, boolean lexicalToo,
+        boolean knownPath)
     {
         if (token.isEmpty())
         {
@@ -1438,11 +1578,13 @@ public class GitTool implements IMcpTool
         try
         {
             Path candidate = Paths.get(token);
-            if (rootRelative && !candidate.isAbsolute())
+            if (rootRelative && !candidate.isAbsolute() && knownPath)
             {
                 // Windows: '/etc/passwd' is not absolute for Java, but git resolves it against a root
                 // of its own (the MSYS prefix) - a location outside this repository either way, and
-                // one this JVM cannot test for existence.
+                // one this JVM cannot test for existence. Only for a token that IS a path: an
+                // ordinary value may start with '/' ('log --grep=/api/v1/users', a commit message
+                // "/fix search") and reads nothing.
                 return true;
             }
             Path resolved = candidate.isAbsolute() ? candidate : root.resolve(candidate);
@@ -1673,18 +1815,41 @@ public class GitTool implements IMcpTool
      */
     private static int urlLimit(String text, int from)
     {
-        for (int marker = text.indexOf(SCHEME_SEPARATOR, from); marker >= 0;
-            marker = text.indexOf(SCHEME_SEPARATOR, marker + SCHEME_SEPARATOR.length()))
+        // Whether the scan is already inside this URL's query/fragment: there '=' and '&' join the
+        // value ('?token=secret://tail' is ONE url), while in the plain part of the text they
+        // separate things ('a=https://tok@host' is TWO). Tracking that is what keeps the redaction
+        // from either stopping before a secret or swallowing the next URL whole.
+        boolean inQueryOrFragment = false;
+        for (int i = from; i < text.length(); i++)
         {
-            int schemeStart = marker;
+            char c = text.charAt(i);
+            if (isAsciiWhitespace(c))
+            {
+                // The URL ended: what follows is plain text again, where '=' separates rather than
+                // joins. Without this reset, one '?' anywhere would hide every later URL.
+                inQueryOrFragment = false;
+                continue;
+            }
+            if (c == '?' || c == '#')
+            {
+                inQueryOrFragment = true;
+                continue;
+            }
+            if (!text.startsWith(SCHEME_SEPARATOR, i))
+            {
+                continue;
+            }
+            int schemeStart = i;
             while (schemeStart > 0 && isSchemeChar(text.charAt(schemeStart - 1)))
             {
                 schemeStart--;
             }
-            // A NEW url only starts after something that can separate two of them. A '://' preceded
-            // by '=' or '&' lives INSIDE the current URL's query ('?token=secret://tail'), and
-            // treating it as a boundary would end the redaction right before the secret.
-            if (schemeStart > from && isUrlSeparator(text.charAt(schemeStart - 1)))
+            if (schemeStart <= from)
+            {
+                continue;
+            }
+            char before = text.charAt(schemeStart - 1);
+            if (isUrlSeparator(before) || (!inQueryOrFragment && (before == '=' || before == '&')))
             {
                 return schemeStart;
             }
@@ -1762,13 +1927,48 @@ public class GitTool implements IMcpTool
     /** @return a thread-safe snapshot of the drained output so far. */
     private static String snapshot(StringBuilder out, boolean[] truncated)
     {
+        return capture(out, truncated, false).text;
+    }
+
+    /**
+     * The captured output AND the truncation flag that produced it, read under ONE lock.
+     * <p>
+     * Reading the flag separately after the snapshot has no happens-before edge to the drain thread
+     * that sets it, so a late flip could report {@code truncated} for text the snapshot did not treat
+     * as truncated.
+     *
+     * @param out the shared output buffer
+     * @param truncated the drain thread's truncation flag
+     * @param complete whether the drain finished, i.e. the buffer cannot be mid-write
+     * @return both values, consistent with each other
+     */
+    private static Capture capture(StringBuilder out, boolean[] truncated, boolean complete)
+    {
         synchronized (out)
         {
             // The flag is read under the SAME lock the drain thread appends (and sets it) with: a
             // plain read could still see 'false' for a drain that is alive past join(), and the
             // half-written URL that flag guards would then be returned unredacted.
             String text = out.toString();
-            return redactCredentialUrls(truncated[0] ? dropTruncatedUrlTail(text) : text);
+            boolean cut = truncated[0];
+            // The dangling tail is dropped for an INCOMPLETE drain too, not only for cap-truncated
+            // output: a background child can be mid-write when we capture, and a half-written
+            // 'https://<secret' carries no '@' for the redaction to recognise.
+            return new Capture(redactCredentialUrls(cut || !complete ? dropTruncatedUrlTail(text) : text),
+                cut);
+        }
+    }
+
+    /** An output snapshot together with the truncation flag it was taken with. */
+    private static final class Capture
+    {
+        final String text;
+        final boolean truncated;
+
+        Capture(String text, boolean truncated)
+        {
+            this.text = text;
+            this.truncated = truncated;
         }
     }
 
@@ -1787,6 +1987,13 @@ public class GitTool implements IMcpTool
      */
     private static String dropTruncatedUrlTail(String text)
     {
+        // A cut that lands between the halves of a surrogate pair would leave a lone high surrogate,
+        // which serializes as a replacement character - drop it before anything else looks at the
+        // text.
+        if (!text.isEmpty() && Character.isHighSurrogate(text.charAt(text.length() - 1)))
+        {
+            text = text.substring(0, text.length() - 1);
+        }
         int marker = text.lastIndexOf(SCHEME_SEPARATOR);
         if (marker < 0)
         {
@@ -1867,6 +2074,19 @@ public class GitTool implements IMcpTool
      */
     private static void killTree(Process process)
     {
+        killTree(process, System.nanoTime() + TimeUnit.SECONDS.toNanos(KILL_GRACE_SECONDS));
+    }
+
+    /**
+     * As {@link #killTree(Process)}, but bounded by an EXISTING deadline so teardown cannot be added
+     * on top of the budget the call already spent (the timeout path would otherwise pay 120 s plus a
+     * fresh grace period, twice).
+     *
+     * @param process the process to kill together with its captured descendants
+     * @param deadlineNanos the call's deadline in {@link System#nanoTime()} terms
+     */
+    private static void killTree(Process process, long deadlineNanos)
+    {
         List<ProcessHandle> descendants = new ArrayList<>();
         try
         {
@@ -1888,7 +2108,6 @@ public class GitTool implements IMcpTool
             Activator.logError("git: obtaining the process handle failed; using the Process API", e); //$NON-NLS-1$
         }
 
-        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         // Destroy the parent INDEPENDENTLY of any descendant failure, and guard each descendant kill so
         // one platform hiccup cannot stop the loop before the rest (and the parent) are killed.
         if (parent != null)
@@ -1911,7 +2130,10 @@ public class GitTool implements IMcpTool
         {
             try
             {
-                process.waitFor(5, TimeUnit.SECONDS);
+                // The SAME deadline as the handle path: a fallback must not extend the budget either.
+                long remaining = deadlineNanos - System.nanoTime();
+                process.waitFor(Math.max(0, TimeUnit.NANOSECONDS.toMillis(remaining)),
+                    TimeUnit.MILLISECONDS);
             }
             catch (InterruptedException e)
             {
@@ -2050,7 +2272,11 @@ public class GitTool implements IMcpTool
         env.put("GIT_OPTIONAL_LOCKS", "0"); //$NON-NLS-1$ //$NON-NLS-2$
         // Restrict transports to the safe, well-known set so a remote like 'ext::sh -c <cmd>' / 'fd::'
         // (transport-helper protocols that run an arbitrary command) is refused regardless of config.
-        env.put("GIT_ALLOW_PROTOCOL", "file:git:ssh:http:https:ftp:ftps"); //$NON-NLS-1$ //$NON-NLS-2$
+        // WITHOUT 'file': a remote already configured as 'file:///elsewhere' (a backup mirror, a
+        // network drive, leftover config) would otherwise be reachable BY NAME - 'push backup' carries
+        // no URL for any parser guard to inspect, and git would read, or on a push WRITE, a repository
+        // outside the project. This env setting also overrides a repo-level protocol.file.allow.
+        env.put("GIT_ALLOW_PROTOCOL", "git:ssh:http:https:ftp:ftps"); //$NON-NLS-1$ //$NON-NLS-2$
         // A command that needs an editor (e.g. 'commit' with no -m) fails fast instead of hanging on one.
         env.put("GIT_EDITOR", "false"); //$NON-NLS-1$ //$NON-NLS-2$
         env.put("GIT_SEQUENCE_EDITOR", "false"); //$NON-NLS-1$ //$NON-NLS-2$

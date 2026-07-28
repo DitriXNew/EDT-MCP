@@ -11,6 +11,7 @@ import static org.junit.Assert.*;
 import java.util.Collections;
 import java.util.Set;
 
+import org.eclipse.jface.preference.PreferenceStore;
 import org.junit.Test;
 
 /**
@@ -149,5 +150,54 @@ public class ToolSettingsServiceTest
             Set<String> parsed = ToolSettingsService.parseDisabledTools(serialized);
             assertEquals("Roundtrip failed for preset " + preset.name(), disabled, parsed);
         }
+    }
+
+    /**
+     * The migration is the ONLY thing that keeps a default-off tool disabled on an EXISTING
+     * installation: a stored list from before that tool existed does not contain it, and the shipped
+     * default no longer applies once anything was stored. Without this test a regression would
+     * silently enable the raw git tool for every upgrading user.
+     */
+    @Test
+    public void testMigrationAddsTheDefaultOffToolToAnExistingStoredList()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // An installation that stored its own selection before 'git' existed.
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "debug_launch,run_yaxunit_tests");
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("the migration must add the default-off tool: " + disabled,
+            disabled.contains("git"));
+        assertTrue("it must keep what the user had chosen: " + disabled,
+            disabled.contains("debug_launch") && disabled.contains("run_yaxunit_tests"));
+        assertEquals("the migration must be recorded so it runs once",
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testMigrationDoesNotReAddAToolTheUserDeliberatelyEnabled()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "debug_launch");
+        // Already migrated: the user has since ENABLED git on purpose.
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertFalse("a one-time migration must not fight the user's choice: " + disabled,
+            disabled.contains("git"));
     }
 }

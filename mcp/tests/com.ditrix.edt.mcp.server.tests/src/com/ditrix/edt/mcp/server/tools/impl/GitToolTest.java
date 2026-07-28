@@ -373,6 +373,127 @@ public class GitToolTest
     }
 
     @Test
+    public void testCredentialUrlNormalizationIsConsistent()
+    {
+        // A Unicode space is not trimmed by trim() but is by strip(): with two different
+        // normalizations the scheme guard saw a URL while the credential guard did not, and the
+        // secret was persisted.
+        assertRejected("remote add origin  https://ghp_secret@host/r.git"); //$NON-NLS-1$
+        // A control character inside the URL ends the whitespace-based scanning before the '@',
+        // hiding the credential from every check while git still accepts the URL. It has to be
+        // QUOTED to reach git as one token - unquoted, the tokenizer splits on it.
+        assertRejected("remote add origin \"https://user:ghp_secret\n@host/r.git\""); //$NON-NLS-1$
+        assertRejected("push \"https://user:ghp_secret\t@host/r.git\""); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEncodingOptionCannotHideTheOutputFromRedaction()
+    {
+        // git would emit UTF-16 bytes that this tool decodes as UTF-8, so a credential in the output
+        // no longer looks like a URL to the redaction.
+        assertRejected("log --encoding=UTF-16 -1"); //$NON-NLS-1$
+        // Resolved per traversed directory, so it escapes the work tree from a nested one.
+        assertRejected("ls-files --others --exclude-per-directory=../../secret.rules"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheCommandStringItselfIsBounded()
+    {
+        StringBuilder huge = new StringBuilder("commit -m "); //$NON-NLS-1$
+        for (int i = 0; i < GitTool.MAX_COMMAND_CHARS; i++)
+        {
+            huge.append('a');
+        }
+
+        // Everything reflected back (the echoed command, errors, the consent preview) derives from
+        // this string, so an unbounded one would flood the response, the log and the dialog.
+        assertRejected(huge.toString());
+    }
+
+    @Test
+    public void testRevParseGitDirIsAllowedButNowhereElse()
+    {
+        // 'rev-parse --git-dir' PRINTS the resolved path - it redirects nothing, and it is the
+        // documented way to ask where the repository is.
+        assertAccepted("rev-parse --git-dir"); //$NON-NLS-1$
+        // Everything else keeps the redirection blocked, including the value form.
+        assertRejected("rev-parse --git-dir=/elsewhere/.git"); //$NON-NLS-1$
+        assertRejected("status --git-dir"); //$NON-NLS-1$
+        assertRejected("log --git-dir"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOrdinaryValuesThatLookLikePathsAreNotRefused()
+    {
+        // A leading '/' does not make a value a path: these read nothing, and refusing them broke
+        // ordinary searches and messages.
+        assertAccepted("log --grep=/api/v1/users"); //$NON-NLS-1$
+        assertAccepted("commit -m \"/fix search endpoint\""); //$NON-NLS-1$
+        assertAccepted("tag -a v2 -m \"/v2 release notes\""); //$NON-NLS-1$
+        assertAccepted("stash push -m \"/wip: quick fix\""); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOrderFileIsAFileOptionForLogAndShowToo()
+    {
+        // '-O<orderfile>' is a diff option, and log/show accept diff options - the containment check
+        // has to follow it there as well. Decided against a real work tree, like the diff case.
+        java.nio.file.Path root;
+        java.nio.file.Path outside;
+        try
+        {
+            root = java.nio.file.Files.createTempDirectory("edt-mcp-git-order-root"); //$NON-NLS-1$
+            outside = java.nio.file.Files.createTempFile("edt-mcp-order", ".txt"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (java.io.IOException e)
+        {
+            throw new IllegalStateException(e);
+        }
+        try
+        {
+            java.nio.file.Path canonicalRoot = root.toRealPath();
+            String outsidePath = outside.toRealPath().toString();
+
+            assertNotNull("log must follow -O into the cluster", //$NON-NLS-1$
+                GitTool.escapingCandidate("-pO" + outsidePath, "log", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNotNull("show must too", //$NON-NLS-1$
+                GitTool.escapingCandidate("-O" + outsidePath, "show", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull("the pickaxe value is still left alone", //$NON-NLS-1$
+                GitTool.escapingCandidate("-S" + outsidePath, "log", canonicalRoot)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (java.io.IOException e)
+        {
+            throw new IllegalStateException(e);
+        }
+        finally
+        {
+            try
+            {
+                java.nio.file.Files.deleteIfExists(outside);
+                java.nio.file.Files.deleteIfExists(root);
+            }
+            catch (java.io.IOException ignored)
+            {
+                // best-effort cleanup
+            }
+        }
+    }
+
+    @Test
+    public void testFileRemotesAreRefused()
+    {
+        // A 'file://' remote reads - and on a push WRITES - a repository anywhere on disk, and that
+        // path lives inside a URI where the containment check cannot see it.
+        assertRejected("push file:///tmp/bare HEAD:main"); //$NON-NLS-1$
+        assertRejected("remote add backup file:///tmp/bare"); //$NON-NLS-1$
+        assertRejected("fetch file://C:/other/repo.git"); //$NON-NLS-1$
+
+        // The normal remotes stay accepted.
+        assertAccepted("push https://example.com/repo.git main"); //$NON-NLS-1$
+        assertAccepted("fetch ssh://git@example.com/repo.git"); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAPlainSshUserIsARemoteNotACredential()
     {
         // 'ssh://[user@]server/project.git' is how git documents an SSH remote - an explicit user or
@@ -538,6 +659,12 @@ public class GitToolTest
         assertFalse("the fragment secret must not survive: " + fragment, //$NON-NLS-1$
             fragment.contains("ghp_secret")); //$NON-NLS-1$
         assertTrue("what follows must survive: " + fragment, fragment.contains("(fetch)")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A query in an EARLIER url must not hide a later one: the state resets at whitespace.
+        String afterQuery = GitTool.redactCredentialUrls(
+            "https://h/r?x=y done x=https://ghp_secret@evil/r"); //$NON-NLS-1$
+        assertFalse("the second credential must not survive: " + afterQuery, //$NON-NLS-1$
+            afterQuery.contains("ghp_secret")); //$NON-NLS-1$
 
         // A '://' inside a query VALUE is not the next URL: the redaction must cover the whole query.
         String schemeInValue = GitTool.redactCredentialUrls("https://h/x?token=secret://tail"); //$NON-NLS-1$
