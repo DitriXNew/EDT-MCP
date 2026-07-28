@@ -9,8 +9,10 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -360,24 +362,14 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static final String CANCEL_REASON_BUTTON_NOT_FOUND = "button-not-found"; //$NON-NLS-1$
 
     /**
-     * Monotonic count of external-changes conflict modals this filter CANCELLED (the
-     * {@code cancel} policy, an ambiguous window, or a policy whose labelled button could not
-     * be located). The update then fails with EDT's generic "still out of sync" outcome, which
-     * says nothing about the cause; a caller samples this counter around its update and turns a
-     * change into an actionable error instead. A COUNTER rather than a wall-clock stamp: it is
-     * immune to clock rollback and to two events landing in the same millisecond.
-     *
-     * <p>Scope caveat: like the filter itself this is process-global, so a concurrent update of
-     * ANOTHER application that cancels its own modal is indistinguishable from this one's. The
-     * message it produces is therefore phrased as "while this update ran", never as a claim
-     * about which application raised the dialog.
-     *
-     * <p>Volatile: written on the UI thread, read on the MCP worker.
+     * The conflict-cancel windows currently open — one per update in flight (see
+     * {@link #beginConflictWatch(String)}). A cancelled dialog is recorded INTO the windows it
+     * belongs to, so both the fact and its reason stay correlated with the caller that owns
+     * them: a concurrent update of another application can neither be mistaken for this one's
+     * failure nor overwrite its reason. Bounded by construction — a window is removed when its
+     * call ends.
      */
-    private static volatile int conflictCancelCount;
-
-    /** Why the last cancelled conflict modal was cancelled; see the CANCEL_REASON_* constants. */
-    private static volatile String lastConflictCancelReason = CANCEL_REASON_POLICY;
+    private static final List<ConflictWatch> CONFLICT_WATCHES = new ArrayList<>();
 
     private static Display filterDisplay;
     private static Listener filter;
@@ -558,11 +550,18 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param dialogBody the dialog message text (may be {@code null})
      * @return the policy to apply, or {@code null} when the dialog must be cancelled
      */
-    static ExternalInfobaseChangesPolicy chooseConflictPolicy(String dialogBody)
+    /**
+     * The live form of {@link #decideFor(String, List)} — decides against the arms outstanding
+     * right now.
+     *
+     * @param dialogBody the dialog message text (may be {@code null})
+     * @return the decision, never {@code null}
+     */
+    static ConflictDecision decideFor(String dialogBody)
     {
         synchronized (LOCK)
         {
-            return choosePolicyFor(dialogBody, CONFLICT_ARMS);
+            return decideFor(dialogBody, CONFLICT_ARMS);
         }
     }
 
@@ -586,11 +585,27 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     static ExternalInfobaseChangesPolicy choosePolicyFor(String body, List<ConflictArm> arms)
     {
+        return decideFor(body, arms).policy;
+    }
+
+    /**
+     * Same decision as {@link #choosePolicyFor(String, List)}, but also reporting WHICH armed
+     * infobase the dialog was attributed to ({@code null} when it could not be attributed).
+     * The name correlates the outcome with the caller that owns it: a cancel is counted for
+     * that infobase, so a concurrent update of another application never sees it as its own.
+     *
+     * @param body the dialog message text (may be {@code null})
+     * @param arms the outstanding arms (may be empty)
+     * @return the decision, never {@code null}
+     */
+    static ConflictDecision decideFor(String body, List<ConflictArm> arms)
+    {
         if (arms == null || arms.isEmpty())
         {
-            return null;
+            return new ConflictDecision(null, null);
         }
         ExternalInfobaseChangesPolicy matched = null;
+        String matchedName = null;
         boolean anyNamed = false;
         ExternalInfobaseChangesPolicy unnamed = null;
         boolean unnamedAmbiguous = false;
@@ -613,20 +628,38 @@ public final class LaunchUpdateDialogAutoConfirmer
             if (matched != null && matched != arm.policy)
             {
                 // The SAME dialog is claimed by two callers wanting different answers.
-                return ExternalInfobaseChangesPolicy.CANCEL;
+                return new ConflictDecision(ExternalInfobaseChangesPolicy.CANCEL, arm.infobaseName);
             }
             matched = arm.policy;
+            matchedName = arm.infobaseName;
         }
         if (matched != null)
         {
-            return matched;
+            return new ConflictDecision(matched, matchedName);
         }
         if (anyNamed)
         {
             // Named arms exist but none of them is about THIS dialog: not ours.
-            return null;
+            return new ConflictDecision(null, null);
         }
-        return unnamedAmbiguous ? ExternalInfobaseChangesPolicy.CANCEL : unnamed;
+        return new ConflictDecision(
+            unnamedAmbiguous ? ExternalInfobaseChangesPolicy.CANCEL : unnamed, null);
+    }
+
+    /**
+     * The outcome of attributing a conflict dialog: which button to press ({@code null} = cancel
+     * it) and which armed infobase it belongs to ({@code null} = could not be attributed).
+     */
+    static final class ConflictDecision
+    {
+        final ExternalInfobaseChangesPolicy policy;
+        final String infobaseName;
+
+        ConflictDecision(ExternalInfobaseChangesPolicy policy, String infobaseName)
+        {
+            this.policy = policy;
+            this.infobaseName = infobaseName;
+        }
     }
 
     /** Trims to {@code null}: a blank infobase name is the same as "no name". */
@@ -1644,7 +1677,9 @@ public final class LaunchUpdateDialogAutoConfirmer
         // THIS infobase, so two concurrent updates of different infobases keep their own policies.
         // Anything unattributable — a foreign infobase, a manually opened dialog, a body we cannot
         // read — yields null, i.e. cancel rather than a writing press.
-        ExternalInfobaseChangesPolicy effective = chooseConflictPolicy(collectDialogText(shell));
+        ConflictDecision decision = decideFor(collectDialogText(shell));
+        ExternalInfobaseChangesPolicy effective = decision.policy;
+        String attributedName = decision.infobaseName;
         Set<String> labels = conflictButtonLabels(effective);
         Button button = labels == null ? null : findButtonByLabel(shell, 0, labels);
         if (chooseConflictAction(effective, button != null) == ConfirmAction.PRESS_POLICY_BUTTON)
@@ -1655,11 +1690,10 @@ public final class LaunchUpdateDialogAutoConfirmer
             pressButton(button);
             return;
         }
-        lastConflictCancelReason =
-            labels != null && button == null ? CANCEL_REASON_BUTTON_NOT_FOUND : CANCEL_REASON_POLICY;
-        // NB: a policy of null here means the dialog was NOT attributed to an armed update
-        // (see mentionsArmedInfobase) — cancelling is then the only safe completion.
-        conflictCancelCount++;
+        // NB: a null policy here means the dialog was NOT attributed to an armed update —
+        // cancelling is then the only safe completion.
+        noteCancel(attributedName,
+            labels != null && button == null ? CANCEL_REASON_BUTTON_NOT_FOUND : CANCEL_REASON_POLICY);
         Activator.logInfo("Cancelling infobase-changed-outside-EDT dialog '" //$NON-NLS-1$
             + safeShellText(shell) + "' (policy " //$NON-NLS-1$
             + (effective == null ? "none" : effective.wireValue()) //$NON-NLS-1$
@@ -1669,42 +1703,121 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * How many external-changes conflict modals this filter has CANCELLED so far. Callers
-     * sample it before issuing an update and again afterwards: a change means the update was
-     * stopped by a cancelled conflict, so the failure can be reported with a cause instead of
-     * EDT's generic out-of-sync text. Monotonic, so it is immune to clock rollback and to two
-     * events landing in the same millisecond.
+     * Opens a window that records the conflict modals CANCELLED while a single update runs.
+     * Pair it with {@link ConflictWatch#close()} (try-with-resources) around the update AND the
+     * check that consumes it.
      *
-     * @return the current count
+     * <p>{@code infobaseName} is the infobase the caller is updating: a cancelled dialog
+     * attributed to that infobase lands in this window. A caller that could not resolve a name
+     * passes {@code null} and receives the cancels that could not be attributed either. An
+     * unattributable cancel is also assigned to the ONLY open window when there is exactly one,
+     * since it is then unambiguous whose it was.
+     *
+     * @param infobaseName the infobase being updated (may be {@code null})
+     * @return the open window, never {@code null}
      */
-    public static int conflictCancelCount()
+    public static ConflictWatch beginConflictWatch(String infobaseName)
     {
-        return conflictCancelCount;
+        ConflictWatch watch = new ConflictWatch(trimToNull(infobaseName));
+        synchronized (LOCK)
+        {
+            CONFLICT_WATCHES.add(watch);
+        }
+        return watch;
     }
 
     /**
-     * Why the most recent conflict modal was cancelled — {@link #CANCEL_REASON_POLICY} (the
-     * call's own {@code cancel}, or an ambiguous window that degraded to it) or
-     * {@link #CANCEL_REASON_BUTTON_NOT_FOUND} (the policy's localized button was not present).
-     * Only meaningful together with a {@link #conflictCancelCount()} change.
-     *
-     * @return the reason token, never {@code null}
+     * Records a cancelled conflict dialog into the open windows it belongs to: the ones naming
+     * {@code attributedName}, the nameless ones when the cancel itself could not be attributed,
+     * and — when exactly one window is open — that window regardless (an unambiguous owner).
      */
-    public static String lastConflictCancelReason()
+    private static void noteCancel(String attributedName, String reason)
     {
-        return lastConflictCancelReason;
+        synchronized (LOCK)
+        {
+            boolean single = CONFLICT_WATCHES.size() == 1;
+            for (ConflictWatch watch : CONFLICT_WATCHES)
+            {
+                boolean mine = single
+                    || (attributedName != null && attributedName.equals(watch.infobaseName))
+                    || (attributedName == null && watch.infobaseName == null);
+                if (mine)
+                {
+                    watch.record(reason);
+                }
+            }
+        }
     }
 
     /**
-     * Test seam: records a conflict-modal cancel exactly as the UI-thread press path does,
-     * so the resulting error contract can be asserted headlessly (no SWT shell required).
+     * A conflict-cancel window owned by one update: how many conflict modals were cancelled
+     * while it was open, and why the last of them was. Closing it removes it from the filter's
+     * bookkeeping — always close it (try-with-resources).
+     */
+    public static final class ConflictWatch implements AutoCloseable
+    {
+        private final String infobaseName;
+        private int cancels;
+        private String reason;
+
+        ConflictWatch(String infobaseName)
+        {
+            this.infobaseName = infobaseName;
+        }
+
+        void record(String cancelReason)
+        {
+            cancels++;
+            reason = cancelReason;
+        }
+
+        /**
+         * Was a conflict modal cancelled while this window was open?
+         *
+         * @return {@code true} when at least one cancel was recorded
+         */
+        public boolean cancelled()
+        {
+            synchronized (LOCK)
+            {
+                return cancels > 0;
+            }
+        }
+
+        /**
+         * Why the last cancel in this window happened — one of the {@code CANCEL_REASON_*}
+         * constants; only meaningful when {@link #cancelled()} is {@code true}.
+         *
+         * @return the reason token, or {@code null} when nothing was cancelled
+         */
+        public String reason()
+        {
+            synchronized (LOCK)
+            {
+                return reason;
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            synchronized (LOCK)
+            {
+                CONFLICT_WATCHES.remove(this);
+            }
+        }
+    }
+
+    /**
+     * Test seam: records a cancel exactly as the UI-thread press path does, so the resulting
+     * contract can be asserted headlessly (no SWT shell required).
      *
      * @param reason one of the {@code CANCEL_REASON_*} constants
+     * @param infobaseName the infobase the cancelled dialog was attributed to (may be {@code null})
      */
-    static void recordConflictCancelForTest(String reason)
+    static void recordConflictCancelForTest(String reason, String infobaseName)
     {
-        lastConflictCancelReason = reason;
-        conflictCancelCount++;
+        noteCancel(trimToNull(infobaseName), reason);
     }
 
     /** Fires {@code SWT.Selection} on the button — mirrors a user click. */

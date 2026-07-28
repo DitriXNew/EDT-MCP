@@ -602,7 +602,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         // The project comes from the launch CONFIGURATION, not from req: a caller addressing the
         // run by launchConfigurationName leaves req.projectName null.
         ProjectContext launchCtx = ProjectContext.of(configProjectName(matchingConfig));
-        String launchInfobase = LaunchLifecycleUtils.applicationDisplayName(
+        String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(
             Activator.getDefault().getApplicationManager(),
             launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
         LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
@@ -1047,7 +1047,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             // Same as the RUN path: gated on the update opt-out, and the only armed window
             // around a standalone-server application's delegate-performed update.
             ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? externalChanges : null;
-            String launchInfobase = LaunchLifecycleUtils.applicationDisplayName(appManager, project,
+            String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
                 applicationId);
             LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
                 launchInfobase);

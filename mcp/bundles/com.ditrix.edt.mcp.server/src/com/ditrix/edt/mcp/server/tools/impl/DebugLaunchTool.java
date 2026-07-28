@@ -983,7 +983,7 @@ public class DebugLaunchTool implements IMcpTool
             {
                 return null;
             }
-            return LaunchLifecycleUtils.applicationDisplayName(
+            return LaunchLifecycleUtils.attributionInfobaseName(
                 Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break the launch

@@ -1338,20 +1338,30 @@ public final class LaunchLifecycleUtils
         // finalizeFreshLaunchPrep alike), which is exactly how this slipped through before:
         // only the launch itself was armed, never the update that precedes it.
         ApplicationUpdateState after;
-        int conflictCancelsBefore = LaunchUpdateDialogAutoConfirmer.conflictCancelCount();
         // EDT's conflict modal names the INFOBASE it is about; passing that name makes the
-        // auto-press ATTRIBUTABLE (a conflict dialog for some other infobase is cancelled,
-        // never answered with a writing choice).
+        // auto-press ATTRIBUTABLE (a conflict dialog for some other infobase is cancelled, never
+        // answered with a writing choice) and it owns the cancel WINDOW opened around the update,
+        // so a concurrent update of ANOTHER application can neither be mistaken for this one's
+        // failure nor overwrite the reason reported for it.
         String infobaseName = conflictAttributionName(application);
-        LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
-        try
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName))
         {
-            after = appManager.update(application, ApplicationUpdateType.INCREMENTAL, context,
-                new NullProgressMonitor());
-        }
-        finally
-        {
-            LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+            LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
+            try
+            {
+                after = appManager.update(application, ApplicationUpdateType.INCREMENTAL, context,
+                    new NullProgressMonitor());
+            }
+            finally
+            {
+                LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+            }
+            Optional<String> declined = declinedByCancelledConflict(after, policy, watch);
+            if (declined.isPresent())
+            {
+                return declined;
+            }
         }
         Activator.logInfo("Pre-launch DB update returned: stateAfter=" + after //$NON-NLS-1$
             + " (now awaiting the UPDATE_STATE_CHANGED→UPDATED event)"); //$NON-NLS-1$
@@ -1366,17 +1376,6 @@ public final class LaunchLifecycleUtils
         // arrive. Awaiting SYNCED would stall the MCP call for the full apply
         // timeout and then fail with the very same out-of-sync error — fail
         // fast instead, restoring the old prompt-error behaviour.
-        // A cancelled external-changes modal is the one failure cause EDT's generic out-of-sync
-        // text hides completely — name it, and name the knob that changes it. Checked BEFORE the
-        // terminal/transitional split: the update can also come back UNKNOWN or BEING_UPDATED
-        // after a cancel, and waiting out the full apply timeout to then report a generic stale
-        // infobase would make an immediate, deliberate cancel look like a slow update.
-        if (!isSynced(after)
-            && LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != conflictCancelsBefore)
-        {
-            return Optional.of(ExternalInfobaseChangesPolicy.declinedUpdateError(policy,
-                LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason()));
-        }
         if (needsUpdate(after))
         {
             return Optional.of(terminalOutOfSyncError(after));
@@ -1406,7 +1405,7 @@ public final class LaunchLifecycleUtils
      * @param applicationId the application id (may be {@code null})
      * @return the application display name, or {@code null}
      */
-    public static String applicationDisplayName(IApplicationManager appManager, IProject project,
+    public static String attributionInfobaseName(IApplicationManager appManager, IProject project,
         String applicationId)
     {
         if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
@@ -1416,7 +1415,7 @@ public final class LaunchLifecycleUtils
         try
         {
             return appManager.getApplication(project, applicationId)
-                .map(LaunchLifecycleUtils::safeApplicationName)
+                .map(LaunchLifecycleUtils::conflictAttributionName)
                 .orElse(null);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break a launch
@@ -1444,7 +1443,7 @@ public final class LaunchLifecycleUtils
      * @param application the application being updated (may be {@code null})
      * @return the infobase name, or {@code null}
      */
-    private static String conflictAttributionName(IApplication application)
+    public static String conflictAttributionName(IApplication application)
     {
         try
         {
@@ -1479,6 +1478,29 @@ public final class LaunchLifecycleUtils
         {
             return null;
         }
+    }
+
+    /**
+     * A cancelled external-changes modal is the one failure cause EDT's generic out-of-sync text
+     * hides completely - name it, and name the knob that changes it. Consulted BEFORE the
+     * terminal/transitional split: the update can also come back {@code UNKNOWN} or
+     * {@code BEING_UPDATED} after a cancel, and waiting out the full apply timeout only to report
+     * a generic stale infobase would make an immediate, deliberate cancel look like a slow update.
+     *
+     * @param after the state {@code update()} returned
+     * @param policy the policy the call ran with
+     * @param watch the cancel window opened around this update
+     * @return the actionable error, or {@link Optional#empty()} when this update was not stopped
+     *         by a cancelled conflict
+     */
+    private static Optional<String> declinedByCancelledConflict(ApplicationUpdateState after,
+        ExternalInfobaseChangesPolicy policy, LaunchUpdateDialogAutoConfirmer.ConflictWatch watch)
+    {
+        if (isSynced(after) || !watch.cancelled())
+        {
+            return Optional.empty();
+        }
+        return Optional.of(ExternalInfobaseChangesPolicy.declinedUpdateError(policy, watch.reason()));
     }
 
     /**

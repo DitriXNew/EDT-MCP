@@ -213,29 +213,6 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     /**
-     * Returns the application's display name — the string EDT interpolates into its conflict
-     * modal — or {@code null} when it cannot be read (the name is only an attribution hint).
-     *
-     * @param application the application being updated (may be {@code null})
-     * @return the name, or {@code null}
-     */
-    private static String safeApplicationName(IApplication application)
-    {
-        if (application == null)
-        {
-            return null;
-        }
-        try
-        {
-            return application.getName();
-        }
-        catch (RuntimeException e) // NOSONAR a hint must never break the update
-        {
-            return null;
-        }
-    }
-
-    /**
      * Validates the directly supplied target arguments used when no launch
      * configuration name is given. Returns a ready {@link ToolResult#error} JSON
      * payload describing the first missing argument, or {@code null} when the
@@ -388,29 +365,33 @@ public class UpdateDatabaseTool implements IMcpTool
                 // the infobase was changed outside EDT since the last EDT interaction; it is answered
                 // by the caller's externalInfobaseChanges policy (default: override the infobase with
                 // the project configuration, i.e. exactly what this tool was asked to do).
-                int conflictCancelsBefore = LaunchUpdateDialogAutoConfirmer.conflictCancelCount();
-                String infobaseName = safeApplicationName(application);
-                LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges, infobaseName);
-                try
+                // Reference-first: EDT's dialog names the REGISTERED infobase, which can differ
+                // from the application's display name — resolving the wrong one would leave every
+                // dialog unattributable and silently degrade override/import to cancel.
+                String infobaseName = LaunchLifecycleUtils.conflictAttributionName(application);
+                try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+                    LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName))
                 {
-                    stateAfter = appManager.update(application, updateType, context, monitor);
-                }
-                finally
-                {
-                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
+                    LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges,
                         infobaseName);
-                }
-                // A cancelled external-changes modal means the update wrote NOTHING. Reporting
-                // "updated" here would be a false success: EDT returns the unchanged state, not a
-                // failure. Both conditions are required — the cancel counter is process-global, so
-                // a cancel raised by a CONCURRENT update of another application must not fail this
-                // one when its own state came back applied.
-                if (LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != conflictCancelsBefore
-                    && stateAfter != ApplicationUpdateState.UPDATED)
-                {
-                    return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
-                        externalChanges, LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason()))
-                        .toJson();
+                    try
+                    {
+                        stateAfter = appManager.update(application, updateType, context, monitor);
+                    }
+                    finally
+                    {
+                        LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
+                            infobaseName);
+                    }
+                    // A cancelled external-changes modal means the update wrote NOTHING. Reporting
+                    // "updated" here would be a false success: EDT returns the unchanged state, not
+                    // a failure. Both conditions are required — an update that DID apply is not a
+                    // failure just because a cancel landed in the window.
+                    if (watch.cancelled() && stateAfter != ApplicationUpdateState.UPDATED)
+                    {
+                        return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
+                            externalChanges, watch.reason())).toJson();
+                    }
                 }
             }
 

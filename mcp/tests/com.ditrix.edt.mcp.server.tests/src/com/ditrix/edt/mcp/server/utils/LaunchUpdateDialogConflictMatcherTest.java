@@ -156,18 +156,50 @@ public class LaunchUpdateDialogConflictMatcherTest
     }
 
     @Test
-    public void testCancelledConflictIsVisibleToTheUpdateCaller()
+    public void testCancelsLandInTheOwningWatchOnly()
     {
-        // The update caller samples the counter around its update, so a failed update can name
-        // the real cause instead of EDT's generic out-of-sync text. A COUNTER (not a clock
-        // stamp) keeps that detection immune to rollback and same-millisecond events.
-        int before = LaunchUpdateDialogAutoConfirmer.conflictCancelCount();
-        assertEquals(before, LaunchUpdateDialogAutoConfirmer.conflictCancelCount());
+        // A cancel raised by a CONCURRENT update of another application must not be readable as
+        // this update's failure, and must not overwrite its reason.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch mine =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("mine-base"); //$NON-NLS-1$
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch theirs =
+                LaunchUpdateDialogAutoConfirmer.beginConflictWatch("foreign-base")) //$NON-NLS-1$
+        {
+            LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY, "foreign-base"); //$NON-NLS-1$
+            assertFalse(mine.cancelled());
+            assertTrue(theirs.cancelled());
+            assertEquals(LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY, theirs.reason());
+            assertNull(mine.reason());
+
+            LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND, "mine-base"); //$NON-NLS-1$
+            assertTrue(mine.cancelled());
+            // Each window keeps ITS OWN reason - the other cancel did not overwrite it.
+            assertEquals(LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND, mine.reason());
+            assertEquals(LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY, theirs.reason());
+        }
+    }
+
+    @Test
+    public void testUnattributedCancelGoesToTheOnlyOpenWatch()
+    {
+        // Exactly one update in flight: an unattributable cancel is unambiguously its own, so it
+        // still gets the actionable reason instead of EDT's generic out-of-sync text.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch only =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("mine-base")) //$NON-NLS-1$
+        {
+            LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND, null);
+            assertTrue(only.cancelled());
+        }
+        // A closed window records nothing further.
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch closed =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("mine-base"); //$NON-NLS-1$
+        closed.close();
         LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
-            LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY);
-        assertTrue(LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != before);
-        assertEquals(LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY,
-            LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason());
+            LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY, "mine-base"); //$NON-NLS-1$
+        assertFalse(closed.cancelled());
     }
 
     @Test
@@ -222,12 +254,12 @@ public class LaunchUpdateDialogConflictMatcherTest
     {
         // Headless (no Display): arm() is a no-op, so nothing is ever armed here and the
         // filter can never claim a dialog.
-        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy(BODY_A));
+        assertNull(LaunchUpdateDialogAutoConfirmer.decideFor(BODY_A).policy);
         LaunchUpdateDialogAutoConfirmer.arm(false, false, false, ExternalInfobaseChangesPolicy.OVERRIDE);
-        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy(BODY_A));
+        assertNull(LaunchUpdateDialogAutoConfirmer.decideFor(BODY_A).policy);
         // An unbalanced disarm stays a no-op too.
         LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, ExternalInfobaseChangesPolicy.OVERRIDE);
-        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy(BODY_A));
+        assertNull(LaunchUpdateDialogAutoConfirmer.decideFor(BODY_A).policy);
     }
 
     @Test
@@ -282,6 +314,16 @@ public class LaunchUpdateDialogConflictMatcherTest
             arm(null, ExternalInfobaseChangesPolicy.OVERRIDE),
             arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE)))); //$NON-NLS-1$
         assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList()));
+    }
+
+    @Test
+    public void testDecisionReportsTheAttributedInfobase()
+    {
+        // The decision carries the name so the cancel can be counted for the right owner.
+        assertEquals("agent-base", LaunchUpdateDialogAutoConfirmer.decideFor(BODY_A, //$NON-NLS-1$
+            Arrays.asList(arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE))).infobaseName); //$NON-NLS-1$
+        assertNull(LaunchUpdateDialogAutoConfirmer.decideFor(BODY_C,
+            Arrays.asList(arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE))).infobaseName); //$NON-NLS-1$
     }
 
     private static LaunchUpdateDialogAutoConfirmer.ConflictArm arm(String infobase,
