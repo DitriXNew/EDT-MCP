@@ -373,6 +373,47 @@ public class GitToolTest
     }
 
     @Test
+    public void testAPlainSshUserIsARemoteNotACredential()
+    {
+        // 'ssh://[user@]server/project.git' is how git documents an SSH remote - an explicit user or
+        // a non-default port needs exactly that spelling, and it is the alternative the guide
+        // recommends, so refusing it would break the advice.
+        assertAccepted("push ssh://git@example.com/project.git main"); //$NON-NLS-1$
+        assertAccepted("remote add origin ssh://git@example.com:2222/project.git"); //$NON-NLS-1$
+        assertAccepted("fetch git+ssh://user@host/repo.git"); //$NON-NLS-1$
+
+        // A PASSWORD is still a credential, wherever it rides - and for http(s) any userinfo is,
+        // since a token is commonly passed as the user name itself.
+        assertRejected("push ssh://user:secret@example.com/project.git"); //$NON-NLS-1$
+        // A password hiding after a SECOND '@' (an email-style user name in front of it).
+        assertRejected("push ssh://user@example.com:secret@host/project.git"); //$NON-NLS-1$
+        // Percent encoding does not hide it either: git decodes '%3A' back to ':'.
+        assertRejected("push ssh://user%3Asecret@example.com/project.git"); //$NON-NLS-1$
+        assertRejected("push ssh://user%3asecret@example.com/project.git"); //$NON-NLS-1$
+        // The exemption must reach an option-ATTACHED url too.
+        assertAccepted("push --repo=ssh://git@host/repo.git"); //$NON-NLS-1$
+        assertRejected("remote add origin https://ghp_token@example.com/repo.git"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnsupportedSubcommandThatIsAUrlIsRedacted()
+    {
+        // A pasted remote URL in the SUBCOMMAND position still reaches the "not supported" error.
+        try
+        {
+            GitTool.parseCommand("https://ghp_s3cret@example.com/repo.git"); //$NON-NLS-1$
+            fail("a URL is not a subcommand"); //$NON-NLS-1$
+        }
+        catch (CommandRejectedException expected)
+        {
+            assertFalse("the credential must not be echoed: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("ghp_s3cret")); //$NON-NLS-1$
+            assertTrue("the host must stay, or the error is not actionable: " //$NON-NLS-1$
+                + expected.getMessage(), expected.getMessage().contains("example.com")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testARefusalDoesNotEchoTheOptionValue()
     {
         // A refused command can carry a secret in the value of the very option that got it refused,

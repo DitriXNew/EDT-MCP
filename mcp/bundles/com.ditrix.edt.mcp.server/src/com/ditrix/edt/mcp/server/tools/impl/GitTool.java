@@ -153,10 +153,11 @@ public class GitTool implements IMcpTool
      * A URL carrying USERINFO ({@code scheme://user@host}, with or without a {@code :password}) -
      * rejected so a secret is never written into the repository. The bare {@code token@} form matters
      * too: a token is commonly passed that way ({@code https://<token>@host/...}) and
-     * {@code remote add} / {@code set-url} would PERSIST it in the repo config. Matched ANYWHERE in a
-     * token (not only at its start), so an option-attached URL such as
-     * {@code --repo=https://t@host/r.git} is caught too; the authority match stops at {@code /},
-     * {@code ?} and {@code #} so an {@code @} inside a path or query is not a false positive.
+     * {@code remote add} / {@code set-url} would PERSIST it in the repo config. Applied in exactly
+     * two positions: at the START of a token, and to the value after the {@code =} of an option
+     * ({@code --repo=https://t@host/r.git}) - a URL further inside a token is text, not a remote.
+     * The authority match stops at {@code /}, {@code ?} and {@code #} so an {@code @} inside a path
+     * or query is not a false positive.
      * <p>
      * NOTE: this keeps the secret out of git CONFIG; it does not scrub the rejected command from the
      * MCP call history, which records the raw request body.
@@ -557,7 +558,8 @@ public class GitTool implements IMcpTool
         }
         if (!ALLOWED_SUBCOMMANDS.contains(subcommand))
         {
-            throw new CommandRejectedException("git subcommand '" + subcommand + "' is not supported. " //$NON-NLS-1$ //$NON-NLS-2$
+            throw new CommandRejectedException("git subcommand '" //$NON-NLS-1$
+                + redactCredentialUrls(subcommand) + "' is not supported. " //$NON-NLS-1$
                 + "Supported: " + String.join(", ", new TreeSet<>(ALLOWED_SUBCOMMANDS)) + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         List<String> argv = new ArrayList<>(tokens.size() + 1);
@@ -590,7 +592,7 @@ public class GitTool implements IMcpTool
         String value = token.trim();
         if (CREDENTIAL_URL.matcher(value).lookingAt())
         {
-            return true;
+            return !isPlainSshUser(value);
         }
         // An option-attached URL: everything after the FIRST '=' of a '-'/'--' option.
         if (value.startsWith("-")) //$NON-NLS-1$
@@ -598,10 +600,58 @@ public class GitTool implements IMcpTool
             int eq = value.indexOf('=');
             if (eq >= 0 && eq + 1 < value.length())
             {
-                return CREDENTIAL_URL.matcher(value.substring(eq + 1).trim()).lookingAt();
+                String attached = value.substring(eq + 1).trim();
+                return CREDENTIAL_URL.matcher(attached).lookingAt() && !isPlainSshUser(attached);
             }
         }
         return false;
+    }
+
+    /**
+     * Whether a userinfo URL is the ordinary SSH remote form rather than an embedded credential.
+     * <p>
+     * {@code ssh://[user@]server/project.git} is how git documents an SSH remote, and an explicit
+     * user (or a non-default port) needs exactly that spelling - refusing it would break the very
+     * alternative this tool's guide recommends. A PASSWORD is still refused
+     * ({@code ssh://user:secret@host}), and for http(s) any userinfo stays refused: that is where a
+     * token rides, commonly as the user name itself.
+     *
+     * @param value the token being checked
+     * @return {@code true} when this is a plain {@code user@} ssh URL
+     */
+    private static boolean isPlainSshUser(String value)
+    {
+        int marker = value.indexOf(SCHEME_SEPARATOR);
+        if (marker < 0)
+        {
+            return false;
+        }
+        String scheme = value.substring(0, marker).toLowerCase(Locale.ROOT);
+        if (!"ssh".equals(scheme) && !"git+ssh".equals(scheme) && !"ssh+git".equals(scheme)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            return false;
+        }
+        int authorityStart = marker + SCHEME_SEPARATOR.length();
+        // The userinfo runs to the LAST '@' before the authority ends: git accepts an email-style
+        // user name, so 'ssh://user@example.com:secret@host/r.git' hides its password after the
+        // first one. Taking the first '@' would let exactly that through.
+        int authorityEnd = authorityStart;
+        while (authorityEnd < value.length() && value.charAt(authorityEnd) != '/'
+            && value.charAt(authorityEnd) != '?' && value.charAt(authorityEnd) != '#'
+            && !isAsciiWhitespace(value.charAt(authorityEnd)))
+        {
+            authorityEnd++;
+        }
+        int at = value.lastIndexOf('@', authorityEnd - 1);
+        if (at < authorityStart)
+        {
+            return false;
+        }
+        String userinfo = value.substring(authorityStart, at);
+        // A ':' anywhere in the userinfo is a password - a credential wherever it rides. Percent
+        // encoding counts: git decodes '%3A' back to ':', so the encoded spelling is refused too.
+        return !userinfo.isEmpty() && userinfo.indexOf(':') < 0
+            && !userinfo.toLowerCase(Locale.ROOT).contains("%3a"); //$NON-NLS-1$
     }
 
     /**
@@ -1311,7 +1361,7 @@ public class GitTool implements IMcpTool
                 continue;
             }
             token = candidate;
-            return "'" + token + "' points outside the repository '" + root //$NON-NLS-1$ //$NON-NLS-2$
+            return "'" + redactCredentialUrls(token) + "' points outside the repository '" + root //$NON-NLS-1$ //$NON-NLS-2$
                 + "'. git would read that file - 'diff' compares it on disk, and options such as " //$NON-NLS-1$
                 + "'blame --contents' or 'commit -F' take it as their value - and this tool governs " //$NON-NLS-1$
                 + "only the project. Pass a path inside the project."; //$NON-NLS-1$

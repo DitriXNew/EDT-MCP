@@ -11,7 +11,7 @@ executes git as an argument VECTOR (never through a shell).
 RESPONSE SHAPE
 --------------
 JSON tool (getResponseType() == JSON); payload lands in r.structured:
-  {"success": true, "exitCode": 0, "command": "status --short",
+  {"success": true, "exitCode": 0, "command": "git status --short",
    "output": "...", "truncated": false}
   error: {"success": false, "error": "..."}
 
@@ -186,7 +186,9 @@ def test_status_runs_and_reports_the_real_exit_code():
     data = r.structured or {}
     if data.get("exitCode") != 0:
         raise AssertionError("a clean 'status --short' must exit 0, got %r" % data.get("exitCode"))
-    if data.get("command") != "status --short":
+    # The tool records the command it actually RAN, i.e. the argv with the git executable in
+    # front ("git status --short") - that is what its output schema documents.
+    if data.get("command") != "git status --short":
         raise AssertionError("the result must echo the command it ran, got %r" % data.get("command"))
     if "output" not in data:
         raise AssertionError("the result must carry git's own output, got keys %r" % sorted(data))
