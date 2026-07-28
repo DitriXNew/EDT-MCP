@@ -69,7 +69,9 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
  * <p>
  * <b>Trust boundary.</b> This is a terminal-equivalent convenience, NOT a sandbox. What it guarantees
  * is the list above: no shell, a whitelisted subcommand, consent before a write, nothing that waits
- * for a human, one bounded process with its children, a capped output. Everything else here - the
+ * for a human, one bounded process killed with every child the JVM can still see (a fully DETACHED
+ * grandchild is out of reach - the JVM has no portable process-group/job-object API, which is why
+ * descendants are sampled while git runs), a capped output. Everything else here - the
  * blocked-option list, the checks that keep a path inside the repository, the credential redaction -
  * is a best-effort guardrail against a common mistake. Git owns the option grammar (values attach,
  * cluster and abbreviate) and the output format, so those guardrails cannot be complete, and the

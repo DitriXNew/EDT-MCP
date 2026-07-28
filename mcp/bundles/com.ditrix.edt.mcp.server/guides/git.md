@@ -28,8 +28,11 @@ What the tool **does** guarantee, and what the checks below are for:
 - only **whitelisted subcommands** run, and every write-capable one asks for consent;
 - it never **hangs**: stdin is closed and the editor, pager, askpass, credential prompt and signing
   are all disabled, so anything that would wait for a human fails fast instead;
-- one **bounded** process (see the timeout below) whose children are killed with it, and a capped
-  output.
+- one **bounded** process (see the timeout below): at the timeout it is killed together with every
+  child the JVM can still see, and the output is capped. A child that a hook or helper fully
+  DETACHES before we sample it is out of reach — Java has no portable process-group / job-object
+  API, so descendants are tracked by sampling while git runs — but it holds neither the tool's
+  thread nor its pipe afterwards.
 
 The rest - the blocked-option list, the checks that keep a path inside the repository, and the
 credential redaction in the output - are **best-effort guardrails against a common mistake**, not a
