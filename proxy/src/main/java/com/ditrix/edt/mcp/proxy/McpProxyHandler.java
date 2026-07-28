@@ -32,7 +32,9 @@ import com.sun.net.httpserver.HttpHandler;
  * itself (via {@link SessionManager}) and answers {@code initialize} / {@code ping} /
  * {@code router_status} / {@code router_refresh} locally instead of forwarding them.
  * <p>
- * {@code tools/list} is forwarded to the first live backend and has the two
+ * {@code tools/list} is forwarded to the backend {@link BackendRegistry#toolsListDonor()}
+ * picks (the lowest-port one that supports the machine project list, so a mixed-version fleet
+ * does not publish an outdated descriptor set) and has the two
  * {@code router_*} tool descriptors injected before being cached and returned; a
  * {@code tools/call} (and any other method) is routed via {@link ProjectRouter} to one
  * backend (forwarded WITH the client's own {@code Accept} header - see
@@ -328,7 +330,9 @@ public final class McpProxyHandler implements HttpHandler
     }
 
     /**
-     * Serves {@code tools/list}: forwards the raw request to the first live backend, injects
+     * Serves {@code tools/list}: forwards the raw request to the DONOR backend (see
+     * {@link BackendRegistry#toolsListDonor()} - the lowest-port one that supports the machine
+     * project list, so a mixed-version fleet does not publish an outdated descriptor set), injects
      * the two {@code router_*} descriptors, and caches the injected response. With zero live
      * backends, serves the cache (re-stamped with the caller's request id) when one exists,
      * or a minimal list containing ONLY the router tools otherwise.
@@ -344,7 +348,20 @@ public final class McpProxyHandler implements HttpHandler
             return;
         }
 
-        Backend backend = live.get(0);
+        // NOT simply the lowest port: in a mixed-version fleet that one may run a plugin whose
+        // list_projects has no 'format' parameter, and publishing its descriptors would hide the
+        // machine contract from schema-driven clients. Read ONCE - a refresh between the emptiness
+        // check above and this call can leave no backend at all.
+        Backend backend = registry.toolsListDonor();
+        if (backend == null)
+        {
+            // The registry emptied between the check above and this read: answer the same way the
+            // zero-backend path does rather than dereferencing nothing.
+            String cached = registry.cachedToolsListResponse();
+            sendMcpResponse(exchange, 200,
+                cached != null ? rewriteId(cached, requestId) : minimalToolsListResponse(requestId), null);
+            return;
+        }
         try
         {
             HttpResponse<InputStream> response = backend.forward(rawBody);

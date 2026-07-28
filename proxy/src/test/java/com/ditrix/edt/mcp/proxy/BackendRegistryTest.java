@@ -23,6 +23,8 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.Timeout;
 
+import com.google.gson.JsonObject;
+
 /**
  * Unit tests for {@link BackendRegistry}: a real {@link BackendRegistry#refresh()} scan
  * against {@link FakeBackend} instances builds the live/owner/duplicate snapshot, an empty
@@ -362,5 +364,49 @@ public class BackendRegistryTest
         {
             // already stopped - nothing to clean up
         }
+    }
+
+    /**
+     * A backend whose machine list the output cap CUT is a size problem, not an old plugin: telling
+     * the operator to upgrade would send them after the wrong thing. Discovery must classify it the
+     * way the fan-out already does.
+     */
+    @Test
+    public void testATruncatedPayloadIsNotReportedAsAnUnsupportedPlugin()
+    {
+        JsonObject result = Json.parseObject("{\"content\":[{\"type\":\"text\",\"text\":" //$NON-NLS-1$
+            + "\"{\\\"success\\\":true,\\\"projects\\\":[{\\\"name\\\":\\\"Pro\\n\\n---\\n" //$NON-NLS-1$
+            + "[OUTPUT TRUNCATED] cut here\"}]}"); //$NON-NLS-1$
+
+        assertTrue("a cut machine payload must be recognised", //$NON-NLS-1$
+            BackendRegistry.hasTruncatedMachineProjects(result));
+
+        JsonObject legacy = Json.parseObject("{\"content\":[{\"type\":\"text\",\"text\":" //$NON-NLS-1$
+            + "\"| Project |\\n|---|\\n| Legacy |\"}]}"); //$NON-NLS-1$
+        assertFalse("an old plugin's markdown table is NOT a truncation", //$NON-NLS-1$
+            BackendRegistry.hasTruncatedMachineProjects(legacy));
+    }
+
+    /**
+     * In a mixed-version fleet the lowest port may run an old plugin; publishing ITS tools/list would
+     * advertise a list_projects without the 'format' parameter and hide the machine contract.
+     */
+    @Test
+    public void testToolsListDonorSkipsAnUnsupportedBackend()
+    {
+        BackendRegistry registry = new BackendRegistry(ProxyConfig.parse(new String[0], Map.of()));
+        Backend old = new Backend(8765, java.net.http.HttpClient.newHttpClient(), 5);
+        Backend current = new Backend(8766, java.net.http.HttpClient.newHttpClient(), 5);
+        registry.installStateForTest(List.of(old, current), Map.of(), List.of(8765));
+
+        assertEquals("the donor must be the supported backend", //$NON-NLS-1$
+            8766, registry.toolsListDonor().getPort());
+
+        // With no supported backend at all, the lowest port still has to serve something.
+        registry.installStateForTest(List.of(old), Map.of(), List.of(8765));
+        assertEquals(8765, registry.toolsListDonor().getPort());
+
+        registry.installStateForTest(List.of(), Map.of(), List.of());
+        assertNull("no live backend means no donor", registry.toolsListDonor()); //$NON-NLS-1$
     }
 }

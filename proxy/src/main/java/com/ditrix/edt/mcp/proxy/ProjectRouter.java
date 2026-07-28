@@ -154,15 +154,26 @@ public final class ProjectRouter
      */
     private String describeUnsupportedBackends()
     {
-        List<Integer> unsupported = registry.unsupportedBackends();
-        if (unsupported.isEmpty())
+        BackendRegistry.UnroutableBackends unroutable = registry.unroutableBackends();
+        List<Integer> unsupported = unroutable.unsupported();
+        List<Integer> truncated = unroutable.truncated();
+        StringBuilder note = new StringBuilder();
+        if (!unsupported.isEmpty())
         {
-            return ""; //$NON-NLS-1$
+            note.append(". NOTE: backend(s) on port(s) ").append(joinPorts(unsupported)) //$NON-NLS-1$
+                .append(" run an EDT-MCP plugin version that does not support the machine project") //$NON-NLS-1$
+                .append(" list (list_projects with format=json), so their projects cannot be routed") //$NON-NLS-1$
+                .append(" - update the plugin in those EDT instances"); //$NON-NLS-1$
         }
-        return ". NOTE: backend(s) on port(s) " + joinPorts(unsupported) //$NON-NLS-1$
-            + " run an EDT-MCP plugin version that does not support the machine project list" //$NON-NLS-1$
-            + " (list_projects with format=json), so their projects cannot be routed - update the" //$NON-NLS-1$
-            + " plugin in those EDT instances"; //$NON-NLS-1$
+        if (!truncated.isEmpty())
+        {
+            // A DIFFERENT cause with a different fix: the plugin is current, its answer was too big.
+            note.append(". NOTE: backend(s) on port(s) ").append(joinPorts(truncated)) //$NON-NLS-1$
+                .append(" answered with a project list that was CUT by the output size cap, so it") //$NON-NLS-1$
+                .append(" could not be parsed and their projects cannot be routed - that is a size") //$NON-NLS-1$
+                .append(" problem, not an old plugin"); //$NON-NLS-1$
+        }
+        return note.toString();
     }
 
     /**

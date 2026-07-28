@@ -209,14 +209,20 @@ public class ToolCallResultTest
     public void testErrorTextKeepsIsErrorWithoutStructuredContent()
     {
         // The suppressed-structuredContent error result (plain-text mode / an opted-out client): the
-        // real message in the text channel + isError:true, and NO structuredContent - suppressing the
-        // payload must never turn a failure into a success-looking result.
-        JsonElement payload = JsonParser.parseString("{\"success\":false,\"error\":\"boom\"}");
+        // WHOLE payload in the text channel + isError:true, and NO structuredContent - suppressing the
+        // payload must never turn a failure into a success-looking result, nor drop the fields that
+        // say what to do next (debug_launch's availableConfigurations, update_database's project and
+        // application, an attached userSignal).
+        JsonElement payload = JsonParser.parseString(
+            "{\"success\":false,\"error\":\"boom\",\"availableConfigurations\":[\"A\",\"B\"]}");
         ToolCallResult result = ToolCallResult.errorText(payload);
 
         assertEquals(Boolean.TRUE, result.getIsError());
         assertNull("no structuredContent when suppressed", result.getStructuredContent());
-        assertEquals("boom", result.getContent().get(0).getText());
+        String text = result.getContent().get(0).getText();
+        assertTrue("the message must survive: " + text, text.contains("boom"));
+        assertTrue("the actionable fields must survive too: " + text,
+            text.contains("availableConfigurations") && text.contains("\"A\""));
 
         JsonElement el = JsonParser.parseString(GsonProvider.toJson(result));
         assertTrue("isError must serialize", el.getAsJsonObject().get("isError").getAsBoolean());

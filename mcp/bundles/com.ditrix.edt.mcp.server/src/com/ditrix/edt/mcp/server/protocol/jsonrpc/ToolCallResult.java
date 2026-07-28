@@ -81,7 +81,7 @@ public class ToolCallResult
     }
 
     /**
-     * A TEXT-only error result: the real error message in the text channel plus {@code isError:true},
+     * A TEXT-only error result: the whole error payload in the text channel plus {@code isError:true},
      * and NO {@code structuredContent}. Used on the JSON path when the structured payload must be
      * suppressed (plain-text mode, or a client that opted out of structuredContent) - suppressing it
      * must not turn a tool FAILURE into a success-looking result.
@@ -92,11 +92,34 @@ public class ToolCallResult
     public static ToolCallResult errorText(Object structuredContent)
     {
         ToolCallResult result = new ToolCallResult();
-        // Capped like the normal text path (buildToolCallTextResponse): suppressing the structured
-        // payload must not let a huge error message through unbounded.
-        result.content.add(ContentItem.text(OutputSizeGuard.cap(buildErrorText(structuredContent))));
+        // The WHOLE payload, not just its 'error' string: a failed JSON tool attaches the fields that
+        // say what to do next (debug_launch lists the available configurations, update_database names
+        // the project, application and termination state, and a userSignal may be attached), and a
+        // client that cannot read structuredContent would otherwise lose exactly those. Capped like
+        // the normal text path, so suppressing the structured channel cannot let a huge payload
+        // through unbounded.
+        result.content.add(ContentItem.text(OutputSizeGuard.cap(errorPayloadText(structuredContent))));
         result.isError = Boolean.TRUE;
         return result;
+    }
+
+    /**
+     * The text form of a failed payload for a client that cannot accept {@code structuredContent}:
+     * the payload itself, so nothing an ordinary client would have read is dropped. A Gson element
+     * is serialized back to JSON, a {@link CharSequence} IS the payload already and is used verbatim,
+     * and anything else falls back to the plain error message.
+     *
+     * @param structuredContent the structured error payload (typically a Gson {@link JsonElement})
+     * @return the text to put into {@code content[0]}
+     */
+    private static String errorPayloadText(Object structuredContent)
+    {
+        if (structuredContent instanceof JsonElement || structuredContent instanceof CharSequence)
+        {
+            // A JsonElement serializes back to the payload; a raw string IS the payload already.
+            return structuredContent.toString();
+        }
+        return buildErrorText(structuredContent);
     }
 
     /**

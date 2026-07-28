@@ -195,11 +195,20 @@ public final class RouterTools
         // Live backends whose plugin does not support list_projects(format=json): their projects are
         // not routable, so an operator must see them here and not just in the log.
         JsonArray unsupportedJson = new JsonArray();
-        for (Integer port : registry.unsupportedBackends())
+        BackendRegistry.UnroutableBackends unroutable = registry.unroutableBackends();
+        for (Integer port : unroutable.unsupported())
         {
             unsupportedJson.add(port);
         }
         structured.add("unsupportedBackends", unsupportedJson); //$NON-NLS-1$
+        JsonArray truncatedJson = new JsonArray();
+        for (Integer port : unroutable.truncated())
+        {
+            truncatedJson.add(port);
+        }
+        // Reported apart from unsupportedBackends: the plugin there is CURRENT, its answer was cut by
+        // the output size cap, and the fix is a smaller project list rather than an upgrade.
+        structured.add("truncatedBackends", truncatedJson); //$NON-NLS-1$
         structured.add("duplicates", duplicatesJson); //$NON-NLS-1$
         structured.addProperty("lastRefreshMs", registry.lastRefreshMillis()); //$NON-NLS-1$
         structured.addProperty("scanRange", //$NON-NLS-1$

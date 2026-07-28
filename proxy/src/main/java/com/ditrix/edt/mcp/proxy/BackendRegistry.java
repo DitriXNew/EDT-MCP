@@ -198,6 +198,7 @@ public final class BackendRegistry
         List<Backend> live = new ArrayList<>();
         Map<String, List<Backend>> holders = new LinkedHashMap<>();
         List<Integer> unsupported = new ArrayList<>();
+        List<Integer> truncated = new ArrayList<>();
         for (int port = cfg.scanFrom; port <= cfg.scanTo; port++)
         {
             if (Thread.currentThread().isInterrupted())
@@ -212,7 +213,11 @@ public final class BackendRegistry
             }
             live.add(backend);
             ProjectsProbe probe = fetchProjectNames(backend);
-            if (!probe.supported)
+            if (probe.truncated)
+            {
+                truncated.add(backend.getPort());
+            }
+            else if (!probe.supported)
             {
                 unsupported.add(backend.getPort());
             }
@@ -223,7 +228,7 @@ public final class BackendRegistry
         }
 
         Snapshot previous = snapshot;
-        snapshot = Snapshot.build(live, holders, unsupported);
+        snapshot = Snapshot.build(live, holders, unsupported, truncated);
         lastRefreshMillis = System.currentTimeMillis();
         logChange(previous, snapshot);
     }
@@ -295,6 +300,82 @@ public final class BackendRegistry
     public Map<Integer, List<String>> projectsByPort()
     {
         return snapshot.projectsByPort;
+    }
+
+    /**
+     * Ports of live backends that DO support the machine project list but whose last answer was CUT
+     * by the output size cap, so it could not be parsed. Reported separately from
+     * {@link #unsupportedBackends()}: the fix is a smaller list, not a plugin upgrade.
+     *
+     * @return the ascending ports, possibly empty
+     */
+    public List<Integer> truncatedBackends()
+    {
+        return snapshot.truncated;
+    }
+
+    /**
+     * Both unroutable-backend classifications taken from ONE snapshot.
+     * <p>
+     * Reading {@link #unsupportedBackends()} and {@link #truncatedBackends()} separately can straddle
+     * a refresh and report the same port in both lists, which would tell the operator two different
+     * causes for one backend.
+     *
+     * @return the classifications of the current snapshot
+     */
+    public UnroutableBackends unroutableBackends()
+    {
+        Snapshot current = snapshot;
+        return new UnroutableBackends(current.unsupported, current.truncated);
+    }
+
+    /** The ports that cannot serve routing, by cause - see {@link #unroutableBackends()}. */
+    public static final class UnroutableBackends
+    {
+        private final List<Integer> unsupported;
+        private final List<Integer> truncated;
+
+        private UnroutableBackends(List<Integer> unsupported, List<Integer> truncated)
+        {
+            this.unsupported = unsupported;
+            this.truncated = truncated;
+        }
+
+        /** @return ports whose plugin has no machine project list at all */
+        public List<Integer> unsupported()
+        {
+            return unsupported;
+        }
+
+        /** @return ports whose machine project list was CUT by the output size cap */
+        public List<Integer> truncated()
+        {
+            return truncated;
+        }
+    }
+
+    /**
+     * The backend whose {@code tools/list} the proxy should publish: the lowest-port live backend
+     * that supports the machine contract, falling back to the lowest-port live one when none does.
+     * <p>
+     * In a mixed-version fleet the lowest port may run an old plugin, and publishing ITS descriptors
+     * would advertise a {@code list_projects} without the {@code format} parameter - hiding the
+     * machine contract from schema-driven clients even though the proxy and the other backends
+     * support it.
+     *
+     * @return the donor backend, or {@code null} when no backend is live
+     */
+    public Backend toolsListDonor()
+    {
+        Snapshot current = snapshot;
+        for (Backend backend : current.live)
+        {
+            if (!current.unsupported.contains(backend.getPort()))
+            {
+                return backend;
+            }
+        }
+        return current.live.isEmpty() ? null : current.live.get(0);
     }
 
     /**
@@ -383,7 +464,21 @@ public final class BackendRegistry
      */
     void installStateForTest(List<Backend> liveBackends, Map<String, List<Backend>> projectHolders)
     {
-        snapshot = Snapshot.build(liveBackends, projectHolders, List.of());
+        installStateForTest(liveBackends, projectHolders, List.of());
+    }
+
+    /**
+     * As {@link #installStateForTest(List, Map)}, but marking some ports as running a plugin without
+     * the machine project list - so donor selection and the operator-facing notes can be tested.
+     *
+     * @param liveBackends the backends to expose as live (any order; sorted by port here)
+     * @param projectHolders project name to the backends holding it (any order)
+     * @param unsupportedPorts ports whose plugin does not support the machine list
+     */
+    void installStateForTest(List<Backend> liveBackends, Map<String, List<Backend>> projectHolders,
+        List<Integer> unsupportedPorts)
+    {
+        snapshot = Snapshot.build(liveBackends, projectHolders, unsupportedPorts);
     }
 
     /**
@@ -419,6 +514,17 @@ public final class BackendRegistry
             }
             if (!hasStructuredProjects(raw))
             {
+                JsonObject result = Json.obj(Json.parseObject(Backend.stripSseFraming(raw)), "result"); //$NON-NLS-1$
+                if (hasTruncatedMachineProjects(result))
+                {
+                    // A CURRENT plugin whose payload the output cap cut in half. Telling the operator
+                    // to upgrade would send them after the wrong problem.
+                    LOGGER.warning("Backend :" + backend.getPort() //$NON-NLS-1$
+                        + " answered list_projects(format=json) with a project list that was CUT by" //$NON-NLS-1$
+                        + " the output size cap, so it no longer parses; its projects are not" //$NON-NLS-1$
+                        + " routable until the list gets smaller."); //$NON-NLS-1$
+                    return ProjectsProbe.truncated();
+                }
                 LOGGER.warning("Backend :" + backend.getPort() //$NON-NLS-1$
                     + " did not answer list_projects(format=json) with a machine project list" //$NON-NLS-1$
                     + " - unsupported EDT-MCP plugin version; its projects are not routable."); //$NON-NLS-1$
@@ -606,20 +712,29 @@ public final class BackendRegistry
         final List<String> names;
         final boolean supported;
 
-        private ProjectsProbe(List<String> names, boolean supported)
+        /** The plugin DOES support the machine list, but this answer was cut by the output cap. */
+        final boolean truncated;
+
+        private ProjectsProbe(List<String> names, boolean supported, boolean truncated)
         {
             this.names = names;
             this.supported = supported;
+            this.truncated = truncated;
         }
 
         static ProjectsProbe of(List<String> names)
         {
-            return new ProjectsProbe(names, true);
+            return new ProjectsProbe(names, true, false);
         }
 
         static ProjectsProbe unsupported()
         {
-            return new ProjectsProbe(List.of(), false);
+            return new ProjectsProbe(List.of(), false, false);
+        }
+
+        static ProjectsProbe truncated()
+        {
+            return new ProjectsProbe(List.of(), false, true);
         }
     }
 
@@ -696,10 +811,15 @@ public final class BackendRegistry
         /** Ports of live backends whose plugin does not support the machine project list. */
         final List<Integer> unsupported;
 
+        /** Ports of live backends that DO support it but whose answer the output cap cut. */
+        final List<Integer> truncated;
+
         private Snapshot(List<Backend> live, Map<String, Backend> owners, Map<String, List<Integer>> duplicates,
-            List<String> knownProjects, Map<Integer, List<String>> projectsByPort, List<Integer> unsupported)
+            List<String> knownProjects, Map<Integer, List<String>> projectsByPort, List<Integer> unsupported,
+            List<Integer> truncated)
         {
             this.unsupported = unsupported;
+            this.truncated = truncated;
             this.live = live;
             this.owners = owners;
             this.duplicates = duplicates;
@@ -709,6 +829,12 @@ public final class BackendRegistry
 
         static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders,
             List<Integer> unsupportedIn)
+        {
+            return build(liveIn, holders, unsupportedIn, List.of());
+        }
+
+        static Snapshot build(List<Backend> liveIn, Map<String, List<Backend>> holders,
+            List<Integer> unsupportedIn, List<Integer> truncatedIn)
         {
             List<Backend> live = new ArrayList<>(liveIn);
             live.sort(Comparator.comparingInt(Backend::getPort));
@@ -761,7 +887,8 @@ public final class BackendRegistry
                 Collections.unmodifiableMap(duplicates),
                 Collections.unmodifiableList(projectNames),
                 Collections.unmodifiableMap(frozenByPort),
-                Collections.unmodifiableList(new ArrayList<>(unsupportedIn)));
+                Collections.unmodifiableList(new ArrayList<>(unsupportedIn)),
+                Collections.unmodifiableList(new ArrayList<>(truncatedIn)));
         }
     }
 }
