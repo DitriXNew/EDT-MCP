@@ -373,6 +373,44 @@ public class GitToolTest
     }
 
     @Test
+    public void testARefusalDoesNotEchoTheOptionValue()
+    {
+        // A refused command can carry a secret in the value of the very option that got it refused,
+        // and the error text travels to the client, the model's context and the request history.
+        // The cluster forms are covered too: a short option's value has no '=' to cut at.
+        try
+        {
+            GitTool.parseCommand("fetch --config=http.extraHeader=Authorization:Bearer_s3cret origin"); //$NON-NLS-1$
+            fail("a blocked option must be rejected"); //$NON-NLS-1$
+        }
+        catch (CommandRejectedException expected)
+        {
+            String message = expected.getMessage();
+            assertFalse("the secret must not be echoed back: " + message, //$NON-NLS-1$
+                message.contains("s3cret")); //$NON-NLS-1$
+            assertTrue("the option NAME must stay, or the error is not actionable: " + message, //$NON-NLS-1$
+                message.contains("--config")); //$NON-NLS-1$
+        }
+
+        // A SHORT option carries its value attached, and that value may itself contain an '='.
+        for (String command : new String[]{"commit -FBearer_s3cret", //$NON-NLS-1$
+            "commit -FBearer_s3cret=x", "blame -wSBearer_s3cret -- tracked.bsl", //$NON-NLS-1$ //$NON-NLS-2$
+            "merge -nsBearer_s3cret other"}) //$NON-NLS-1$
+        {
+            try
+            {
+                GitTool.parseCommand(command);
+                fail("expected rejection of '" + command + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            catch (CommandRejectedException expected)
+            {
+                assertFalse("the secret must not be echoed for '" + command + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + expected.getMessage(), expected.getMessage().contains("Bearer_s3cret")); //$NON-NLS-1$
+            }
+        }
+    }
+
+    @Test
     public void testRemoteUrlGuardsOnlyApplyWhereATokenCanBecomeARemote()
     {
         // A commit message is TEXT: git never resolves it as a remote, so an app URL or an

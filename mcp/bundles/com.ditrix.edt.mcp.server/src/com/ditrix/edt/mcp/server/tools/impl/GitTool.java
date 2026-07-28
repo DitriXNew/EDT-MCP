@@ -482,7 +482,8 @@ public class GitTool implements IMcpTool
         {
             if (isBlockedFlag(token))
             {
-                throw new CommandRejectedException("The option '" + token + "' is not allowed: it could make " //$NON-NLS-1$ //$NON-NLS-2$
+                throw new CommandRejectedException("The option '" + safeToken(token) //$NON-NLS-1$
+                    + "' is not allowed: it could make " //$NON-NLS-1$
                     + "git run an arbitrary program, read/write files outside the repository, or operate on " //$NON-NLS-1$
                     + "a different repository. Remove it and retry."); //$NON-NLS-1$
             }
@@ -505,11 +506,10 @@ public class GitTool implements IMcpTool
             if (scanMessageFile && (clusterCarries(token, 'F', tokens.get(0))
                 || ("commit".equals(tokens.get(0)) && clusterCarries(token, 't', tokens.get(0)))))
             {
-                throw new CommandRejectedException("'" + token + "' reads the message or its template " //$NON-NLS-1$
-                    + "from a FILE, which " //$NON-NLS-1$
-                    + "would " //$NON-NLS-1$
-                    + "copy a file this tool does not govern into the repository. Pass the message " //$NON-NLS-1$
-                    + "inline with -m instead."); //$NON-NLS-1$
+                throw new CommandRejectedException("This command carries '-F' (or 'commit -t'), " //$NON-NLS-1$
+                    + "which reads the message or its template from a FILE and would copy a file " //$NON-NLS-1$
+                    + "this tool does not govern into the repository. Pass the message inline with " //$NON-NLS-1$
+                    + "-m instead."); //$NON-NLS-1$
             }
             if (scanStrategy && selectsStrategy(token, tokens.get(0)))
             {
@@ -517,16 +517,19 @@ public class GitTool implements IMcpTool
                 // '-n -s pwn'. Telling a clustered FLAG from a letter inside an attached value would
                 // mean reimplementing git's per-subcommand option arity, so the whole cluster is
                 // refused - pass the message separately (-m "...") if that is what carried the 's'.
-                throw new CommandRejectedException("'" + token + "' can select a merge STRATEGY, " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "which git runs as the program 'git-<strategy>' from PATH - this tool does not " //$NON-NLS-1$
-                    + "run arbitrary programs. Drop '-s' (git's default strategy needs no flag) and " //$NON-NLS-1$
-                    + "pass any message as a separate -m \"...\" argument."); //$NON-NLS-1$
+                throw new CommandRejectedException("This command can select a merge STRATEGY ('-s', " //$NON-NLS-1$
+                    + "possibly inside a cluster such as '-ns'), which git runs as the program " //$NON-NLS-1$
+                    + "'git-<strategy>' from PATH - this tool does not run arbitrary programs. Drop " //$NON-NLS-1$
+                    + "'-s' (git's default strategy needs no flag) and pass any message as a " //$NON-NLS-1$
+                    + "separate -m \"...\" argument."); //$NON-NLS-1$
             }
             if (shortFileFlag != null && clusterCarries(token, shortFileFlag.charAt(1), tokens.get(0)))
             {
-                throw new CommandRejectedException("'" + token + "' takes a FILE whose contents git " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "reports back, so this option is refused whatever the path - drop it, or read " //$NON-NLS-1$
-                    + "the file with read_module_source if it belongs to the project."); //$NON-NLS-1$
+                throw new CommandRejectedException("This command carries '" + shortFileFlag //$NON-NLS-1$
+                    + "', which takes a FILE whose contents git reports back, so the option is " //$NON-NLS-1$
+                    + "refused whatever the path (a cluster such as '-w" + shortFileFlag.charAt(1) //$NON-NLS-1$
+                    + "<file>' carries it too) - drop it, or read the file with read_module_source " //$NON-NLS-1$
+                    + "if it belongs to the project."); //$NON-NLS-1$
             }
             if (scanUrls && scheme.find(0)
                 && (urlCandidate.indexOf('?') > 0 || urlCandidate.indexOf('#') > 0))
@@ -548,7 +551,8 @@ public class GitTool implements IMcpTool
         if (subcommand.startsWith("-")) //$NON-NLS-1$
         {
             throw new CommandRejectedException("Expected a git subcommand first, but got the option '" //$NON-NLS-1$
-                + subcommand + "'. Global options (e.g. -c / -C) are not accepted; start with a subcommand " //$NON-NLS-1$
+                + safeToken(subcommand)
+                + "'. Global options (e.g. -c / -C) are not accepted; start with a subcommand " //$NON-NLS-1$
                 + "such as 'status' or 'commit'."); //$NON-NLS-1$
         }
         if (!ALLOWED_SUBCOMMANDS.contains(subcommand))
@@ -598,6 +602,34 @@ public class GitTool implements IMcpTool
             }
         }
         return false;
+    }
+
+    /**
+     * A token safe to quote back in an error: the option NAME without its attached value.
+     * <p>
+     * A refused command can carry a secret in that value
+     * ({@code --config=http.extraHeader=Authorization:Bearer <token>}, a credential URL on
+     * {@code --upload-pack=...}), and the error text travels back to the client, into the model's
+     * context and into the request history. The name alone is what makes the message actionable, so
+     * the value is dropped rather than reflected.
+     *
+     * @param token the rejected token
+     * @return the option name with its value replaced, or the token itself when it carries none
+     */
+    private static String safeToken(String token)
+    {
+        if (token.length() > 2 && token.charAt(0) == '-' && token.charAt(1) != '-')
+        {
+            // A SHORT option carries its value attached, and that value may itself contain an '='
+            // ('-FBearer_s3cret=x'), so the cut has to happen HERE, before any '=' is looked for.
+            return token.substring(0, 2) + "***"; //$NON-NLS-1$
+        }
+        int equals = token.indexOf('=');
+        if (equals >= 0)
+        {
+            return token.substring(0, equals + 1) + "***"; //$NON-NLS-1$
+        }
+        return token;
     }
 
     /**

@@ -89,10 +89,19 @@ def test_disabled_by_default_is_not_advertised_and_is_refused():
             "git must be DISABLED by default: it appeared in tools/list. A preset or a "
             "defaults reset that clears the disabled set would do this.")
 
+    # The shared disabled-tool path answers with a TEXT result (not isError) - see
+    # McpProtocolHandler: a tool the user switched off is a configuration state, not a tool
+    # failure. What matters is that nothing ran and the answer says why.
     r = call("git", {"projectName": PROJECT, "command": "status --short"})
-    err = assert_error(r, "a disabled tool must refuse to run")
-    assert_error_quality(err, names=["git"],
-                         ctx="a disabled tool must say which tool was refused")
+    expected = "Tool 'git' is disabled by the user"
+    if expected not in (r.text or ""):
+        raise AssertionError(
+            "a disabled tool must answer with the shared disabled-path message %r, got: %r"
+            % (expected, (r.text or "")[:300]))
+    if r.structured:
+        raise AssertionError(
+            "the disabled path carries no structured payload - anything here means the tool RAN: %r"
+            % r.structured)
 
     assert_no_diff("a refused call must not touch the project on disk")
 
