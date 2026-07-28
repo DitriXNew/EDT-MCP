@@ -1046,7 +1046,7 @@ public class GitTool implements IMcpTool
         }
     }
 
-    private String runGit(List<String> argv, File workTree)
+    String runGit(List<String> argv, File workTree)
     {
         ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
         builder.directory(workTree);
