@@ -810,6 +810,10 @@
           "description": "Application ID from get_applications; required in the projectName+applicationId mode.",
           "type": "string"
         },
+        "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "type": "string"
+        },
         "launchConfigurationName": {
           "description": "Exact name of an EDT debug launch config (runtime client or Attach); skips projectName/applicationId.",
           "type": "string"
@@ -952,6 +956,10 @@
         },
         "extensions": {
           "description": "Comma-separated extension names to filter tests by extension.",
+          "type": "string"
+        },
+        "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
         },
         "launchConfigurationName": {
@@ -3842,6 +3850,10 @@
           },
           "type": "array"
         },
+        "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "type": "string"
+        },
         "launchConfigurationName": {
           "description": "Exact runtime-client launch config name (preferred; from list_configurations).",
           "type": "string"
@@ -4568,6 +4580,10 @@
         "confirm": {
           "description": "true = apply the update; default false = preview only (resolves the target and reports what would change WITHOUT mutating the infobase).",
           "type": "boolean"
+        },
+        "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
+          "type": "string"
         },
         "fullUpdate": {
           "description": "true = full reload, false = incremental (default false).",

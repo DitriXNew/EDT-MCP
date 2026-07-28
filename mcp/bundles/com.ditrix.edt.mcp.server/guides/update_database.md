@@ -24,6 +24,7 @@ After changing metadata/configuration, to push those changes into the running in
 - **applicationId** (string) — from `get_applications`; required if launchConfigurationName is omitted.
 - **fullUpdate** (boolean, default false) — true performs a FULL reload (complete rebuild), false performs an INCREMENTAL update (changed objects only). Incremental is faster; use full when the structure changed substantially or an incremental update fails.
 - **confirm** (boolean, default false) — false previews the resolved update without touching the infobase; true applies it.
+- `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 - **terminateRunningClients** (boolean, default true) — before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock and stop it running stale modules. Set false to leave a running client in place (the update then fails if that client holds the infobase exclusively). Only affects the apply phase (confirm=true); the preview reports `willTerminateRunningClients` but terminates nothing.
 
 ## Exclusive-lock handling (automatic)
@@ -69,3 +70,25 @@ Workaround: update via the platform CLI instead — `export_configuration_to_xml
 - `launchConfigurationName` must reference a runtime-client config; an Attach config is rejected.
 - The project must exist and be open; a closed project returns an error.
 - Running this on a **standalone-server** application (`applicationId` starting with `ServerApplication.`) STARTS the standalone server in RUN mode as a side effect — that is EDT-native behaviour of the server-application update (the configurator agent publishes the modules into the running server). A subsequent `debug_launch` will then have to restart that server in DEBUG mode. Prefer letting the launch do the update: `debug_launch` / `run_yaxunit_tests` with `updateBeforeLaunch=true` defer the server-app update to EDT's coordinated launch flow.
+
+## Infobase changed outside EDT
+
+When something other than EDT wrote the infobase configuration since the last EDT interaction —
+a `1cv8 DESIGNER /LoadConfigFromFiles`, an `ibcmd infobase config load`, a colleague in the
+Configurator — the configuration-to-infobase update stops and asks what to do with those
+changes in a modal titled **"Infobase configuration changes"** / **"Изменения конфигурации информационной базы"**
+(buttons Import / Override / Cancel). Nobody presses it in an unattended run, so the call would
+block on the UI thread until the tool times out.
+
+`externalInfobaseChanges` answers it for you:
+
+| value | what it writes | when to use |
+|---|---|---|
+| `override` (default) | the INFOBASE — the project configuration wins, the external changes are discarded | the literal meaning of "update the infobase from the project"; the right choice for a CI/agent pipeline that owns the infobase |
+| `import` | the PROJECT sources — the infobase changes are pulled in and merged | you want to keep what was loaded into the infobase; note this rewrites your working tree |
+| `cancel` | nothing | you want the call to fail loudly and resolve the divergence yourself |
+
+The modal's own default button is **Import**, which would rewrite the project sources — so this
+plugin never presses it blind: if the labelled button for the selected policy cannot be found (an
+unshipped locale, a reworded button) the dialog is cancelled and the update reports the failure
+instead of writing anything.

@@ -21,6 +21,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
@@ -426,7 +427,8 @@ public class RunYaxunitTestsToolTest
         // which would raise the dialog on a live base, never runs here).
         RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
             "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
-            null, null, "prep-job-suppressor-ratchet"); //$NON-NLS-1$
+            null, null, ExternalInfobaseChangesPolicy.DEFAULT,
+            "prep-job-suppressor-ratchet"); //$NON-NLS-1$
         PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
         PreLaunchResult[] holder = new PreLaunchResult[1];
 

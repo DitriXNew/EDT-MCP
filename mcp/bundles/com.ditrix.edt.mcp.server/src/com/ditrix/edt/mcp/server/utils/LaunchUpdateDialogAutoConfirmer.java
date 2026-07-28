@@ -6,9 +6,11 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.eclipse.swt.SWT;
@@ -61,6 +63,21 @@ import com.ditrix.edt.mcp.server.Activator;
  * preceding pre-launch DB update (see {@code LaunchLifecycleUtils}) has already
  * published the configuration, so the auto-pressed update is a fast no-op and
  * does not cascade into a second structural-changes dialog.
+ *
+ * <h2>The three modals</h2>
+ * Besides the "Application update" modal above, two more blocking dialogs are raised by the
+ * SAME programmatic {@code IApplicationManager.update} and are matched here, each behind its own
+ * arm flag:
+ * <ul>
+ *   <li><b>"Restructure data"</b> ({@code InfobaseUpdateConfirmDialog}) - the DB structure
+ *       changes confirmation; completed via its default "Accept" button.</li>
+ *   <li><b>"Infobase configuration changes"</b> ({@code InfobaseUpdateConflictDialog}) - raised
+ *       when the infobase configuration was written OUTSIDE EDT (Designer, {@code ibcmd}, a CLI
+ *       pipeline) since the last EDT interaction. This one has NO safe default: its default
+ *       button is "Import", which rewrites the caller's PROJECT sources. It is therefore
+ *       completed by the labelled button the call's {@link ExternalInfobaseChangesPolicy}
+ *       selects, and a label that cannot be located degrades to cancelling the dialog.</li>
+ * </ul>
  *
  * <h2>Scope &amp; safety</h2>
  * <ul>
@@ -174,6 +191,55 @@ public final class LaunchUpdateDialogAutoConfirmer
         new LinkedHashSet<>(Arrays.asList(RESTRUCTURE_TITLE, RESTRUCTURE_TITLE_RU)));
 
     /**
+     * English title of the platform's external-changes conflict modal
+     * ({@code InfobaseUpdateConflictDialog}, resource key
+     * {@code InfobaseUpdateConflictDialog_Infobase_configuration_changes}). It pops during
+     * {@code IApplicationManager.update} whenever the infobase configuration was changed
+     * WITHOUT EDT (Designer, {@code ibcmd}, a CLI pipeline) since the last EDT interaction,
+     * and offers "Import" / "Override" / "Cancel". Unlike the other two modals it has NO
+     * safe default: its default button is "Import", which rewrites the caller's PROJECT
+     * sources — so this modal is completed by a LABELLED button chosen from the call's
+     * {@link ExternalInfobaseChangesPolicy}, never blind.
+     */
+    static final String CONFLICT_TITLE = "Infobase configuration changes"; //$NON-NLS-1$
+
+    /**
+     * Russian title of the same conflict modal ({@code messages_ru.properties}:
+     * "Изменения конфигурации информационной базы"), copied verbatim from EDT's own
+     * {@code com._1c.g5.v8.dt.platform.services.ui} bundle and kept unicode-escaped (no raw
+     * Cyrillic in source) so it compiles identically whatever encoding Tycho picks.
+     */
+    static final String CONFLICT_TITLE_RU = "\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F " //$NON-NLS-1$
+        + "\u043A\u043E\u043D\u0444\u0438\u0433\u0443\u0440\u0430\u0446\u0438\u0438 " //$NON-NLS-1$
+        + "\u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u043E\u0439 " //$NON-NLS-1$
+        + "\u0431\u0430\u0437\u044B"; //$NON-NLS-1$
+
+    /**
+     * Every shipped localized title of the external-changes conflict modal (English /
+     * Russian — the only NL variants EDT ships). Exact whole-title compare.
+     */
+    static final Set<String> CONFLICT_TITLES = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList(CONFLICT_TITLE, CONFLICT_TITLE_RU)));
+
+    /**
+     * Localized labels of the conflict modal's "Override" button
+     * ({@code InfobaseUpdateConflictDialog_Override}, "\u041F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C") — keep the project
+     * configuration and overwrite the externally-changed infobase with it.
+     */
+    static final Set<String> CONFLICT_OVERRIDE_BUTTONS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList("Override", //$NON-NLS-1$
+            "\u041F\u0435\u0440\u0435\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C"))); //$NON-NLS-1$
+
+    /**
+     * Localized labels of the conflict modal's "Import" button
+     * ({@code InfobaseUpdateConflictDialog_Import}, "\u0418\u043C\u043F\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C") — pull the external
+     * infobase changes into the PROJECT sources.
+     */
+    static final Set<String> CONFLICT_IMPORT_BUTTONS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList("Import", //$NON-NLS-1$
+            "\u0418\u043C\u043F\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C"))); //$NON-NLS-1$
+
+    /**
      * English message-body prefix of EDT's "Debug session already exists" launch
      * modal (status code {@code 1003}, handler {@code DebugSessionCheckStatusHandler}).
      * The full text is "Debug session for project \"{0}\" and application \"{1}\" has
@@ -235,6 +301,12 @@ public final class LaunchUpdateDialogAutoConfirmer
     static final Set<String> DEBUG_SESSION_KEEP_BUTTONS = Collections.unmodifiableSet(
         new LinkedHashSet<>(Arrays.asList(DEBUG_SESSION_KEEP_BUTTON, DEBUG_SESSION_KEEP_BUTTON_RU)));
 
+    /** Cap on how much dialog text {@link #collectDialogText} accumulates for attribution. */
+    private static final int MAX_DIALOG_TEXT_CHARS = 8192;
+
+    /** Cap on how many controls {@link #collectDialogText} visits, bounding the UI-thread cost. */
+    private static final int MAX_DIALOG_CONTROLS = 500;
+
     /** Cap on the widget-tree walk depth when reading a dialog's message body. */
     private static final int MAX_BODY_SCAN_DEPTH = 6;
 
@@ -268,6 +340,58 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static int restructureArmCount;
 
+    /**
+     * Reentrant arm counts for the external-changes conflict TITLE matcher, ONE PER
+     * {@link ExternalInfobaseChangesPolicy}: the modal has no safe default button, so the
+     * press depends on the policy the arming call selected. While any of them is
+     * {@code > 0} the listener's conflict branch is allowed to fire; which button it
+     * presses is decided by {@link #chooseConflictPolicy()}.
+     *
+     * <p>Indexed by {@link ExternalInfobaseChangesPolicy#ordinal()} so a concurrent pair of
+     * launches with DIFFERENT policies stays balanced (each disarm releases its own arm).
+     */
+    private static final int[] CONFLICT_ARM_COUNTS = new int[ExternalInfobaseChangesPolicy.values().length];
+
+    /** {@link #lastConflictCancelReason()} value: the call's own policy asked to cancel. */
+    public static final String CANCEL_REASON_POLICY = "policy"; //$NON-NLS-1$
+
+    /** {@link #lastConflictCancelReason()} value: the policy's button was not found in the dialog. */
+    public static final String CANCEL_REASON_BUTTON_NOT_FOUND = "button-not-found"; //$NON-NLS-1$
+
+    /**
+     * Monotonic count of external-changes conflict modals this filter CANCELLED (the
+     * {@code cancel} policy, an ambiguous window, or a policy whose labelled button could not
+     * be located). The update then fails with EDT's generic "still out of sync" outcome, which
+     * says nothing about the cause; a caller samples this counter around its update and turns a
+     * change into an actionable error instead. A COUNTER rather than a wall-clock stamp: it is
+     * immune to clock rollback and to two events landing in the same millisecond.
+     *
+     * <p>Scope caveat: like the filter itself this is process-global, so a concurrent update of
+     * ANOTHER application that cancels its own modal is indistinguishable from this one's. The
+     * message it produces is therefore phrased as "while this update ran", never as a claim
+     * about which application raised the dialog.
+     *
+     * <p>Volatile: written on the UI thread, read on the MCP worker.
+     */
+    private static volatile int conflictCancelCount;
+
+    /** Why the last cancelled conflict modal was cancelled; see the CANCEL_REASON_* constants. */
+    private static volatile String lastConflictCancelReason = CANCEL_REASON_POLICY;
+
+    /**
+     * Names of the infobases whose update is currently armed for the conflict matcher — one
+     * entry per outstanding arm, so nested/concurrent updates stay balanced.
+     *
+     * <p>This is what makes the conflict press ATTRIBUTABLE. EDT's conflict modal states the
+     * infobase in its message ({@code Infobase "<name>" configuration was changed independent
+     * of the project…}), so a dialog whose body mentions an armed name is ours and gets the
+     * policy; any other conflict dialog appearing in the window — a manual one, or one raised
+     * for a different infobase — is CANCELLED instead. Without that check a mis-attributed
+     * press would WRITE: {@code override} discards the other infobase's external changes and
+     * {@code import} rewrites the other project's sources.
+     */
+    private static final List<String> CONFLICT_INFOBASE_NAMES = new ArrayList<>();
+
     private static Display filterDisplay;
     private static Listener filter;
 
@@ -296,6 +420,205 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean isRestructureTitle(String shellTitle)
     {
         return shellTitle != null && RESTRUCTURE_TITLES.contains(shellTitle);
+    }
+
+    /**
+     * May the conflict modal on {@code shell} be answered with the armed policy?
+     *
+     * <p>Attribution needs a name: an armed update supplies the infobase EDT interpolates into
+     * the dialog's message, and only a dialog naming one of those may be PRESSED. When no armed
+     * window supplied a name at all (the launch-time windows around EDT's own delegate-performed
+     * update cannot always resolve one), attribution is impossible — the policy is then applied
+     * as it was before attribution existed, which is what keeps {@code override}/{@code import}
+     * working on those paths. The residual mis-attribution risk is the same one the class header
+     * documents for the other two modals.
+     *
+     * @param shell the conflict dialog shell
+     * @return {@code true} when the policy may be applied to this dialog
+     */
+    private static boolean attributable(Shell shell)
+    {
+        synchronized (LOCK)
+        {
+            if (CONFLICT_INFOBASE_NAMES.isEmpty())
+            {
+                return true;
+            }
+        }
+        return mentionsArmedInfobase(collectDialogText(shell));
+    }
+
+    /**
+     * Concatenates the label-like texts of a dialog, depth- and size-bounded. Attribution needs
+     * the WHOLE message, not the first label: EDT's conflict dialog opens with its own header
+     * ("Infobase configuration changes") and states the infobase only in the paragraph below it,
+     * so a first-label read ({@link #readDialogBody}) never sees the name. Fully guarded — never
+     * throws onto the UI thread.
+     *
+     * @param shell the dialog shell (may be {@code null}/disposed)
+     * @return the collected text, or {@code null}
+     */
+    static String collectDialogText(Shell shell)
+    {
+        if (shell == null || shell.isDisposed())
+        {
+            return null;
+        }
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+            appendLabelTexts(shell, 0, sb, new int[] {MAX_DIALOG_CONTROLS});
+            return sb.length() == 0 ? null : sb.toString();
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Depth-bounded pre-order walk appending every label-like text. Bounded three ways so the
+     * UI thread can never pay for a pathological widget tree: by depth, by accumulated text
+     * (each label is truncated to what is left of the budget) and by the number of controls
+     * visited ({@code budget[0]}, decremented per node).
+     */
+    private static void appendLabelTexts(Control control, int depth, StringBuilder sb, int[] budget)
+    {
+        if (control == null || control.isDisposed() || depth > MAX_BODY_SCAN_DEPTH || budget[0] <= 0
+            || sb.length() >= MAX_DIALOG_TEXT_CHARS)
+        {
+            return;
+        }
+        budget[0]--;
+        String own = labelLikeText(control);
+        if (own != null && !own.isEmpty())
+        {
+            int room = MAX_DIALOG_TEXT_CHARS - sb.length();
+            sb.append(own, 0, Math.min(own.length(), room)).append('\n');
+        }
+        if (control instanceof Composite)
+        {
+            for (Control child : ((Composite)control).getChildren())
+            {
+                appendLabelTexts(child, depth + 1, sb, budget);
+            }
+        }
+    }
+
+    /**
+     * Is the conflict modal's message about an infobase whose update is armed right now?
+     * EDT names the infobase in that message, which is the only owner information the dialog
+     * carries. An unattributable dialog (no armed name, an unreadable body, or a body naming
+     * some other infobase) must never be PRESSED — only cancelled.
+     *
+     * @param body the dialog's message text (may be {@code null})
+     * @return {@code true} when the body mentions an armed infobase name
+     */
+    static boolean mentionsArmedInfobase(String body)
+    {
+        synchronized (LOCK)
+        {
+            return bodyMentionsAny(body, CONFLICT_INFOBASE_NAMES);
+        }
+    }
+
+    /**
+     * Pure decision (and test seam) behind {@link #mentionsArmedInfobase(String)}: does the
+     * dialog body name any of {@code names}? A blank body or an empty name list yields
+     * {@code false} — an unattributable dialog is never pressed.
+     *
+     * @param body the dialog message text (may be {@code null})
+     * @param names the armed infobase names (may be {@code null}/empty)
+     * @return {@code true} when the body mentions one of the names
+     */
+    static boolean bodyMentionsAny(String body, List<String> names)
+    {
+        if (body == null || body.isEmpty() || names == null)
+        {
+            return false;
+        }
+        for (String name : names)
+        {
+            if (name != null && !name.isEmpty() && mentionsQuoted(body, name))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Does {@code body} name {@code name} the way EDT renders it in the conflict modal — in
+     * quotes ({@code Infobase "agent-base" configuration was changed…})? A bare substring test
+     * would let an armed {@code base} claim a dialog about {@code prod-base} and then answer it
+     * with a WRITING choice, so the quotes are part of the match. All quote styles EDT's two
+     * locales use are accepted.
+     *
+     * @param body the collected dialog text, never {@code null}
+     * @param name the armed infobase name, never {@code null}/empty
+     * @return {@code true} when the body contains the quoted name
+     */
+    private static boolean mentionsQuoted(String body, String name)
+    {
+        return body.contains('"' + name + '"')
+            || body.contains('\'' + name + '\'')
+            || body.contains("\u00AB" + name + "\u00BB")
+            || body.contains("\u201C" + name + "\u201D");
+    }
+
+    /**
+     * Pure decision (and test seam): is the given shell title EDT's external-changes
+     * conflict modal ({@link #CONFLICT_TITLES}, "Infobase configuration changes" /
+     * "Изменения конфигурации информационной базы")? It pops when the infobase
+     * configuration was changed outside EDT (Designer/CLI) since the last EDT
+     * interaction. Completed by a LABELLED button chosen from the call's
+     * {@link ExternalInfobaseChangesPolicy} — never by the default button, which is
+     * "Import" and would rewrite the caller's project sources.
+     *
+     * @param shellTitle the dialog shell title (may be {@code null})
+     * @return {@code true} when the title is the conflict modal's, in either locale
+     */
+    static boolean isConflictTitle(String shellTitle)
+    {
+        return shellTitle != null && CONFLICT_TITLES.contains(shellTitle);
+    }
+
+    /**
+     * Picks the policy the conflict branch acts on. Concurrent launches share the ONE
+     * {@link Display} filter and the modal carries no information about which launch
+     * raised it, so the choice must be unambiguous:
+     * <ul>
+     *   <li>exactly one policy armed → that policy;</li>
+     *   <li>two or more DIFFERENT policies armed → {@link ExternalInfobaseChangesPolicy#CANCEL}:
+     *       the dialog is closed and nothing is written on either side. Acting on one of the
+     *       arms would apply a choice the OTHER caller never asked for — and one of those
+     *       choices ({@code import}) rewrites project sources — so an ambiguous window
+     *       degrades to the choice that cannot damage anything;</li>
+     *   <li>none armed → {@code null} (the modal is left for a human).</li>
+     * </ul>
+     *
+     * @return the policy to act on, or {@code null} when the conflict matcher is not armed
+     */
+    static ExternalInfobaseChangesPolicy chooseConflictPolicy()
+    {
+        synchronized (LOCK)
+        {
+            ExternalInfobaseChangesPolicy found = null;
+            for (ExternalInfobaseChangesPolicy policy : ExternalInfobaseChangesPolicy.values())
+            {
+                if (CONFLICT_ARM_COUNTS[policy.ordinal()] == 0)
+                {
+                    continue;
+                }
+                if (found != null)
+                {
+                    // Ambiguous: two callers want different answers to the same modal.
+                    return ExternalInfobaseChangesPolicy.CANCEL;
+                }
+                found = policy;
+            }
+            return found;
+        }
     }
 
     /**
@@ -397,7 +720,51 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog)
     {
-        if (!updateDialog && !sessionDialog && !restructureDialog)
+        arm(updateDialog, sessionDialog, restructureDialog, null);
+    }
+
+    /**
+     * Arms the auto-confirmer with all three boolean matchers plus the external-changes
+     * conflict matcher, whose press is policy-driven. MUST be paired with
+     * {@link #disarm(boolean, boolean, boolean, ExternalInfobaseChangesPolicy)} passing the
+     * SAME arguments, in a {@code finally} block.
+     *
+     * <p>The conflict matcher is armed only when {@code conflictPolicy} is non-{@code null}
+     * — a caller that leaves it {@code null} keeps EDT's "Infobase configuration changes"
+     * modal for a human, exactly like the update opt-out.
+     *
+     * <p>No-op in a headless environment and when nothing at all is requested. Never throws.
+     *
+     * @param updateDialog arm the "Application update" TITLE matcher
+     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     * @param conflictPolicy the button to press on the external-changes conflict modal, or
+     *            {@code null} to leave that modal alone
+     */
+    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+        ExternalInfobaseChangesPolicy conflictPolicy)
+    {
+        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, null);
+    }
+
+    /**
+     * Arms the auto-confirmer, additionally naming the INFOBASE whose update this window
+     * covers so the conflict modal can be attributed (see {@link #CONFLICT_INFOBASE_NAMES}).
+     * MUST be paired with the five-argument {@code disarm} passing the same values.
+     *
+     * @param updateDialog arm the "Application update" TITLE matcher
+     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     * @param conflictPolicy the button to press on the external-changes conflict modal, or
+     *            {@code null} to leave that modal alone
+     * @param infobaseName the infobase this update targets, as EDT names it (may be
+     *            {@code null}/blank when it cannot be resolved — the conflict modal is then
+     *            only ever CANCELLED, never pressed)
+     */
+    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+        ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
+    {
+        if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null)
         {
             return;
         }
@@ -419,6 +786,14 @@ public final class LaunchUpdateDialogAutoConfirmer
             if (restructureDialog)
             {
                 restructureArmCount++;
+            }
+            if (conflictPolicy != null)
+            {
+                CONFLICT_ARM_COUNTS[conflictPolicy.ordinal()]++;
+                if (infobaseName != null && !infobaseName.trim().isEmpty())
+                {
+                    CONFLICT_INFOBASE_NAMES.add(infobaseName.trim());
+                }
             }
         }
         reconcileOnUiThread(display);
@@ -453,7 +828,41 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog)
     {
-        if (!updateDialog && !sessionDialog && !restructureDialog)
+        disarm(updateDialog, sessionDialog, restructureDialog, null);
+    }
+
+    /**
+     * Disarms the matchers armed by a matching
+     * {@link #arm(boolean, boolean, boolean, ExternalInfobaseChangesPolicy)} (same
+     * arguments). The underlying {@link Display} filter is removed only once EVERY matcher
+     * — including every per-policy conflict arm — has no outstanding arm. Never throws.
+     *
+     * @param updateDialog release one update-matcher arm
+     * @param sessionDialog release one session-matcher arm
+     * @param restructureDialog release one restructure-matcher arm
+     * @param conflictPolicy release one conflict-matcher arm of THIS policy, or {@code null}
+     */
+    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+        ExternalInfobaseChangesPolicy conflictPolicy)
+    {
+        disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, null);
+    }
+
+    /**
+     * Disarms an arm made with the five-argument
+     * {@link #arm(boolean, boolean, boolean, ExternalInfobaseChangesPolicy, String)} — pass the
+     * SAME values so both the per-policy counter and the armed infobase name are released.
+     *
+     * @param updateDialog release one update-matcher arm
+     * @param sessionDialog release one session-matcher arm
+     * @param restructureDialog release one restructure-matcher arm
+     * @param conflictPolicy release one conflict-matcher arm of THIS policy, or {@code null}
+     * @param infobaseName the name passed to {@code arm} (may be {@code null})
+     */
+    public static void disarm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+        ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
+    {
+        if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null)
         {
             return;
         }
@@ -471,6 +880,14 @@ public final class LaunchUpdateDialogAutoConfirmer
             if (restructureDialog && restructureArmCount > 0)
             {
                 restructureArmCount--;
+            }
+            if (conflictPolicy != null && CONFLICT_ARM_COUNTS[conflictPolicy.ordinal()] > 0)
+            {
+                CONFLICT_ARM_COUNTS[conflictPolicy.ordinal()]--;
+                if (infobaseName != null && !infobaseName.trim().isEmpty())
+                {
+                    CONFLICT_INFOBASE_NAMES.remove(infobaseName.trim());
+                }
             }
             display = filterDisplay;
         }
@@ -532,7 +949,13 @@ public final class LaunchUpdateDialogAutoConfirmer
                 filter = null;
                 filterDisplay = null;
             }
-            boolean anyArmed = updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0;
+            boolean conflictArmed = false;
+            for (int count : CONFLICT_ARM_COUNTS)
+            {
+                conflictArmed |= count > 0;
+            }
+            boolean anyArmed =
+                updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0 || conflictArmed;
             if (anyArmed && filter == null)
             {
                 toInstall = createFilterListener();
@@ -609,14 +1032,18 @@ public final class LaunchUpdateDialogAutoConfirmer
                 sessionArmed = sessionArmCount > 0;
                 restructureArmed = restructureArmCount > 0;
             }
+            // The conflict matcher is armed per policy; a null choice means "not armed".
+            ExternalInfobaseChangesPolicy conflictPolicy = chooseConflictPolicy();
             // The body is only read (a widget-tree walk) when the title did not already
-            // match an armed TITLE matcher (update or restructure) AND the session
-            // matcher is armed — otherwise it is needless work.
-            boolean titleMatched =
-                (updateArmed && isTargetTitle(title)) || (restructureArmed && isRestructureTitle(title));
+            // match an armed TITLE matcher (update, restructure or conflict) AND the
+            // session matcher is armed — otherwise it is needless work.
+            boolean titleMatched = (updateArmed && isTargetTitle(title))
+                || (restructureArmed && isRestructureTitle(title))
+                || (conflictPolicy != null && isConflictTitle(title));
             boolean needBody = sessionArmed && !titleMatched;
             String body = needBody ? readDialogBody(shell) : null;
-            if (!shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, title, body))
+            if (!shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, conflictPolicy != null, title,
+                body))
             {
                 return;
             }
@@ -670,11 +1097,35 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean shouldAutoConfirm(boolean updateArmed, boolean sessionArmed, boolean restructureArmed,
         String title, String body)
     {
+        return shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, false, title, body);
+    }
+
+    /**
+     * Pure gating decision including the external-changes conflict matcher. The conflict
+     * branch fires only when {@code conflictArmed} (i.e. the caller supplied an
+     * {@link ExternalInfobaseChangesPolicy}); its title is disjoint from the other two.
+     *
+     * @param updateArmed is the "Application update" TITLE matcher armed
+     * @param sessionArmed is the 1003 "Debug session already exists" BODY matcher armed
+     * @param restructureArmed is the DB-restructure TITLE matcher armed
+     * @param conflictArmed is the external-changes conflict TITLE matcher armed
+     * @param title the dialog shell title (may be {@code null})
+     * @param body the dialog message body (may be {@code null}; only consulted when
+     *            {@code sessionArmed})
+     * @return {@code true} when an armed matcher claims this dialog
+     */
+    static boolean shouldAutoConfirm(boolean updateArmed, boolean sessionArmed, boolean restructureArmed,
+        boolean conflictArmed, String title, String body)
+    {
         if (updateArmed && isTargetTitle(title))
         {
             return true;
         }
         if (restructureArmed && isRestructureTitle(title))
+        {
+            return true;
+        }
+        if (conflictArmed && isConflictTitle(title))
         {
             return true;
         }
@@ -826,7 +1277,15 @@ public final class LaunchUpdateDialogAutoConfirmer
          */
         CANCEL_DIALOG,
         /** The "Application update" modal: press its default button ("Update then run"). */
-        PRESS_DEFAULT_BUTTON;
+        PRESS_DEFAULT_BUTTON,
+        /**
+         * The external-changes conflict modal: press the LABELLED button the call's
+         * {@link ExternalInfobaseChangesPolicy} selects ("Override" / "Import"). Its
+         * default button is "Import", which rewrites the project sources, so it is never
+         * pressed blind: a policy whose label is not found falls back to
+         * {@link #CANCEL_DIALOG}.
+         */
+        PRESS_POLICY_BUTTON;
     }
 
     /**
@@ -851,6 +1310,53 @@ public final class LaunchUpdateDialogAutoConfirmer
             return ConfirmAction.PRESS_DEFAULT_BUTTON;
         }
         return keepButtonFound ? ConfirmAction.PRESS_KEEP_BUTTON : ConfirmAction.CANCEL_DIALOG;
+    }
+
+    /**
+     * Pure decision (and test seam): how should EDT's external-changes conflict modal be
+     * completed for the given policy?
+     * <ul>
+     *   <li>{@link ExternalInfobaseChangesPolicy#CANCEL} (or a {@code null} policy) →
+     *       {@link ConfirmAction#CANCEL_DIALOG}: nothing is written on either side and the
+     *       update call fails with an actionable error instead of hanging;</li>
+     *   <li>{@code OVERRIDE}/{@code IMPORT} → {@link ConfirmAction#PRESS_POLICY_BUTTON} when
+     *       the labelled button was located, else {@code CANCEL_DIALOG} — the modal's
+     *       DEFAULT button is "Import" (it rewrites the project sources), so a label miss
+     *       must never fall through to it.</li>
+     * </ul>
+     *
+     * @param policy the policy this arm selected (may be {@code null})
+     * @param policyButtonFound {@code true} when the policy's labelled button was located
+     * @return the action that completes the conflict modal
+     */
+    static ConfirmAction chooseConflictAction(ExternalInfobaseChangesPolicy policy, boolean policyButtonFound)
+    {
+        if (policy == null || policy == ExternalInfobaseChangesPolicy.CANCEL || !policyButtonFound)
+        {
+            return ConfirmAction.CANCEL_DIALOG;
+        }
+        return ConfirmAction.PRESS_POLICY_BUTTON;
+    }
+
+    /**
+     * Returns the localized button labels that carry out the given policy on EDT's
+     * external-changes conflict modal, or {@code null} when the policy presses no button
+     * ({@link ExternalInfobaseChangesPolicy#CANCEL} cancels the dialog instead).
+     *
+     * @param policy the policy (may be {@code null})
+     * @return the labels to match, or {@code null}
+     */
+    static Set<String> conflictButtonLabels(ExternalInfobaseChangesPolicy policy)
+    {
+        if (policy == ExternalInfobaseChangesPolicy.OVERRIDE)
+        {
+            return CONFLICT_OVERRIDE_BUTTONS;
+        }
+        if (policy == ExternalInfobaseChangesPolicy.IMPORT)
+        {
+            return CONFLICT_IMPORT_BUTTONS;
+        }
+        return null;
     }
 
     /**
@@ -881,6 +1387,17 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             if (shell == null || shell.isDisposed())
             {
+                return;
+            }
+            // The external-changes conflict modal is keyed on its own TITLE and completed
+            // by a policy-selected LABELLED button (its default button rewrites the
+            // project) — decided before the generic body walk below.
+            if (isConflictTitle(safeShellText(shell)))
+            {
+                // Deferred like every other press: the attribution reads the dialog BODY, and at
+                // SWT.Show time the message area may not be populated yet — inside the asyncExec
+                // the dialog is fully built and pumping its own event loop.
+                shell.getDisplay().asyncExec(() -> pressConflictButton(shell, chooseConflictPolicy()));
                 return;
             }
             // Distinguish the two modals (the body walk is cheap and also drives the
@@ -964,6 +1481,21 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static Button findButtonByLabel(Control control, int depth)
     {
+        return findButtonByLabel(control, depth, DEBUG_SESSION_KEEP_BUTTONS);
+    }
+
+    /**
+     * Depth-bounded pre-order walk returning the first {@link Button} whose text is one of
+     * {@code labels} (exact, whole-label compare after trimming SWT's mnemonic markers).
+     * Shared by the 1003 keep-button lookup and the conflict modal's policy button.
+     *
+     * @param control the widget subtree root (may be {@code null}/disposed)
+     * @param depth current recursion depth
+     * @param labels the accepted localized labels, never {@code null}
+     * @return the first matching button, or {@code null}
+     */
+    private static Button findButtonByLabel(Control control, int depth, Set<String> labels)
+    {
         if (control == null || control.isDisposed() || depth > MAX_BODY_SCAN_DEPTH)
         {
             return null;
@@ -973,7 +1505,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             Button b = (Button)control;
             try
             {
-                if (isKeepExistingLabel(b.getText()))
+                if (matchesButtonLabel(b.getText(), labels))
                 {
                     return b;
                 }
@@ -987,7 +1519,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             for (Control child : ((Composite)control).getChildren())
             {
-                Button found = findButtonByLabel(child, depth + 1);
+                Button found = findButtonByLabel(child, depth + 1, labels);
                 if (found != null)
                 {
                     return found;
@@ -1008,12 +1540,126 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     static boolean isKeepExistingLabel(String label)
     {
-        if (label == null)
+        return matchesButtonLabel(label, DEBUG_SESSION_KEEP_BUTTONS);
+    }
+
+    /**
+     * Pure decision (and test seam): is the given button label one of {@code labels}, in
+     * any EDT locale? JFace strips no mnemonic here, so {@code &} mnemonic markers (if
+     * any) are removed before the exact, whole-label compare.
+     *
+     * @param label a button label (may be {@code null})
+     * @param labels the accepted localized labels (may be {@code null})
+     * @return {@code true} when {@code label} matches one of {@code labels}
+     */
+    static boolean matchesButtonLabel(String label, Set<String> labels)
+    {
+        if (label == null || labels == null)
         {
             return false;
         }
         String normalized = label.replace("&", "").trim(); //$NON-NLS-1$ //$NON-NLS-2$
-        return DEBUG_SESSION_KEEP_BUTTONS.contains(normalized);
+        return labels.contains(normalized);
+    }
+
+    /**
+     * Completes EDT's external-changes conflict modal ("Infobase configuration changes")
+     * according to {@code policy}: presses the labelled "Override"/"Import" button, or —
+     * for {@link ExternalInfobaseChangesPolicy#CANCEL}, a {@code null} policy, or a label
+     * that could not be located — CANCELS the dialog ({@link Shell#close()}, which JFace
+     * maps to the dialog's Cancel). The modal's DEFAULT button is "Import", which rewrites
+     * the caller's PROJECT sources, so it is never pressed blind. The update call then
+     * returns EDT's own "not resolved" failure, which the tool reports as an actionable
+     * error — an unattended run never hangs on this modal either way.
+     *
+     * <p>Runs on the UI thread; fully guarded — never throws.
+     *
+     * @param shell the conflict dialog shell
+     * @param policy the policy selected by the arming call (may be {@code null})
+     */
+    private static void pressConflictButton(Shell shell, ExternalInfobaseChangesPolicy policy)
+    {
+        if (shell == null || shell.isDisposed())
+        {
+            return;
+        }
+        try
+        {
+            pressConflictButtonUnguarded(shell, policy);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Failed to complete the infobase-changed-outside-EDT dialog", e); //$NON-NLS-1$
+        }
+    }
+
+    /** The body of {@link #pressConflictButton}, called inside its disposal/exception guard. */
+    private static void pressConflictButtonUnguarded(Shell shell, ExternalInfobaseChangesPolicy policy)
+    {
+        // Attribute the dialog first: while an armed update NAMES its infobase, only a conflict
+        // modal about one of those names may be answered with a WRITING choice — anything else (a
+        // foreign infobase, a manually opened dialog, a body we cannot read) is cancelled instead.
+        ExternalInfobaseChangesPolicy effective = attributable(shell) ? policy : null;
+        Set<String> labels = conflictButtonLabels(effective);
+        Button button = labels == null ? null : findButtonByLabel(shell, 0, labels);
+        if (chooseConflictAction(effective, button != null) == ConfirmAction.PRESS_POLICY_BUTTON)
+        {
+            Activator.logInfo("Auto-resolving infobase-changed-outside-EDT dialog '" //$NON-NLS-1$
+                + safeShellText(shell) + "' via button '" + safeText(button) + "' (policy " //$NON-NLS-1$ //$NON-NLS-2$
+                + effective.wireValue() + ")"); //$NON-NLS-1$
+            pressButton(button);
+            return;
+        }
+        lastConflictCancelReason =
+            labels != null && button == null ? CANCEL_REASON_BUTTON_NOT_FOUND : CANCEL_REASON_POLICY;
+        // NB: a policy of null here means the dialog was NOT attributed to an armed update
+        // (see mentionsArmedInfobase) — cancelling is then the only safe completion.
+        conflictCancelCount++;
+        Activator.logInfo("Cancelling infobase-changed-outside-EDT dialog '" //$NON-NLS-1$
+            + safeShellText(shell) + "' (policy " //$NON-NLS-1$
+            + (policy == null ? "none" : policy.wireValue()) //$NON-NLS-1$
+            + (effective == null && policy != null ? ", not attributable to an armed update" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + (labels != null && button == null ? ", button label not found" : "") + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        shell.close();
+    }
+
+    /**
+     * How many external-changes conflict modals this filter has CANCELLED so far. Callers
+     * sample it before issuing an update and again afterwards: a change means the update was
+     * stopped by a cancelled conflict, so the failure can be reported with a cause instead of
+     * EDT's generic out-of-sync text. Monotonic, so it is immune to clock rollback and to two
+     * events landing in the same millisecond.
+     *
+     * @return the current count
+     */
+    public static int conflictCancelCount()
+    {
+        return conflictCancelCount;
+    }
+
+    /**
+     * Why the most recent conflict modal was cancelled — {@link #CANCEL_REASON_POLICY} (the
+     * call's own {@code cancel}, or an ambiguous window that degraded to it) or
+     * {@link #CANCEL_REASON_BUTTON_NOT_FOUND} (the policy's localized button was not present).
+     * Only meaningful together with a {@link #conflictCancelCount()} change.
+     *
+     * @return the reason token, never {@code null}
+     */
+    public static String lastConflictCancelReason()
+    {
+        return lastConflictCancelReason;
+    }
+
+    /**
+     * Test seam: records a conflict-modal cancel exactly as the UI-thread press path does,
+     * so the resulting error contract can be asserted headlessly (no SWT shell required).
+     *
+     * @param reason one of the {@code CANCEL_REASON_*} constants
+     */
+    static void recordConflictCancelForTest(String reason)
+    {
+        lastConflictCancelReason = reason;
+        conflictCancelCount++;
     }
 
     /** Fires {@code SWT.Selection} on the button — mirrors a user click. */

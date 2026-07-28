@@ -27,6 +27,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
@@ -94,6 +95,8 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the update; default false = preview only (resolves the target and " //$NON-NLS-1$
                 + "reports what would change WITHOUT mutating the infobase).") //$NON-NLS-1$
+            .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
+                RunYaxunitTestsTool.EXTERNAL_INFOBASE_CHANGES_DESCRIPTION)
             .booleanProperty("terminateRunningClients", //$NON-NLS-1$
                 "Before applying, terminate any 1C client THIS EDT launched on the target infobase " //$NON-NLS-1$
                 + "to free the exclusive lock (default true). false keeps a running client — the " //$NON-NLS-1$
@@ -150,6 +153,13 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         boolean terminateRunningClients =
             JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
+        String rawPolicy = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
+        ExternalInfobaseChangesPolicy externalChanges = ExternalInfobaseChangesPolicy.parse(rawPolicy);
+        if (externalChanges == null)
+        {
+            return ToolResult.error("Unknown externalInfobaseChanges value: '" + rawPolicy //$NON-NLS-1$
+                + "'. Accepted values: " + ExternalInfobaseChangesPolicy.acceptedValues()).toJson(); //$NON-NLS-1$
+        }
 
         boolean hasName = configName != null && !configName.isEmpty();
         String argError = validateDirectArguments(hasName, projectName, applicationId);
@@ -199,7 +209,30 @@ public class UpdateDatabaseTool implements IMcpTool
         }
 
         return updateDatabase(projectName, applicationId, fullUpdate, confirm,
-            terminateRunningClients);
+            terminateRunningClients, externalChanges);
+    }
+
+    /**
+     * Returns the application's display name — the string EDT interpolates into its conflict
+     * modal — or {@code null} when it cannot be read (the name is only an attribution hint).
+     *
+     * @param application the application being updated (may be {@code null})
+     * @return the name, or {@code null}
+     */
+    private static String safeApplicationName(IApplication application)
+    {
+        if (application == null)
+        {
+            return null;
+        }
+        try
+        {
+            return application.getName();
+        }
+        catch (RuntimeException e) // NOSONAR a hint must never break the update
+        {
+            return null;
+        }
     }
 
     /**
@@ -242,11 +275,13 @@ public class UpdateDatabaseTool implements IMcpTool
      * @param confirm false previews without mutating; true applies the update
      * @param terminateRunningClients true (default) frees the infobase by terminating a 1C client
      *            this EDT launched on it before the update; false leaves a running client in place
+     * @param externalChanges how to answer EDT's "Infobase configuration changes" modal when the
+     *            infobase was changed outside EDT since the last EDT interaction
      * @return JSON string with result
      */
     private String updateDatabase(String projectName, String applicationId,
             boolean fullUpdate, boolean confirm,
-            boolean terminateRunningClients)
+            boolean terminateRunningClients, ExternalInfobaseChangesPolicy externalChanges)
     {
         boolean terminatedClient = false;
         try
@@ -349,14 +384,33 @@ public class UpdateDatabaseTool implements IMcpTool
                 // hangs this unattended call. Arm the restructure matcher to auto-press its default
                 // "Accept" button around the update only — the confirm=true gate already approved the
                 // (irreversible) update, so accepting the platform's re-prompt is the correct completion.
-                LaunchUpdateDialogAutoConfirmer.arm(false, false, true);
+                // The same update can also raise EDT's "Infobase configuration changes" modal when
+                // the infobase was changed outside EDT since the last EDT interaction; it is answered
+                // by the caller's externalInfobaseChanges policy (default: override the infobase with
+                // the project configuration, i.e. exactly what this tool was asked to do).
+                int conflictCancelsBefore = LaunchUpdateDialogAutoConfirmer.conflictCancelCount();
+                String infobaseName = safeApplicationName(application);
+                LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges, infobaseName);
                 try
                 {
                     stateAfter = appManager.update(application, updateType, context, monitor);
                 }
                 finally
                 {
-                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, true);
+                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
+                        infobaseName);
+                }
+                // A cancelled external-changes modal means the update wrote NOTHING. Reporting
+                // "updated" here would be a false success: EDT returns the unchanged state, not a
+                // failure. Both conditions are required — the cancel counter is process-global, so
+                // a cancel raised by a CONCURRENT update of another application must not fail this
+                // one when its own state came back applied.
+                if (LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != conflictCancelsBefore
+                    && stateAfter != ApplicationUpdateState.UPDATED)
+                {
+                    return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
+                        externalChanges, LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason()))
+                        .toJson();
                 }
             }
 

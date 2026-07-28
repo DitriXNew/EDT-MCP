@@ -29,6 +29,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
+import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -107,6 +108,13 @@ public class DebugLaunchTool implements IMcpTool
                     + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
                     + "is auto-confirmed); false skips the update and the platform may then show that " //$NON-NLS-1$
                     + "modal. Ignored for Attach.") //$NON-NLS-1$
+            .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
+                "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase " //$NON-NLS-1$
+                    + "was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT " //$NON-NLS-1$
+                    + "interaction: 'override' (default) keeps the project configuration and overwrites " //$NON-NLS-1$
+                    + "the infobase, 'import' pulls the external changes into the PROJECT sources, " //$NON-NLS-1$
+                    + "'cancel' aborts the update with an error. Omitted, the modal is still " //$NON-NLS-1$
+                    + "answered (with 'override'), so an unattended call never blocks on it.") //$NON-NLS-1$
             .booleanProperty("restartIfRunning", //$NON-NLS-1$
                 "Default false: if a matching session is already running, short-circuit with " //$NON-NLS-1$
                     + "alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). " //$NON-NLS-1$
@@ -155,11 +163,18 @@ public class DebugLaunchTool implements IMcpTool
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", true); //$NON-NLS-1$
         boolean restartIfRunning = extractRestartIfRunning(params);
+        String rawPolicy = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
+        ExternalInfobaseChangesPolicy policy = ExternalInfobaseChangesPolicy.parse(rawPolicy);
+        if (policy == null)
+        {
+            return ToolResult.error("Unknown externalInfobaseChanges value: '" + rawPolicy //$NON-NLS-1$
+                + "'. Accepted values: " + ExternalInfobaseChangesPolicy.acceptedValues()).toJson(); //$NON-NLS-1$
+        }
 
         // Mode 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
-            return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning);
+            return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning, policy);
         }
 
         // Mode 2: project + application (runtime-client only).
@@ -182,7 +197,7 @@ public class DebugLaunchTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return launchDebug(projectName, applicationId, updateBeforeLaunch, restartIfRunning);
+        return launchDebug(projectName, applicationId, updateBeforeLaunch, restartIfRunning, policy);
     }
 
     /**
@@ -202,7 +217,7 @@ public class DebugLaunchTool implements IMcpTool
      * Works for both runtime-client and Attach configuration types.
      */
     private String launchByConfigName(String configName, boolean updateBeforeLaunch,
-        boolean restartIfRunning)
+        boolean restartIfRunning, ExternalInfobaseChangesPolicy policy)
     {
         try
         {
@@ -278,13 +293,13 @@ public class DebugLaunchTool implements IMcpTool
 
             // For runtime-client configs, run the usual DB-update preflight.
             String preflightError =
-                runUpdatePreflight(isAttach, updateBeforeLaunch, configProject, effectiveAppId);
+                runUpdatePreflight(isAttach, updateBeforeLaunch, configProject, effectiveAppId, policy);
             if (preflightError != null)
             {
                 return preflightError;
             }
 
-            String launchError = performLaunch(config, updateBeforeLaunch);
+            String launchError = performLaunch(config, updateBeforeLaunch, policy);
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$
@@ -306,7 +321,7 @@ public class DebugLaunchTool implements IMcpTool
      * guard it replaces: same condition, same order, same exceptions propagate.
      */
     private String runUpdatePreflight(boolean isAttach, boolean updateBeforeLaunch, String configProject,
-        String effectiveAppId)
+        String effectiveAppId, ExternalInfobaseChangesPolicy policy)
     {
         if (!isAttach && updateBeforeLaunch && configProject != null && !configProject.isEmpty())
         {
@@ -315,7 +330,7 @@ public class DebugLaunchTool implements IMcpTool
             {
                 return ToolResult.error(notReady).toJson();
             }
-            String updateError = updateDatabaseIfNeeded(configProject, effectiveAppId);
+            String updateError = updateDatabaseIfNeeded(configProject, effectiveAppId, policy);
             if (updateError != null)
             {
                 return ToolResult.error(updateError).toJson();
@@ -359,7 +374,7 @@ public class DebugLaunchTool implements IMcpTool
      * Legacy path: launch a runtime-client config matched by project+application.
      */
     private String launchDebug(String projectName, String applicationId, boolean updateBeforeLaunch,
-        boolean restartIfRunning)
+        boolean restartIfRunning, ExternalInfobaseChangesPolicy policy)
     {
         try
         {
@@ -408,7 +423,7 @@ public class DebugLaunchTool implements IMcpTool
             if (appManager != null && application != null)
             {
                 String updateError = runPreLaunchUpdateStep(project, applicationId,
-                    appManager, updateBeforeLaunch);
+                    appManager, updateBeforeLaunch, policy);
                 if (updateError != null)
                 {
                     return ToolResult.error(updateError).toJson();
@@ -462,7 +477,7 @@ public class DebugLaunchTool implements IMcpTool
                 return dupResult;
             }
 
-            String launchError = performLaunch(matchingConfig, updateBeforeLaunch);
+            String launchError = performLaunch(matchingConfig, updateBeforeLaunch, policy);
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$
@@ -618,7 +633,8 @@ public class DebugLaunchTool implements IMcpTool
      * {@link #runPreLaunchUpdateStep}, the same gate on the
      * project+applicationId path.
      */
-    private String updateDatabaseIfNeeded(String projectName, String applicationId)
+    private String updateDatabaseIfNeeded(String projectName, String applicationId,
+        ExternalInfobaseChangesPolicy policy)
     {
         if (applicationId == null || applicationId.isEmpty()
             || LaunchConfigUtils.isSyntheticApplicationId(applicationId))
@@ -638,8 +654,8 @@ public class DebugLaunchTool implements IMcpTool
         }
         // Shared update analysis: skip on UPDATED, wait on BEING_UPDATED, otherwise
         // incremental-update — same path as the YAXUnit auto-chain.
-        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager)
-            .orElse(null);
+        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager, false,
+            policy).orElse(null);
     }
 
     /**
@@ -676,7 +692,7 @@ public class DebugLaunchTool implements IMcpTool
      * assert the gate decision without a live workbench.
      */
     static String runPreLaunchUpdateStep(IProject project, String applicationId,
-        IApplicationManager appManager, boolean updateBeforeLaunch)
+        IApplicationManager appManager, boolean updateBeforeLaunch, ExternalInfobaseChangesPolicy policy)
     {
         if (!updateBeforeLaunch)
         {
@@ -689,8 +705,8 @@ public class DebugLaunchTool implements IMcpTool
                 + applicationId);
             return null;
         }
-        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager)
-            .orElse(null);
+        return LaunchLifecycleUtils.updateApplicationIfNeeded(project, applicationId, appManager, false,
+            policy).orElse(null);
     }
 
     /**
@@ -940,7 +956,41 @@ public class DebugLaunchTool implements IMcpTool
      * @return {@code null} when the launch was scheduled (or, in a headless test
      *         with no UI thread, completed) successfully; otherwise an error message.
      */
-    String performLaunch(ILaunchConfiguration config, boolean autoConfirmUpdateDialog)
+    /**
+     * Resolves the infobase name EDT states in its "Infobase \"<name>\" configuration was
+     * changed…" conflict modal for the application this launch configuration targets, so the
+     * launch-time auto-confirmer window can be armed with an ATTRIBUTABLE name. Best-effort:
+     * {@code null} when the config carries no resolvable project/application.
+     *
+     * @param config the launch configuration about to be started (may be {@code null})
+     * @return the application display name, or {@code null}
+     */
+    private static String launchInfobaseName(ILaunchConfiguration config)
+    {
+        if (config == null)
+        {
+            return null;
+        }
+        try
+        {
+            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            String applicationId = LaunchConfigUtils.getApplicationIdFor(config);
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (!ctx.isOpen())
+            {
+                return null;
+            }
+            return LaunchLifecycleUtils.applicationDisplayName(
+                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break the launch
+        {
+            return null;
+        }
+    }
+
+    String performLaunch(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
+        ExternalInfobaseChangesPolicy policy)
     {
         // Workbench-aware probe: never creates a display. It
         // decides Job-vs-headless ONLY: with a live workbench the launch is
@@ -960,7 +1010,7 @@ public class DebugLaunchTool implements IMcpTool
                 @Override
                 protected IStatus run(IProgressMonitor monitor)
                 {
-                    return runLaunchJobBody(config, autoConfirmUpdateDialog, monitor);
+                    return runLaunchJobBody(config, autoConfirmUpdateDialog, policy, monitor);
                 }
             };
             job.setPriority(Job.INTERACTIVE);
@@ -971,7 +1021,13 @@ public class DebugLaunchTool implements IMcpTool
         // The infobase auth-dialog suppression is held across the synchronous connect for
         // the same #230 reason as the async Job body above (kept symmetric with the
         // arm/disarm pattern; a no-op headless where no dialog can appear).
-        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true);
+        // The conflict matcher follows the same opt-out as the update matcher. It matters
+        // most for a STANDALONE-SERVER application: there the pre-launch update is deferred to
+        // EDT's launch delegate, so this window is the ONLY one covering that update.
+        ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
+        String launchInfobase = launchInfobaseName(config);
+        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
+            launchPolicy, launchInfobase);
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -986,7 +1042,8 @@ public class DebugLaunchTool implements IMcpTool
         finally
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
-            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true);
+            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase);
         }
     }
 
@@ -1009,7 +1066,8 @@ public class DebugLaunchTool implements IMcpTool
      *        {@code config.launch} so the Progress view shows the delegate's steps
      * @return {@link Status#OK_STATUS} on success, else an error status
      */
-    static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
+    static IStatus runLaunchJobBody(ILaunchConfiguration config, boolean autoConfirmUpdateDialog, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        ExternalInfobaseChangesPolicy policy,
         IProgressMonitor monitor)
     {
         // Auto-confirm EDT's blocking launch modals for the duration of this
@@ -1018,7 +1076,10 @@ public class DebugLaunchTool implements IMcpTool
         // code-1003 "debug session already exists" modal is ALWAYS
         // auto-confirmed on this debug path (it is independent of the update
         // opt-out). Manual EDT launches outside this window still prompt.
-        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true);
+        ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
+        String launchInfobase = launchInfobaseName(config);
+        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
+            launchPolicy, launchInfobase);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
         // (#230). This launch is fire-and-forget: tool.execute() has already returned and
         // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no
@@ -1050,7 +1111,8 @@ public class DebugLaunchTool implements IMcpTool
         finally
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
-            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true);
+            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
+                autoConfirmUpdateDialog, launchPolicy, launchInfobase);
         }
     }
 

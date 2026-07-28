@@ -218,3 +218,22 @@ def test_nonexistent_project_is_rejected_without_mutating():
     assert_contains(e, "Project not found",
                     "a non-existent project must hit the value-naming not-found branch")
     assert_no_diff("a rejected update must not touch the project on disk")
+
+
+@e2e_test(tool="update_database", kind="action")
+def test_unknown_external_infobase_changes_value_is_rejected():
+    """externalInfobaseChanges answers EDT's blocking "Infobase configuration changes"
+    modal (the infobase was written outside EDT since the last EDT interaction). A typo
+    must NOT silently fall back to the default 'override' - that choice OVERWRITES the
+    infobase - so an unrecognised token is rejected up front, before any target
+    resolution, naming the bad value and listing the accepted ones."""
+    bad = "overwrite"
+    r = call("update_database", {
+        "projectName": PROJECT,
+        "applicationId": BOGUS_APP_ID,
+        "externalInfobaseChanges": bad,
+    })
+    e = assert_error(r, "unknown externalInfobaseChanges value")
+    assert_error_quality(e, names=[bad], suggests=["override", "import", "cancel"],
+                         ctx="unknown externalInfobaseChanges names the bad value and lists the accepted ones")
+    assert_no_diff("a rejected update must not touch the project on disk")

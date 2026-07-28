@@ -291,3 +291,20 @@ def test_unknown_config_name_takes_precedence_over_project_mode():
             "config name must win: Mode-1 should run, but got the Mode-2 application error: %r"
             % err)
     assert_no_diff("a rejected launch must not touch the project source")
+
+
+@e2e_test(tool="debug_launch", kind="action")
+def test_unknown_external_infobase_changes_value_is_rejected():
+    """externalInfobaseChanges decides how the pre-launch update answers EDT's blocking
+    "Infobase configuration changes" modal. An unrecognised token must be rejected with
+    the accepted values rather than silently defaulting to 'override', which writes the
+    infobase. Rejected before any launch is attempted, so nothing is started."""
+    bad = "merge"
+    r = call("debug_launch", {
+        "launchConfigurationName": "NoSuchLaunchConfig_e2e",
+        "externalInfobaseChanges": bad,
+    })
+    e = assert_error(r, "unknown externalInfobaseChanges value")
+    assert_error_quality(e, names=[bad], suggests=["override", "import", "cancel"],
+                         ctx="unknown externalInfobaseChanges names the bad value and lists the accepted ones")
+    assert_no_diff("a rejected launch must not touch the project on disk")

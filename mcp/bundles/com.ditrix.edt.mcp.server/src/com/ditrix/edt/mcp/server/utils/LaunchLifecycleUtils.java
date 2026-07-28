@@ -1179,6 +1179,33 @@ public final class LaunchLifecycleUtils
     public static Optional<String> updateApplicationIfNeeded(IProject project, String applicationId,
             IApplicationManager appManager, boolean settleAfterPossibleRecompute)
     {
+        return updateApplicationIfNeeded(project, applicationId, appManager, settleAfterPossibleRecompute,
+            ExternalInfobaseChangesPolicy.DEFAULT);
+    }
+
+    /**
+     * Same contract as
+     * {@link #updateApplicationIfNeeded(IProject, String, IApplicationManager, boolean)}, plus the
+     * policy that decides how EDT's blocking "Infobase configuration changes" modal is answered
+     * when the infobase was changed OUTSIDE EDT (Designer/CLI) since the last EDT interaction.
+     *
+     * <p>That modal has no safe default button, so it is completed by the labelled button the
+     * policy selects: {@code override} keeps the project configuration and overwrites the infobase,
+     * {@code import} pulls the external changes into the project sources, {@code cancel} aborts the
+     * update. Without it the call blocks on the un-pressed modal until the tool times out.
+     *
+     * @param project the project whose application is updated
+     * @param applicationId the application id
+     * @param appManager the EDT application manager
+     * @param settleAfterPossibleRecompute wait out the settle window before trusting a cached UPDATED
+     * @param policy how to answer the external-changes conflict modal (may be {@code null} to leave
+     *            that modal for a human)
+     * @return {@link Optional#empty()} on success, otherwise an actionable error message
+     */
+    public static Optional<String> updateApplicationIfNeeded(IProject project, String applicationId,
+            IApplicationManager appManager, boolean settleAfterPossibleRecompute,
+            ExternalInfobaseChangesPolicy policy)
+    {
         if (appManager == null)
         {
             return Optional.of("IApplicationManager service is not available"); //$NON-NLS-1$
@@ -1237,7 +1264,7 @@ public final class LaunchLifecycleUtils
 
             // Phase B — IB needs an update (or state is UNKNOWN). Issue the update,
             // then await the UPDATE_STATE_CHANGED→UPDATED event before returning.
-            return performUpdateAndAwaitApplied(appManager, application, applicationId, state);
+            return performUpdateAndAwaitApplied(appManager, application, applicationId, state, policy);
         }
         catch (ApplicationException e)
         {
@@ -1288,7 +1315,8 @@ public final class LaunchLifecycleUtils
      * @throws ApplicationException if the update call itself fails
      */
     private static Optional<String> performUpdateAndAwaitApplied(IApplicationManager appManager,
-        IApplication application, String applicationId, ApplicationUpdateState stateBefore)
+        IApplication application, String applicationId, ApplicationUpdateState stateBefore,
+        ExternalInfobaseChangesPolicy policy)
         throws ApplicationException
     {
         ExecutionContext context = new ExecutionContext();
@@ -1299,8 +1327,31 @@ public final class LaunchLifecycleUtils
         }
         Activator.logInfo("Pre-launch DB update: application=" + applicationId //$NON-NLS-1$
             + ", stateBefore=" + stateBefore); //$NON-NLS-1$
-        ApplicationUpdateState after = appManager.update(application,
-            ApplicationUpdateType.INCREMENTAL, context, new NullProgressMonitor());
+        // THE choke point of every pre-launch DB update: this one call can raise three
+        // different blocking EDT modals on the UI thread - "Application update",
+        // "Restructure data" and, when the infobase was changed outside EDT, "Infobase
+        // configuration changes". Nothing presses them in an unattended run, so the worker
+        // thread waits inside Display.syncCall forever: no launch, no report, no client,
+        // until the tool times out. Arming HERE - rather than at each caller - covers every
+        // path that reaches the update (debug_launch's preflight and the YAXUnit auto-chain's
+        // finalizeFreshLaunchPrep alike), which is exactly how this slipped through before:
+        // only the launch itself was armed, never the update that precedes it.
+        ApplicationUpdateState after;
+        int conflictCancelsBefore = LaunchUpdateDialogAutoConfirmer.conflictCancelCount();
+        // EDT's conflict modal names the infobase it is about; passing that name makes the
+        // auto-press ATTRIBUTABLE (a conflict dialog for some other infobase is cancelled,
+        // never answered with a writing choice).
+        String infobaseName = safeApplicationName(application);
+        LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
+        try
+        {
+            after = appManager.update(application, ApplicationUpdateType.INCREMENTAL, context,
+                new NullProgressMonitor());
+        }
+        finally
+        {
+            LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+        }
         Activator.logInfo("Pre-launch DB update returned: stateAfter=" + after //$NON-NLS-1$
             + " (now awaiting the UPDATE_STATE_CHANGED→UPDATED event)"); //$NON-NLS-1$
 
@@ -1316,6 +1367,13 @@ public final class LaunchLifecycleUtils
         // fast instead, restoring the old prompt-error behaviour.
         if (needsUpdate(after))
         {
+            // A cancelled external-changes modal is the one failure cause EDT's generic
+            // out-of-sync text hides completely — name it, and name the knob that changes it.
+            if (LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != conflictCancelsBefore)
+            {
+                return Optional.of(ExternalInfobaseChangesPolicy.declinedUpdateError(policy,
+                    LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason()));
+            }
             return Optional.of(terminalOutOfSyncError(after));
         }
         if (!isSynced(after))
@@ -1330,6 +1388,61 @@ public final class LaunchLifecycleUtils
             return Optional.empty();
         }
         return Optional.of(staleInfobaseError(after));
+    }
+
+    /**
+     * Resolves the display name of {@code applicationId} — the string EDT interpolates into its
+     * "Infobase \"<name>\" configuration was changed…" conflict modal — so a launch window can
+     * arm the auto-confirmer with an ATTRIBUTABLE name. Fully guarded and best-effort: a name
+     * that cannot be resolved simply yields {@code null}.
+     *
+     * @param appManager the EDT application manager (may be {@code null})
+     * @param project the project the application belongs to (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return the application display name, or {@code null}
+     */
+    public static String applicationDisplayName(IApplicationManager appManager, IProject project,
+        String applicationId)
+    {
+        if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            return appManager.getApplication(project, applicationId)
+                .map(LaunchLifecycleUtils::safeApplicationName)
+                .orElse(null);
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break a launch
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Returns the application's display name — the string EDT interpolates into its
+     * "Infobase \"<name>\" configuration was changed…" conflict modal — or {@code null} when
+     * it cannot be read. Fully guarded: a name is only an attribution HINT, never a
+     * precondition of the update itself.
+     *
+     * @param application the application being updated (may be {@code null})
+     * @return the name, or {@code null}
+     */
+    private static String safeApplicationName(IApplication application)
+    {
+        if (application == null)
+        {
+            return null;
+        }
+        try
+        {
+            return application.getName();
+        }
+        catch (RuntimeException e) // NOSONAR a hint must never break the update
+        {
+            return null;
+        }
     }
 
     /**
@@ -1672,6 +1785,30 @@ public final class LaunchLifecycleUtils
             IProject project, String applicationId, IApplicationManager appManager,
             int terminateTimeoutSeconds, String updateScope)
     {
+        return prepareForFreshLaunch(launchManager, project, applicationId, appManager,
+            terminateTimeoutSeconds, updateScope, ExternalInfobaseChangesPolicy.DEFAULT);
+    }
+
+    /**
+     * Same contract as
+     * {@link #prepareForFreshLaunch(ILaunchManager, IProject, String, IApplicationManager, int, String)},
+     * with the policy that answers EDT's "Infobase configuration changes" modal when the infobase
+     * was changed outside EDT since the last EDT interaction (see
+     * {@link ExternalInfobaseChangesPolicy}).
+     *
+     * @param launchManager the debug-platform launch manager
+     * @param project the launch (configuration) project
+     * @param applicationId the application the launch targets
+     * @param appManager the EDT application manager
+     * @param terminateTimeoutSeconds how long to wait for each swept launch to die
+     * @param updateScope the caller's update scope (see {@link #resolveUpdateScope})
+     * @param policy how to answer the external-changes conflict modal (may be {@code null})
+     * @return the prep result
+     */
+    public static PreLaunchResult prepareForFreshLaunch(ILaunchManager launchManager,
+            IProject project, String applicationId, IApplicationManager appManager,
+            int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy)
+    {
         if (launchManager == null)
         {
             return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
@@ -1717,7 +1854,7 @@ public final class LaunchLifecycleUtils
                 return new PreLaunchResult(false, outcome.terminated, outcome.error);
             }
 
-            return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope,
+            return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope, policy,
                 outcome.terminated);
         }
     }
@@ -1851,7 +1988,8 @@ public final class LaunchLifecycleUtils
      * @param terminated the swept-launch count accumulated by the terminate passes
      */
     private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId,
-            IApplicationManager appManager, String updateScope, int terminated)
+            IApplicationManager appManager, String updateScope, ExternalInfobaseChangesPolicy policy,
+            int terminated)
     {
         // Selectively force a derived-data recompute of projects that have
         // had file changes since the last successful prepare (dirty projects).
@@ -1908,8 +2046,11 @@ public final class LaunchLifecycleUtils
         // derived-data job families do NOT cover), so no during-drain probe can
         // prove it will not come. The plain debug_launch path passes false
         // (immediate return on UPDATED) to avoid that ~5s cost.
-        Optional<String> updateErr = updateApplicationIfNeeded(project, applicationId,
-            appManager, true);
+        // The blocking-modal arming lives in performUpdateAndAwaitApplied - the single point
+        // where the update is actually issued - so every caller of the pre-launch update is
+        // covered, not just this one; see the comment there.
+        Optional<String> updateErr =
+            updateApplicationIfNeeded(project, applicationId, appManager, true, policy);
         if (updateErr.isPresent())
         {
             // Error path: do NOT mark prepared — the next call must recompute.

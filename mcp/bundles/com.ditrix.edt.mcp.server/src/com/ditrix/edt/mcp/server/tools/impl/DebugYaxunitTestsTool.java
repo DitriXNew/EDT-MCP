@@ -33,6 +33,8 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
     /** Input param: comma-separated update scope for the pre-launch auto-chain. */
     private static final String KEY_UPDATE_SCOPE = "updateScope"; //$NON-NLS-1$
 
+    private static final String KEY_EXTERNAL_INFOBASE_CHANGES = "externalInfobaseChanges"; //$NON-NLS-1$
+
     /** Input param: exact runtime-client launch configuration name. */
     private static final String KEY_LAUNCH_CONFIGURATION_NAME = "launchConfigurationName"; //$NON-NLS-1$
 
@@ -88,6 +90,8 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
                     + "'Update database?' dialog blocks the call; false keeps legacy delegate behaviour — " //$NON-NLS-1$
                     + "no client sweep, no auto-confirmed update dialog; platform dialogs may appear.") //$NON-NLS-1$
             .stringProperty(KEY_UPDATE_SCOPE, RunYaxunitTestsTool.UPDATE_SCOPE_DESCRIPTION)
+            .stringProperty(KEY_EXTERNAL_INFOBASE_CHANGES,
+                RunYaxunitTestsTool.EXTERNAL_INFOBASE_CHANGES_DESCRIPTION)
             .build();
     }
 
@@ -107,6 +111,8 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
         putIfPresent(forwarded, KEY_TESTS, params.get(KEY_TESTS));
         putIfPresent(forwarded, KEY_UPDATE_BEFORE_LAUNCH, params.get(KEY_UPDATE_BEFORE_LAUNCH));
         putIfPresent(forwarded, KEY_UPDATE_SCOPE, params.get(KEY_UPDATE_SCOPE));
+        putIfPresent(forwarded, KEY_EXTERNAL_INFOBASE_CHANGES,
+            params.get(KEY_EXTERNAL_INFOBASE_CHANGES));
         forwarded.put("debug", "true"); //$NON-NLS-1$ //$NON-NLS-2$
         return DELEGATE.execute(forwarded);
     }

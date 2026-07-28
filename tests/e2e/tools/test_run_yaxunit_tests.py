@@ -263,3 +263,19 @@ def test_nonexistent_project_with_appid_surfaces_no_config_sentinel():
         ctx="unknown project surfaces via the no-config sentinel that names it",
     )
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="action")
+def test_unknown_external_infobase_changes_value_is_rejected():
+    """The YAXUnit auto-chain runs the same pre-launch update, so it takes the same
+    externalInfobaseChanges policy. An unrecognised token is rejected with the accepted
+    values instead of silently defaulting to 'override' (which overwrites the infobase)."""
+    bad = "OVERRIDE!"
+    r = call("run_yaxunit_tests", {
+        "launchConfigurationName": "NoSuchLaunchConfig_e2e",
+        "externalInfobaseChanges": bad,
+    })
+    e = assert_error(r, "unknown externalInfobaseChanges value")
+    assert_error_quality(e, names=[bad], suggests=["override", "import", "cancel"],
+                         ctx="unknown externalInfobaseChanges names the bad value and lists the accepted ones")
+    assert_no_diff("a rejected run must not touch the project on disk")

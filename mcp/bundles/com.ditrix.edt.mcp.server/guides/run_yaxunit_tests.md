@@ -22,6 +22,7 @@ Control:
 - `timeout` — polling window in seconds (default 60). See ## Polling and Pending.
 - `updateBeforeLaunch` — auto-chain, default `true`. See ## Auto-chain.
 - `updateScope` — which projects to force-recompute + update before the run when `updateBeforeLaunch=true`: `all` (configuration + dependent extensions, default), `configuration`, or `extension:<ProjectName>` (comma-separate several). See ## Auto-chain.
+- `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 
 ## Polling and Pending
 
@@ -85,3 +86,25 @@ Run a single test method with a longer window:
 - A timeout returns **Pending**, not a failure — do not retry with different arguments; reuse the same ones so the run key matches.
 - If no JUnit XML appears after the launch finishes, the YAXUnit extension is likely not installed in the infobase, or the filter matched no tests.
 - The config must be a runtime-client launch configuration; other types are rejected.
+
+## Infobase changed outside EDT
+
+When something other than EDT wrote the infobase configuration since the last EDT interaction —
+a `1cv8 DESIGNER /LoadConfigFromFiles`, an `ibcmd infobase config load`, a colleague in the
+Configurator — the configuration-to-infobase update stops and asks what to do with those
+changes in a modal titled **"Infobase configuration changes"** / **"Изменения конфигурации информационной базы"**
+(buttons Import / Override / Cancel). Nobody presses it in an unattended run, so the call would
+block on the UI thread until the tool times out.
+
+`externalInfobaseChanges` answers it for you:
+
+| value | what it writes | when to use |
+|---|---|---|
+| `override` (default) | the INFOBASE — the project configuration wins, the external changes are discarded | the literal meaning of "update the infobase from the project"; the right choice for a CI/agent pipeline that owns the infobase |
+| `import` | the PROJECT sources — the infobase changes are pulled in and merged | you want to keep what was loaded into the infobase; note this rewrites your working tree |
+| `cancel` | nothing | you want the call to fail loudly and resolve the divergence yourself |
+
+The modal's own default button is **Import**, which would rewrite the project sources — so this
+plugin never presses it blind: if the labelled button for the selected policy cannot be found (an
+unshipped locale, a reworded button) the dialog is cancelled and the update reports the failure
+instead of writing anything.

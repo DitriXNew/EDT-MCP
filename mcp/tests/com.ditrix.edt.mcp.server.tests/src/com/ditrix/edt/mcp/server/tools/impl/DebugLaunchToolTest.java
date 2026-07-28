@@ -41,6 +41,7 @@ import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.DebugLaunchTool.AlreadyRunningContext;
+import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -289,7 +290,7 @@ public class DebugLaunchToolTest
         // probe, this headless test JVM takes the SYNCHRONOUS path: the launch
         // really executes on the calling thread.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
-        String error = new DebugLaunchTool().performLaunch(config, false);
+        String error = new DebugLaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNull("successful headless launch must return null", error);
         Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, null);
     }
@@ -302,7 +303,7 @@ public class DebugLaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         Mockito.when(config.launch(ILaunchManager.DEBUG_MODE, null)).thenThrow(
             new CoreException(new Status(IStatus.ERROR, "test", "launch refused"))); //$NON-NLS-1$ //$NON-NLS-2$
-        String error = new DebugLaunchTool().performLaunch(config, false);
+        String error = new DebugLaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNotNull("headless launch failure must be surfaced synchronously", error);
         assertTrue(error.contains("launch refused")); //$NON-NLS-1$
     }
@@ -330,7 +331,7 @@ public class DebugLaunchToolTest
         // completes cleanly.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         IProgressMonitor monitor = new NullProgressMonitor();
-        IStatus status = DebugLaunchTool.runLaunchJobBody(config, true, monitor);
+        IStatus status = DebugLaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, monitor);
         assertNotNull(status);
         assertTrue("successful launch must report OK", status.isOK());
         Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, monitor);
@@ -346,7 +347,7 @@ public class DebugLaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         Mockito.when(config.launch(eq(ILaunchManager.DEBUG_MODE), any()))
             .thenThrow(new CoreException(refusal));
-        IStatus status = DebugLaunchTool.runLaunchJobBody(config, false, new NullProgressMonitor());
+        IStatus status = DebugLaunchTool.runLaunchJobBody(config, false, ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
         assertNotNull(status);
         assertSame("the CoreException's own status must be the Job result", refusal, status);
     }
@@ -360,7 +361,7 @@ public class DebugLaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         IllegalStateException boom = new IllegalStateException("boom"); //$NON-NLS-1$
         Mockito.when(config.launch(eq(ILaunchManager.DEBUG_MODE), any())).thenThrow(boom);
-        IStatus status = DebugLaunchTool.runLaunchJobBody(config, true, new NullProgressMonitor());
+        IStatus status = DebugLaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, new NullProgressMonitor());
         assertNotNull(status);
         assertEquals("a runtime failure must be an ERROR status", IStatus.ERROR, status.getSeverity());
         assertSame("the status must carry the original exception", boom, status.getException());
@@ -412,7 +413,7 @@ public class DebugLaunchToolTest
         // the confirmer arm/disarm is a no-op in this no-workbench harness and must
         // not break the launch or its finally chain.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
-        String error = new DebugLaunchTool().performLaunch(config, true);
+        String error = new DebugLaunchTool().performLaunch(config, true, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNull("successful headless launch must return null even with update auto-confirm", error);
         Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, null);
     }
@@ -691,7 +692,7 @@ public class DebugLaunchToolTest
         // touching the application manager at all.
         IApplicationManager mgr = mock(IApplicationManager.class);
         String error = DebugLaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
-            "ServerApplication.MyServer", mgr, true); //$NON-NLS-1$
+            "ServerApplication.MyServer", mgr, true, ExternalInfobaseChangesPolicy.DEFAULT); //$NON-NLS-1$
         assertNull("server application must proceed without a programmatic update", error);
         verify(mgr, never()).update(any(), any(), any(), any());
         verify(mgr, never()).getUpdateState(any());
@@ -715,7 +716,7 @@ public class DebugLaunchToolTest
             any(ExecutionContext.class), any())).thenReturn(ApplicationUpdateState.UPDATED);
 
         String error = DebugLaunchTool.runPreLaunchUpdateStep(project,
-            "infobase-app-uuid", mgr, true); //$NON-NLS-1$
+            "infobase-app-uuid", mgr, true, ExternalInfobaseChangesPolicy.DEFAULT); //$NON-NLS-1$
         assertNull("a successful non-server update must proceed", error);
         verify(mgr, times(1)).update(eq(app), eq(ApplicationUpdateType.INCREMENTAL),
             any(ExecutionContext.class), any());
@@ -730,9 +731,9 @@ public class DebugLaunchToolTest
         // unarmed, so the platform's modal — if any — is a human's).
         IApplicationManager mgr = mock(IApplicationManager.class);
         assertNull(DebugLaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
-            "ServerApplication.MyServer", mgr, false)); //$NON-NLS-1$
+            "ServerApplication.MyServer", mgr, false, ExternalInfobaseChangesPolicy.DEFAULT)); //$NON-NLS-1$
         assertNull(DebugLaunchTool.runPreLaunchUpdateStep(mockOpenProject(),
-            "infobase-app-uuid", mgr, false)); //$NON-NLS-1$
+            "infobase-app-uuid", mgr, false, ExternalInfobaseChangesPolicy.DEFAULT)); //$NON-NLS-1$
         verify(mgr, never()).update(any(), any(), any(), any());
         verify(mgr, never()).getUpdateState(any());
         verify(mgr, never()).getApplication(any(IProject.class), anyString());
