@@ -40,6 +40,7 @@ import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -1338,10 +1339,10 @@ public final class LaunchLifecycleUtils
         // only the launch itself was armed, never the update that precedes it.
         ApplicationUpdateState after;
         int conflictCancelsBefore = LaunchUpdateDialogAutoConfirmer.conflictCancelCount();
-        // EDT's conflict modal names the infobase it is about; passing that name makes the
+        // EDT's conflict modal names the INFOBASE it is about; passing that name makes the
         // auto-press ATTRIBUTABLE (a conflict dialog for some other infobase is cancelled,
         // never answered with a writing choice).
-        String infobaseName = safeApplicationName(application);
+        String infobaseName = conflictAttributionName(application);
         LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
         try
         {
@@ -1365,15 +1366,19 @@ public final class LaunchLifecycleUtils
         // arrive. Awaiting SYNCED would stall the MCP call for the full apply
         // timeout and then fail with the very same out-of-sync error — fail
         // fast instead, restoring the old prompt-error behaviour.
+        // A cancelled external-changes modal is the one failure cause EDT's generic out-of-sync
+        // text hides completely — name it, and name the knob that changes it. Checked BEFORE the
+        // terminal/transitional split: the update can also come back UNKNOWN or BEING_UPDATED
+        // after a cancel, and waiting out the full apply timeout to then report a generic stale
+        // infobase would make an immediate, deliberate cancel look like a slow update.
+        if (!isSynced(after)
+            && LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != conflictCancelsBefore)
+        {
+            return Optional.of(ExternalInfobaseChangesPolicy.declinedUpdateError(policy,
+                LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason()));
+        }
         if (needsUpdate(after))
         {
-            // A cancelled external-changes modal is the one failure cause EDT's generic
-            // out-of-sync text hides completely — name it, and name the knob that changes it.
-            if (LaunchUpdateDialogAutoConfirmer.conflictCancelCount() != conflictCancelsBefore)
-            {
-                return Optional.of(ExternalInfobaseChangesPolicy.declinedUpdateError(policy,
-                    LaunchUpdateDialogAutoConfirmer.lastConflictCancelReason()));
-            }
             return Optional.of(terminalOutOfSyncError(after));
         }
         if (!isSynced(after))
@@ -1429,6 +1434,37 @@ public final class LaunchLifecycleUtils
      * @param application the application being updated (may be {@code null})
      * @return the name, or {@code null}
      */
+    /**
+     * Resolves the name EDT interpolates into its "Infobase \"<name>\" configuration was
+     * changed…" conflict modal: the bound {@link com._1c.g5.v8.dt.platform.services.model
+     * .InfobaseReference}'s name, since an application's own (localized) name can differ from
+     * the infobase registered in EDT. Falls back to the application name when no reference
+     * resolves. Both are only attribution HINTS — a {@code null} simply means "cannot attribute".
+     *
+     * @param application the application being updated (may be {@code null})
+     * @return the infobase name, or {@code null}
+     */
+    private static String conflictAttributionName(IApplication application)
+    {
+        try
+        {
+            InfobaseReference ref = InfobaseAccessSupport.resolveInfobaseReference(application);
+            if (ref != null)
+            {
+                String name = ref.getName();
+                if (name != null && !name.trim().isEmpty())
+                {
+                    return name.trim();
+                }
+            }
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break the update
+        {
+            Activator.logInfo("Conflict attribution: no infobase reference for the application"); //$NON-NLS-1$
+        }
+        return safeApplicationName(application);
+    }
+
     private static String safeApplicationName(IApplication application)
     {
         if (application == null)

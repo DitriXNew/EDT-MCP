@@ -299,7 +299,10 @@ public class DebugLaunchTool implements IMcpTool
                 return preflightError;
             }
 
-            String launchError = performLaunch(config, updateBeforeLaunch, policy);
+            // An Attach configuration performs no DB update at all (the preflight above is
+            // skipped for it), so the conflict matcher must stay unarmed: an "Infobase
+            // configuration changes" dialog appearing during an Attach is somebody else's.
+            String launchError = performLaunch(config, updateBeforeLaunch, isAttach ? null : policy);
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$

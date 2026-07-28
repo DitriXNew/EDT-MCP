@@ -423,8 +423,12 @@ public class RunYaxunitTestsTool implements IMcpTool
 
             // Use the launch config name as the run-key root — stable across
             // (project, applicationId) vs. launchConfigurationName call styles.
+            // The conflict policy is part of the key: a run started under one
+            // externalInfobaseChanges answer must never be reused (or its report delivered) for a
+            // later call that asked for a different one.
             String runKey = matchingConfig.getName() + ":" //$NON-NLS-1$
-                    + sha1(safe(req.extensions) + "|" + safe(req.modules) + "|" + safe(req.tests)); //$NON-NLS-1$ //$NON-NLS-2$
+                    + sha1(safe(req.extensions) + "|" + safe(req.modules) + "|" + safe(req.tests) //$NON-NLS-1$ //$NON-NLS-2$
+                        + "|" + req.externalChanges.wireValue()); //$NON-NLS-1$
             Path reportDir = stableReportDir(runKey);
 
             // If a launch is already running for this key, just poll it.
