@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
+import java.util.List;
 
 import org.junit.Test;
 
@@ -29,6 +30,19 @@ import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer.ConfirmAc
  */
 public class LaunchUpdateDialogConflictMatcherTest
 {
+    /** EDT's conflict message for infobase "agent-base". */
+    private static final String BODY_A =
+        "Infobase \"agent-base\" configuration was changed independent of the project " //$NON-NLS-1$
+            + "since last EDT infobase interaction, possible with the Designer."; //$NON-NLS-1$
+
+    /** The same message for infobase "other-base". */
+    private static final String BODY_B =
+        "Infobase \"other-base\" configuration was changed independent of the project."; //$NON-NLS-1$
+
+    /** The same message for an infobase nobody armed. */
+    private static final String BODY_C =
+        "Infobase \"third-base\" configuration was changed independent of the project."; //$NON-NLS-1$
+
     /** Russian title of the modal, unicode-escaped exactly like the production constant. */
     private static final String CONFLICT_TITLE_RU = "\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u043A\u043E\u043D\u0444\u0438\u0433\u0443\u0440\u0430\u0446\u0438\u0438 \u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u043E\u0439 \u0431\u0430\u0437\u044B"; //$NON-NLS-1$
 
@@ -208,11 +222,71 @@ public class LaunchUpdateDialogConflictMatcherTest
     {
         // Headless (no Display): arm() is a no-op, so nothing is ever armed here and the
         // filter can never claim a dialog.
-        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy());
+        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy(BODY_A));
         LaunchUpdateDialogAutoConfirmer.arm(false, false, false, ExternalInfobaseChangesPolicy.OVERRIDE);
-        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy());
+        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy(BODY_A));
         // An unbalanced disarm stays a no-op too.
         LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, ExternalInfobaseChangesPolicy.OVERRIDE);
-        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy());
+        assertNull(LaunchUpdateDialogAutoConfirmer.chooseConflictPolicy(BODY_A));
+    }
+
+    @Test
+    public void testPolicyIsChosenPerAttributedInfobaseNotGlobally()
+    {
+        // Two independent updates armed at once with DIFFERENT policies: each dialog must get
+        // the policy of the arm that NAMED its infobase. Collapsing to CANCEL just because some
+        // other policy is armed would break parallel runs of unrelated projects.
+        List<LaunchUpdateDialogAutoConfirmer.ConflictArm> arms = Arrays.asList(
+            arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE), //$NON-NLS-1$
+            arm("other-base", ExternalInfobaseChangesPolicy.IMPORT)); //$NON-NLS-1$
+        assertEquals(ExternalInfobaseChangesPolicy.OVERRIDE,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, arms));
+        assertEquals(ExternalInfobaseChangesPolicy.IMPORT,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_B, arms));
+        // A dialog about an infobase nobody armed is somebody else\'s: cancel, never a press.
+        assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_C, arms));
+        assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(null, arms));
+    }
+
+    @Test
+    public void testSameInfobaseWithTwoPoliciesIsTheOnlyRealAmbiguity()
+    {
+        // Two callers want DIFFERENT answers to the SAME dialog - the only case where acting
+        // would apply a choice the other caller never asked for.
+        assertEquals(ExternalInfobaseChangesPolicy.CANCEL,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
+                arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE), //$NON-NLS-1$
+                arm("agent-base", ExternalInfobaseChangesPolicy.IMPORT)))); //$NON-NLS-1$
+        // The same policy twice (nested arms) is not ambiguous.
+        assertEquals(ExternalInfobaseChangesPolicy.OVERRIDE,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
+                arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE), //$NON-NLS-1$
+                arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE)))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnnamedArmsKeepThePreAttributionBehaviour()
+    {
+        // A launch window that could not resolve an infobase name (EDT performs the update
+        // inside its own launch delegate) cannot attribute anything - the single armed policy
+        // still applies, and only a genuine disagreement cancels.
+        assertEquals(ExternalInfobaseChangesPolicy.OVERRIDE,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
+                arm(null, ExternalInfobaseChangesPolicy.OVERRIDE))));
+        assertEquals(ExternalInfobaseChangesPolicy.CANCEL,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
+                arm(null, ExternalInfobaseChangesPolicy.OVERRIDE),
+                arm(null, ExternalInfobaseChangesPolicy.IMPORT))));
+        // A NAMED arm that does not match wins over an unnamed one: the dialog is not ours.
+        assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_C, Arrays.asList(
+            arm(null, ExternalInfobaseChangesPolicy.OVERRIDE),
+            arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE)))); //$NON-NLS-1$
+        assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList()));
+    }
+
+    private static LaunchUpdateDialogAutoConfirmer.ConflictArm arm(String infobase,
+        ExternalInfobaseChangesPolicy policy)
+    {
+        return new LaunchUpdateDialogAutoConfirmer.ConflictArm(infobase, policy);
     }
 }

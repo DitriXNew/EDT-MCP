@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.swt.SWT;
@@ -341,16 +342,16 @@ public final class LaunchUpdateDialogAutoConfirmer
     private static int restructureArmCount;
 
     /**
-     * Reentrant arm counts for the external-changes conflict TITLE matcher, ONE PER
-     * {@link ExternalInfobaseChangesPolicy}: the modal has no safe default button, so the
-     * press depends on the policy the arming call selected. While any of them is
-     * {@code > 0} the listener's conflict branch is allowed to fire; which button it
-     * presses is decided by {@link #chooseConflictPolicy()}.
+     * Outstanding arms of the external-changes conflict matcher — one entry per {@code arm}
+     * call, each pairing the policy with the INFOBASE whose update it covers (the name may be
+     * {@code null} when it could not be resolved).
      *
-     * <p>Indexed by {@link ExternalInfobaseChangesPolicy#ordinal()} so a concurrent pair of
-     * launches with DIFFERENT policies stays balanced (each disarm releases its own arm).
+     * <p>The pairing is what lets two concurrent updates of DIFFERENT infobases run with
+     * DIFFERENT policies: the dialog is attributed to an infobase first, and only the arms for
+     * that infobase decide the button. A global "any two policies differ → cancel" rule would
+     * make parallel runs of unrelated projects all degrade to cancelling.
      */
-    private static final int[] CONFLICT_ARM_COUNTS = new int[ExternalInfobaseChangesPolicy.values().length];
+    private static final List<ConflictArm> CONFLICT_ARMS = new ArrayList<>();
 
     /** {@link #lastConflictCancelReason()} value: the call's own policy asked to cancel. */
     public static final String CANCEL_REASON_POLICY = "policy"; //$NON-NLS-1$
@@ -377,20 +378,6 @@ public final class LaunchUpdateDialogAutoConfirmer
 
     /** Why the last cancelled conflict modal was cancelled; see the CANCEL_REASON_* constants. */
     private static volatile String lastConflictCancelReason = CANCEL_REASON_POLICY;
-
-    /**
-     * Names of the infobases whose update is currently armed for the conflict matcher — one
-     * entry per outstanding arm, so nested/concurrent updates stay balanced.
-     *
-     * <p>This is what makes the conflict press ATTRIBUTABLE. EDT's conflict modal states the
-     * infobase in its message ({@code Infobase "<name>" configuration was changed independent
-     * of the project…}), so a dialog whose body mentions an armed name is ours and gets the
-     * policy; any other conflict dialog appearing in the window — a manual one, or one raised
-     * for a different infobase — is CANCELLED instead. Without that check a mis-attributed
-     * press would WRITE: {@code override} discards the other infobase's external changes and
-     * {@code import} rewrites the other project's sources.
-     */
-    private static final List<String> CONFLICT_INFOBASE_NAMES = new ArrayList<>();
 
     private static Display filterDisplay;
     private static Listener filter;
@@ -420,32 +407,6 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean isRestructureTitle(String shellTitle)
     {
         return shellTitle != null && RESTRUCTURE_TITLES.contains(shellTitle);
-    }
-
-    /**
-     * May the conflict modal on {@code shell} be answered with the armed policy?
-     *
-     * <p>Attribution needs a name: an armed update supplies the infobase EDT interpolates into
-     * the dialog's message, and only a dialog naming one of those may be PRESSED. When no armed
-     * window supplied a name at all (the launch-time windows around EDT's own delegate-performed
-     * update cannot always resolve one), attribution is impossible — the policy is then applied
-     * as it was before attribution existed, which is what keeps {@code override}/{@code import}
-     * working on those paths. The residual mis-attribution risk is the same one the class header
-     * documents for the other two modals.
-     *
-     * @param shell the conflict dialog shell
-     * @return {@code true} when the policy may be applied to this dialog
-     */
-    private static boolean attributable(Shell shell)
-    {
-        synchronized (LOCK)
-        {
-            if (CONFLICT_INFOBASE_NAMES.isEmpty())
-            {
-                return true;
-            }
-        }
-        return mentionsArmedInfobase(collectDialogText(shell));
     }
 
     /**
@@ -506,26 +467,9 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Is the conflict modal's message about an infobase whose update is armed right now?
-     * EDT names the infobase in that message, which is the only owner information the dialog
-     * carries. An unattributable dialog (no armed name, an unreadable body, or a body naming
-     * some other infobase) must never be PRESSED — only cancelled.
-     *
-     * @param body the dialog's message text (may be {@code null})
-     * @return {@code true} when the body mentions an armed infobase name
-     */
-    static boolean mentionsArmedInfobase(String body)
-    {
-        synchronized (LOCK)
-        {
-            return bodyMentionsAny(body, CONFLICT_INFOBASE_NAMES);
-        }
-    }
-
-    /**
-     * Pure decision (and test seam) behind {@link #mentionsArmedInfobase(String)}: does the
-     * dialog body name any of {@code names}? A blank body or an empty name list yields
-     * {@code false} — an unattributable dialog is never pressed.
+     * Pure decision (and test seam): does the dialog body name any of {@code names}, quoted the
+     * way EDT renders it? A blank body or an empty name list yields {@code false} — an
+     * unattributable dialog is never pressed.
      *
      * @param body the dialog message text (may be {@code null})
      * @param names the armed infobase names (may be {@code null}/empty)
@@ -599,25 +543,138 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * @return the policy to act on, or {@code null} when the conflict matcher is not armed
      */
-    static ExternalInfobaseChangesPolicy chooseConflictPolicy()
+    static boolean conflictMatcherArmed()
     {
         synchronized (LOCK)
         {
-            ExternalInfobaseChangesPolicy found = null;
-            for (ExternalInfobaseChangesPolicy policy : ExternalInfobaseChangesPolicy.values())
+            return !CONFLICT_ARMS.isEmpty();
+        }
+    }
+
+    /**
+     * Which button answers the conflict dialog whose message is {@code dialogBody}, given the
+     * arms outstanding right now? See {@link #choosePolicyFor(String, List)}.
+     *
+     * @param dialogBody the dialog message text (may be {@code null})
+     * @return the policy to apply, or {@code null} when the dialog must be cancelled
+     */
+    static ExternalInfobaseChangesPolicy chooseConflictPolicy(String dialogBody)
+    {
+        synchronized (LOCK)
+        {
+            return choosePolicyFor(dialogBody, CONFLICT_ARMS);
+        }
+    }
+
+    /**
+     * Pure decision (and test seam): which button answers a conflict dialog whose message is
+     * {@code body}, given the outstanding {@code arms}?
+     * <ul>
+     *   <li>Arms that NAME an infobase the body mentions win: one distinct policy among them →
+     *       that policy; two different ones for the same dialog → {@link
+     *       ExternalInfobaseChangesPolicy#CANCEL} (a genuine conflict of intent);</li>
+     *   <li>otherwise, if any arm named an infobase at all, the dialog is somebody else's →
+     *       {@code null} (cancel, never a writing press);</li>
+     *   <li>otherwise (no arm could resolve a name — e.g. a launch window around EDT's own
+     *       delegate-performed update) attribution is impossible, so the unnamed arms decide,
+     *       with the same one-policy/ambiguity rule. That is the pre-attribution behaviour.</li>
+     * </ul>
+     *
+     * @param body the dialog message text (may be {@code null})
+     * @param arms the outstanding arms (may be empty)
+     * @return the policy to apply, or {@code null} when the dialog must be cancelled
+     */
+    static ExternalInfobaseChangesPolicy choosePolicyFor(String body, List<ConflictArm> arms)
+    {
+        if (arms == null || arms.isEmpty())
+        {
+            return null;
+        }
+        ExternalInfobaseChangesPolicy matched = null;
+        boolean anyNamed = false;
+        ExternalInfobaseChangesPolicy unnamed = null;
+        boolean unnamedAmbiguous = false;
+        for (ConflictArm arm : arms)
+        {
+            if (arm.infobaseName == null)
             {
-                if (CONFLICT_ARM_COUNTS[policy.ordinal()] == 0)
+                if (unnamed != null && unnamed != arm.policy)
                 {
-                    continue;
+                    unnamedAmbiguous = true;
                 }
-                if (found != null)
-                {
-                    // Ambiguous: two callers want different answers to the same modal.
-                    return ExternalInfobaseChangesPolicy.CANCEL;
-                }
-                found = policy;
+                unnamed = unnamed == null ? arm.policy : unnamed;
+                continue;
             }
-            return found;
+            anyNamed = true;
+            if (body == null || !mentionsQuoted(body, arm.infobaseName))
+            {
+                continue;
+            }
+            if (matched != null && matched != arm.policy)
+            {
+                // The SAME dialog is claimed by two callers wanting different answers.
+                return ExternalInfobaseChangesPolicy.CANCEL;
+            }
+            matched = arm.policy;
+        }
+        if (matched != null)
+        {
+            return matched;
+        }
+        if (anyNamed)
+        {
+            // Named arms exist but none of them is about THIS dialog: not ours.
+            return null;
+        }
+        return unnamedAmbiguous ? ExternalInfobaseChangesPolicy.CANCEL : unnamed;
+    }
+
+    /** Trims to {@code null}: a blank infobase name is the same as "no name". */
+    private static String trimToNull(String value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * One outstanding conflict-matcher arm: the policy plus the infobase it covers
+     * ({@code null} when the caller could not resolve one). Value semantics, so a
+     * {@code disarm} releases exactly one matching arm.
+     */
+    static final class ConflictArm
+    {
+        final String infobaseName;
+        final ExternalInfobaseChangesPolicy policy;
+
+        ConflictArm(String infobaseName, ExternalInfobaseChangesPolicy policy)
+        {
+            this.infobaseName = infobaseName;
+            this.policy = policy;
+        }
+
+        @Override
+        public boolean equals(Object other)
+        {
+            if (this == other)
+            {
+                return true;
+            }
+            if (!(other instanceof ConflictArm))
+            {
+                return false;
+            }
+            ConflictArm that = (ConflictArm)other;
+            return policy == that.policy && Objects.equals(infobaseName, that.infobaseName);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(infobaseName, policy);
         }
     }
 
@@ -789,11 +846,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
             if (conflictPolicy != null)
             {
-                CONFLICT_ARM_COUNTS[conflictPolicy.ordinal()]++;
-                if (infobaseName != null && !infobaseName.trim().isEmpty())
-                {
-                    CONFLICT_INFOBASE_NAMES.add(infobaseName.trim());
-                }
+                CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName), conflictPolicy));
             }
         }
         reconcileOnUiThread(display);
@@ -881,13 +934,9 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount--;
             }
-            if (conflictPolicy != null && CONFLICT_ARM_COUNTS[conflictPolicy.ordinal()] > 0)
+            if (conflictPolicy != null)
             {
-                CONFLICT_ARM_COUNTS[conflictPolicy.ordinal()]--;
-                if (infobaseName != null && !infobaseName.trim().isEmpty())
-                {
-                    CONFLICT_INFOBASE_NAMES.remove(infobaseName.trim());
-                }
+                CONFLICT_ARMS.remove(new ConflictArm(trimToNull(infobaseName), conflictPolicy));
             }
             display = filterDisplay;
         }
@@ -949,13 +998,8 @@ public final class LaunchUpdateDialogAutoConfirmer
                 filter = null;
                 filterDisplay = null;
             }
-            boolean conflictArmed = false;
-            for (int count : CONFLICT_ARM_COUNTS)
-            {
-                conflictArmed |= count > 0;
-            }
-            boolean anyArmed =
-                updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0 || conflictArmed;
+            boolean anyArmed = updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0
+                || !CONFLICT_ARMS.isEmpty();
             if (anyArmed && filter == null)
             {
                 toInstall = createFilterListener();
@@ -1033,16 +1077,16 @@ public final class LaunchUpdateDialogAutoConfirmer
                 restructureArmed = restructureArmCount > 0;
             }
             // The conflict matcher is armed per policy; a null choice means "not armed".
-            ExternalInfobaseChangesPolicy conflictPolicy = chooseConflictPolicy();
+            boolean conflictArmed = conflictMatcherArmed();
             // The body is only read (a widget-tree walk) when the title did not already
             // match an armed TITLE matcher (update, restructure or conflict) AND the
             // session matcher is armed — otherwise it is needless work.
             boolean titleMatched = (updateArmed && isTargetTitle(title))
                 || (restructureArmed && isRestructureTitle(title))
-                || (conflictPolicy != null && isConflictTitle(title));
+                || (conflictArmed && isConflictTitle(title));
             boolean needBody = sessionArmed && !titleMatched;
             String body = needBody ? readDialogBody(shell) : null;
-            if (!shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, conflictPolicy != null, title,
+            if (!shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, conflictArmed, title,
                 body))
             {
                 return;
@@ -1397,7 +1441,7 @@ public final class LaunchUpdateDialogAutoConfirmer
                 // Deferred like every other press: the attribution reads the dialog BODY, and at
                 // SWT.Show time the message area may not be populated yet — inside the asyncExec
                 // the dialog is fully built and pumping its own event loop.
-                shell.getDisplay().asyncExec(() -> pressConflictButton(shell, chooseConflictPolicy()));
+                shell.getDisplay().asyncExec(() -> pressConflictButton(shell));
                 return;
             }
             // Distinguish the two modals (the body walk is cheap and also drives the
@@ -1577,7 +1621,7 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param shell the conflict dialog shell
      * @param policy the policy selected by the arming call (may be {@code null})
      */
-    private static void pressConflictButton(Shell shell, ExternalInfobaseChangesPolicy policy)
+    private static void pressConflictButton(Shell shell)
     {
         if (shell == null || shell.isDisposed())
         {
@@ -1585,7 +1629,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         }
         try
         {
-            pressConflictButtonUnguarded(shell, policy);
+            pressConflictButtonUnguarded(shell);
         }
         catch (RuntimeException e)
         {
@@ -1594,12 +1638,13 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /** The body of {@link #pressConflictButton}, called inside its disposal/exception guard. */
-    private static void pressConflictButtonUnguarded(Shell shell, ExternalInfobaseChangesPolicy policy)
+    private static void pressConflictButtonUnguarded(Shell shell)
     {
-        // Attribute the dialog first: while an armed update NAMES its infobase, only a conflict
-        // modal about one of those names may be answered with a WRITING choice — anything else (a
-        // foreign infobase, a manually opened dialog, a body we cannot read) is cancelled instead.
-        ExternalInfobaseChangesPolicy effective = attributable(shell) ? policy : null;
+        // Attribute the dialog and choose in ONE step: the answer belongs to the arm that named
+        // THIS infobase, so two concurrent updates of different infobases keep their own policies.
+        // Anything unattributable — a foreign infobase, a manually opened dialog, a body we cannot
+        // read — yields null, i.e. cancel rather than a writing press.
+        ExternalInfobaseChangesPolicy effective = chooseConflictPolicy(collectDialogText(shell));
         Set<String> labels = conflictButtonLabels(effective);
         Button button = labels == null ? null : findButtonByLabel(shell, 0, labels);
         if (chooseConflictAction(effective, button != null) == ConfirmAction.PRESS_POLICY_BUTTON)
@@ -1617,8 +1662,8 @@ public final class LaunchUpdateDialogAutoConfirmer
         conflictCancelCount++;
         Activator.logInfo("Cancelling infobase-changed-outside-EDT dialog '" //$NON-NLS-1$
             + safeShellText(shell) + "' (policy " //$NON-NLS-1$
-            + (policy == null ? "none" : policy.wireValue()) //$NON-NLS-1$
-            + (effective == null && policy != null ? ", not attributable to an armed update" : "") //$NON-NLS-1$ //$NON-NLS-2$
+            + (effective == null ? "none" : effective.wireValue()) //$NON-NLS-1$
+            + (effective == null ? ", not attributable to an armed update" : "") //$NON-NLS-1$ //$NON-NLS-2$
             + (labels != null && button == null ? ", button label not found" : "") + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         shell.close();
     }
