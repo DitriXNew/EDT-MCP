@@ -193,9 +193,11 @@ public class LaunchUpdateDialogConflictMatcherTest
                 LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null))
         {
             LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
-                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND, null);
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED, null);
             assertFalse(named.cancelled());
             assertTrue(unnamed.cancelled());
+            assertEquals(LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED,
+                unnamed.reason());
         }
         // A closed window records nothing further.
         LaunchUpdateDialogAutoConfirmer.ConflictWatch closed =
@@ -204,6 +206,22 @@ public class LaunchUpdateDialogConflictMatcherTest
         LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
             LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY, "mine-base"); //$NON-NLS-1$
         assertFalse(closed.cancelled());
+    }
+
+    @Test
+    public void testNotAttributedCancelDoesNotAdviseRepeatingThePolicy()
+    {
+        // Repeating the same policy cannot fix a dialog that was never attributable, so the advice
+        // must not say so - it names the two real ways forward instead.
+        String message = ExternalInfobaseChangesPolicy.declinedUpdateError(
+            ExternalInfobaseChangesPolicy.OVERRIDE,
+            LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED);
+        assertTrue(message, message.contains("could not be attributed")); //$NON-NLS-1$
+        assertFalse(message, message.contains("Re-run with externalInfobaseChanges")); //$NON-NLS-1$
+        // BOTH remedies are pinned: the dialog may have belonged to another operation (retry), or
+        // this call cannot resolve its own infobase (retrying is useless - target one that does).
+        assertTrue(message, message.contains("simply retry")); //$NON-NLS-1$
+        assertTrue(message, message.contains("an application that does")); //$NON-NLS-1$
     }
 
     @Test
@@ -248,7 +266,8 @@ public class LaunchUpdateDialogConflictMatcherTest
             Arrays.asList("agent-base"))); //$NON-NLS-1$
         // A blank armed name must not match everything.
         assertFalse(LaunchUpdateDialogAutoConfirmer.bodyMentionsAny(body, Arrays.asList(""))); //$NON-NLS-1$
-        // An unattributed dialog completes as a CANCEL (policy null), never as a press.
+        // An unattributed dialog is CANCELLED, never pressed: cancelling writes nothing, while
+        // leaving an application-modal dialog open would freeze the workbench and hang the call.
         assertEquals(ConfirmAction.CANCEL_DIALOG,
             LaunchUpdateDialogAutoConfirmer.chooseConflictAction(null, true));
     }
@@ -301,22 +320,25 @@ public class LaunchUpdateDialogConflictMatcherTest
     }
 
     @Test
-    public void testUnnamedArmsKeepThePreAttributionBehaviour()
+    public void testUnnamedArmsCanOnlyDecline()
     {
-        // A launch window that could not resolve an infobase name (EDT performs the update
-        // inside its own launch delegate) cannot attribute anything - the single armed policy
-        // still applies, and only a genuine disagreement cancels.
-        assertEquals(ExternalInfobaseChangesPolicy.OVERRIDE,
-            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
-                arm(null, ExternalInfobaseChangesPolicy.OVERRIDE))));
+        // A window that could not resolve an infobase name is degraded to cancel by arm(), so an
+        // unnamed arm can only ever decline - never write.
         assertEquals(ExternalInfobaseChangesPolicy.CANCEL,
             LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
-                arm(null, ExternalInfobaseChangesPolicy.OVERRIDE),
-                arm(null, ExternalInfobaseChangesPolicy.IMPORT))));
-        // A NAMED arm that does not match wins over an unnamed one: the dialog is not ours.
+                arm(null, ExternalInfobaseChangesPolicy.CANCEL))));
+        assertEquals(ExternalInfobaseChangesPolicy.CANCEL,
+            LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList(
+                arm(null, ExternalInfobaseChangesPolicy.CANCEL),
+                arm(null, ExternalInfobaseChangesPolicy.CANCEL))));
+        // A NAMED arm that does not match still yields "not ours" - and the press path answers
+        // that by CANCELLING the dialog (this modal is application-modal: leaving it open would
+        // freeze the workbench), which writes nothing on either side.
         assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_C, Arrays.asList(
-            arm(null, ExternalInfobaseChangesPolicy.OVERRIDE),
+            arm(null, ExternalInfobaseChangesPolicy.CANCEL),
             arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE)))); //$NON-NLS-1$
+        assertEquals(ConfirmAction.CANCEL_DIALOG,
+            LaunchUpdateDialogAutoConfirmer.chooseConflictAction(null, true));
         assertNull(LaunchUpdateDialogAutoConfirmer.choosePolicyFor(BODY_A, Arrays.asList()));
     }
 
@@ -341,6 +363,25 @@ public class LaunchUpdateDialogConflictMatcherTest
         assertTrue(message, message.contains("override")); //$NON-NLS-1$
         assertTrue(message, message.contains("import")); //$NON-NLS-1$
         assertTrue(message, message.contains("outside EDT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnArmWithoutANameCanOnlyDecline()
+    {
+        // Without an infobase name nothing can be proven to be ours, so a WRITING answer is
+        // degraded to cancel: the modal is still answered (the call cannot hang on it), but a
+        // dialog whose ownership is unproven is never written through.
+        assertEquals(ExternalInfobaseChangesPolicy.CANCEL, LaunchUpdateDialogAutoConfirmer
+            .attributableAnswer(null, ExternalInfobaseChangesPolicy.OVERRIDE));
+        assertEquals(ExternalInfobaseChangesPolicy.CANCEL, LaunchUpdateDialogAutoConfirmer
+            .attributableAnswer("   ", ExternalInfobaseChangesPolicy.IMPORT)); //$NON-NLS-1$
+        assertEquals(ExternalInfobaseChangesPolicy.CANCEL, LaunchUpdateDialogAutoConfirmer
+            .attributableAnswer(null, ExternalInfobaseChangesPolicy.CANCEL));
+        // With a name the caller's own answer stands.
+        assertEquals(ExternalInfobaseChangesPolicy.OVERRIDE, LaunchUpdateDialogAutoConfirmer
+            .attributableAnswer("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE)); //$NON-NLS-1$
+        assertEquals(ExternalInfobaseChangesPolicy.IMPORT, LaunchUpdateDialogAutoConfirmer
+            .attributableAnswer("agent-base", ExternalInfobaseChangesPolicy.IMPORT)); //$NON-NLS-1$
     }
 
     private static LaunchUpdateDialogAutoConfirmer.ConflictArm arm(String infobase,

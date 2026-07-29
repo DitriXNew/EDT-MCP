@@ -658,7 +658,6 @@ public class RunYaxunitTestsTool implements IMcpTool
         // The conflict matcher follows the same opt-out as the update matcher, and matters
         // most for a STANDALONE-SERVER application: there the pre-launch update is deferred
         // to EDT's launch delegate, so this window is the ONLY one covering that update.
-        ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
         // Name the infobase so the conflict press stays ATTRIBUTABLE in this window: EDT states
         // it in the dialog message, and only a dialog naming an armed infobase may be answered
         // with a writing choice.
@@ -668,6 +667,9 @@ public class RunYaxunitTestsTool implements IMcpTool
         String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(
             Activator.getDefault().getApplicationManager(),
             launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
+        // Armed even without a resolved name: the confirmer degrades such an arm to 'cancel', so
+        // the modal is answered (no hang) but nothing is written on an unattributable dialog.
+        ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
         // For a STANDALONE-SERVER application this window is where the DB update actually
         // happens, so a conflict cancelled here must be reported with its cause - otherwise the run
         // just fails later with a generic "no junit.xml" and the caller never learns which knob
@@ -1141,9 +1143,9 @@ public class RunYaxunitTestsTool implements IMcpTool
             boolean[] armFlags = debugPathArmFlags(updateBeforeLaunch);
             // Same as the RUN path: gated on the update opt-out, and the only armed window
             // around a standalone-server application's delegate-performed update.
-            ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? externalChanges : null;
             String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
                 applicationId);
+            ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? externalChanges : null;
             // Same as the RUN path: this is the only armed window around a standalone-server
             // application's delegate-performed update, so a cancel here is reported with its cause.
             LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null

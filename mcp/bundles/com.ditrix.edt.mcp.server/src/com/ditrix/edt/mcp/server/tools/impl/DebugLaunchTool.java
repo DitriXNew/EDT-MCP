@@ -1074,8 +1074,8 @@ public class DebugLaunchTool implements IMcpTool
         // The conflict matcher follows the same opt-out as the update matcher. It matters
         // most for a STANDALONE-SERVER application: there the pre-launch update is deferred to
         // EDT's launch delegate, so this window is the ONLY one covering that update.
-        ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         String launchInfobase = launchInfobaseName(config);
+        ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
             launchPolicy, launchInfobase);
         InfobaseAuthDialogSuppressor.markActivityStart();
@@ -1126,8 +1126,12 @@ public class DebugLaunchTool implements IMcpTool
         // code-1003 "debug session already exists" modal is ALWAYS
         // auto-confirmed on this debug path (it is independent of the update
         // opt-out). Manual EDT launches outside this window still prompt.
-        ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         String launchInfobase = launchInfobaseName(config);
+        // The window lasts as long as the launch - minutes for a standalone-server mode switch -
+        // so it must never answer a dialog blind. That is handled where the arm is recorded: an arm
+        // whose infobase name could not be resolved (a by-name config with no persisted application
+        // id) is degraded to 'cancel', which still answers the modal but writes nothing.
+        ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         // This Job is where a STANDALONE-SERVER application's DB update actually happens (it is
         // deferred to EDT's launch delegate), so an external-changes dialog can be cancelled here —
         // long after debug_launch returned "launching". The window records that outcome so

@@ -362,6 +362,13 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static final String CANCEL_REASON_BUTTON_NOT_FOUND = "button-not-found"; //$NON-NLS-1$
 
     /**
+     * Reason value: the dialog could not be attributed to any armed update — it named another
+     * infobase, or the caller could not resolve its own. Cancelling is then the only answer that
+     * writes nothing, and repeating the same policy would not change that.
+     */
+    public static final String CANCEL_REASON_NOT_ATTRIBUTED = "not-attributed"; //$NON-NLS-1$
+
+    /**
      * The conflict-cancel windows currently open — one per update in flight (see
      * {@link #beginConflictWatch(String)}). A cancelled dialog is recorded INTO the windows it
      * belongs to, so both the fact and its reason stay correlated with the caller that owns
@@ -575,8 +582,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      *   <li>otherwise, if any arm named an infobase at all, the dialog is somebody else's →
      *       {@code null} (cancel, never a writing press);</li>
      *   <li>otherwise (no arm could resolve a name — e.g. a launch window around EDT's own
-     *       delegate-performed update) attribution is impossible, so the unnamed arms decide,
-     *       with the same one-policy/ambiguity rule. That is the pre-attribution behaviour.</li>
+     *       delegate-performed update) attribution is impossible, so the unnamed arms decide. Such
+     *       arms are degraded to {@link ExternalInfobaseChangesPolicy#CANCEL} when they are
+     *       recorded ({@link #attributableAnswer}), so what they decide is always a decline.</li>
      * </ul>
      *
      * @param body the dialog message text (may be {@code null})
@@ -660,6 +668,27 @@ public final class LaunchUpdateDialogAutoConfirmer
             this.policy = policy;
             this.infobaseName = infobaseName;
         }
+    }
+
+    /**
+     * The answer an arm may actually give: without an infobase name nothing can be proven to be
+     * ours, so a WRITING choice ({@code override} discards the infobase's external changes,
+     * {@code import} rewrites the project sources) is degraded to {@code cancel}.
+     *
+     * <p>That keeps both failure modes closed at once: the modal is still answered, so an
+     * unattended call cannot hang on it, and the answer cannot damage an update this caller does
+     * not own. Such a cancel is reported as {@link #CANCEL_REASON_NOT_ATTRIBUTED}, whose message
+     * explains that the dialog could not be tied to this operation - repeating the same policy
+     * would only degrade again - which is the honest outcome: the divergence was not resolved.
+     *
+     * @param infobaseName the name the caller could resolve (may be {@code null}/blank)
+     * @param policy the policy the caller asked for, never {@code null}
+     * @return the policy that may be applied
+     */
+    static ExternalInfobaseChangesPolicy attributableAnswer(String infobaseName,
+        ExternalInfobaseChangesPolicy policy)
+    {
+        return trimToNull(infobaseName) == null ? ExternalInfobaseChangesPolicy.CANCEL : policy;
     }
 
     /** Trims to {@code null}: a blank infobase name is the same as "no name". */
@@ -828,8 +857,11 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param updateDialog arm the "Application update" TITLE matcher
      * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
      * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
-     * @param conflictPolicy the button to press on the external-changes conflict modal, or
-     *            {@code null} to leave that modal alone
+     * @param conflictPolicy the answer for the external-changes conflict modal, or {@code null}
+     *            to leave that matcher unarmed. NOTE: this overload names no infobase, so the arm
+     *            is degraded to {@link ExternalInfobaseChangesPolicy#CANCEL} — nothing can be
+     *            proven to be this caller's. Use the five-argument overload to allow a writing
+     *            answer.
      */
     public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy)
@@ -847,9 +879,10 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
      * @param conflictPolicy the button to press on the external-changes conflict modal, or
      *            {@code null} to leave that modal alone
-     * @param infobaseName the infobase this update targets, as EDT names it (may be
-     *            {@code null}/blank when it cannot be resolved — the conflict modal is then
-     *            only ever CANCELLED, never pressed)
+     * @param infobaseName the infobase this update targets, as EDT names it. When it cannot be
+     *            resolved ({@code null}/blank), the arm is degraded to
+     *            {@link ExternalInfobaseChangesPolicy#CANCEL}: the modal is still answered, so the
+     *            call cannot hang, but nothing is written on a dialog whose ownership is unproven
      */
     public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
@@ -879,7 +912,8 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
             if (conflictPolicy != null)
             {
-                CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName), conflictPolicy));
+                CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName),
+                    attributableAnswer(infobaseName, conflictPolicy)));
             }
         }
         reconcileOnUiThread(display);
@@ -969,7 +1003,8 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
             if (conflictPolicy != null)
             {
-                CONFLICT_ARMS.remove(new ConflictArm(trimToNull(infobaseName), conflictPolicy));
+                CONFLICT_ARMS.remove(new ConflictArm(trimToNull(infobaseName),
+                    attributableAnswer(infobaseName, conflictPolicy)));
             }
             display = filterDisplay;
         }
@@ -1393,9 +1428,10 @@ public final class LaunchUpdateDialogAutoConfirmer
      * Pure decision (and test seam): how should EDT's external-changes conflict modal be
      * completed for the given policy?
      * <ul>
-     *   <li>{@link ExternalInfobaseChangesPolicy#CANCEL} (or a {@code null} policy) →
-     *       {@link ConfirmAction#CANCEL_DIALOG}: nothing is written on either side and the
-     *       update call fails with an actionable error instead of hanging;</li>
+     *   <li>{@link ExternalInfobaseChangesPolicy#CANCEL} (or a {@code null} policy, i.e. a dialog
+     *       that could not be attributed) → {@link ConfirmAction#CANCEL_DIALOG}: nothing is written
+     *       on either side and the update call fails with an actionable error instead of
+     *       hanging;</li>
      *   <li>{@code OVERRIDE}/{@code IMPORT} → {@link ConfirmAction#PRESS_POLICY_BUTTON} when
      *       the labelled button was located, else {@code CANCEL_DIALOG} — the modal's
      *       DEFAULT button is "Import" (it rewrites the project sources), so a label miss
@@ -1652,7 +1688,6 @@ public final class LaunchUpdateDialogAutoConfirmer
      * <p>Runs on the UI thread; fully guarded — never throws.
      *
      * @param shell the conflict dialog shell
-     * @param policy the policy selected by the arming call (may be {@code null})
      */
     private static void pressConflictButton(Shell shell)
     {
@@ -1680,6 +1715,23 @@ public final class LaunchUpdateDialogAutoConfirmer
         ConflictDecision decision = decideFor(collectDialogText(shell));
         ExternalInfobaseChangesPolicy effective = decision.policy;
         String attributedName = decision.infobaseName;
+        if (effective == null)
+        {
+            // Not attributable: the dialog names another infobase, or its text could not be read.
+            // It is CANCELLED rather than left alone - this modal is application-modal, so leaving
+            // it open freezes the workbench and hangs every call behind it, including the one this
+            // window was opened for. Cancelling writes nothing on either side; the worst case is
+            // that an update we do not own has to be retried, which beats a stuck workbench.
+            Activator.logInfo("Cancelling an infobase-changed-outside-EDT dialog that is not " //$NON-NLS-1$
+                + "attributable to an armed update: '" + safeShellText(shell) + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+            // Recorded only for windows that could not name an infobase either. A NAMED window
+            // must NOT see it: its own update may well be applying normally, and marking it would
+            // fail a call over somebody else's dialog. The consequence is accepted: when the
+            // unreadable dialog WAS ours, that call falls back to the generic out-of-sync error.
+            noteCancel(null, CANCEL_REASON_NOT_ATTRIBUTED);
+            shell.close();
+            return;
+        }
         Set<String> labels = conflictButtonLabels(effective);
         Button button = labels == null ? null : findButtonByLabel(shell, 0, labels);
         if (chooseConflictAction(effective, button != null) == ConfirmAction.PRESS_POLICY_BUTTON)
@@ -1690,10 +1742,24 @@ public final class LaunchUpdateDialogAutoConfirmer
             pressButton(button);
             return;
         }
-        // NB: a null policy here means the dialog was NOT attributed to an armed update —
-        // cancelling is then the only safe completion.
-        noteCancel(attributedName,
-            labels != null && button == null ? CANCEL_REASON_BUTTON_NOT_FOUND : CANCEL_REASON_POLICY);
+        // The reason must match what actually happened, because the caller turns it into advice:
+        // a cancel that came from an arm which could not name its infobase (attributedName == null)
+        // was DEGRADED here, so "re-run with override" would be wrong - re-running would degrade
+        // again. Such a cancel is reported as not-attributed.
+        String cancelReason;
+        if (labels != null && button == null)
+        {
+            cancelReason = CANCEL_REASON_BUTTON_NOT_FOUND;
+        }
+        else if (attributedName == null)
+        {
+            cancelReason = CANCEL_REASON_NOT_ATTRIBUTED;
+        }
+        else
+        {
+            cancelReason = CANCEL_REASON_POLICY;
+        }
+        noteCancel(attributedName, cancelReason);
         Activator.logInfo("Cancelling infobase-changed-outside-EDT dialog '" //$NON-NLS-1$
             + safeShellText(shell) + "' (policy " //$NON-NLS-1$
             + (effective == null ? "none" : effective.wireValue()) //$NON-NLS-1$

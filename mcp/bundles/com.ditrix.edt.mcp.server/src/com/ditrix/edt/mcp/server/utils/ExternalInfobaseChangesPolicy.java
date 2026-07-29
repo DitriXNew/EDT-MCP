@@ -116,6 +116,17 @@ public enum ExternalInfobaseChangesPolicy
             "The infobase configuration was changed outside EDT (Designer, ibcmd or another CLI) since " //$NON-NLS-1$
                 + "the last EDT interaction. The dialog that offers to resolve it was cancelled while this " //$NON-NLS-1$
                 + "update ran, so nothing was written and the infobase is still out of sync. "); //$NON-NLS-1$
+        if (LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED.equals(reason))
+        {
+            sb.append("Cause: the dialog could not be attributed to this operation - it named a " //$NON-NLS-1$
+                + "different infobase, or this call could not resolve the infobase it targets - so it " //$NON-NLS-1$
+                + "was cancelled rather than answered with a writing choice. If it belonged to " //$NON-NLS-1$
+                + "another operation running at the same time, simply retry. If this call cannot " //$NON-NLS-1$
+                + "resolve its own infobase (an application that does not resolve one), retrying " //$NON-NLS-1$
+                + "will not help: target it by an application that does, or resolve the divergence " //$NON-NLS-1$
+                + "in the EDT UI once."); //$NON-NLS-1$
+            return sb.toString();
+        }
         if (LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND.equals(reason))
         {
             sb.append("Cause: the '") //$NON-NLS-1$

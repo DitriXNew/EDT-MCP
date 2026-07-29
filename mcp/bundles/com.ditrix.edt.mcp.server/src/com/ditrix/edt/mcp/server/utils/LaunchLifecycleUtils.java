@@ -1353,6 +1353,18 @@ public final class LaunchLifecycleUtils
                 after = appManager.update(application, ApplicationUpdateType.INCREMENTAL, context,
                     new NullProgressMonitor());
             }
+            catch (ApplicationException ex)
+            {
+                // The cancel can ABORT the update instead of letting it return a state. The reason
+                // is in the window, and it beats the generic "Database update failed" the outer
+                // handler would produce - it names the knob that would have let it through.
+                Optional<String> aborted = declinedByCancelledConflict(policy, watch);
+                if (aborted.isPresent())
+                {
+                    return aborted;
+                }
+                throw ex;
+            }
             finally
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
