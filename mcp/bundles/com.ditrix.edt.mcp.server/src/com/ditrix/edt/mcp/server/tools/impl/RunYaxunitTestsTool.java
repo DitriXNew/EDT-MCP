@@ -33,6 +33,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugPlugin;
+import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
@@ -202,6 +203,68 @@ public class RunYaxunitTestsTool implements IMcpTool
     static boolean shouldSweepExistingClientSession(boolean updateBeforeLaunch)
     {
         return updateBeforeLaunch;
+    }
+
+    /**
+     * The actionable message for a launch window whose external-changes dialog was cancelled, or
+     * {@code null} when nothing was cancelled (or no window was opened because the caller armed no
+     * policy).
+     *
+     * <p>This is the standalone-server case: {@code prepareForFreshLaunch} defers that
+     * application's DB update to EDT's launch delegate, so the launch window is the only place the
+     * conflict can appear - and without this the run would only fail later, generically.
+     *
+     * <p>Pure read: the window is CLOSED by the same {@code finally} that disarms the confirmer, so
+     * a launch that throws cannot leave it registered.
+     *
+     * @param conflicts the window opened around the launch (may be {@code null})
+     * @param policy the policy the call ran with (may be {@code null})
+     * @return the message, or {@code null}
+     */
+    private static String declinedConflict(LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
+        ExternalInfobaseChangesPolicy policy)
+    {
+        if (conflicts == null || !conflicts.cancelled())
+        {
+            return null;
+        }
+        return ExternalInfobaseChangesPolicy.declinedUpdateError(policy, conflicts.reason());
+    }
+
+    /** Closes a conflict window when one was opened; never throws. */
+    private static void closeQuietly(LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts)
+    {
+        if (conflicts != null)
+        {
+            conflicts.close();
+        }
+    }
+
+    /**
+     * Terminates a launch this tool refuses to keep, best-effort: the caller is already reporting
+     * the real failure, and a client left running against a not-updated infobase is worse than a
+     * logged termination error.
+     *
+     * @param launch the launch to stop (may be {@code null})
+     */
+    private static void terminateQuietly(ILaunch launch)
+    {
+        if (launch == null)
+        {
+            return;
+        }
+        try
+        {
+            if (launch.canTerminate())
+            {
+                launch.terminate();
+            }
+        }
+        catch (DebugException e)
+        {
+            Activator.logError("Failed to terminate a YAXUnit launch refused after a cancelled " //$NON-NLS-1$
+                + "external-changes dialog", e); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -605,6 +668,13 @@ public class RunYaxunitTestsTool implements IMcpTool
         String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(
             Activator.getDefault().getApplicationManager(),
             launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
+        // For a STANDALONE-SERVER application this window is where the DB update actually
+        // happens, so a conflict cancelled here must be reported with its cause - otherwise the run
+        // just fails later with a generic "no junit.xml" and the caller never learns which knob
+        // would have let it through.
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
+            ? null
+            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
             launchInfobase);
         ILaunch launch;
@@ -617,6 +687,19 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
                 launchInfobase);
+            // Closed HERE, not after the check below: a launch() that throws must not leave the
+            // window registered in the confirmer for the rest of the session.
+            closeQuietly(conflicts);
+        }
+        String declined = declinedConflict(conflicts, launchPolicy);
+        if (declined != null)
+        {
+            // The client started, but the infobase it needs was never updated - it would run against
+            // the old configuration. Stop it and report the cause instead of polling for a report
+            // that cannot come. NOT registered as owned: that flag protects a launch from being
+            // swept, which is the opposite of what this one needs.
+            terminateQuietly(launch);
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined));
         }
         // Register BEFORE leaving the per-key lock so a concurrent
         // auto-chain on the same IB sees this launch as owned and
@@ -1049,12 +1132,17 @@ public class RunYaxunitTestsTool implements IMcpTool
             ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? externalChanges : null;
             String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
                 applicationId);
+            // Same as the RUN path: this is the only armed window around a standalone-server
+            // application's delegate-performed update, so a cancel here is reported with its cause.
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
+                ? null
+                : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
             LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
                 launchInfobase);
+            ILaunch[] spawned = new ILaunch[1];
             try
             {
-                ILaunch spawned = workingCopy.launch(ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
-                LaunchLifecycleUtils.registerOwnedLaunch(spawned);
+                spawned[0] = workingCopy.launch(ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
             }
             catch (CoreException ex)
             {
@@ -1065,7 +1153,18 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0],
                     launchPolicy, launchInfobase);
+                closeQuietly(conflicts);
             }
+            String declined = declinedConflict(conflicts, launchPolicy);
+            if (declined != null)
+            {
+                // Registered only AFTER this check: the owned flag protects a launch from being
+                // swept, so marking one we are about to refuse would leave it live and protected
+                // if the termination below cannot go through.
+                terminateQuietly(spawned[0]);
+                return ToolResult.error(declined).toJson();
+            }
+            LaunchLifecycleUtils.registerOwnedLaunch(spawned[0]);
         }
         return buildDebugLaunchMarkdown(matchingConfig.getName(), projectName, applicationId,
             reportDir, junitFile, preLaunch);
