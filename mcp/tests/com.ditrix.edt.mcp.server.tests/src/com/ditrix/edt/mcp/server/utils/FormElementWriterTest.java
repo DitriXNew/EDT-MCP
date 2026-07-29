@@ -37,6 +37,9 @@ import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
@@ -2661,5 +2664,86 @@ public class FormElementWriterTest
             reference.setUpperBound(many ? -1 : 1);
             return reference;
         }
+    }
+
+    @Test
+    public void testEnforceContentFormCommandBarIdReachesTheFormThroughItsOwner()
+    {
+        // A top-level CommonForm carries its content through the same BasicForm 'form' reference an
+        // owned form uses, so the caller can re-assert the id sentinel after fillDefaultReferences
+        // without knowing anything about the content object. Issue #297.
+        CommonForm commonForm = MdClassFactory.eINSTANCE.createCommonForm();
+        EObject content = FormElementWriter.createContentForm(null, null, null, false);
+        commonForm.eSet(MdClassPackage.Literals.BASIC_FORM__FORM, content);
+        EObject bar = (EObject)content.eGet(feature(content, "autoCommandBar")); //$NON-NLS-1$
+        // The BM integration resets the predefined bar's id to the model default.
+        bar.eSet(feature(bar, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+
+        FormElementWriter.enforceContentFormCommandBarId(commonForm);
+
+        assertEquals(Integer.valueOf(-1), bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEnforceContentFormCommandBarIdToleratesAFormWithoutContent()
+    {
+        // The sentinel re-assert runs AFTER fillDefaultReferences and must tolerate a form whose
+        // 'form' reference is not set - it reads the reference rather than assuming it, so it is a
+        // no-op instead of an NPE. (Building the content itself is NOT best-effort: a form that
+        // cannot get one fails the create, see createCommonFormContent.)
+        CommonForm commonForm = MdClassFactory.eINSTANCE.createCommonForm();
+
+        FormElementWriter.enforceContentFormCommandBarId(commonForm);
+
+        assertNull(commonForm.eGet(MdClassPackage.Literals.BASIC_FORM__FORM));
+    }
+
+    @Test
+    public void testACommonFormContentIsTheSameRenderableShapeAnOwnedFormGets()
+    {
+        // The whole point of issue #297: a standalone form must be built from the same content as an
+        // owned one - flags, the vertical children group and the render-critical predefined command
+        // bar with its -1 id - otherwise it renders empty and no member can attach to it.
+        EObject content = FormElementWriter.createContentForm(null,
+            MdClassFactory.eINSTANCE.createCommonForm(), null, false);
+
+        assertNotNull(content);
+        assertEquals("Form", content.eClass().getName()); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, content.eGet(feature(content, "autoTitle"))); //$NON-NLS-1$
+        assertEquals("Vertical", literalOf(content, "group")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject bar = (EObject)content.eGet(feature(content, "autoCommandBar")); //$NON-NLS-1$
+        assertNotNull(bar);
+        assertEquals(Integer.valueOf(-1), bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateCommonFormContentUndoesTheReferenceWhenTheFqnCannotBeGenerated()
+    {
+        // The content is linked to its form BEFORE the canonical FQN is known. When the generator
+        // cannot produce one the create is refused - and the reference to the content that will
+        // never be attached must be undone, or the surrounding transaction fails at commit with
+        // "Failed to persist reference value" instead of with the actionable message. Issue #297,
+        // the trap XdtoWriter already hit for the XDTO package content.
+        CommonForm commonForm = MdClassFactory.eINSTANCE.createCommonForm();
+        commonForm.setName("F"); //$NON-NLS-1$
+        com._1c.g5.v8.bm.core.IBmTransaction tx =
+            org.mockito.Mockito.mock(com._1c.g5.v8.bm.core.IBmTransaction.class);
+        com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator gen =
+            org.mockito.Mockito.mock(com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator.class);
+
+        try
+        {
+            FormElementWriter.createCommonFormContent(tx, commonForm, null, gen, null, false);
+            fail("a form whose content FQN cannot be generated must not be reported as created"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("F")); //$NON-NLS-1$
+        }
+
+        assertNull("the form must NOT keep a reference to the unattached content", //$NON-NLS-1$
+            commonForm.eGet(MdClassPackage.Literals.BASIC_FORM__FORM));
+        org.mockito.Mockito.verify(tx, org.mockito.Mockito.never())
+            .attachTopObject(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 }
