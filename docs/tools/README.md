@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**83 tools.**
+**84 tools.**
 
 ## Core
 
@@ -33,7 +33,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`create_launch_config`](create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
 | [`delete_launch_config`](delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
-| [`delete_metadata`](delete_metadata.md) | Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name' or a FORM member - item / attribute / command / handler) addressed… |
+| [`delete_metadata`](delete_metadata.md) | Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO pac… |
 | [`export_common_picture`](export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |
 | [`get_configuration_properties`](get_configuration_properties.md) | Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.) |
 | [`get_subsystem_content`](get_subsystem_content.md) | Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsy… |
@@ -156,3 +156,4 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`set_infobase_credentials`](set_infobase_credentials.md) | Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user li… |
 | [`switch_git_branch`](switch_git_branch.md) | Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/… |
 | [`update_database`](update_database.md) | Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + appl… |
+| [`validate_xdto_package`](validate_xdto_package.md) | Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and re… |
