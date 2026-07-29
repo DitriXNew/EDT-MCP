@@ -1165,7 +1165,15 @@ public class DebugLaunchTool implements IMcpTool
         catch (CoreException e)
         {
             // Recorded, not just logged: this Job's caller was answered "launching" long ago, so the
-            // log is the only place the reason would otherwise exist.
+            // log is the only place the reason would otherwise exist. A cancelled conflict is
+            // preferred over the delegate's own message: it is the actual cause AND it names the
+            // knob that would have let the launch through.
+            String declined = declinedConflictMessage(config, launchPolicy, conflicts);
+            if (declined != null)
+            {
+                Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined, e);
+            }
             recordAsyncFailure(config, ERR_ASYNC_PREFIX + e.getMessage());
             Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
             return e.getStatus();
@@ -1174,6 +1182,12 @@ public class DebugLaunchTool implements IMcpTool
         {
             // Never let the Job die on an uncaught exception — it would vanish
             // without a trace for the MCP caller. Log + report an error status.
+            String declined = declinedConflictMessage(config, launchPolicy, conflicts);
+            if (declined != null)
+            {
+                Activator.logError(ERR_ASYNC_PREFIX + t.getMessage(), t);
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined, t);
+            }
             recordAsyncFailure(config, ERR_ASYNC_PREFIX + t.getMessage());
             Activator.logError(ERR_ASYNC_PREFIX + t.getMessage(), t);
             return new Status(IStatus.ERROR, Activator.PLUGIN_ID,

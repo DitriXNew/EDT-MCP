@@ -330,6 +330,19 @@ public class LaunchUpdateDialogConflictMatcherTest
             Arrays.asList(arm("agent-base", ExternalInfobaseChangesPolicy.OVERRIDE))).infobaseName); //$NON-NLS-1$
     }
 
+    @Test
+    public void testDeclinedUpdateErrorNamesTheWayOut()
+    {
+        // The message is what a caller gets INSTEAD of a generic launch failure, so it must carry
+        // the parameter and both writing answers - that is the whole point of preferring it.
+        String message = ExternalInfobaseChangesPolicy.declinedUpdateError(
+            ExternalInfobaseChangesPolicy.CANCEL, LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY);
+        assertTrue(message, message.contains("externalInfobaseChanges")); //$NON-NLS-1$
+        assertTrue(message, message.contains("override")); //$NON-NLS-1$
+        assertTrue(message, message.contains("import")); //$NON-NLS-1$
+        assertTrue(message, message.contains("outside EDT")); //$NON-NLS-1$
+    }
+
     private static LaunchUpdateDialogAutoConfirmer.ConflictArm arm(String infobase,
         ExternalInfobaseChangesPolicy policy)
     {

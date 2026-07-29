@@ -683,6 +683,18 @@ public class RunYaxunitTestsTool implements IMcpTool
             launch = workingCopy.launch(ILaunchManager.RUN_MODE,
                 new NullProgressMonitor());
         }
+        catch (CoreException ex)
+        {
+            // The cancel can also ABORT the launch instead of letting it return: the reason is
+            // still in the window, and it explains the failure far better than the delegate's own
+            // message does.
+            String cancelled = declinedConflict(conflicts, launchPolicy);
+            if (cancelled != null)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, cancelled, ex));
+            }
+            throw ex;
+        }
         finally
         {
             LaunchUpdateDialogAutoConfirmer.disarm(armFlags[0], armFlags[1], armFlags[0], launchPolicy,
@@ -1147,7 +1159,11 @@ public class RunYaxunitTestsTool implements IMcpTool
             catch (CoreException ex)
             {
                 Activator.logError("Failed to launch YAXUnit in debug mode", ex); //$NON-NLS-1$
-                return ToolResult.error("Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
+                // Same as the RUN path: a cancel that aborted the launch is reported with its own
+                // cause, not with the delegate's generic message.
+                String cancelled = declinedConflict(conflicts, launchPolicy);
+                return ToolResult.error(cancelled != null ? cancelled
+                    : "Launch failed: " + ex.getMessage()).toJson(); //$NON-NLS-1$
             }
             finally
             {
