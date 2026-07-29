@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
@@ -959,6 +960,52 @@ public class DebugLaunchTool implements IMcpTool
      * @return {@code null} when the launch was scheduled (or, in a headless test
      *         with no UI thread, completed) successfully; otherwise an error message.
      */
+
+    /**
+     * The actionable message for a launch whose external-changes dialog was cancelled while the
+     * launch delegate performed the DB update, or {@code null} when nothing was cancelled.
+     *
+     * <p>Also RECORDS it, so {@code debug_status} can report an outcome that happened long after
+     * this Job's caller received its "launching" answer.
+     *
+     * @param config the launch configuration that was started
+     * @param policy the policy the call ran with (may be {@code null})
+     * @param conflicts the cancel window opened around the launch
+     * @return the message, or {@code null}
+     */
+    private static String declinedConflictMessage(ILaunchConfiguration config,
+        ExternalInfobaseChangesPolicy policy, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts)
+    {
+        if (conflicts == null || !conflicts.cancelled())
+        {
+            return null;
+        }
+        String message = ExternalInfobaseChangesPolicy.declinedUpdateError(policy, conflicts.reason());
+        recordAsyncFailure(config, message);
+        Activator.logError(ERR_ASYNC_PREFIX + message, null);
+        return message;
+    }
+
+    /**
+     * Stores a failure of the fire-and-forget launch so {@code debug_status} can report it, tagged
+     * with the configuration and application it belongs to (a {@code debug_status} filtered by
+     * application must not surface someone else's failure).
+     *
+     * @param config the launch configuration that was started (may be {@code null})
+     * @param message the actionable message, never {@code null}
+     */
+    private static void recordAsyncFailure(ILaunchConfiguration config, String message)
+    {
+        String name = null;
+        String applicationId = null;
+        if (config != null)
+        {
+            name = config.getName();
+            applicationId = LaunchConfigUtils.getApplicationIdFor(config);
+        }
+        AsyncLaunchOutcomes.record(name, applicationId, message);
+    }
+
     /**
      * Resolves the infobase name EDT states in its "Infobase \"<name>\" configuration was
      * changed…" conflict modal for the application this launch configuration targets, so the
@@ -1081,6 +1128,17 @@ public class DebugLaunchTool implements IMcpTool
         // opt-out). Manual EDT launches outside this window still prompt.
         ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         String launchInfobase = launchInfobaseName(config);
+        // This Job is where a STANDALONE-SERVER application's DB update actually happens (it is
+        // deferred to EDT's launch delegate), so an external-changes dialog can be cancelled here —
+        // long after debug_launch returned "launching". The window records that outcome so
+        // debug_status can report it; without it the caller would see a successful dispatch and
+        // then simply no session, with the reason only in the workspace log.
+        // Only a launch that actually ARMED the conflict matcher opens a window. An Attach
+        // performs no DB update and passes no policy; giving it a window would let an unattributed
+        // cancel from a concurrent launch be recorded as an Attach failure.
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
+            ? null
+            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, true, autoConfirmUpdateDialog,
             launchPolicy, launchInfobase);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
@@ -1096,10 +1154,19 @@ public class DebugLaunchTool implements IMcpTool
         try
         {
             config.launch(ILaunchManager.DEBUG_MODE, monitor);
+            String declined = declinedConflictMessage(config, launchPolicy, conflicts);
+            if (declined != null)
+            {
+                // The launch itself did not throw, but the update inside it wrote nothing.
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined);
+            }
             return Status.OK_STATUS;
         }
         catch (CoreException e)
         {
+            // Recorded, not just logged: this Job's caller was answered "launching" long ago, so the
+            // log is the only place the reason would otherwise exist.
+            recordAsyncFailure(config, ERR_ASYNC_PREFIX + e.getMessage());
             Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
             return e.getStatus();
         }
@@ -1107,6 +1174,7 @@ public class DebugLaunchTool implements IMcpTool
         {
             // Never let the Job die on an uncaught exception — it would vanish
             // without a trace for the MCP caller. Log + report an error status.
+            recordAsyncFailure(config, ERR_ASYNC_PREFIX + t.getMessage());
             Activator.logError(ERR_ASYNC_PREFIX + t.getMessage(), t);
             return new Status(IStatus.ERROR, Activator.PLUGIN_ID,
                 ERR_ASYNC_PREFIX + t.getMessage(), t);
@@ -1116,6 +1184,10 @@ public class DebugLaunchTool implements IMcpTool
             InfobaseAuthDialogSuppressor.markActivityEnd();
             LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, true,
                 autoConfirmUpdateDialog, launchPolicy, launchInfobase);
+            if (conflicts != null)
+            {
+                conflicts.close();
+            }
         }
     }
 

@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
@@ -77,6 +78,14 @@ public class DebugStatusTool implements IMcpTool
             .objectArrayProperty("debugServerTargets", //$NON-NLS-1$
                 "1C debug-server targets (server-side / EDT-UI sessions) with real suspend state") //$NON-NLS-1$
             .integerProperty("debugServerTargetCount", "Number of debug-server targets returned") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("recentLaunchFailures", //$NON-NLS-1$
+                "Failures of asynchronous (fire-and-forget) launches from the last hour, which the " //$NON-NLS-1$
+                    + "debug_launch call itself could not report because it had already returned: " //$NON-NLS-1$
+                    + "{launchConfiguration, applicationId, message, ageSeconds}. Filtered by " //$NON-NLS-1$
+                    + "applicationId like the launches above (strictly: call without it to see " //$NON-NLS-1$
+                    + "failures whose application could not be resolved). Includes an external-changes " //$NON-NLS-1$
+                    + "conflict the configured externalInfobaseChanges policy declined to resolve " //$NON-NLS-1$
+                    + "while EDT updated the infobase inside the launch.") //$NON-NLS-1$
             .build();
     }
 
@@ -127,6 +136,7 @@ public class DebugStatusTool implements IMcpTool
             List<Map<String, Object>> serverTargets = listDebugServerTargets(filterAppId);
 
             return ToolResult.success()
+                .put("recentLaunchFailures", recentLaunchFailures(filterAppId)) //$NON-NLS-1$
                 .put("launches", launches) //$NON-NLS-1$
                 .put("count", launches.size()) //$NON-NLS-1$
                 .put("registry", registryInfo) //$NON-NLS-1$
@@ -327,5 +337,40 @@ public class DebugStatusTool implements IMcpTool
             out.add(DebugServerTargetSupport.describe(st));
         }
         return out;
+    }
+
+    /**
+     * The recent failures of fire-and-forget launches, as plain maps for the JSON result.
+     *
+     * <p>{@code debug_launch} answers {@code status: "launching"} and returns; anything that fails
+     * afterwards - including an external-changes conflict the call's policy declined to resolve
+     * while EDT performed the DB update inside the launch - would otherwise reach the caller only
+     * as an absent session. This is the follow-up call an agent already makes, so it is where the
+     * reason belongs.
+     *
+     * @param filterAppId the caller's application filter, or {@code null} for all
+     * @return one entry per recorded failure, oldest first (empty when there were none)
+     */
+    private static List<Map<String, Object>> recentLaunchFailures(String filterAppId)
+    {
+        List<Map<String, Object>> failures = new ArrayList<>();
+        for (AsyncLaunchOutcomes.Outcome outcome : AsyncLaunchOutcomes.recent())
+        {
+            // Filtered like the launches above, and strictly: an entry whose application could not
+            // be resolved is NOT handed to a filtered caller, who would have no way to tell whether
+            // it is theirs. Call debug_status without applicationId to see everything.
+            if (filterAppId != null && !filterAppId.isEmpty()
+                && !filterAppId.equals(outcome.applicationId()))
+            {
+                continue;
+            }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("launchConfiguration", outcome.launchConfiguration()); //$NON-NLS-1$
+            entry.put(APPLICATION_ID, outcome.applicationId());
+            entry.put("message", outcome.message()); //$NON-NLS-1$
+            entry.put("ageSeconds", outcome.ageSeconds()); //$NON-NLS-1$
+            failures.add(entry);
+        }
+        return failures;
     }
 }

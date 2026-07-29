@@ -182,16 +182,20 @@ public class LaunchUpdateDialogConflictMatcherTest
     }
 
     @Test
-    public void testUnattributedCancelGoesToTheOnlyOpenWatch()
+    public void testUnattributedCancelNeverClaimsANamedWatch()
     {
-        // Exactly one update in flight: an unattributable cancel is unambiguously its own, so it
-        // still gets the actionable reason instead of EDT's generic out-of-sync text.
-        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch only =
-            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("mine-base")) //$NON-NLS-1$
+        // A cancel the filter could not attribute must NOT be pinned on a named window - callers
+        // treat a cancel in their window as a failure, so guessing an owner would fail a call whose
+        // own update actually applied. Only a caller that could not resolve a name either sees it.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch named =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("mine-base"); //$NON-NLS-1$
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch unnamed =
+                LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null))
         {
             LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
                 LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND, null);
-            assertTrue(only.cancelled());
+            assertFalse(named.cancelled());
+            assertTrue(unnamed.cancelled());
         }
         // A closed window records nothing further.
         LaunchUpdateDialogAutoConfirmer.ConflictWatch closed =

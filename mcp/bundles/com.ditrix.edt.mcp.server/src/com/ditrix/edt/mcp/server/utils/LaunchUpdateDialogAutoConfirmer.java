@@ -1709,9 +1709,11 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * <p>{@code infobaseName} is the infobase the caller is updating: a cancelled dialog
      * attributed to that infobase lands in this window. A caller that could not resolve a name
-     * passes {@code null} and receives the cancels that could not be attributed either. An
-     * unattributable cancel is also assigned to the ONLY open window when there is exactly one,
-     * since it is then unambiguous whose it was.
+     * passes {@code null} and receives the cancels that could not be attributed either.
+     *
+     * <p>Windows are keyed by INFOBASE, not by call: two updates of the SAME infobase running at
+     * once both see the cancel. That is the honest reading - the divergence neither of them
+     * resolved affects both - but it does mean the window is not a per-call token.
      *
      * @param infobaseName the infobase being updated (may be {@code null})
      * @return the open window, never {@code null}
@@ -1728,19 +1730,23 @@ public final class LaunchUpdateDialogAutoConfirmer
 
     /**
      * Records a cancelled conflict dialog into the open windows it belongs to: the ones naming
-     * {@code attributedName}, the nameless ones when the cancel itself could not be attributed,
-     * and — when exactly one window is open — that window regardless (an unambiguous owner).
+     * {@code attributedName}, or — when the cancel itself could not be attributed — the ones that
+     * could not name an infobase either.
      */
     private static void noteCancel(String attributedName, String reason)
     {
         synchronized (LOCK)
         {
-            boolean single = CONFLICT_WATCHES.size() == 1;
             for (ConflictWatch watch : CONFLICT_WATCHES)
             {
-                boolean mine = single
-                    || (attributedName != null && attributedName.equals(watch.infobaseName))
-                    || (attributedName == null && watch.infobaseName == null);
+                // A cancel lands in a window only when it is demonstrably about that window's
+                // infobase, or when NEITHER could be named (then the two are as related as anything
+                // here can be). It is deliberately NOT handed to "the only open window": callers
+                // treat a cancel in their window as a failure, so guessing an owner would fail a
+                // call whose own update actually applied.
+                boolean mine = attributedName == null
+                    ? watch.infobaseName == null
+                    : attributedName.equals(watch.infobaseName);
                 if (mine)
                 {
                     watch.record(reason);
@@ -1750,9 +1756,11 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * A conflict-cancel window owned by one update: how many conflict modals were cancelled
-     * while it was open, and why the last of them was. Closing it removes it from the filter's
-     * bookkeeping — always close it (try-with-resources).
+     * A conflict-cancel window opened around one update: how many conflict modals attributable to
+     * ITS infobase were cancelled while it was open, and why the last of them was. Two updates of
+     * the same infobase running at once therefore both see the cancel — the divergence neither of
+     * them resolved concerns both. Closing the window removes it from the filter's bookkeeping —
+     * always close it (try-with-resources).
      */
     public static final class ConflictWatch implements AutoCloseable
     {

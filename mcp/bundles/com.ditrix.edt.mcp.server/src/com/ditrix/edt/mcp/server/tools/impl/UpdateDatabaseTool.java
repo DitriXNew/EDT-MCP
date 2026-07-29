@@ -384,10 +384,12 @@ public class UpdateDatabaseTool implements IMcpTool
                             infobaseName);
                     }
                     // A cancelled external-changes modal means the update wrote NOTHING. Reporting
-                    // "updated" here would be a false success: EDT returns the unchanged state, not
-                    // a failure. Both conditions are required — an update that DID apply is not a
-                    // failure just because a cancel landed in the window.
-                    if (watch.cancelled() && stateAfter != ApplicationUpdateState.UPDATED)
+                    // "updated" here would be a false success — and the returned state cannot be
+                    // used to tell the two apart: EDT may hand back a CACHED UPDATED, because the
+                    // process that changed the infobase behind its back emitted no state event. The
+                    // window is per-update, so a cancel recorded in it is this call's by
+                    // construction and is a failure whatever the state says.
+                    if (watch.cancelled())
                     {
                         return ToolResult.error(ExternalInfobaseChangesPolicy.declinedUpdateError(
                             externalChanges, watch.reason())).toJson();

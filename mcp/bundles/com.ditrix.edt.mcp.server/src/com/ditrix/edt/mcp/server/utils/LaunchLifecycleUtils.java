@@ -1357,7 +1357,7 @@ public final class LaunchLifecycleUtils
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
             }
-            Optional<String> declined = declinedByCancelledConflict(after, policy, watch);
+            Optional<String> declined = declinedByCancelledConflict(policy, watch);
             if (declined.isPresent())
             {
                 return declined;
@@ -1486,17 +1486,19 @@ public final class LaunchLifecycleUtils
      * terminal/transitional split: the update can also come back {@code UNKNOWN} or
      * {@code BEING_UPDATED} after a cancel, and waiting out the full apply timeout only to report
      * a generic stale infobase would make an immediate, deliberate cancel look like a slow update.
+     * The RETURNED state cannot be used to second-guess the cancel either: EDT may hand back a
+     * CACHED {@code UPDATED}, because whatever changed the infobase behind its back emitted no
+     * state event. The window is per-update, so a cancel recorded in it belongs to this call.
      *
-     * @param after the state {@code update()} returned
      * @param policy the policy the call ran with
      * @param watch the cancel window opened around this update
      * @return the actionable error, or {@link Optional#empty()} when this update was not stopped
      *         by a cancelled conflict
      */
-    private static Optional<String> declinedByCancelledConflict(ApplicationUpdateState after,
+    private static Optional<String> declinedByCancelledConflict(
         ExternalInfobaseChangesPolicy policy, LaunchUpdateDialogAutoConfirmer.ConflictWatch watch)
     {
-        if (isSynced(after) || !watch.cancelled())
+        if (!watch.cancelled())
         {
             return Optional.empty();
         }

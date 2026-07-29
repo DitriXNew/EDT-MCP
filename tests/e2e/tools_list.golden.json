@@ -926,6 +926,13 @@
           },
           "type": "array"
         },
+        "recentLaunchFailures": {
+          "description": "Failures of asynchronous (fire-and-forget) launches from the last hour, which the debug_launch call itself could not report because it had already returned: {launchConfiguration, applicationId, message, ageSeconds}. Filtered by applicationId like the launches above (strictly: call without it to see failures whose application could not be resolved). Includes an external-changes conflict the configured externalInfobaseChanges policy declined to resolve while EDT updated the infobase inside the launch.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
         "registry": {
           "description": "Debug session registry snapshot counters",
           "type": "object"

@@ -9,7 +9,7 @@ Shows the active debug launches and whether each is currently suspended - the "w
 - `applicationId` - optional filter to a single launch; omit to list all active EDT debug launches.
 
 ## What you get
-JSON: `launches` - each with `applicationId` (a real id, or a synthetic `attach:<configName>` for attach launches), `launchConfiguration` name and `configurationType`, `mode`/`debug`, `project`, whether it is `suspended`, the `threadCount`, and `suspendedAt` (the top frame name and line) when paused. Plus a `count` and a `registry` snapshot.
+JSON: `launches` - each with `applicationId` (a real id, or a synthetic `attach:<configName>` for attach launches), `launchConfiguration` name and `configurationType`, `mode`/`debug`, `project`, whether it is `suspended`, the `threadCount`, and `suspendedAt` (the top frame name and line) when paused. Plus a `count`, a `registry` snapshot and `recentLaunchFailures` — failures of fire-and-forget launches from the last hour ({`launchConfiguration`, `applicationId`, `message`, `ageSeconds`}), filtered by `applicationId` like the launches. This is where a `debug_launch` that already answered `status: "launching"` reports what went wrong afterwards, including an external-changes conflict its policy declined to resolve.
 
 ## Notes & gotchas
 - Only EDT/1C debug launches are listed; unrelated Java/Ant launches are filtered out.
