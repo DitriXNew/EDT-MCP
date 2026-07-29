@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -106,6 +107,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     /** Output key: names of the optional attributes applied (XDTO member create only). */
     private static final String KEY_APPLIED = "applied"; //$NON-NLS-1$
+
+    /** Declared locales that still have no value for the localized property just written (#298). */
+    private static final String KEY_LOCALES_MISSING = "localesMissing"; //$NON-NLS-1$
 
     /** Property / output key: the synonym display name. */
     private static final String KEY_SYNONYM = "synonym"; //$NON-NLS-1$
@@ -270,7 +274,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(KEY_APPLIED,
                 "Names of the optional attributes actually applied (XDTO package member create only)") //$NON-NLS-1$
             .stringProperty(KEY_SYNONYM, "Display name written, when a synonym property was provided") //$NON-NLS-1$
-            .stringProperty(KEY_LANGUAGE, "Language code the synonym was written for") //$NON-NLS-1$
+            .stringProperty(KEY_LANGUAGE,
+                "Language code the localized value (synonym, or a form element's title) was " //$NON-NLS-1$
+                + "written under") //$NON-NLS-1$
+            .stringArrayProperty(KEY_LOCALES_MISSING,
+                "Declared language codes that still have NO value for the localized property just " //$NON-NLS-1$
+                + "written (empty when every declared language is translated); present only when a " //$NON-NLS-1$
+                + "localized value was written") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
             .stringProperty(KEY_COMMON_MODULE_KIND,
@@ -427,12 +437,19 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Node already exists: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
+        // Which declared locales this node still owes a translation for. The node is NEW here (a
+        // duplicate was rejected above), so its synonym map starts empty and the only locale it can
+        // carry is the one being written - no model read needed. Issue #298.
+        List<String> localesMissing = synonymLanguage == null ? null
+            : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage));
+
         if (target.topLevel)
         {
             return createTopLevel(new TopLevelRequest(project, config, projectName, target, normFqn,
-                props, synonymLanguage, typeSpecific, normReport));
+                props, synonymLanguage, localesMissing, typeSpecific, normReport));
         }
-        return createMember(project, projectName, target, normFqn, props, synonymLanguage, normReport);
+        return createMember(project, projectName, target, normFqn, props, synonymLanguage,
+            localesMissing, normReport);
     }
 
     /**
@@ -854,13 +871,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String normFqn;
         final Props props;
         final String synonymLanguage;
+        /** Declared locales with no synonym yet; {@code null} when no synonym was written. */
+        final List<String> localesMissing;
         final TypeSpecific typeSpecific;
         final MdNameNormalizer.Report normReport;
 
         TopLevelRequest(IProject project, Configuration config, String projectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             CreateTarget target, String normFqn, Props props, String synonymLanguage,
-            TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+            List<String> localesMissing, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
         {
+            this.localesMissing = localesMissing;
             this.project = project;
             this.config = config;
             this.projectName = projectName;
@@ -966,7 +986,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(req.project, exportFqns);
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
-            req.synonymLanguage, req.typeSpecific, req.normReport));
+            req.synonymLanguage, req.localesMissing, req.typeSpecific, req.normReport));
     }
 
     /**
@@ -1000,8 +1020,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     // ---- member creation (mirrors the former add_metadata_attribute, generalized) ---------------
 
-    private String createMember(IProject project, String projectName, CreateTarget target,
-        String normFqn, Props props, String synonymLanguage, MdNameNormalizer.Report normReport)
+    private String createMember(IProject project, String projectName, CreateTarget target, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        String normFqn, Props props, String synonymLanguage, List<String> localesMissing,
+        MdNameNormalizer.Report normReport)
     {
         // Members are created inside a write transaction. Only TOP objects are re-fetchable by
         // bmId, so we re-fetch the TOP object and re-navigate to the leaf's owner BY NAME inside the
@@ -1052,7 +1073,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
         return success(new SuccessInfo(normFqn, createdKind, name, persisted, props, synonymLanguage,
-            null, normReport));
+            localesMissing, null, normReport));
     }
 
     /**
@@ -1220,6 +1241,24 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean russianAutoNames = config.getScriptVariant() == ScriptVariant.RUSSIAN;
         final String[] createdKind = new String[1];
 
+        // Resolved BEFORE the write (it needs only the configuration) so the success payload can
+        // echo the locale actually used and the ones still missing a translation. Issue #298.
+        final String titleLanguage;
+        try
+        {
+            titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, fmProps.titleVal,
+                fmProps.titleLang, "the title"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+        // A Table with no explicit title still gets a GENERATED one (its own name, the way the
+        // designer builds it), so a locale is needed even when the caller supplied no title: the
+        // configuration's own default, never a code guessed from the script variant (issue #298).
+        final String writeTitleLanguage =
+            titleLanguage != null ? titleLanguage : MetadataLanguageUtils.resolveLanguageCode(config, null);
+
         final boolean persisted;
         try
         {
@@ -1227,17 +1266,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 ref.formPath, "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
                     + "get_metadata_objects and get_metadata_details."); //$NON-NLS-1$
-
-            final String titleLanguage;
-            try // NOSONAR nested try is intentional (distinct resource/exception scopes)
-            {
-                titleLanguage = MetadataLanguageUtils.resolveSynonymLanguage(config, fmProps.titleVal,
-                    fmProps.titleLang, "the title"); //$NON-NLS-1$
-            }
-            catch (IllegalArgumentException e)
-            {
-                return ToolResult.error(e.getMessage()).toJson();
-            }
 
             // A Table auto-generates one column per tabular-section attribute; the column names come
             // from the metadata owner (the form model alone cannot enumerate them), resolved here.
@@ -1248,7 +1276,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     String err = fKind == FormElementWriter.Kind.TABLE
                         ? FormElementWriter.createTable(formModel, ref.name, parent, bind, tableColumns,
-                            titleLanguage, titleText, russianAutoNames, createdKind)
+                            writeTitleLanguage, titleText, russianAutoNames, createdKind)
                         : FormElementWriter.createMember(formModel, fKind, ref.name, parent, bind,
                             titleLanguage, titleText, russianAutoNames, createdKind);
                     if (err != null)
@@ -1274,6 +1302,19 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .put("kind", createdKind[0] != null ? createdKind[0] : fKind.name()) //$NON-NLS-1$
             .put("name", ref.name) //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted);
+        // The locale a title actually landed under: the caller's when it supplied one, otherwise the
+        // resolved fallback for a TABLE, which always gets a GENERATED title (its own name). Any other
+        // kind without a title writes nothing localized, so it reports nothing.
+        String writtenTitleLanguage = titleLanguage != null ? titleLanguage
+            : (fKind == FormElementWriter.Kind.TABLE ? writeTitleLanguage : null);
+        if (writtenTitleLanguage != null)
+        {
+            // The element is NEW, so its title map carries exactly the locale just written; the rest
+            // of the declared locales are what the caller still owes a translation for (#298).
+            formResult.put(KEY_LANGUAGE, writtenTitleLanguage).put(KEY_LOCALES_MISSING,
+                MetadataLanguageUtils.localesMissing(config,
+                    Collections.singletonList(writtenTitleLanguage)));
+        }
         normReport.addTo(formResult);
         return formResult.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
     }
@@ -1539,8 +1580,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         List<String> dirty = formObjectDirtyFqns(contentFormFqn, ownerFqn);
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(project, dirty);
 
+        // The form is NEW, so its synonym map carries exactly the locale just written (issue #298).
         return buildFormObjectResult(normFqn, formName, persisted, setAsDefault,
-            effectiveGenerateContent, props, synonymLanguage, normReport);
+            effectiveGenerateContent, props, synonymLanguage,
+            synonymLanguage == null ? null
+                : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage)),
+            normReport);
     }
 
     /**
@@ -1648,7 +1693,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Builds the success JSON for a created form OBJECT. Side-effect-free: pure formatting. */
     private String buildFormObjectResult(String normFqn, String formName, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         boolean setAsDefault, boolean generateContent, Props props, String synonymLanguage,
-        MdNameNormalizer.Report normReport)
+        List<String> localesMissing, MdNameNormalizer.Report normReport)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
@@ -1661,6 +1706,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (props.synonym != null && !props.synonym.isEmpty() && synonymLanguage != null)
         {
             result.put(KEY_SYNONYM, props.synonym).put(KEY_LANGUAGE, synonymLanguage);
+            if (localesMissing != null)
+            {
+                result.put(KEY_LOCALES_MISSING, localesMissing);
+            }
         }
         normReport.addTo(result);
         return result.put(McpKeys.MESSAGE, "Created form " + normFqn //$NON-NLS-1$
@@ -2106,13 +2155,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final boolean persisted;
         final Props props;
         final String synonymLanguage;
+        /** Declared locales with no synonym yet; {@code null} when no synonym was written. */
+        final List<String> localesMissing;
         /** Type-specific options to echo back; {@code null} for a member create. */
         final TypeSpecific typeSpecific;
         final MdNameNormalizer.Report normReport;
 
         SuccessInfo(String fqn, EClass kind, String name, boolean persisted, Props props, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-            String synonymLanguage, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+            String synonymLanguage, List<String> localesMissing, TypeSpecific typeSpecific,
+            MdNameNormalizer.Report normReport)
         {
+            this.localesMissing = localesMissing;
             this.fqn = fqn;
             this.kind = kind;
             this.name = name;
@@ -2135,6 +2188,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (info.props.synonym != null && !info.props.synonym.isEmpty() && info.synonymLanguage != null)
         {
             result.put(KEY_SYNONYM, info.props.synonym).put(KEY_LANGUAGE, info.synonymLanguage);
+            if (info.localesMissing != null)
+            {
+                result.put(KEY_LOCALES_MISSING, info.localesMissing);
+            }
         }
         if (info.typeSpecific != null)
         {

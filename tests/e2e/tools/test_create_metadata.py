@@ -1424,7 +1424,9 @@ def test_create_normalizes_yo_in_name_and_synonym_by_default():
     r = call("create_metadata", {
         "projectName": PROJECT,
         "fqn": "Catalog." + name_yo,
-        "properties": [{"name": "synonym", "value": syn_yo, "language": "ru"}],
+        # The fixture declares only 'en'; a 'ru' here would now be REJECTED as an undeclared
+        # locale (issue #298). The ё-normalization under test is about the VALUE, not the locale.
+        "properties": [{"name": "synonym", "value": syn_yo, "language": "en"}],
     })
     assert_ok(r, "create a Catalog whose Name + synonym carry ё (default normalizeYo)")
     assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
@@ -1650,3 +1652,138 @@ def test_unsupported_property_is_error():
     e = assert_error(r, "unsupported property name")
     assert_error_quality(e, names=["indexing"], suggests=["synonym, comment", "modify_metadata"])
     assert_no_diff("a rejected create must not change the project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Localized strings must name a DECLARED locale — issue #298.
+# Fixture ground truth: TestConfiguration declares exactly ONE language, code 'en'.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_rejects_a_synonym_in_an_undeclared_locale():
+    """Issue #298: a synonym written under a locale the configuration does not declare was accepted
+    silently. The platform has no fallback between locale codes, so that value is NEVER displayed —
+    the label comes out blank and the mistake is invisible until a human opens the form."""
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Z298Undeclared",
+        "properties": [{"name": "synonym", "value": "Marchandises", "language": "fr_CA"}],
+    })
+    e = assert_error(r, "a synonym in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the error must name the bad code AND list what the configuration declares")
+    assert_no_diff("a rejected localized write must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_stores_a_declared_locale_under_its_declared_spelling():
+    # A differently-cased request names a DECLARED locale, so it is accepted — but stored under the
+    # configuration's own spelling, or it would be a second, never-displayed key (issue #298).
+    name = "Z298Case"
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog." + name,
+        "properties": [{"name": "synonym", "value": "Goods", "language": "EN"}],
+    })
+    assert_ok(r, "a declared locale in a different case must be accepted")
+    assert r.structured.get("language") == "en", \
+        "the result must echo the DECLARED spelling, not the requested one: %r" % (r.structured,)
+    poll_diff_contains("<key>en</key>", ctx="the synonym must be keyed by the declared code")
+    mdo = read_disk("src/Catalogs/%s/%s.mdo" % (name, name))
+    assert "<key>EN</key>" not in mdo, \
+        "the requested casing must NOT create a second synonym key: %s" % mdo
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_reports_the_locales_still_missing_a_translation():
+    # Issue #298 part 2: after a localized write the result lists the declared locales that still
+    # have NO value, so a caller building a multilingual configuration knows what it still owes.
+    # The fixture declares one language, so a second one is added here to make the list non-empty.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnCreate"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnCreate",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Z298Missing",
+        "properties": [{"name": "synonym", "value": "Goods", "language": "en"}],
+    })
+    assert_ok(r, "create with a synonym in one of the two declared locales")
+    assert r.structured.get("language") == "en", \
+        "the result must echo the locale used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == ["fr"], \
+        "the untranslated locale must be reported: %r" % (r.structured,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_member_rejects_a_title_in_an_undeclared_locale():
+    # The same guard on the OTHER localized create path (a form element's title).
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Decoration.Z298Deco",
+        "properties": [{"name": "title", "value": "Étiquette", "language": "fr_CA"}],
+    })
+    e = assert_error(r, "a form-element title in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the form-title path must give the same actionable error")
+    assert_no_diff("a rejected form-member create must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_reports_the_locales_still_missing_a_translation():
+    # The form-OBJECT create builds its own payload, so it needs its own proof that the localized
+    # report is there too (issue #298).
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnFormObject"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnFormObject",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.Z298LocForm",
+        "properties": [{"name": "synonym", "value": "Item form", "language": "en"}],
+    })
+    assert_ok(r, "create a form object with a synonym")
+    assert r.structured.get("language") == "en",         "the form-object create must echo the locale used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == ["fr"],         "the form-object create must report the untranslated locale: %r" % (r.structured,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_table_without_a_title_still_reports_the_generated_titles_locale():
+    # A Table with no explicit title still GETS one (its own name, the way the designer builds it),
+    # so a localized value IS written - and it must land under a DECLARED locale, not one guessed
+    # from the script variant, and be reported like any other localized write (issue #298).
+    ts, table = "Z298TableTS", "Z298Table"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnTable"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnTable",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection." + ts}),
+        "seed the tabular section the table binds to")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Table." + table,
+        "properties": [{"name": "dataPath", "value": "Object.%s" % ts}],
+    })
+    assert_ok(r, "create a table without an explicit title")
+    assert r.structured.get("language") == "en",         "the generated title's locale must be reported: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == ["fr"],         "the untranslated locale must be reported for a generated title: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # And it must really be stored under the declared code - the pre-fix code wrote the script-variant
+    # guess, which in an en_CA-only configuration would be an invisible 'en' key.
+    form_xml = read_disk("src/Catalogs/Catalog/Forms/ItemForm/Form.form")
+    assert "<key>en</key>" in form_xml,         "the generated title must be keyed by a declared language code: %s" % form_xml[:400]

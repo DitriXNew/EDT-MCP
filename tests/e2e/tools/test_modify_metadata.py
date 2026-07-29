@@ -105,7 +105,8 @@ def test_modify_normalizes_yo_in_synonym_and_comment_by_default():
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog",
         "properties": [
-            {"name": "synonym", "value": syn_yo, "language": "ru"},
+            # 'en' is the fixture's only declared locale; 'ru' is now rejected (issue #298).
+            {"name": "synonym", "value": syn_yo, "language": "en"},
             {"name": "comment", "value": com_yo},
         ],
     })
@@ -1668,3 +1669,102 @@ def test_xdto_namespace_change_cascades_into_referencing_package():
         "P own targetNamespace must move")
     if old_ns in p_text:
         raise AssertionError("P own self-reference must be rewritten too: %r" % p_text)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Localized properties must name a DECLARED locale — issue #298.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_rejects_a_localized_property_in_an_undeclared_locale():
+    """Issue #298: modify_metadata accepted any 'language' code and stored the value under it, where
+    nothing ever reads it. The fixture declares only 'en'."""
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Marchandises", "language": "fr_CA"}],
+    })
+    e = assert_error(r, "a localized property in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the error must name the bad code AND list what the configuration declares")
+    assert_no_diff("a rejected localized write must not change the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_reports_the_locale_used_and_the_ones_still_untranslated():
+    # Issue #298 parts 2-3. A second language is added so the missing list is non-empty, then the
+    # SAME property is translated into it and the list empties - proving the report is read from the
+    # object (a modify target may already carry other translations), not guessed.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnModify"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnModify",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Goods", "language": "en"}],
+    })
+    assert_ok(r, "set the synonym in the first declared locale")
+    assert r.structured.get("language") == "en", \
+        "the result must echo the locale used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == ["fr"], \
+        "the untranslated locale must be reported: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r2 = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Marchandises", "language": "fr"}],
+    })
+    assert_ok(r2, "translate the same property into the second locale")
+    assert r2.structured.get("localesMissing") == [], \
+        "with every declared locale translated the list must be empty: %r" % (r2.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_without_a_localized_property_reports_no_locales():
+    # The localized report belongs to a localized write: a plain scalar edit must not grow the
+    # payload (its absence is what tells a caller no localized value was touched).
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "comment", "value": "plain scalar edit"}],
+    })
+    assert_ok(r, "a scalar-only modify")
+    assert "localesMissing" not in r.structured, \
+        "a non-localized modify must not report locales: %r" % (r.structured,)
+    assert "language" not in r.structured, \
+        "a non-localized modify must not echo a locale: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_member_reports_the_locale_used_and_the_ones_still_untranslated():
+    # A form member's title is a localized property, and that path builds its OWN result - it must
+    # carry the same report as the mdclass path (issue #298).
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnFormMember"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnFormMember",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.Description",
+        "properties": [{"name": "title", "value": "Description", "language": "en"}],
+    })
+    assert_ok(r, "set a form field's title")
+    assert r.structured.get("language") == "en",         "the form-member modify must echo the locale used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == ["fr"],         "the form-member modify must report the untranslated locale: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_member_rejects_a_title_in_an_undeclared_locale():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.Description",
+        "properties": [{"name": "title", "value": "Libellé", "language": "fr_CA"}],
+    })
+    e = assert_error(r, "a form-member title in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the form-member path must give the same actionable error")
+    assert_no_diff("a rejected localized write must not change the project")

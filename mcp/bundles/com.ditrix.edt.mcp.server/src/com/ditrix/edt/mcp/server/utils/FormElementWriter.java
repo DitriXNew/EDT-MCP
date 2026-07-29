@@ -2534,15 +2534,12 @@ public final class FormElementWriter
         applyTableDefaults(table);
         setUndefinedRowFilter(table);
         // The designer's table carries a title = its own name (hidden by titleLocation=None); use the
-        // caller's explicit title when given, otherwise default to the table name in the script variant.
-        if (title != null && !title.isEmpty())
-        {
-            applyTitle(table, titleLanguage, title);
-        }
-        else
-        {
-            applyTitle(table, russianAutoNames ? "ru" : "en", name); //$NON-NLS-1$ //$NON-NLS-2$
-        }
+        // caller's explicit title when given, otherwise default to the table name. BOTH go under
+        // titleLanguage: deriving the locale from the SCRIPT VARIANT instead ("ru"/"en") wrote the
+        // generated title under a code the configuration may not declare - e.g. "en" in an en_CA-only
+        // configuration - where nothing ever displays it (issue #298). The caller resolves that
+        // locale from the configuration and passes it here even when it supplies no title.
+        applyTitle(table, titleLanguage, title != null && !title.isEmpty() ? title : name);
         addToList(container, FEATURE_ITEMS, table);
         // The table's own command bar carries a NORMAL id (only the form-root bar uses the -1 sentinel).
         addTableAutoCommandBar(formModel, table, russianAutoNames);

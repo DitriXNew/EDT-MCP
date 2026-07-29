@@ -7,8 +7,10 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
@@ -115,6 +117,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** Output result key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
+    /** Echoes the locale a localized property was actually written under (#298). */
+    private static final String KEY_LANGUAGE = "language"; //$NON-NLS-1$
+
+    /** Declared locales that still have no value for a localized property just written (#298). */
+    private static final String KEY_LOCALES_MISSING = "localesMissing"; //$NON-NLS-1$
 
     /** Output value for {@link McpKeys#ACTION}: the node was modified. */
     private static final String VAL_MODIFIED = "modified"; //$NON-NLS-1$
@@ -359,6 +367,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
                 + "the applied counts)") //$NON-NLS-1$
+            .stringProperty(KEY_LANGUAGE, "Language code a localized property was written under; " //$NON-NLS-1$
+                + "present only when this call wrote localized properties under exactly ONE code") //$NON-NLS-1$
+            .stringArrayProperty(KEY_LOCALES_MISSING,
+                "Declared language codes that still have NO value for at least one of the localized " //$NON-NLS-1$
+                + "properties just written (empty when every declared language is translated); " //$NON-NLS-1$
+                + "present only when a localized property was written") //$NON-NLS-1$
             .objectProperty(KEY_CONTENT, "For a membership-list content change: the counts object. A " //$NON-NLS-1$
                 + "CommonAttribute / ExchangePlan change reports {added, updated, removed} (members " //$NON-NLS-1$
                 + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
@@ -2350,6 +2364,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final long configBmId =
             xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L;
         final String[] contentFqnHolder = { null };
+        // Read OUTSIDE the write transaction (a plain configuration read, like the language
+        // resolution the prepare step already did); only the per-object present locales are
+        // collected inside. Issue #298.
+        final List<String> declaredCodes = MetadataLanguageUtils.declaredLanguageCodes(config);
+        final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
 
@@ -2366,6 +2385,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     change.applyTo(applyTo, tx);
                 }
+                localizedReport.collect(applyTo, changes, declaredCodes);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
                     XDTOPackage changedPkg = (XDTOPackage)applyTo;
@@ -2437,7 +2457,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
-        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames);
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+            localizedReport);
     }
 
     /**
@@ -2712,11 +2733,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
         MdNameNormalizer.Report normReport, List<String> cascadedPackageNames)
     {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames, null);
+    }
+
+    /**
+     * The {@link #buildModifiedResult(String, List, boolean, MdNameNormalizer.Report, List)} variant
+     * that also reports the localized write: the locale actually used and the declared locales that
+     * still have no translation. Issue #298.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
+        LocalizedWriteReport localizedReport)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        if (localizedReport != null)
+        {
+            localizedReport.addTo(result);
+        }
         normReport.addTo(result);
         String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!cascadedPackageNames.isEmpty())
@@ -3271,6 +3308,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final Version version = v8Project != null ? v8Project.getVersion() : null;
 
         final List<String> applied = new ArrayList<>();
+        // A form member's title is a localized property too, so it gets the same report the mdclass
+        // path gives (issue #298). The declared codes are read OUTSIDE the write transaction.
+        final List<String> declaredCodes = MetadataLanguageUtils.declaredLanguageCodes(config);
+        final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
 
         // Validate + apply inside ONE BM write transaction: resolve the member, validate every
         // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
@@ -3297,6 +3338,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                     List<HolderChange> changes =
                         prepareFormMemberChanges(config, version, member, properties, normReport);
+                    // (receiver, change) of every localized write, reported only AFTER the whole
+                    // batch is applied: reading a map mid-batch would report a locale as missing that
+                    // a LATER change in the same call fills in.
+                    List<EObject> localizedHolders = new ArrayList<>();
+                    List<PreparedChange> localizedChanges = new ArrayList<>();
                     for (HolderChange hc : changes)
                     {
                         // A direct feature lands on the member; a property on the nested <extInfo> lands
@@ -3306,6 +3352,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             ? FormElementWriter.ensureExtInfo(formModel, member) : member;
                         hc.change.applyTo(holder, tx);
                         applied.add(hc.change.featureName());
+                        if (hc.change.isLocalized())
+                        {
+                            // Remember the receiver the change actually landed on: a title on the
+                            // member and one on its <extInfo> live in different objects.
+                            localizedHolders.add(holder);
+                            localizedChanges.add(hc.change);
+                        }
+                    }
+                    for (int i = 0; i < localizedChanges.size(); i++)
+                    {
+                        localizedReport.collect(localizedHolders.get(i),
+                            List.of(localizedChanges.get(i)), declaredCodes);
                     }
                 });
         }
@@ -3327,6 +3385,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        localizedReport.addTo(result);
         normReport.addTo(result);
         return result
             .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -4881,6 +4940,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return typeChange;
         }
 
+        boolean isLocalized()
+        {
+            return kind == Kind.LOCALIZED;
+        }
+
+        EStructuralFeature feature()
+        {
+            return feature;
+        }
+
+        /** The locale a {@code LOCALIZED} change was written under; {@code null} for other kinds. */
+        String language()
+        {
+            return localizedLanguage;
+        }
+
         @SuppressWarnings("unchecked")
         void applyTo(EObject target, IBmTransaction tx)
         {
@@ -5010,5 +5085,88 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
+    }
+
+    /**
+     * Collects what a modify wrote to LOCALIZED properties, so the result can tell the caller which
+     * locale was actually used and which declared locales still owe a translation. Issue #298.
+     *
+     * <p>A locale counts as MISSING when AT LEAST ONE of the localized properties written by this
+     * call has no value for it - the caller is told there is work left, without having to re-read the
+     * object. The present locales are read from the model right after the changes are applied, so an
+     * object that already carried other translations is reported correctly (unlike a create, where
+     * the map is necessarily fresh).
+     */
+    private static final class LocalizedWriteReport
+    {
+        private final Set<String> languagesUsed = new LinkedHashSet<>();
+        private final Set<String> missing = new LinkedHashSet<>();
+        private boolean wrote;
+
+        /**
+         * Reads the localized maps of the just-applied changes. Call INSIDE the write transaction,
+         * AFTER the changes are applied.
+         */
+        @SuppressWarnings("unchecked")
+        void collect(EObject target, List<PreparedChange> changes, List<String> declaredCodes)
+        {
+            for (PreparedChange change : changes)
+            {
+                if (!change.isLocalized())
+                {
+                    continue;
+                }
+                wrote = true;
+                languagesUsed.add(change.language());
+                Object map = target.eGet(change.feature());
+                if (!(map instanceof EMap))
+                {
+                    continue;
+                }
+                Map<String, String> present = ((EMap<String, String>)map).map();
+                for (String declared : declaredCodes)
+                {
+                    String value = present.get(declared);
+                    if (value == null || value.isEmpty())
+                    {
+                        missing.add(declared);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Appends the report to a result: the locale used (only when this call used exactly ONE -
+         * see {@link #singleLanguage()}) and the declared locales still without a translation. A
+         * no-op when no localized property was written, so the ABSENCE of both fields is what tells
+         * a caller nothing localized was touched.
+         */
+        void addTo(ToolResult result)
+        {
+            if (!wrote)
+            {
+                return;
+            }
+            String only = singleLanguage();
+            if (only != null)
+            {
+                result.put(KEY_LANGUAGE, only);
+            }
+            result.put(KEY_LOCALES_MISSING, missing());
+        }
+
+        /**
+         * The single locale every localized property was written under, or {@code null} when this
+         * call used more than one (echoing one of them would misdescribe the others).
+         */
+        String singleLanguage()
+        {
+            return languagesUsed.size() == 1 ? languagesUsed.iterator().next() : null;
+        }
+
+        List<String> missing()
+        {
+            return new ArrayList<>(missing);
+        }
     }
 }

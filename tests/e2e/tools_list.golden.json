@@ -596,8 +596,15 @@
           "type": "string"
         },
         "language": {
-          "description": "Language code the synonym was written for",
+          "description": "Language code the localized value (synonym, or a form element's title) was written under",
           "type": "string"
+        },
+        "localesMissing": {
+          "description": "Declared language codes that still have NO value for the localized property just written (empty when every declared language is translated); present only when a localized value was written",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "message": {
           "description": "Human-readable confirmation message",
@@ -3436,6 +3443,17 @@
         "fqn": {
           "description": "Normalized FQN of the modified node",
           "type": "string"
+        },
+        "language": {
+          "description": "Language code a localized property was written under; present only when this call wrote localized properties under exactly ONE code",
+          "type": "string"
+        },
+        "localesMissing": {
+          "description": "Declared language codes that still have NO value for at least one of the localized properties just written (empty when every declared language is translated); present only when a localized property was written",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "message": {
           "description": "Human-readable confirmation message",

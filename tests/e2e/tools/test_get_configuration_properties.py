@@ -35,7 +35,8 @@ no-op / wrong project / empty body would FAIL these (mutation thinking).
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
-    assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT, TESTS_PROJECT,
+    assert_contains, assert_not_contains, assert_no_diff, wait_for_project_ready,
+    e2e_test, PROJECT, TESTS_PROJECT,
 )
 
 
@@ -161,3 +162,24 @@ def test_nonexistent_project_errors_and_names_value():
     assert_error_quality(err, names=[bad], suggests=["list_projects"],
                          ctx="non-existent project names the bad value and points at list_projects")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="get_configuration_properties", kind="write-metadata")
+def test_reports_every_declared_language_code():
+    # Issue #298: the localized-string tools only accept a DECLARED locale code, so the whole list
+    # has to be discoverable - reading a native object's .mdo by hand was the documented workaround.
+    # The fixture declares ONE language, so a second is added here: reporting only the DEFAULT one
+    # (the pre-#298 output) must not be able to pass this.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnConfig"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnConfig",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("get_configuration_properties", {"projectName": PROJECT})
+    assert_ok(r, "read the configuration properties")
+    assert_contains(r.text, "languages:", "the declared language codes must be reported")
+    assert_contains(r.text, "- en", "the default language's code must be listed")
+    assert_contains(r.text, "- fr", "a NON-default declared code must be listed too")

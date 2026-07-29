@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -201,5 +203,94 @@ public class MetadataLanguageUtilsTest
             org.junit.Assert.assertTrue("message must suggest the 'language' parameter",
                 e.getMessage().contains("'language'"));
         }
+    }
+
+    // --- declared locales / undeclared-locale rejection (issue #298) -----------
+
+    @Test
+    public void declaredLanguageCodesListsThemInDeclarationOrderWithoutBlanksOrDuplicates()
+    {
+        Configuration config =
+            config(language("en_CA"), language("en_CA"), language(""), language("fr_CA"), language("en_CA"));
+        assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.declaredLanguageCodes(config));
+    }
+
+    @Test
+    public void declaredLanguageCodesIsEmptyForANullOrLanguagelessConfiguration()
+    {
+        // EMPTY means "cannot validate", never "nothing is allowed" - the callers rely on that.
+        assertTrue(MetadataLanguageUtils.declaredLanguageCodes(null).isEmpty());
+        assertTrue(MetadataLanguageUtils.declaredLanguageCodes(config(null)).isEmpty());
+    }
+
+    @Test
+    public void canonicalLanguageCodeReturnsTheDeclaredSpelling()
+    {
+        Configuration config = config(language("en_CA"), language("en_CA"), language("fr_CA"));
+        assertEquals("en_CA", MetadataLanguageUtils.canonicalLanguageCode(config, "en_CA"));
+        // A differently-cased request must be stored under the CONFIGURATION's spelling, not create
+        // a second, never-displayed key.
+        assertEquals("en_CA", MetadataLanguageUtils.canonicalLanguageCode(config, "EN_ca"));
+        assertNull(MetadataLanguageUtils.canonicalLanguageCode(config, "en"));
+        assertNull(MetadataLanguageUtils.canonicalLanguageCode(config, null));
+    }
+
+    @Test
+    public void localesMissingListsTheDeclaredCodesWithNoValue()
+    {
+        Configuration config = config(language("en_CA"), language("en_CA"), language("fr_CA"));
+        assertEquals(Arrays.asList("fr_CA"),
+            MetadataLanguageUtils.localesMissing(config, Collections.singletonList("en_CA")));
+        assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.localesMissing(config, null));
+        assertTrue(MetadataLanguageUtils.localesMissing(config, Arrays.asList("en_CA", "fr_CA")).isEmpty());
+    }
+
+    @Test
+    public void resolveSynonymLanguageRejectsAnUndeclaredCodeAndListsTheDeclaredOnes()
+    {
+        // The bug of issue #298: 'en' against a configuration that declares only 'en_CA' used to be
+        // accepted, and the value was then never displayed (the platform has no locale fallback).
+        Configuration config = config(language("en_CA"), language("en_CA"), language("fr_CA"));
+        try
+        {
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", "en", "the synonym");
+            fail("an undeclared language code must be rejected");
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("'en'"));
+            assertTrue("the message must name the subject", e.getMessage().contains("the synonym"));
+            assertTrue("the message must list what IS declared", e.getMessage().contains("en_CA"));
+            assertTrue("the message must list every declared code", e.getMessage().contains("fr_CA"));
+        }
+    }
+
+    @Test
+    public void resolveSynonymLanguageCanonicalizesADeclaredCodesCase()
+    {
+        Configuration config = config(language("en_CA"), language("en_CA"));
+        assertEquals("en_CA",
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", "EN_ca", "the synonym"));
+    }
+
+    @Test
+    public void resolveSynonymLanguageStillAcceptsAnyCodeWhenNothingIsDeclared()
+    {
+        // A configuration that declares no language code gives nothing to validate against; refusing
+        // every localized write there would be worse than the bug being fixed.
+        Configuration config = config(language("ru"));
+        assertEquals("de",
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", "de", "the synonym"));
+    }
+
+    @Test
+    public void resolveSynonymLanguageDoesNotValidateTheFallbackCode()
+    {
+        // With no explicit code the fallback comes FROM the configuration's own default language, so
+        // it is declared by construction (in the real model defaultLanguage REFERENCES one of
+        // languages) - hence only an EXPLICIT code is validated.
+        Configuration config = config(language("en_CA"), language("en_CA"), language("fr_CA"));
+        assertEquals("en_CA",
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", null, "the synonym"));
     }
 }

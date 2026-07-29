@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -358,6 +359,11 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             appendScalar(yaml, "defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
             appendScalar(yaml, "defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
         }
+        // EVERY declared language code, not just the default one: these are the only keys a
+        // localized value (synonym / title / toolTip / ...) may be written under, and a value stored
+        // under any other code is never displayed. Reading a native object's .mdo to learn them was
+        // the documented workaround. Issue #298.
+        appendList(yaml, "languages", MetadataLanguageUtils.declaredLanguageCodes(configuration)); //$NON-NLS-1$
     }
 
     /**
