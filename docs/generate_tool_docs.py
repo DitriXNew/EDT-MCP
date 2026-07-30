@@ -97,8 +97,15 @@ def main():
     # nothing has to be enabled on the server to document it.
     groups = []  # list of (title, description, [tool names])
     hidden = set()
+    # Absence from tools/list has TWO different causes and only one of them means "disabled":
+    # with progressive disclosure ON the server hides every non-core toolset until enable_toolset
+    # reveals it, so labelling those "not enabled by default" would tell readers that the metadata /
+    # debug / code tools are off - which they are not. The flag says which world we are in; when it
+    # is on, the run cannot tell the two apart, so it labels nothing.
+    disclosure = False
     try:
         ts = call_structured(url, "list_toolsets", {})
+        disclosure = bool(ts.get("progressiveDisclosure"))
         for toolset in ts.get("toolsets", []):
             tnames = sorted(toolset.get("tools", []))
             hidden.update(n for n in tnames if n not in tools_by_name)
@@ -109,8 +116,13 @@ def main():
         print("list_toolsets unavailable (%s) — using a flat index" % e, file=sys.stderr)
 
     names = sorted(set(tools_by_name) | hidden)
+    # Only a tool missing from tools/list while progressive disclosure is OFF is genuinely disabled.
+    default_disabled = set() if disclosure else set(hidden)
     if hidden:
-        print("tools hidden from tools/list (documented anyway): %s" % ", ".join(sorted(hidden)))
+        print("tools absent from tools/list (documented anyway): %s%s"
+              % (", ".join(sorted(hidden)),
+                 " [progressive disclosure is ON - not labelling them as disabled]"
+                 if disclosure else ""))
     grouped = {n for _t, _d, ns in groups for n in ns}
     ungrouped = [n for n in names if n not in grouped]
     if ungrouped:
@@ -161,7 +173,7 @@ def main():
                 if len(d) > 160:
                     d = d[:157].rstrip() + "…"
                 d = d.replace("|", "\\|")
-                mark = " *(not enabled by default)*" if n in hidden else ""
+                mark = " *(not enabled by default)*" if n in default_disabled else ""
                 out.append("| [`%s`](%s%s.md) | %s%s |" % (n, link_prefix, n, d, mark))
             out.append("")
         return out
