@@ -1668,8 +1668,13 @@ def test_xdto_namespace_change_cascades_into_referencing_package():
         "Q import must point at the NEW namespace")
     if old_ns in q_text:
         raise AssertionError("no trace of the OLD namespace may remain in Q: %r" % q_text)
-    # ...and P own content (targetNamespace + the self-reference QName) moved as one.
-    p_text = read_disk("src/XDTOPackages/E2ECascP/Package.xdto")
+    # ...and P own content (targetNamespace + the self-reference QName) moved as one. P has its OWN
+    # wait: the two packages are exported as separate files, so Q landing says nothing about P - a
+    # CI run failed here with P still holding the old targetNamespace while Q was already rewritten.
+    p_rel = "src/XDTOPackages/E2ECascP/Package.xdto"
+    poll_disk_contains(p_rel, "targetNamespace=" + chr(34) + new_ns + chr(34),
+                       ctx="P own targetNamespace must move on disk")
+    p_text = read_disk(p_rel)
     assert_contains(p_text, "targetNamespace=" + chr(34) + new_ns + chr(34),
         "P own targetNamespace must move")
     if old_ns in p_text:
