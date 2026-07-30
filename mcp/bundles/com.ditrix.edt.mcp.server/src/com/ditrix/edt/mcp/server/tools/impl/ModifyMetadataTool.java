@@ -44,6 +44,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
+import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Report;
@@ -2367,8 +2368,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Read OUTSIDE the write transaction (a plain configuration read, like the language
         // resolution the prepare step already did); only the per-object present locales are
         // collected inside. Issue #298.
-        final List<String> declaredCodes =
-            MetadataLanguageUtils.declaredLanguageCodes(config, pendingLanguageCodes(properties));
+        final List<String> declaredCodes = MetadataLanguageUtils.declaredOrOverride(config,
+            declaredCodesAfterBatch(config, target, properties));
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
@@ -3198,8 +3199,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        PrepareContext ctx =
-            new PrepareContext(project, config, version, pendingLanguageCodes(properties));
+        PrepareContext ctx = new PrepareContext(project, config, version,
+            declaredCodesAfterBatch(config, target, properties));
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
@@ -4306,55 +4307,87 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         final Version version;
 
-        /** Language codes THIS batch declares (a Language object's 'languageCode'); never null. */
-        final List<String> pendingLanguageCodes;
+        /** Codes declared AFTER this batch; {@code null} when it changes no language code. */
+        final List<String> declaredAfterBatch;
 
         PrepareContext(IProject project, Configuration config, Version version)
         {
-            this(project, config, version, List.of());
+            this(project, config, version, null);
         }
 
         PrepareContext(IProject project, Configuration config, Version version,
-            List<String> pendingLanguageCodes)
+            List<String> declaredAfterBatch)
         {
             this.project = project;
             this.config = config;
             this.version = version;
-            this.pendingLanguageCodes = pendingLanguageCodes;
+            this.declaredAfterBatch = declaredAfterBatch;
         }
     }
 
     /**
-     * The language codes THIS properties batch declares - the values of its {@code languageCode}
-     * entries (a {@code Language} object's own code). Issue #298.
+     * The language codes the configuration will declare AFTER this batch is applied, or {@code null}
+     * when the batch changes no language code (the caller then uses the model's current set).
+     * Issue #298.
      *
-     * <p>The whole batch is validated before anything is written, so treating these as declared
-     * cannot let a value slip in under a code that never materializes: if the {@code languageCode}
-     * entry itself is rejected, the call fails and nothing is applied. Without this, an edit that
-     * sets a new Language's code AND its synonym in that code in ONE call would reject its own
-     * second half - the model does not carry the code yet at validation time.
+     * <p>The set is the configuration's languages with the TARGET language's code REPLACED by the
+     * one this batch assigns - not the union of old and new. A batch that renames a code
+     * ({@code en} -&gt; {@code fr}) leaves no {@code en} behind, so a value written under {@code en}
+     * in that same batch would be invisible and must be refused, exactly like any other undeclared
+     * code. A batch that gives a NEW language its first code adds it, because the target's old code
+     * is empty.
      *
+     * <p>Safe by construction: the whole batch is prepared before anything is written, so if the
+     * {@code languageCode} entry is itself rejected the call fails and nothing is applied.
+     *
+     * @param config the configuration
+     * @param target the object being modified
      * @param properties the raw properties array (may be {@code null})
-     * @return the pending codes, never {@code null}
+     * @return the post-batch codes, or {@code null} when this batch changes no language code
      */
-    private static List<String> pendingLanguageCodes(List<JsonObject> properties)
+    private static List<String> declaredCodesAfterBatch(Configuration config, MdObject target,
+        List<JsonObject> properties)
     {
-        if (properties == null || properties.isEmpty())
+        if (config == null || !(target instanceof Language) || properties == null)
         {
-            return List.of();
+            return null;
         }
-        List<String> codes = new ArrayList<>();
+        String newCode = null;
         for (JsonObject prop : properties)
         {
-            if (!"languageCode".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+            if ("languageCode".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                String value = asString(prop.get(KEY_VALUE));
+                if (value != null && !value.isEmpty())
+                {
+                    newCode = value;
+                }
+            }
+        }
+        if (newCode == null)
+        {
+            return null;
+        }
+        List<String> codes = new ArrayList<>();
+        boolean targetSeen = false;
+        for (Language lang : config.getLanguages())
+        {
+            if (lang == null)
             {
                 continue;
             }
-            String code = asString(prop.get(KEY_VALUE));
+            boolean isTarget = lang == target || lang.getName() != null
+                && lang.getName().equals(((Language)target).getName());
+            targetSeen |= isTarget;
+            String code = isTarget ? newCode : lang.getLanguageCode();
             if (code != null && !code.isEmpty() && !codes.contains(code))
             {
                 codes.add(code);
             }
+        }
+        if (!targetSeen && !codes.contains(newCode))
+        {
+            codes.add(newCode);
         }
         return codes;
     }
@@ -4581,10 +4614,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String code;
         try
         {
-            // Codes this same batch declares count as declared: an edit that sets a Language's
-            // 'languageCode' and a localized value under it must not reject its own second half.
+            // Validate against what the configuration will declare AFTER this batch: an edit that
+            // sets a Language's 'languageCode' and a localized value under it must not reject its own
+            // second half, and one that RENAMES a code must not accept the code it removes.
             code = MetadataLanguageUtils.resolveSynonymLanguage(ctx.config, value,
-                asString(prop.get("language")), "'" + name + "'", ctx.pendingLanguageCodes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                asString(prop.get("language")), "'" + name + "'", ctx.declaredAfterBatch); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         catch (IllegalArgumentException e)
         {

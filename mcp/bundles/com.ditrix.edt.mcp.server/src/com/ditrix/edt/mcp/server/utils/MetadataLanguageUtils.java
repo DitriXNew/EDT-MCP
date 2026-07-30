@@ -115,30 +115,35 @@ public final class MetadataLanguageUtils
     public static String resolveSynonymLanguage(Configuration config, String value,
         String explicitLanguage, String subject)
     {
-        return resolveSynonymLanguage(config, value, explicitLanguage, subject, null);
+        return resolveSynonymLanguage(config, value, explicitLanguage, subject, (Collection<String>)null);
     }
 
     /**
-     * The {@link #resolveSynonymLanguage(Configuration, String, String, String)} variant that also
-     * accepts codes the SAME call is about to declare.
+     * The {@link #resolveSynonymLanguage(Configuration, String, String, String)} variant that
+     * validates against the codes the configuration will declare AFTER the current call.
      * <p>
      * One {@code modify_metadata} batch can set a {@code Language} object's {@code languageCode} AND
-     * a localized value under that very code. Validating against the model alone would reject the
-     * second half of an edit whose first half declares the code, so the caller passes the pending
-     * codes here. They are treated exactly like declared ones - the whole batch is prepared before
-     * anything is written, so a rejected {@code languageCode} fails the call before the locale it
-     * would have declared can be used.
+     * a localized value in the same breath. Validating against the model alone would reject the
+     * second half of an edit whose first half declares the code; validating against the UNION of old
+     * and new would do the opposite and accept a code the batch REMOVES (renaming a language's code
+     * from {@code en} to {@code fr} leaves no {@code en} behind). So the caller computes the
+     * post-batch set and passes it here, and it REPLACES the model-derived one.
+     * <p>
+     * This cannot let a value slip in under a code that never materializes: the whole batch is
+     * prepared before anything is written, so a rejected {@code languageCode} fails the call before
+     * the locale it would have declared can be used.
      *
      * @param config the configuration (may be {@code null})
      * @param value the localized value being set (may be {@code null}/empty)
      * @param explicitLanguage an explicitly requested language code, or {@code null}/empty
      * @param subject what is being localized, for the error message
-     * @param alsoDeclared codes this same call declares (may be {@code null}/empty)
+     * @param declaredOverride the codes declared AFTER this call, or {@code null}/empty to use the
+     *            configuration's current ones
      * @return the resolved language code, or {@code null} when {@code value} is absent
      * @throws IllegalArgumentException when the code is undeclared or cannot be determined
      */
     public static String resolveSynonymLanguage(Configuration config, String value,
-        String explicitLanguage, String subject, Collection<String> alsoDeclared)
+        String explicitLanguage, String subject, Collection<String> declaredOverride)
     {
         if (value == null || value.isEmpty())
         {
@@ -151,7 +156,7 @@ public final class MetadataLanguageUtils
         // declared language by construction. Issue #298.
         if (explicitLanguage != null && !explicitLanguage.isEmpty())
         {
-            List<String> declared = declaredLanguageCodes(config, alsoDeclared);
+            List<String> declared = declaredOrOverride(config, declaredOverride);
             if (!declared.isEmpty())
             {
                 String canonical = canonicalOf(declared, explicitLanguage);
@@ -191,35 +196,38 @@ public final class MetadataLanguageUtils
      */
     public static List<String> declaredLanguageCodes(Configuration config)
     {
-        return declaredLanguageCodes(config, null);
+        List<String> codes = new ArrayList<>();
+        collectDeclared(config, codes);
+        return codes;
     }
 
     /**
-     * The declared language codes PLUS the ones the current call is about to declare, in declaration
-     * order, without blanks or duplicates. See
-     * {@link #resolveSynonymLanguage(Configuration, String, String, String, Collection)} for why a
-     * pending code counts as declared.
+     * {@code declaredOverride} when it has content, else the configuration's current codes. An empty
+     * or {@code null} override means "the caller has nothing better to say".
      *
      * @param config the configuration (may be {@code null})
-     * @param alsoDeclared codes this call declares (may be {@code null}/empty)
-     * @return the codes, never {@code null}
+     * @param declaredOverride the codes declared after the current call (may be {@code null}/empty)
+     * @return the codes to validate against, never {@code null}
      */
-    public static List<String> declaredLanguageCodes(Configuration config,
-        Collection<String> alsoDeclared)
+    public static List<String> declaredOrOverride(Configuration config,
+        Collection<String> declaredOverride)
     {
-        List<String> codes = new ArrayList<>();
-        collectDeclared(config, codes);
-        if (alsoDeclared != null)
+        if (declaredOverride != null && !declaredOverride.isEmpty())
         {
-            for (String code : alsoDeclared)
+            List<String> codes = new ArrayList<>();
+            for (String code : declaredOverride)
             {
                 if (code != null && !code.isEmpty() && !codes.contains(code))
                 {
                     codes.add(code);
                 }
             }
+            if (!codes.isEmpty())
+            {
+                return codes;
+            }
         }
-        return codes;
+        return declaredLanguageCodes(config);
     }
 
     private static void collectDeclared(Configuration config, List<String> codes)

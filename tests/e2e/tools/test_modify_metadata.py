@@ -1803,3 +1803,17 @@ def test_modify_accepts_a_locale_the_same_batch_declares():
     e = assert_error(bad, "a code neither declared nor pending must still be refused")
     assert_error_quality(e, names=["de"], suggests=["fr"],
                          ctx="the pending code must be listed among the available ones")
+    wait_for_project_ready()
+
+    # And the mirror case: a batch that RENAMES this language's code must not accept the code it
+    # removes - after it, nothing declares 'fr' any more, so a value written under it is invisible.
+    removed = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Language.Z298Atomic",
+        "properties": [
+            {"name": "languageCode", "value": "it"},
+            {"name": "synonym", "value": "Francais", "language": "fr"},
+        ],
+    })
+    e2 = assert_error(removed, "the code the batch removes must be refused")
+    assert_error_quality(e2, names=["fr"], suggests=["it"],
+                         ctx="the error must name the removed code and list the post-batch ones")

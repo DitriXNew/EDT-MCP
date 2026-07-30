@@ -295,35 +295,54 @@ public class MetadataLanguageUtilsTest
     }
 
     @Test
-    public void resolveSynonymLanguageAcceptsACodeTheSameCallDeclares()
+    public void resolveSynonymLanguageValidatesAgainstThePostCallCodesWhenGivenThem()
     {
         // One modify batch can set a Language's languageCode AND a localized value under that very
-        // code. Validating against the model alone would reject the second half of an edit whose
-        // first half declares the code (codex review on #298).
+        // code, so the caller passes the codes declared AFTER the batch (codex review on #298).
         Configuration config = config(language("en"), language("en"));
         assertEquals("fr", MetadataLanguageUtils.resolveSynonymLanguage(config, "Francais", "fr",
-            "the synonym", Collections.singletonList("fr")));
-        // ... and a code nobody declares, pending or not, is still refused.
+            "the synonym", Arrays.asList("en", "fr")));
+        // A code in NEITHER set is still refused, and the message lists the post-call codes.
         try
         {
             MetadataLanguageUtils.resolveSynonymLanguage(config, "Deutsch", "de", "the synonym",
-                Collections.singletonList("fr"));
-            fail("a code neither declared nor pending must still be rejected");
+                Arrays.asList("en", "fr"));
+            fail("a code the call does not declare either must still be rejected");
         }
         catch (IllegalArgumentException e)
         {
             assertTrue(e.getMessage(), e.getMessage().contains("'de'"));
-            assertTrue("the message must list the pending code as available too",
-                e.getMessage().contains("fr"));
+            assertTrue("the message must list what will be declared", e.getMessage().contains("fr"));
         }
     }
 
     @Test
-    public void declaredLanguageCodesAppendsThePendingOnesAfterTheDeclaredOnes()
+    public void resolveSynonymLanguageRefusesACodeTheSameCallREMOVES()
+    {
+        // The override REPLACES the model's codes rather than adding to them: a batch that renames a
+        // language's code en -> fr leaves no 'en' behind, so a value written under 'en' in that same
+        // batch would be invisible - exactly what this guard exists to prevent.
+        Configuration config = config(language("en"), language("en"));
+        try
+        {
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "English", "en", "the synonym",
+                Collections.singletonList("fr"));
+            fail("a code the batch removes must be rejected even though the model still has it");
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("'en'"));
+        }
+    }
+
+    @Test
+    public void declaredOrOverrideTakesTheOverrideOnlyWhenItHasContent()
     {
         Configuration config = config(language("en"), language("en"));
-        assertEquals(Arrays.asList("en", "fr"),
-            MetadataLanguageUtils.declaredLanguageCodes(config, Arrays.asList("fr", "en", "", null)));
-        assertEquals(Arrays.asList("en"), MetadataLanguageUtils.declaredLanguageCodes(config, null));
+        assertEquals(Arrays.asList("fr"),
+            MetadataLanguageUtils.declaredOrOverride(config, Arrays.asList("fr", "", null, "fr")));
+        assertEquals(Arrays.asList("en"), MetadataLanguageUtils.declaredOrOverride(config, null));
+        assertEquals(Arrays.asList("en"),
+            MetadataLanguageUtils.declaredOrOverride(config, Collections.<String> emptyList()));
     }
 }
