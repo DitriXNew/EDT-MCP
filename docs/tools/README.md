@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**84 tools.**
+**85 tools.**
 
 ## Core
 
@@ -157,3 +157,11 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`switch_git_branch`](switch_git_branch.md) | Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/… |
 | [`update_database`](update_database.md) | Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + appl… |
 | [`validate_xdto_package`](validate_xdto_package.md) | Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and re… |
+
+## Git
+
+> Run raw git commands (status/diff/commit/push/pull/...) in a project's repository via the 'git' tool. Powerful (it can push, checkout, stash); DISABLED by default - check it in the MCP Server Tools preference tab to enable.
+
+| Tool | Description |
+|------|-------------|
+| [`git`](git.md) | Run a git command in a project's repository - the non-UI equivalent of typing it in a terminal. Send it as a shell-style string (e.g. 'status', 'diff HEAD~1'… *(not enabled by default)* |
