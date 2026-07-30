@@ -1196,7 +1196,82 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return mixError;
         }
+        // A dcs payload writes localized titles ({code: text}) straight into the DCS model, without
+        // going through the property pipeline where the undeclared-locale guard lives - so without
+        // this the very hole issue #298 closes stayed open on this route. Checked HERE, before any
+        // write, so a bad code fails the call with nothing applied.
+        String localeError = dcsTitleLocaleError(ctx.config, args.dcsSpec);
+        if (localeError != null)
+        {
+            return localeError;
+        }
         return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec);
+    }
+
+
+    /**
+     * Rejects a localized {@code title} in a {@code dcs} payload whose language code the
+     * configuration does not declare - the same rule the property pipeline applies, on the route
+     * that bypasses it. Issue #298.
+     *
+     * <p>Walks the payload for every {@code title} that is an OBJECT (a {@code {code: text}} map); a
+     * plain-string title is language-neutral and needs no check. Returns a ready JSON error naming
+     * the offending code and the declared ones, or {@code null} when every code is fine (or the
+     * configuration declares none, which leaves nothing to validate against).
+     *
+     * @param config the configuration
+     * @param dcsSpec the raw dcs payload
+     * @return a JSON error, or {@code null} when the payload's locales are acceptable
+     */
+    private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec)
+    {
+        List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
+        if (declared.isEmpty() || dcsSpec == null)
+        {
+            return null;
+        }
+        for (String code : collectDcsTitleLocales(dcsSpec, new ArrayList<>()))
+        {
+            if (MetadataLanguageUtils.canonicalLanguageCode(config, code) == null)
+            {
+                return ToolResult.error("Unknown language '" + code + "' for a dcs title. This " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /** Collects the keys of every OBJECT-valued {@code title} anywhere in the payload. */
+    private static List<String> collectDcsTitleLocales(JsonElement element, List<String> out)
+    {
+        if (element == null || element.isJsonNull())
+        {
+            return out;
+        }
+        if (element.isJsonArray())
+        {
+            for (JsonElement item : element.getAsJsonArray())
+            {
+                collectDcsTitleLocales(item, out);
+            }
+            return out;
+        }
+        if (!element.isJsonObject())
+        {
+            return out;
+        }
+        for (java.util.Map.Entry<String, JsonElement> member : element.getAsJsonObject().entrySet())
+        {
+            JsonElement value = member.getValue();
+            if ("title".equals(member.getKey()) && value != null && value.isJsonObject()) //$NON-NLS-1$
+            {
+                out.addAll(value.getAsJsonObject().keySet());
+                continue;
+            }
+            collectDcsTitleLocales(value, out);
+        }
+        return out;
     }
 
     /**

@@ -46,6 +46,8 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_not_contains,
+    diff,
     poll_diff_contains,
     read_disk,
     wait_for_project_ready,
@@ -243,3 +245,27 @@ def test_dcs_payload_on_non_report_fqn_is_error():
     assert_error_quality(e, names=[NON_REPORT_FQN], suggests=["dcs", "Report"],
                          ctx="a dcs payload on a non-Report object names the FQN + a Report hint")
     assert_no_diff("a rejected non-Report dcs write must change nothing on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_in_an_undeclared_locale_is_rejected():
+    # Issue #298: a dcs payload writes localized titles straight into the DCS model, bypassing the
+    # property pipeline where the undeclared-locale guard lives - so this route still accepted a
+    # code nothing declares and produced the invisible value the guard exists to prevent.
+    report = "Z298DcsLocale"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"fr_CA": "Periode"}}]},
+    })
+    e = assert_error(r, "a dcs title in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the error must name the bad code and list what the configuration declares")
+    # NOT assert_no_diff: seeding the report above is a legitimate change. What must be true is that
+    # the REJECTED write left nothing behind - neither the locale nor the title it carried.
+    assert_not_contains(diff(), "fr_CA", "a rejected dcs write must not reach the disk")
+    assert_not_contains(diff(), "Periode", "a rejected dcs write must not reach the disk")
+
