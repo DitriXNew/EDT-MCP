@@ -93,8 +93,9 @@ public class PlatformDocumentationService
     /**
      * Gets documentation for a platform type (ValueTable, Array, etc.).
      */
-    public String getTypeDocumentation(String typeName, String memberName, String memberType,
-                                        String projectName, int limit, boolean useRussian)
+    public String getTypeDocumentation(String typeName, String memberName, String memberType, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                                        String projectName, int limit, boolean useRussian,
+                                        boolean detailed)
     {
         AtomicReference<String> resultRef = new AtomicReference<>();
 
@@ -103,7 +104,7 @@ public class PlatformDocumentationService
             try
             {
                 String result = getTypeDocumentationInternal(typeName, memberName, memberType,
-                                                              projectName, limit, useRussian);
+                                                              projectName, limit, useRussian, detailed);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -119,8 +120,9 @@ public class PlatformDocumentationService
     /**
      * Internal implementation that runs on UI thread.
      */
-    private String getTypeDocumentationInternal(String typeName, String memberName, String memberType,
-                                                 String projectName, int limit, boolean useRussian)
+    private String getTypeDocumentationInternal(String typeName, String memberName, String memberType, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                                                 String projectName, int limit, boolean useRussian,
+                                                 boolean detailed)
     {
         // Get version for type provider
         Version version = getProjectVersion(projectName);
@@ -149,7 +151,8 @@ public class PlatformDocumentationService
         }
 
         // Build documentation from resolved Type
-        return buildTypeDocumentation(foundType, memberName, memberType, limit, useRussian);
+        return buildTypeDocumentation(foundType, version, memberName, memberType, limit, useRussian,
+            detailed);
     }
 
     /**
@@ -300,24 +303,47 @@ public class PlatformDocumentationService
     /**
      * Builds markdown documentation for a Type.
      */
-    private String buildTypeDocumentation(Type type, String memberName, String memberType,
-                                           int limit, boolean useRussian)
+    private String buildTypeDocumentation(Type type, Version version, String memberName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                                           String memberType, int limit, boolean useRussian,
+                                           boolean detailed)
     {
         StringBuilder sb = new StringBuilder();
+        // The syntax helper carries what the model does not: the prose, and the return value of
+        // methods the model records none for. Unavailable => every lookup is null and the output is
+        // exactly the model-only one. Read ONLY for 'detailed': the concise rendering drops every
+        // description anyway, and each lookup walks the doc tree and parses a page on the UI thread -
+        // at limit 200 that is hundreds of page loads whose result is then thrown away. Issue #299.
+        PlatformHelpService help = detailed ? new PlatformHelpService(version, useRussian ? "ru" : "en") //$NON-NLS-1$ //$NON-NLS-2$
+            : PlatformHelpService.disabled();
+        String typeName = type.getName() != null ? type.getName() : type.getNameRu();
 
         appendTypeHeader(sb, type, useRussian);
+        appendDescription(sb, help.typeDescription(typeName));
         appendTypeInfo(sb, type);
         appendCollectionElementTypes(sb, type, useRussian);
 
         int count = 0;
-        count = appendConstructorsSection(sb, type, memberType, limit, count, useRussian);
+        // A system enumeration's VALUES are what a caller comes for; they are also the only thing it
+        // has - it is not constructible, so the "Constructors" section below is skipped for it
+        // (rendering an empty constructor under "Created by New: No" was self-contradicting). #299
+        if (type.isSysEnum())
+        {
+            count = appendSysEnumValuesSection(sb, type, version, memberName, memberType, limit, count,
+                useRussian);
+        }
+        else
+        {
+            count = appendConstructorsSection(sb, type, memberType, limit, count, useRussian);
+        }
 
         // Get context def for methods and properties
         ContextDef contextDef = type.getContextDef();
         if (contextDef != null)
         {
-            count = appendMethodsSection(sb, contextDef, memberName, memberType, limit, count, useRussian);
-            count = appendPropertiesSection(sb, contextDef, memberName, memberType, limit, count, useRussian);
+            count = appendMethodsSection(sb, contextDef, memberName, memberType, limit, count,
+                useRussian, help, typeName);
+            count = appendPropertiesSection(sb, contextDef, memberName, memberType, limit, count,
+                useRussian, help, typeName);
         }
 
         count = appendEventsSection(sb, type, memberName, memberType, limit, count, useRussian);
@@ -328,6 +354,21 @@ public class PlatformDocumentationService
         }
 
         return sb.toString();
+    }
+
+
+    /**
+     * Appends a documentation paragraph read from the syntax helper, when there is one. A blank or
+     * absent text renders nothing at all, so an EDT without the platform documentation produces the
+     * same output as before. Issue #299.
+     */
+    private static void appendDescription(StringBuilder sb, String description)
+    {
+        if (description == null || description.isBlank())
+        {
+            return;
+        }
+        sb.append(MarkdownUtils.escapeMarkdown(description.trim())).append("\n\n"); //$NON-NLS-1$
     }
 
     /**
@@ -385,6 +426,168 @@ public class PlatformDocumentationService
         sb.append(String.join(", ", typeNames)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+
+    /**
+     * Appends the "Values" section of a SYSTEM ENUMERATION - the thing a caller actually needs from
+     * such a type and the one thing the type itself does not carry. Issue #299.
+     *
+     * <p>A system enumeration is modelled as TWO types: the one named after the enumeration (what a
+     * caller asks for, and what a variable is typed as) and a companion "manager" type whose
+     * PROPERTIES are the values. Only the second one holds them, and it is reachable through the
+     * GLOBAL CONTEXT property that carries the enumeration's name - the very thing BSL resolves when
+     * it sees {@code DateFractions.Date}. When that lookup fails the section is simply omitted: a
+     * missing section is better than a wrong one.
+     *
+     * @return the updated running item count
+     */
+    private int appendSysEnumValuesSection(StringBuilder sb, Type type, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        String memberName, String memberType, int limit, int count, boolean useRussian)
+    {
+        if (!shouldIncludeMemberType(memberType, MEMBER_PROPERTY) && !MEMBER_ALL.equals(memberType))
+        {
+            return count;
+        }
+        List<Property> values;
+        try
+        {
+            values = findSysEnumValues(type, version);
+        }
+        catch (Exception e) // NOSONAR the values are an enrichment: an unresolvable proxy must not fail the whole lookup
+        {
+            // Without this the javadoc above ("the section is simply omitted") was a promise the
+            // code did not keep: the exception reached the outer handler and turned the WHOLE type
+            // lookup into an error.
+            Activator.logInfo("System enumeration values could not be read: " + e); //$NON-NLS-1$
+            return count;
+        }
+        if (values.isEmpty())
+        {
+            return count;
+        }
+        sb.append("## Values\n\n"); //$NON-NLS-1$
+        String enumName = useRussian && type.getNameRu() != null ? type.getNameRu() : type.getName();
+        for (Property value : values)
+        {
+            if (count >= limit)
+            {
+                break;
+            }
+            String valueName = useRussian && value.getNameRu() != null ? value.getNameRu() : value.getName();
+            if (!memberNameMatches(valueName, value.getName(), value.getNameRu(), memberName))
+            {
+                continue;
+            }
+            String altName = useRussian ? value.getName() : value.getNameRu();
+            sb.append("- `").append(enumName != null ? enumName : UNKNOWN_LABEL).append('.') //$NON-NLS-1$
+                .append(valueName != null ? valueName : UNKNOWN_LABEL).append('`'); //$NON-NLS-1$
+            if (altName != null && !altName.equals(valueName))
+            {
+                // The alternate identifier names the enumeration in the OTHER language too:
+                // a Russian rendering reads 'ЧастиДаты.Дата / DateFractions.Date', not the
+                // Russian enumeration name glued to the English value - which would be a
+                // hybrid that exists in neither language.
+                String altEnumName = useRussian ? type.getName() : type.getNameRu();
+                sb.append(" / `").append(altEnumName != null ? altEnumName : UNKNOWN_LABEL) //$NON-NLS-1$
+                    .append('.').append(altName).append('`'); //$NON-NLS-1$
+            }
+            sb.append('\n');
+            count++;
+        }
+        sb.append('\n');
+        return count;
+    }
+
+
+    /**
+     * The values of a system enumeration: the properties of the companion type reached through the
+     * global-context property named after the enumeration. Returns an empty list when the model does
+     * not expose it (never {@code null}) - the caller then omits the section. Issue #299.
+     */
+    private List<Property> findSysEnumValues(Type type, Version version)
+    {
+        String enName = type.getName();
+        String ruName = type.getNameRu();
+        if (enName == null && ruName == null)
+        {
+            return List.of();
+        }
+        IEObjectProvider propertyProvider =
+            IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.PROPERTY, version);
+        if (propertyProvider == null)
+        {
+            return List.of();
+        }
+        Iterable<IEObjectDescription> descriptions = propertyProvider.getEObjectDescriptions(null);
+        if (descriptions == null)
+        {
+            return List.of();
+        }
+        // The provider hands out PROXIES. Resolve them in the resource set the ALREADY-RESOLVED type
+        // lives in: that one holds the platform resources of THIS type's version, whereas a fresh,
+        // empty one resolves nothing. This is the whole reason the values looked absent.
+        //
+        // Deliberately no fallback to "any project's resource set": in a workspace holding projects
+        // on DIFFERENT platform versions that would resolve this version's proxies against another
+        // version's resources - wrong values are worse than none, so a type with no resource set
+        // simply reports no values.
+        ResourceSet resourceSet = type.eResource() != null ? type.eResource().getResourceSet() : null;
+        if (resourceSet == null)
+        {
+            return List.of();
+        }
+        for (IEObjectDescription desc : descriptions)
+        {
+            String lastSegment = desc.getName().getLastSegment();
+            if (lastSegment == null
+                || !lastSegment.equalsIgnoreCase(enName) && !lastSegment.equalsIgnoreCase(ruName))
+            {
+                continue;
+            }
+            List<Property> values = valuesOfEnumAccessProperty(desc, resourceSet);
+            if (!values.isEmpty())
+            {
+                return values;
+            }
+        }
+        return List.of();
+    }
+
+    /**
+     * Resolves a global-context property description to the properties of the type it is typed at -
+     * for an enumeration-access property those ARE the enumeration's values. Empty when the
+     * description does not resolve or carries no such type.
+     */
+    private List<Property> valuesOfEnumAccessProperty(IEObjectDescription desc, ResourceSet resourceSet)
+    {
+        EObject resolved = desc.getEObjectOrProxy();
+        if (resolved != null && resolved.eIsProxy() && resourceSet != null)
+        {
+            resolved = EcoreUtil.resolve(resolved, resourceSet);
+        }
+        if (!(resolved instanceof Property) || resolved.eIsProxy())
+        {
+            return List.of();
+        }
+        for (TypeItem typeItem : ((Property)resolved).getTypes())
+        {
+            if (!(typeItem instanceof Type))
+            {
+                continue;
+            }
+            ContextDef holder = ((Type)typeItem).getContextDef();
+            if (holder == null)
+            {
+                continue;
+            }
+            EList<Property> properties = holder.allProperties();
+            if (properties != null && !properties.isEmpty())
+            {
+                return new ArrayList<>(properties);
+            }
+        }
+        return List.of();
+    }
+
     /**
      * Appends the "Constructors" section, honoring the member-type filter and the
      * running item limit. Returns the updated running item count.
@@ -418,8 +621,9 @@ public class PlatformDocumentationService
      * Appends the "Methods" section, honoring the member-name/type filters and the
      * running item limit. Returns the updated running item count.
      */
-    private int appendMethodsSection(StringBuilder sb, ContextDef contextDef, String memberName,
-                                     String memberType, int limit, int count, boolean useRussian)
+    private int appendMethodsSection(StringBuilder sb, ContextDef contextDef, String memberName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                                     String memberType, int limit, int count, boolean useRussian,
+                                     PlatformHelpService help, String typeName)
     {
         if (!shouldIncludeMemberType(memberType, MEMBER_METHOD))
         {
@@ -438,7 +642,7 @@ public class PlatformDocumentationService
             String methodName = useRussian ? method.getNameRu() : method.getName();
             if (memberNameMatches(methodName, method.getName(), method.getNameRu(), memberName))
             {
-                appendMethodDocumentation(sb, method, useRussian);
+                appendMethodDocumentation(sb, method, useRussian, help, typeName);
                 count++;
             }
         }
@@ -450,8 +654,9 @@ public class PlatformDocumentationService
      * Appends the "Properties" section, honoring the member-name/type filters and the
      * running item limit. Returns the updated running item count.
      */
-    private int appendPropertiesSection(StringBuilder sb, ContextDef contextDef, String memberName,
-                                        String memberType, int limit, int count, boolean useRussian)
+    private int appendPropertiesSection(StringBuilder sb, ContextDef contextDef, String memberName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+                                        String memberType, int limit, int count, boolean useRussian,
+                                        PlatformHelpService help, String typeName)
     {
         if (!shouldIncludeMemberType(memberType, MEMBER_PROPERTY))
         {
@@ -470,7 +675,7 @@ public class PlatformDocumentationService
             String propName = useRussian ? prop.getNameRu() : prop.getName();
             if (memberNameMatches(propName, prop.getName(), prop.getNameRu(), memberName))
             {
-                appendPropertyDocumentation(sb, prop, useRussian);
+                appendPropertyDocumentation(sb, prop, useRussian, help, typeName);
                 count++;
             }
         }
@@ -651,7 +856,8 @@ public class PlatformDocumentationService
     /**
      * Appends method documentation.
      */
-    private void appendMethodDocumentation(StringBuilder sb, Method method, boolean useRussian)
+    private void appendMethodDocumentation(StringBuilder sb, Method method, boolean useRussian,
+        PlatformHelpService help, String typeName)
     {
         String name = useRussian && method.getNameRu() != null ? method.getNameRu() : method.getName();
         String altName = useRussian ? method.getName() : method.getNameRu();
@@ -668,16 +874,32 @@ public class PlatformDocumentationService
         {
             sb.append("*Returns a value*\n\n"); //$NON-NLS-1$
         }
+        appendDescription(sb, help.memberDescription(typeName, method.getName()));
 
         // Parameter sets (overloads) - use getParamSet() not getParamSets()
         EList<ParamSet> paramSets = method.getParamSet();
         appendMethodParamSets(sb, paramSets, useRussian);
 
-        // Return type - on method level, not ParamSet
+        // What the method returns, from BOTH sources. The model carries the TYPE but records none at
+        // all for some methods; the syntax helper carries the platform's own wording, which also
+        // says what the value MEANS. Whichever exists is rendered - and when only the documentation
+        // has it, that is stated, so a caller can tell a modelled type from a documented sentence.
+        // A method the documentation describes as a procedure legitimately yields neither. #299
         EList<TypeItem> retValTypes = method.getRetValType();
+        String documentedReturn = help.methodReturnValue(typeName, method.getName());
         if (retValTypes != null && !retValTypes.isEmpty())
         {
-            sb.append("**Returns:** ").append(joinTypeNames(retValTypes, useRussian)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append("\n**Returns:** ").append(joinTypeNames(retValTypes, useRussian)); //$NON-NLS-1$
+            if (documentedReturn != null)
+            {
+                sb.append(" - ").append(MarkdownUtils.escapeMarkdown(documentedReturn)); //$NON-NLS-1$
+            }
+            sb.append("\n"); //$NON-NLS-1$
+        }
+        else if (documentedReturn != null)
+        {
+            sb.append("\n**Returns (from the platform documentation):** ") //$NON-NLS-1$
+                .append(MarkdownUtils.escapeMarkdown(documentedReturn)).append("\n"); //$NON-NLS-1$
         }
 
         sb.append("\n"); //$NON-NLS-1$
@@ -779,7 +1001,8 @@ public class PlatformDocumentationService
     /**
      * Appends property documentation.
      */
-    private void appendPropertyDocumentation(StringBuilder sb, Property prop, boolean useRussian)
+    private void appendPropertyDocumentation(StringBuilder sb, Property prop, boolean useRussian,
+        PlatformHelpService help, String typeName)
     {
         String name = useRussian && prop.getNameRu() != null ? prop.getNameRu() : prop.getName();
         String altName = useRussian ? prop.getName() : prop.getNameRu();
@@ -805,6 +1028,7 @@ public class PlatformDocumentationService
         {
             sb.append("*Access: ").append(String.join("/", flags)).append("*\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
+        appendDescription(sb, help.memberDescription(typeName, prop.getName()));
 
         // Property type - use getTypes() which returns EList<TypeItem>
         EList<TypeItem> propTypes = prop.getTypes();

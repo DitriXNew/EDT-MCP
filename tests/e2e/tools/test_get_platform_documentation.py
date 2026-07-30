@@ -244,3 +244,126 @@ def test_nonexistent_builtin_reports_not_found_with_suggestions():
     assert_error_quality(err, names=[bad], suggests=["Available global methods"],
                          ctx="builtin not found names the bad value and lists available methods")
     assert_no_diff("an invalid lookup must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# System enumerations, and the documentation the model does not carry — issue #299.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_system_enumeration_lists_its_values():
+    """Issue #299: a system enumeration rendered as a bare, self-contradicting "Constructor 1 /
+    No parameters" under "Created by New: No" and NOT ONE of its values - so the only thing such a
+    type actually has could not be learned from this tool at all.
+
+    The values live on a companion type reached through the global-context property named after the
+    enumeration, which is what BSL itself resolves for `DateFractions.Date`."""
+    r = call("get_platform_documentation", {
+        "projectName": PROJECT, "typeName": "DateFractions", "responseFormat": "detailed"})
+    assert_ok(r, "document a system enumeration")
+    assert_contains(r.text, "## Values", "a system enumeration must render its values")
+    for value in ("DateFractions.Date", "DateFractions.DateTime", "DateFractions.Time"):
+        assert_contains(r.text, value, "the enumeration value %s must be listed" % value)
+    # The Russian names come along, the way every other member renders bilingually.
+    assert_contains(r.text, "ЧастиДаты.Дата", "the value's Russian name must be listed too")
+    # ... and the constructor that never applied is gone: this type is not created by New.
+    assert_not_contains(r.text, "## Constructors",
+                        "a non-constructible enumeration must not render a Constructors section")
+    assert_no_diff("a read tool must not touch the project")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_russian_rendering_names_the_enumeration_in_both_languages():
+    # The alternate identifier must be wholly English: the first cut prefixed the ENGLISH value with
+    # the RUSSIAN enumeration name, producing 'ЧастиДаты.Date' - an identifier that exists in
+    # neither language (issue #299 review).
+    r = call("get_platform_documentation", {
+        "projectName": PROJECT, "typeName": "DateFractions", "responseFormat": "detailed",
+        "language": "ru"})
+    assert_ok(r, "document a system enumeration in Russian")
+    assert_contains(r.text, "`ЧастиДаты.Дата` / `DateFractions.Date`",
+                    "the alternate identifier must name the enumeration in the other language too")
+    assert_not_contains(r.text, "`ЧастиДаты.Date`",
+                        "a half-Russian, half-English identifier must never be rendered")
+    assert_no_diff("a read tool must not touch the project")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_enumeration_values_survive_the_member_name_filter():
+    # The values are members like any other, so memberName narrows them instead of being ignored.
+    r = call("get_platform_documentation", {
+        "projectName": PROJECT, "typeName": "DateFractions", "responseFormat": "detailed",
+        "memberName": "DateTime"})
+    assert_ok(r, "filter the enumeration values by name")
+    assert_contains(r.text, "DateFractions.DateTime", "the matching value must survive the filter")
+    # The needle must be one the renderer really emits: values are rendered inside backticks,
+    # so "DateFractions.Time\n" never appeared and this could not fail whatever the filter did.
+    assert_not_contains(r.text, "`DateFractions.Time`",
+                        "a non-matching value must be filtered out")
+    assert_no_diff("a read tool must not touch the project")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_system_enumeration_values_survive_the_default_concise_rendering():
+    # 'concise' is the DEFAULT, and it drops per-member bodies - but an enumeration's values ARE its
+    # inventory, not a body. They are bullets rather than '###' headings, so the concise filter
+    # silently removed them and left an empty "## Values" section (issue #299 review).
+    r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": "DateFractions"})
+    assert_ok(r, "document a system enumeration in the default format")
+    assert_contains(r.text, "## Values", "the concise rendering must keep the Values section")
+    assert_contains(r.text, "DateFractions.Date",
+                    "the concise rendering must keep the values themselves, not just the heading")
+    assert_no_diff("a read tool must not touch the project")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_type_and_members_carry_the_platform_documentation():
+    """Issue #299: the model carries names, parameters and flags but no PROSE, so a caller could not
+    learn what a type or a member is for. The syntax helper has it; this pulls it in."""
+    r = call("get_platform_documentation", {
+        "projectName": PROJECT, "typeName": "AccessToken", "responseFormat": "detailed"})
+    assert_ok(r, "document a type that the platform help describes")
+    # The type's own description...
+    assert_contains(r.text, "JSON Web Token", "the type description must come from the platform help")
+    # ... a method's ...
+    assert_contains(r.text, "Adds a signature to the access token",
+                    "a method's description must come from the platform help")
+    # ... and a property's, which is the part that maps the property to its JWT claim - exactly what
+    # the issue reported as missing and needed.
+    assert_contains(r.text, "iat", "a property's description must come from the platform help")
+    # The markup the help stores its sections in must NOT reach the answer.
+    for markup in ("<a href", "<br>", "&nbsp;", "SyntaxHelperContext"):
+        assert_not_contains(r.text, markup, "the help markup %s must be stripped" % markup)
+    assert_no_diff("a read tool must not touch the project")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_type_whose_name_collides_with_a_help_catalog_still_gets_its_documentation():
+    # The help tree holds GROUPING CATALOGS that can carry a type's very name - there is a catalog
+    # named like the Query type. Having children, such a catalog won the name search, the member
+    # lookup then walked the wrong subtree, and the type silently lost every description. Types
+    # without such a namesake (AccessToken, Chart, DateFractions) never showed it (issue #299 review).
+    r = call("get_platform_documentation", {
+        "projectName": PROJECT, "typeName": "Query", "responseFormat": "detailed",
+        "memberName": "Execute"})
+    assert_ok(r, "document a type whose name collides with a help catalog")
+    assert_contains(r.text, "Executes the database query",
+                    "the member description must come from the TYPE's page, not a same-named catalog")
+    assert_no_diff("a read tool must not touch the project")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_documented_return_value_is_rendered_next_to_the_modelled_type():
+    # Issue #299: the model gives the return TYPE, the help says what the value MEANS - a caller
+    # needs both. The documented-ONLY branch is deliberately not asserted here: AccessToken.Sign,
+    # the case the report cited, is documented as a PROCEDURE, so neither source records a return
+    # for it and none is invented.
+    r = call("get_platform_documentation", {
+        "projectName": PROJECT, "typeName": "Chart", "responseFormat": "detailed",
+        "memberName": "GetValue"})
+    assert_ok(r, "document a method whose return the platform help describes")
+    assert_contains(r.text, "**Returns:** ChartValue", "the modelled return type must still render")
+    assert_contains(r.text, "The chart value at the given point",
+                    "the documented meaning of the return must render next to it")
+    assert_no_diff("a read tool must not touch the project")
+
