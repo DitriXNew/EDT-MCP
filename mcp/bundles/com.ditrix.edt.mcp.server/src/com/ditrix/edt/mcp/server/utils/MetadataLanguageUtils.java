@@ -115,6 +115,31 @@ public final class MetadataLanguageUtils
     public static String resolveSynonymLanguage(Configuration config, String value,
         String explicitLanguage, String subject)
     {
+        return resolveSynonymLanguage(config, value, explicitLanguage, subject, null);
+    }
+
+    /**
+     * The {@link #resolveSynonymLanguage(Configuration, String, String, String)} variant that also
+     * accepts codes the SAME call is about to declare.
+     * <p>
+     * One {@code modify_metadata} batch can set a {@code Language} object's {@code languageCode} AND
+     * a localized value under that very code. Validating against the model alone would reject the
+     * second half of an edit whose first half declares the code, so the caller passes the pending
+     * codes here. They are treated exactly like declared ones - the whole batch is prepared before
+     * anything is written, so a rejected {@code languageCode} fails the call before the locale it
+     * would have declared can be used.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param value the localized value being set (may be {@code null}/empty)
+     * @param explicitLanguage an explicitly requested language code, or {@code null}/empty
+     * @param subject what is being localized, for the error message
+     * @param alsoDeclared codes this same call declares (may be {@code null}/empty)
+     * @return the resolved language code, or {@code null} when {@code value} is absent
+     * @throws IllegalArgumentException when the code is undeclared or cannot be determined
+     */
+    public static String resolveSynonymLanguage(Configuration config, String value,
+        String explicitLanguage, String subject, Collection<String> alsoDeclared)
+    {
         if (value == null || value.isEmpty())
         {
             return null;
@@ -126,10 +151,10 @@ public final class MetadataLanguageUtils
         // declared language by construction. Issue #298.
         if (explicitLanguage != null && !explicitLanguage.isEmpty())
         {
-            List<String> declared = declaredLanguageCodes(config);
+            List<String> declared = declaredLanguageCodes(config, alsoDeclared);
             if (!declared.isEmpty())
             {
-                String canonical = canonicalLanguageCode(config, explicitLanguage);
+                String canonical = canonicalOf(declared, explicitLanguage);
                 if (canonical == null)
                 {
                     throw new IllegalArgumentException("Unknown language '" + explicitLanguage //$NON-NLS-1$
@@ -166,11 +191,43 @@ public final class MetadataLanguageUtils
      */
     public static List<String> declaredLanguageCodes(Configuration config)
     {
+        return declaredLanguageCodes(config, null);
+    }
+
+    /**
+     * The declared language codes PLUS the ones the current call is about to declare, in declaration
+     * order, without blanks or duplicates. See
+     * {@link #resolveSynonymLanguage(Configuration, String, String, String, Collection)} for why a
+     * pending code counts as declared.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param alsoDeclared codes this call declares (may be {@code null}/empty)
+     * @return the codes, never {@code null}
+     */
+    public static List<String> declaredLanguageCodes(Configuration config,
+        Collection<String> alsoDeclared)
+    {
+        List<String> codes = new ArrayList<>();
+        collectDeclared(config, codes);
+        if (alsoDeclared != null)
+        {
+            for (String code : alsoDeclared)
+            {
+                if (code != null && !code.isEmpty() && !codes.contains(code))
+                {
+                    codes.add(code);
+                }
+            }
+        }
+        return codes;
+    }
+
+    private static void collectDeclared(Configuration config, List<String> codes)
+    {
         if (config == null)
         {
-            return Collections.emptyList();
+            return;
         }
-        List<String> codes = new ArrayList<>();
         for (Language lang : config.getLanguages())
         {
             if (lang == null)
@@ -183,7 +240,6 @@ public final class MetadataLanguageUtils
                 codes.add(code);
             }
         }
-        return codes;
     }
 
     /**
@@ -200,11 +256,16 @@ public final class MetadataLanguageUtils
      */
     public static String canonicalLanguageCode(Configuration config, String code)
     {
+        return canonicalOf(declaredLanguageCodes(config), code);
+    }
+
+    /** The declared spelling of {@code code} within {@code declared}, or {@code null}. */
+    private static String canonicalOf(List<String> declared, String code)
+    {
         if (code == null || code.isEmpty())
         {
             return null;
         }
-        List<String> declared = declaredLanguageCodes(config);
         if (declared.contains(code))
         {
             return code;

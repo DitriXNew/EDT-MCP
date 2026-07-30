@@ -293,4 +293,37 @@ public class MetadataLanguageUtilsTest
         assertEquals("en_CA",
             MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", null, "the synonym"));
     }
+
+    @Test
+    public void resolveSynonymLanguageAcceptsACodeTheSameCallDeclares()
+    {
+        // One modify batch can set a Language's languageCode AND a localized value under that very
+        // code. Validating against the model alone would reject the second half of an edit whose
+        // first half declares the code (codex review on #298).
+        Configuration config = config(language("en"), language("en"));
+        assertEquals("fr", MetadataLanguageUtils.resolveSynonymLanguage(config, "Francais", "fr",
+            "the synonym", Collections.singletonList("fr")));
+        // ... and a code nobody declares, pending or not, is still refused.
+        try
+        {
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Deutsch", "de", "the synonym",
+                Collections.singletonList("fr"));
+            fail("a code neither declared nor pending must still be rejected");
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("'de'"));
+            assertTrue("the message must list the pending code as available too",
+                e.getMessage().contains("fr"));
+        }
+    }
+
+    @Test
+    public void declaredLanguageCodesAppendsThePendingOnesAfterTheDeclaredOnes()
+    {
+        Configuration config = config(language("en"), language("en"));
+        assertEquals(Arrays.asList("en", "fr"),
+            MetadataLanguageUtils.declaredLanguageCodes(config, Arrays.asList("fr", "en", "", null)));
+        assertEquals(Arrays.asList("en"), MetadataLanguageUtils.declaredLanguageCodes(config, null));
+    }
 }

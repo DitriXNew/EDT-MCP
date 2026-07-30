@@ -1768,3 +1768,38 @@ def test_modify_form_member_rejects_a_title_in_an_undeclared_locale():
     assert_error_quality(e, names=["fr_CA"], suggests=["en"],
                          ctx="the form-member path must give the same actionable error")
     assert_no_diff("a rejected localized write must not change the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_accepts_a_locale_the_same_batch_declares():
+    # One batch may set a Language's languageCode AND a localized value under that very code. The
+    # undeclared-locale guard must not reject the second half of an edit whose first half declares
+    # the code - the whole batch is validated before anything is written (issue #298, review).
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298Atomic"}),
+              "add the language object")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Language.Z298Atomic",
+        "properties": [
+            {"name": "languageCode", "value": "fr"},
+            {"name": "synonym", "value": "Francais", "language": "fr"},
+        ],
+    })
+    assert_ok(r, "declare a language code and use it in the SAME call")
+    applied = r.structured.get("applied") or []
+    assert "languageCode" in applied and "synonym" in applied,         "both properties must be applied: %r" % (r.structured,)
+    assert r.structured.get("language") == "fr",         "the result must echo the just-declared locale: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # A code that NOBODY declares - neither the model nor this batch - is still refused.
+    bad = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Language.Z298Atomic",
+        "properties": [
+            {"name": "languageCode", "value": "fr"},
+            {"name": "synonym", "value": "Deutsch", "language": "de"},
+        ],
+    })
+    e = assert_error(bad, "a code neither declared nor pending must still be refused")
+    assert_error_quality(e, names=["de"], suggests=["fr"],
+                         ctx="the pending code must be listed among the available ones")

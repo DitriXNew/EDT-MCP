@@ -2367,7 +2367,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Read OUTSIDE the write transaction (a plain configuration read, like the language
         // resolution the prepare step already did); only the per-object present locales are
         // collected inside. Issue #298.
-        final List<String> declaredCodes = MetadataLanguageUtils.declaredLanguageCodes(config);
+        final List<String> declaredCodes =
+            MetadataLanguageUtils.declaredLanguageCodes(config, pendingLanguageCodes(properties));
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
@@ -3197,7 +3198,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        PrepareContext ctx = new PrepareContext(project, config, version);
+        PrepareContext ctx =
+            new PrepareContext(project, config, version, pendingLanguageCodes(properties));
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
@@ -4304,12 +4306,57 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         final Version version;
 
+        /** Language codes THIS batch declares (a Language object's 'languageCode'); never null. */
+        final List<String> pendingLanguageCodes;
+
         PrepareContext(IProject project, Configuration config, Version version)
+        {
+            this(project, config, version, List.of());
+        }
+
+        PrepareContext(IProject project, Configuration config, Version version,
+            List<String> pendingLanguageCodes)
         {
             this.project = project;
             this.config = config;
             this.version = version;
+            this.pendingLanguageCodes = pendingLanguageCodes;
         }
+    }
+
+    /**
+     * The language codes THIS properties batch declares - the values of its {@code languageCode}
+     * entries (a {@code Language} object's own code). Issue #298.
+     *
+     * <p>The whole batch is validated before anything is written, so treating these as declared
+     * cannot let a value slip in under a code that never materializes: if the {@code languageCode}
+     * entry itself is rejected, the call fails and nothing is applied. Without this, an edit that
+     * sets a new Language's code AND its synonym in that code in ONE call would reject its own
+     * second half - the model does not carry the code yet at validation time.
+     *
+     * @param properties the raw properties array (may be {@code null})
+     * @return the pending codes, never {@code null}
+     */
+    private static List<String> pendingLanguageCodes(List<JsonObject> properties)
+    {
+        if (properties == null || properties.isEmpty())
+        {
+            return List.of();
+        }
+        List<String> codes = new ArrayList<>();
+        for (JsonObject prop : properties)
+        {
+            if (!"languageCode".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                continue;
+            }
+            String code = asString(prop.get(KEY_VALUE));
+            if (code != null && !code.isEmpty() && !codes.contains(code))
+            {
+                codes.add(code);
+            }
+        }
+        return codes;
     }
 
     private String prepare(PrepareContext ctx, EObject target, EObject extInfo,
@@ -4370,7 +4417,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         switch (info.valueKind)
         {
             case LOCALIZED_STRING:
-                return prepareLocalized(ctx.config, name, value, prop, info, out, normReport);
+                return prepareLocalized(ctx, name, value, prop, info, out, normReport);
             case ENUM:
                 return prepareEnum(name, value, info, out);
             case BOOLEAN:
@@ -4524,7 +4571,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * success, appends the prepared localized change to {@code out}. Returns a JSON error on failure,
      * or {@code null} on success. Read-only: it only builds and queues the change (no model mutation).
      */
-    private String prepareLocalized(Configuration config, String name, String value, JsonObject prop,
+    private String prepareLocalized(PrepareContext ctx, String name, String value, JsonObject prop,
         PropertyInfo info, List<PreparedChange> out, MdNameNormalizer.Report normReport)
     {
         if (value == null || value.isEmpty())
@@ -4534,8 +4581,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String code;
         try
         {
-            code = MetadataLanguageUtils.resolveSynonymLanguage(config, value,
-                asString(prop.get("language")), "'" + name + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            // Codes this same batch declares count as declared: an edit that sets a Language's
+            // 'languageCode' and a localized value under it must not reject its own second half.
+            code = MetadataLanguageUtils.resolveSynonymLanguage(ctx.config, value,
+                asString(prop.get("language")), "'" + name + "'", ctx.pendingLanguageCodes); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         catch (IllegalArgumentException e)
         {
