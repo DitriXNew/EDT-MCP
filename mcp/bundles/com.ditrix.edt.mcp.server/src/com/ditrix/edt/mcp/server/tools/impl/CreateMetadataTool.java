@@ -1255,9 +1255,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         // A Table with no explicit title still gets a GENERATED one (its own name, the way the
         // designer builds it), so a locale is needed even when the caller supplied no title: the
-        // configuration's own default, never a code guessed from the script variant (issue #298).
-        final String writeTitleLanguage =
-            titleLanguage != null ? titleLanguage : MetadataLanguageUtils.resolveLanguageCode(config, null);
+        // configuration's own default rather than a code guessed from the script variant (#298).
+        // A configuration that declares NO language at all still gets its generated title - under
+        // the script-variant locale, exactly as before this change. Losing the title outright would
+        // be a regression, and a language-less configuration offers nothing better to key it by.
+        String resolvedTitleLanguage = MetadataLanguageUtils.resolveLanguageCode(config, null);
+        if (resolvedTitleLanguage == null)
+        {
+            resolvedTitleLanguage = russianAutoNames ? "ru" : "en"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        final String writeTitleLanguage = titleLanguage != null ? titleLanguage : resolvedTitleLanguage;
 
         final boolean persisted;
         try

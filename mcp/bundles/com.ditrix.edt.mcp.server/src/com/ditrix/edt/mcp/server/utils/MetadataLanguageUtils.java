@@ -180,6 +180,22 @@ public final class MetadataLanguageUtils
             throw new IllegalArgumentException("Cannot determine a language code for " + subject //$NON-NLS-1$
                 + " in this configuration. Specify a 'language' code (e.g. 'en' or 'ru')."); //$NON-NLS-1$
         }
+        // The fallback comes from the model, so it is declared - BEFORE this call. A batch that
+        // RENAMES the default language's code removes it, and the value would land under the code
+        // the same call deleted: invisible, which is the whole point of this guard. With exactly one
+        // code left afterwards the intent is unambiguous, so use it; with several, refuse rather
+        // than guess which one the caller meant.
+        if (declaredOverride != null && !declaredOverride.isEmpty() && !declaredOverride.contains(code))
+        {
+            List<String> after = declaredOrOverride(config, declaredOverride);
+            if (after.size() == 1)
+            {
+                return after.get(0);
+            }
+            throw new IllegalArgumentException("This call changes the language codes, so the default "  //$NON-NLS-1$
+                + "code ('" + code + "') for " + subject + " no longer exists after it. Name the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'language' explicitly - one of: " + String.join(", ", after) + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return code;
     }
 

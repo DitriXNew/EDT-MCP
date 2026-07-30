@@ -345,4 +345,45 @@ public class MetadataLanguageUtilsTest
         assertEquals(Arrays.asList("en"),
             MetadataLanguageUtils.declaredOrOverride(config, Collections.<String> emptyList()));
     }
+
+    @Test
+    public void theFallbackCodeIsAlsoRefusedWhenTheSameCallRemovesIt()
+    {
+        // A batch that RENAMES the default language's code and writes a localized value WITHOUT an
+        // explicit 'language' used to take the OLD default from the model - the very code the call
+        // deletes - so the value landed invisible. With exactly one code left the intent is
+        // unambiguous, so it is used (codex review on #298).
+        Configuration config = config(language("en"), language("en"));
+        assertEquals("fr", MetadataLanguageUtils.resolveSynonymLanguage(config, "Francais", null,
+            "the synonym", Collections.singletonList("fr")));
+    }
+
+    @Test
+    public void anAmbiguousPostCallDefaultIsRefusedRatherThanGuessed()
+    {
+        // Two codes remain and the old default is gone: there is no way to know which one the
+        // caller meant, so the call is refused with both named instead of silently picking one.
+        Configuration config = config(language("en"), language("en"));
+        try
+        {
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Value", null, "the synonym",
+                Arrays.asList("fr", "it"));
+            fail("an ambiguous post-call default must be refused");
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("fr"));
+            assertTrue(e.getMessage(), e.getMessage().contains("it"));
+            assertTrue("the message must name the vanished default", e.getMessage().contains("'en'"));
+        }
+    }
+
+    @Test
+    public void aFallbackThatSurvivesTheCallIsLeftAlone()
+    {
+        // The batch declares another code but does NOT remove the default: the default still wins.
+        Configuration config = config(language("en"), language("en"));
+        assertEquals("en", MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", null,
+            "the synonym", Arrays.asList("en", "fr")));
+    }
 }
