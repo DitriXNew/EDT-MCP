@@ -35,6 +35,7 @@ from harness import (
     tree_snapshot,
     wait_for_project_ready,
     diff,
+    poll_disk_contains,
     read_disk,
     e2e_test,
     PROJECT,
@@ -1656,8 +1657,13 @@ def test_xdto_namespace_change_cascades_into_referencing_package():
         raise AssertionError("the result must report the propagation to E2ECascQ: %r" % msg)
 
     # Ground truth on disk: Q import + property QName carry the NEW namespace only...
-    poll_diff_contains(new_ns, ctx="Q must be rewritten to the new namespace on disk")
-    q_text = read_disk("src/XDTOPackages/E2ECascQ/Package.xdto")
+    # Wait on Q's OWN file, not on the diff: the new namespace lands in P's Package.xdto (its
+    # targetNamespace) FIRST, so a diff-wide wait can release while Q is still being exported and the
+    # read below then sees the pre-cascade content. That is a real CI failure, not a hypothetical.
+    q_rel = "src/XDTOPackages/E2ECascQ/Package.xdto"
+    poll_disk_contains(q_rel, "import namespace=" + chr(34) + new_ns + chr(34),
+                       ctx="Q must be rewritten to the new namespace on disk")
+    q_text = read_disk(q_rel)
     assert_contains(q_text, "import namespace=" + chr(34) + new_ns + chr(34),
         "Q import must point at the NEW namespace")
     if old_ns in q_text:

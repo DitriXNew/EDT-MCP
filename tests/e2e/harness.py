@@ -665,6 +665,31 @@ def poll_disk_path_gone(rel_path, timeout=10, ctx=""):
     _fail("expected %s to be deleted from disk [%s]" % (rel_path, ctx))
 
 
+def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
+    """Poll until ONE named fixture file contains substr. rel_path is relative to the project dir,
+    e.g. 'src/XDTOPackages/P/Package.xdto'.
+
+    Use this instead of poll_diff_contains whenever the assertion that follows reads ONE SPECIFIC
+    file: poll_diff_contains is satisfied by the substring appearing in ANY changed file, so when a
+    write touches several files (an object plus the ones it cascades into) it can release while the
+    file about to be read is still being exported - a race that only shows up on a fast machine.
+    A missing file just keeps polling: the export may not have created it yet."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                last = f.read()
+            if substr in last:
+                return
+        except FileNotFoundError:
+            last = "(file does not exist yet)"
+        time.sleep(0.5)
+    _fail("expected %s to contain %r [%s]; it holds:\n%s"
+          % (rel_path, substr, ctx, last[:700]))
+
+
 def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
     """Poll until a fixture file no longer contains substr (e.g. a removed collection
     reference). A missing file also satisfies 'lacks'. Polls because the on-disk edit

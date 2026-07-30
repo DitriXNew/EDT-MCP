@@ -45,6 +45,7 @@ from harness import (
     assert_tree_unchanged,
     diff,
     poll_diff_contains,
+    poll_disk_contains,
     read_disk,
     reset_all_fixtures,
     tree_snapshot,
@@ -486,7 +487,9 @@ def test_create_form_object_default_seeds_no_attributes():
     assert_ok(r, "create form object without generateContent")
     assert r.structured.get("generateContent") is False, \
         "the default create must echo generateContent=false: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the empty form must land on disk")
+    # Wait on the .form FILE: the form name lands in the owner .mdo first, so waiting on the diff
+    # can release before the content form is exported and the read below hits a missing file.
+    poll_disk_contains(form_rel, "<autoCommandBar>", ctx="the empty form must land on disk")
     form_xml = read_disk(form_rel)
     assert "<attributes>" not in form_xml, \
         "an unseeded object form must carry no <attributes> block: %s" % form_xml
@@ -625,7 +628,10 @@ def test_create_form_object_explicit_object_fields_seeds_only_listed():
     assert_ok(r, "create document form with an explicit single objectFields list")
     assert r.structured.get("generateContent") is True, \
         "the create must echo generateContent=true: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    # Wait on the .form FILE (see above): the name reaches the owner .mdo before the content is
+    # exported, and the assertions below read the content form itself.
+    poll_disk_contains(form_rel, "<name>Object</name>",
+                       ctx="the seeded document form must land on disk")
     form_xml = read_disk(form_rel)
     # The main Object attribute is still seeded, and the one listed field binds to Object.Number.
     assert "<name>Object</name>" in form_xml, \
@@ -677,7 +683,10 @@ def test_create_form_object_empty_object_fields_seeds_only_main_attribute():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": fqn, "generateContent": True, "objectFields": []})
     assert_ok(r, "create document form with an empty objectFields list")
-    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    # Wait on the .form FILE (see above): the name reaches the owner .mdo before the content is
+    # exported, and the assertions below read the content form itself.
+    poll_disk_contains(form_rel, "<name>Object</name>",
+                       ctx="the seeded document form must land on disk")
     form_xml = read_disk(form_rel)
     assert "<name>Object</name>" in form_xml, \
         "the main Object attribute must still be seeded: %s" % form_xml
