@@ -15,9 +15,15 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - `full` - `true` returns every reflected section, `false` (default) returns only key info. In full mode each section is capped and a `[truncated]` row marks omitted rows.
 - `roleObjectOffset` - for a ROLE FQN only: 0-based object offset into the rights matrix. The default (non-`full`) view shows only the first 100 authored objects; page past them by passing the next offset (the matrix notice tells you the exact value), or use `full: true` (which renders every object, capped at 1000). Ignored in `full` mode.
 - `language` - language **code** (`en`/`ru`) used for the synonym columns. Defaults to the configuration's default language; the synonym map is keyed by code, not by the language's display name.
+- `includeHelp` - `true` also appends the object's authored **help** - the "Reference information" HTML a configuration author fills in for an object (Configuration / Catalog / Document / Report / ...), rendered to Markdown, one `## Help (<lang>)` section per language. This is the object's OWN help (read from `<ObjectDir>/Help/<lang>.html`), not the platform documentation - for the platform's help use `get_platform_documentation`. Objects with no authored help show a `**Help:** none authored` note. Default `false`.
+- `dcsInclude` - for an object that hosts a **Data Composition Schema** (СКД - a Report or a template): expand the heavy DCS sections. Comma-separated keywords: `query` (full dataset query texts), `fields` (dataset field lists), `variants` (the default settings AND every report variant expanded to their selection/order/filter/structure fields), `all`. Omitted (default) renders a COMPACT DCS map: data sets (name, type, query length, field count), calculated/total fields, parameters, and section COUNTS for the default settings and each variant. No effect on objects without a DCS template. To search *inside* schemas instead of dumping them, use `search_in_dcs`.
+- `dcsDataSet` - DCS: expand ONE data set fully (its query text + fields) by name, leaving the others compact - a targeted query read on a large report.
+- `dcsVariant` - DCS: expand ONE report variant fully (its selection/order/filter/structure) by name, leaving the query and the other variants compact.
 
 ## Output
 - Markdown, one section per resolved object, separated by `---`.
+- With `includeHelp: true`, each object section is followed by its authored help (a `## Help (<lang>)` block per language) or a `**Help:** none authored` note.
+- A DCS-hosting object appends a `## Data Composition Schema — <TemplateName>` section per schema. Compact by default; `dcsInclude`/`dcsDataSet`/`dcsVariant` expand it. An expanded query renders as a fenced ` ```1c-query ` block; settings render as `- select/order/filter/group <field>` lines (order carries its direction, a filter its comparison + value).
 - A form FQN renders the enriched form structure instead of an mdclass object section: an Items outline (each item with its visibility, bound `dataPath` and per-kind extras), an Attributes table (with the `Main`/`SavedData` columns), a Commands table and an Event handlers section.
 - A template FQN whose content is a Data Composition Schema renders the schema's structure (see above) instead of an mdclass object section, headed `# Data Composition Schema: <fqn>`.
 - Type-specific properties are appended for a few kinds whose behaviour the basic view otherwise hid: a **ScheduledJob** gets a Properties table (methodName, use, predefined, restartCountOnFailure / restartIntervalOnFailure, key, and whether a Schedule is set), a **CommonModule** gets its context-availability flags (server / serverCall / clientManagedApplication / clientOrdinaryApplication / externalConnection / global / privileged) and returnValuesReuse, a **Catalog** / **ChartOfCharacteristicTypes** / **ChartOfCalculationTypes** / **ChartOfAccounts** gets its "Predefined items" table (see above), and an **InformationRegister**'s Dimensions additionally show their `Indexing`. These render in both the default and `full: true` views.
@@ -28,6 +34,10 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - Basic, one object: `{projectName: "MyProject", objectFqns: ["Catalog.Products"]}`.
 - Full details, several objects: `{projectName: "MyProject", objectFqns: ["Catalog.Products", "Document.SalesOrder"], full: true}`.
 - Russian type token + Russian synonyms: `{projectName: "MyProject", objectFqns: ["Справочник.Products"], language: "ru"}`.
+- With the object's authored help: `{projectName: "MyProject", objectFqns: ["Catalog.Products"], includeHelp: true}`.
+- Compact schema map of a report (default): `{projectName: "MyProject", objectFqns: ["Report.Sales"]}`.
+- Full СКД (queries + settings + variants): `{projectName: "MyProject", objectFqns: ["Report.Sales"], dcsInclude: "all"}`.
+- One dataset's query / one variant only: `{..., dcsDataSet: "DataSet1"}` / `{..., dcsVariant: "ByRegion"}`.
 - A report's Data Composition Schema template: `{projectName: "MyProject", objectFqns: ["Report.Sales.Template.ОсновнаяСхемаКомпоновкиДанных"]}`.
 - A predefined item: `{projectName: "MyProject", objectFqns: ["Catalog.Products.Predefined.Service"]}`.
 - A chart of accounts with its predefined accounts: `{projectName: "MyProject", objectFqns: ["ChartOfAccounts.Main"]}`.

@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.DcsSchemaReader;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -54,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.ObjectHelpReader;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -131,6 +133,22 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "ChartOfCharacteristicTypes item only).") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
+            .booleanProperty("includeHelp", //$NON-NLS-1$
+                "Also include the object's authored HELP - the 'Reference information' HTML a " + //$NON-NLS-1$
+                "configuration author fills in for an object (Configuration / Catalog / Document / " + //$NON-NLS-1$
+                "Report / ...), rendered to Markdown per language (default false). This is the object's " + //$NON-NLS-1$
+                "OWN help, not the platform documentation (for that use get_platform_documentation). " + //$NON-NLS-1$
+                "Omitted when the object has no authored help.") //$NON-NLS-1$
+            .stringProperty("dcsInclude", //$NON-NLS-1$
+                "For an object hosting a Data Composition Schema (СКД - a Report or a template): " + //$NON-NLS-1$
+                "expand heavy DCS sections. Comma-separated keywords: 'query' (full dataset query texts), " + //$NON-NLS-1$
+                "'fields' (dataset field lists), 'variants' (full settings of every report variant), 'all'. " + //$NON-NLS-1$
+                "Default (omitted) is a COMPACT DCS map (data sets, field/section counts). No effect on " + //$NON-NLS-1$
+                "objects without a DCS template. To search inside DCS instead, use search_in_dcs.") //$NON-NLS-1$
+            .stringProperty("dcsDataSet", //$NON-NLS-1$
+                "DCS: expand ONE data set fully (its query text + fields) by name, others stay compact.") //$NON-NLS-1$
+            .stringProperty("dcsVariant", //$NON-NLS-1$
+                "DCS: expand ONE report variant fully (selection/order/filter/structure) by name, others stay compact.") //$NON-NLS-1$
             .build();
     }
 
@@ -159,6 +177,13 @@ public class GetMetadataDetailsTool implements IMcpTool
         String fullStr = JsonUtils.extractStringArgument(params, "full"); //$NON-NLS-1$
         boolean assignable = JsonUtils.extractBooleanArgument(params, "assignable", false); //$NON-NLS-1$
         String language = JsonUtils.extractStringArgument(params, "language"); //$NON-NLS-1$
+        boolean includeHelp = JsonUtils.extractBooleanArgument(params, "includeHelp", false); //$NON-NLS-1$
+        // Data Composition Schema (СКД) read expansion. Empty -> compact map for DCS-hosting objects,
+        // nothing at all for the rest; parsed into the reader's Options (no model access here).
+        DcsSchemaReader.Options dcsOptions = DcsSchemaReader.Options.of(
+            JsonUtils.extractStringArgument(params, "dcsInclude"), //$NON-NLS-1$
+            JsonUtils.extractStringArgument(params, "dcsDataSet"), //$NON-NLS-1$
+            JsonUtils.extractStringArgument(params, "dcsVariant")); //$NON-NLS-1$
         // Role-matrix pagination offset (0-based objects). Only the ROLE branch consumes it; a negative
         // request is clamped to 0 downstream. Ignored in full mode.
         int roleObjectOffset = JsonUtils.extractIntArgument(params, "roleObjectOffset", 0); //$NON-NLS-1$
@@ -183,14 +208,16 @@ public class GetMetadataDetailsTool implements IMcpTool
         final boolean fullMode = full;
         final boolean assignableMode = assignable;
         final String lang = language;
+        final boolean helpMode = includeHelp;
         final int roleOffset = roleObjectOffset;
+        final DcsSchemaReader.Options dcsOpts = dcsOptions;
 
         Display display = PlatformUI.getWorkbench().getDisplay();
         display.syncExec(() -> {
             try
             {
-                String result =
-                    getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode, lang, roleOffset);
+                String result = getMetadataDetailsInternal(projectName, fqns, fullMode, assignableMode,
+                    lang, helpMode, roleOffset, dcsOpts);
                 resultRef.set(result);
             }
             catch (Exception e)
@@ -208,7 +235,8 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     private String getMetadataDetailsInternal(String projectName, List<String> objectFqns,
                                                boolean full, boolean assignable, String language,
-                                               int roleObjectOffset)
+                                               boolean includeHelp, int roleObjectOffset,
+                                               DcsSchemaReader.Options dcsOptions)
     {
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
@@ -247,7 +275,7 @@ public class GetMetadataDetailsTool implements IMcpTool
 
         // Per-request render context, constant across every FQN in the loop.
         RenderContext ctx = new RenderContext(config, bmModel, effectiveLanguage, full, assignable,
-            isExtensionProject, roleObjectOffset);
+            isExtensionProject, includeHelp, roleObjectOffset, dcsOptions);
 
         // Process each FQN
         for (String fqn : objectFqns)
@@ -369,7 +397,40 @@ public class GetMetadataDetailsTool implements IMcpTool
         sb.append("\n**Origin:** ") //$NON-NLS-1$
             .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(), ctx.isExtensionProject))
             .append("\n"); //$NON-NLS-1$
+        // A Data Composition Schema host (Report / template) renders its schema structure via the
+        // cross-model hop into the editable DCS content (compact by default, expandable via dcsOptions).
+        // Returns null for an object without a DCS template, so the section is simply omitted.
+        String dcs = DcsSchemaReader.render(ctx.bmModel, mdObject, ctx.dcsOptions);
+        if (dcs != null && !dcs.isEmpty())
+        {
+            sb.append(dcs);
+        }
+        if (ctx.includeHelp)
+        {
+            sb.append(formatHelp(mdObject));
+        }
         sb.append(SECTION_SEPARATOR);
+    }
+
+    /**
+     * Renders the object's authored help (its "Reference information" HTML pages, one per language)
+     * as a Markdown section, or a short "no help" note when the object has none. Read from disk via
+     * {@link ObjectHelpReader} (each cell of the rendered help is prose, already escaped by CopyDown).
+     */
+    private static String formatHelp(MdObject mdObject)
+    {
+        List<ObjectHelpReader.HelpPage> pages = ObjectHelpReader.read(mdObject);
+        if (pages.isEmpty())
+        {
+            return "\n**Help:** _none authored for this object._\n"; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ObjectHelpReader.HelpPage page : pages)
+        {
+            sb.append("\n## Help (").append(page.lang).append(")\n\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(page.markdown).append("\n"); //$NON-NLS-1$
+        }
+        return sb.toString();
     }
 
     /**
@@ -625,11 +686,15 @@ public class GetMetadataDetailsTool implements IMcpTool
         final boolean full;
         final boolean assignable;
         final boolean isExtensionProject;
+        final boolean includeHelp;
         /** 0-based object offset for a Role FQN's paginated rights matrix (ignored in {@code full} mode). */
         final int roleObjectOffset;
+        /** DCS read expansion (compact map when nothing is requested); consumed only for DCS-hosting objects. */
+        final DcsSchemaReader.Options dcsOptions;
 
         RenderContext(Configuration config, IBmModel bmModel, String effectiveLanguage,
-            boolean full, boolean assignable, boolean isExtensionProject, int roleObjectOffset)
+            boolean full, boolean assignable, boolean isExtensionProject, boolean includeHelp,
+            int roleObjectOffset, DcsSchemaReader.Options dcsOptions)
         {
             this.config = config;
             this.bmModel = bmModel;
@@ -637,7 +702,9 @@ public class GetMetadataDetailsTool implements IMcpTool
             this.full = full;
             this.assignable = assignable;
             this.isExtensionProject = isExtensionProject;
+            this.includeHelp = includeHelp;
             this.roleObjectOffset = roleObjectOffset;
+            this.dcsOptions = dcsOptions;
         }
     }
 
