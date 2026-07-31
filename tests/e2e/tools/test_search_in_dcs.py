@@ -29,6 +29,7 @@ exact counts are the broken-proof signals.
 """
 
 import os
+import time
 
 from harness import (
     call,
@@ -38,13 +39,23 @@ from harness import (
     assert_contains,
     assert_not_contains,
     assert_no_diff,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
+    _fail,
     PROJECT,
     PROJECT_DIR,
 )
 
 _QUERY = "SELECT Catalog.Ref AS Ref, Catalog.Description AS Description FROM Catalog.Catalog AS Catalog"
+
+# A distinctive substring of _QUERY, present on the schema's single <query> line - used both as the
+# on-disk "export actually landed" marker (_poll_dcs_ready) and as a search token in the tests below.
+_QUERY_MARKER = "FROM Catalog.Catalog"
+
+# How long to wait for modify_metadata's force-export to drain the authored schema to
+# Templates/<Tpl>/Template.dcs. Mirrors poll_diff_contains'/poll_disk_lacks' timeout in harness.py.
+_DCS_EXPORT_TIMEOUT = 10
 
 
 def _find_report_dcs(report_name):
@@ -62,12 +73,40 @@ def _find_report_dcs(report_name):
     return None
 
 
+def _poll_dcs_ready(report, marker, timeout=_DCS_EXPORT_TIMEOUT):
+    """Poll until the report's Template.dcs exists on disk AND its content contains `marker`.
+
+    modify_metadata's force-export can lag a beat after the call returns (the same async-flush
+    race test_modify_metadata_dcs.py's poll_diff_contains guards against) - reading the disk
+    exactly once right after the call can see no Template.dcs yet at all, or a stale/partial one,
+    so a search against it can spuriously report zero matches (or _find_report_dcs can return None
+    and callers TypeError on it). Retry both checks together until they hold, or fail clearly.
+    """
+    deadline = time.time() + timeout
+    dcs_rel = None
+    while time.time() < deadline:
+        dcs_rel = _find_report_dcs(report)
+        if dcs_rel is not None:
+            try:
+                if marker in read_disk(dcs_rel):
+                    return dcs_rel
+            except FileNotFoundError:
+                pass
+        time.sleep(0.5)
+    _fail("expected Reports/%s's Template.dcs to exist and contain %r within %ss (last seen path: %r)"
+          % (report, marker, timeout, dcs_rel))
+
+
 def _make_schema(report):
     """Create Report.<report>, then author its DCS via modify_metadata's `dcs` payload (a query
     dataset -> auto-created local data source). Returns (fileMask, dcsPath) scoped to it. A UNIQUE
     name per test avoids colliding with the reports left in EDT's in-memory model by earlier tests
     (git resets disk, not the loaded model); the returned fileMask scopes each search to this one
     .dcs so on-disk accumulation can't skew counts.
+
+    The returned dcsPath is only handed back once _poll_dcs_ready confirms the export actually
+    drained to disk and carries the query text - callers search the just-exported file immediately
+    afterward, so a premature (missing or half-written) path would make the happy-path tests flaky.
     """
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
               "create the DCS report")
@@ -78,7 +117,8 @@ def _make_schema(report):
                               "autoFillFields": True}]},
     }), "author the DCS via modify_metadata")
     wait_for_project_ready()
-    return "Reports/%s/" % report, _find_report_dcs(report)
+    dcs_rel = _poll_dcs_ready(report, _QUERY_MARKER)
+    return "Reports/%s/" % report, dcs_rel
 
 
 # ──────────────────────────────────────────────────────────────────────────────
