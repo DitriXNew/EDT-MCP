@@ -86,9 +86,21 @@ public final class ObjectHelpReader
             return Collections.emptyList();
         }
         Path projectRoot;
+        Path helpDirReal;
         try
         {
             projectRoot = project.getLocation().toFile().toPath().toRealPath();
+            // Resolved SEPARATELY from the project root: the Help/ directory itself could be a
+            // symlink/junction (not just an individual file inside it) - resolving it here means the
+            // per-file check below (real parent == helpDirReal) actually pins each file to THIS help
+            // directory, not just "somewhere under the project".
+            helpDirReal = helpDir.toPath().toRealPath();
+            if (!helpDirReal.startsWith(projectRoot))
+            {
+                Activator.logWarning("Skipped the Help directory itself: it resolves outside the " //$NON-NLS-1$
+                    + "project (symlink escape?): " + helpDir.getAbsolutePath()); //$NON-NLS-1$
+                return Collections.emptyList();
+            }
         }
         catch (IOException e)
         {
@@ -110,11 +122,14 @@ public final class ObjectHelpReader
                 // toRealPath, not normalize: a help file that is (or sits under) a symlink/junction is
                 // lexically inside the project's Help/ dir while its content may live outside it - follow
                 // the link to see where it ACTUALLY resolves before reading, the same guard GitTool uses
-                // for a pathspec escape.
+                // for a pathspec escape. Pinned to the RESOLVED Help directory itself (not merely "still
+                // somewhere under the project"), or a symlinked help file could point at another,
+                // unrelated file elsewhere in the SAME project (e.g. '../../../../.env') and still pass
+                // a project-root-only check.
                 Path real = file.toPath().toRealPath();
-                if (!real.startsWith(projectRoot))
+                if (!helpDirReal.equals(real.getParent()))
                 {
-                    Activator.logWarning("Skipped an object help page outside the project " //$NON-NLS-1$
+                    Activator.logWarning("Skipped an object help page outside its Help directory " //$NON-NLS-1$
                         + "(symlink escape?): " + file.getAbsolutePath()); //$NON-NLS-1$
                     continue;
                 }
