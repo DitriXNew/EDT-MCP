@@ -1303,6 +1303,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
                     + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
             }
+            if (rewritten.containsKey(canonical))
+            {
+                // Two spellings of one declared code, e.g. {"en": ..., "EN": ...}. Canonicalizing
+                // would silently drop one translation - and which one survived would depend on map
+                // order. Say so instead: only the caller knows which text was meant.
+                return ToolResult.error("A dcs title names the language '" + canonical //$NON-NLS-1$
+                    + "' twice (as '" + code + "' and again in another spelling). Give it once.") //$NON-NLS-1$
+                        .toJson();
+            }
             rewritten.put(canonical, entry.getValue());
         }
         for (String key : new ArrayList<>(title.keySet()))
@@ -4484,6 +4493,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         List<String> codes = new ArrayList<>();
         boolean targetSeen = false;
+        String defaultAfter = null;
+        Language defaultLanguage = config.getDefaultLanguage();
         for (Language lang : config.getLanguages())
         {
             if (lang == null)
@@ -4494,6 +4505,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 && lang.getName().equals(((Language)target).getName());
             targetSeen |= isTarget;
             String code = isTarget ? newCode : lang.getLanguageCode();
+            if (isDefaultLanguage(defaultLanguage, lang))
+            {
+                defaultAfter = code;
+            }
             if (code != null && !code.isEmpty() && !codes.contains(code))
             {
                 codes.add(code);
@@ -4503,7 +4518,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             codes.add(newCode);
         }
+        // The DEFAULT language's post-edit code goes FIRST: it is what a localized value with no
+        // explicit 'language' must fall back to once the batch has renamed the old default code
+        // away. Counting what is left cannot answer that - a second, untouched language leaves two
+        // codes and neither of them is "the default" by position alone.
+        if (defaultAfter != null && !defaultAfter.isEmpty() && codes.remove(defaultAfter))
+        {
+            codes.add(0, defaultAfter);
+        }
         return codes;
+    }
+
+    /** Whether {@code lang} IS the configuration's default language (by identity, else by name). */
+    private static boolean isDefaultLanguage(Language defaultLanguage, Language lang)
+    {
+        if (defaultLanguage == null || lang == null)
+        {
+            return false;
+        }
+        return defaultLanguage == lang
+            || defaultLanguage.getName() != null && defaultLanguage.getName().equals(lang.getName());
     }
 
     private String prepare(PrepareContext ctx, EObject target, EObject extInfo,

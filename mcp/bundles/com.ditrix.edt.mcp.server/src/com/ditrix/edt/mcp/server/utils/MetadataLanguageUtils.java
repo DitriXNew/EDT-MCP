@@ -182,19 +182,24 @@ public final class MetadataLanguageUtils
         }
         // The fallback comes from the model, so it is declared - BEFORE this call. A batch that
         // RENAMES the default language's code removes it, and the value would land under the code
-        // the same call deleted: invisible, which is the whole point of this guard. With exactly one
-        // code left afterwards the intent is unambiguous, so use it; with several, refuse rather
-        // than guess which one the caller meant.
+        // the same call deleted: invisible, which is the whole point of this guard.
+        //
+        // What replaces it is NOT a matter of counting what is left: with a second, untouched
+        // language around, two codes remain and neither counting nor guessing helps. The
+        // defaultLanguage reference still points at the SAME Language object, so the answer is that
+        // object's post-edit code - which the caller computes and passes as the FIRST override
+        // entry. Only when the caller cannot name it is the call refused.
         if (declaredOverride != null && !declaredOverride.isEmpty() && !declaredOverride.contains(code))
         {
             List<String> after = declaredOrOverride(config, declaredOverride);
-            if (after.size() == 1)
+            String postEditDefault = after.isEmpty() ? null : after.get(0);
+            if (postEditDefault != null)
             {
-                return after.get(0);
+                return postEditDefault;
             }
             throw new IllegalArgumentException("This call changes the language codes, so the default "  //$NON-NLS-1$
                 + "code ('" + code + "') for " + subject + " no longer exists after it. Name the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'language' explicitly - one of: " + String.join(", ", after) + "."); //$NON-NLS-1$ //$NON-NLS-2$
+                + "'language' explicitly."); //$NON-NLS-1$
         }
         return code;
     }

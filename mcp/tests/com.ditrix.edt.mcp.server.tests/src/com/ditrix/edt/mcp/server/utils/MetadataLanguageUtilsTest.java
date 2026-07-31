@@ -359,23 +359,15 @@ public class MetadataLanguageUtilsTest
     }
 
     @Test
-    public void anAmbiguousPostCallDefaultIsRefusedRatherThanGuessed()
+    public void theFallbackFollowsTheRENAMEDDefaultEvenWithOtherLanguagesAround()
     {
-        // Two codes remain and the old default is gone: there is no way to know which one the
-        // caller meant, so the call is refused with both named instead of silently picking one.
-        Configuration config = config(language("en"), language("en"));
-        try
-        {
-            MetadataLanguageUtils.resolveSynonymLanguage(config, "Value", null, "the synonym",
-                Arrays.asList("fr", "it"));
-            fail("an ambiguous post-call default must be refused");
-        }
-        catch (IllegalArgumentException e)
-        {
-            assertTrue(e.getMessage(), e.getMessage().contains("fr"));
-            assertTrue(e.getMessage(), e.getMessage().contains("it"));
-            assertTrue("the message must name the vanished default", e.getMessage().contains("'en'"));
-        }
+        // Counting what is left is the wrong question (codex review on #298): with a second,
+        // untouched language present two codes remain, yet the answer is not ambiguous at all -
+        // defaultLanguage still points at the SAME object, so its post-edit code is the fallback.
+        // The caller passes it FIRST in the override.
+        Configuration config = config(language("en"), language("en"), language("de"));
+        assertEquals("fr", MetadataLanguageUtils.resolveSynonymLanguage(config, "Wert", null,
+            "the synonym", Arrays.asList("fr", "de")));
     }
 
     @Test

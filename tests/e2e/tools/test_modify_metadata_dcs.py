@@ -294,3 +294,23 @@ def test_dcs_title_locale_is_stored_under_the_declared_spelling():
     assert ">en<" in dcs,         "the title must be stored under the DECLARED spelling 'en': %s" % dcs[:700]
     assert ">EN<" not in dcs,         "the requested casing must not create a second, never-displayed key: %s" % dcs[:700]
 
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_naming_one_locale_twice_is_rejected():
+    # {"en": ..., "EN": ...} both canonicalize to the declared 'en'. Rewriting them would silently
+    # drop one translation, and WHICH one survived would depend on map order - so the call is
+    # refused instead: only the caller knows which text was meant (issue #298 review).
+    report = "Z298DcsDup"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"en": "Period", "EN": "Other"}}]},
+    })
+    e = assert_error(r, "one locale named twice must be refused")
+    assert_error_quality(e, names=["en"], suggests=["once"],
+                         ctx="the error must name the duplicated locale and say to give it once")
+    assert_not_contains(diff(), "Other", "a rejected dcs write must not reach the disk")
+
