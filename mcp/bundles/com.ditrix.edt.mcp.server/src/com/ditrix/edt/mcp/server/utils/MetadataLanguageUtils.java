@@ -347,9 +347,9 @@ public final class MetadataLanguageUtils
      * declared code as owed a translation would nag about languages nobody is translating into,
      * which is why {@link #localesMissing} asks THIS question rather than counting declarations.
      * <p>
-     * When the configuration's synonym is empty for every language (a brand-new configuration), the
-     * declared codes are returned as-is: there is nothing to infer usage from, and reporting nothing
-     * would hide real work.
+     * A configuration whose own synonym is empty for EVERY language uses none of them, and the
+     * answer is the empty list. Calling them all in use instead would suppress the confirmation a
+     * write into such a language is owed, and demand translations into every declared code on top.
      *
      * @param config the configuration (may be {@code null})
      * @return the codes in use, in declaration order, never {@code null}

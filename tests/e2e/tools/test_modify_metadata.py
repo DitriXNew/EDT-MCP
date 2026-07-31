@@ -1796,6 +1796,83 @@ def test_modify_reports_the_locales_left_holding_the_previous_text():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_rewriting_the_same_text_does_not_report_stale():
+    # Idempotent rewrite: writing the EXACT SAME text again is not a replace - the other language's
+    # translation still describes the current value, so it must not be reported stale (the old
+    # behaviour flagged the other language on every rewrite, whatever the value - issue #298 review).
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298IdemStaleFr"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298IdemStaleFr",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    # Both languages carry a synonym...
+    for code, text in (("en", "Goods"), ("fr", "Marchandises")):
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": "Catalog.Catalog",
+            "properties": [{"name": "synonym", "value": text, "language": code}]}),
+            "seed the synonym in %s" % code)
+        wait_for_project_ready()
+
+    # ... and now 'en' is written again with the IDENTICAL text: nothing actually changed, so 'fr'
+    # still describes the current value and must not be flagged as stale.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Goods", "language": "en"}],
+    })
+    assert_ok(r, "rewrite the synonym with the identical text")
+    # A positive signal FIRST: the localized-write report engine actually ran (not silently absent -
+    # a broken/no-op report would also satisfy a bare "not in" check below).
+    assert r.structured.get("language") == "en", \
+        "the localized report must have run for this write: %r" % (r.structured,)
+    assert "localesStale" not in r.structured, \
+        "rewriting the SAME text must not mark the other language stale: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_cross_property_locales_stale_are_reported_per_property():
+    # Two DIFFERENT localized properties on the SAME form member: change 'title' in en and 'toolTip'
+    # in fr in ONE call. Staleness is decided PER PROPERTY, so title's untouched 'fr' and toolTip's
+    # untouched 'en' must BOTH surface. The old behaviour excluded every language the call touched
+    # ANYWHERE (a project-wide set), which would wrongly hide both - title never touched fr, and
+    # toolTip never touched en, so neither is "a language this call wrote".
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298CrossPropFr"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298CrossPropFr",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.Description"
+    # Seed BOTH 'title' and 'toolTip' in BOTH languages first (get_metadata_details(assignable:true)
+    # on this fqn lists 'toolTip' as its own LOCALIZED_STRING property, distinct from 'title').
+    for code, title_text, tip_text in (("en", "Description", "Enter a description"),
+                                        ("fr", "Description FR", "Entrez une description")):
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": "title", "value": title_text, "language": code},
+                           {"name": "toolTip", "value": tip_text, "language": code}]}),
+            "seed title + toolTip in %s" % code)
+        wait_for_project_ready()
+
+    # One call: change 'title' in en AND 'toolTip' in fr, both to NEW values.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "title", "value": "New description", "language": "en"},
+                       {"name": "toolTip", "value": "Nouvelle description", "language": "fr"}],
+    })
+    assert_ok(r, "change title(en) and toolTip(fr) in the same call")
+    assert r.structured.get("localesMissing") == [], \
+        "every in-use language already has text for both properties: %r" % (r.structured,)
+    stale = sorted(r.structured.get("localesStale") or [])
+    assert stale == ["en", "fr"], \
+        "title's untouched fr AND toolTip's untouched en must both be reported stale: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_without_a_localized_property_reports_no_locales():
     # The localized report belongs to a localized write: a plain scalar edit must not grow the
     # payload (its absence is what tells a caller no localized value was touched).
