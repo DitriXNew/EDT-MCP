@@ -183,3 +183,39 @@ def test_reports_every_declared_language_code():
     assert_contains(r.text, "languages:", "the declared language codes must be reported")
     assert_contains(r.text, "- en", "the default language's code must be listed")
     assert_contains(r.text, "- fr", "a NON-default declared code must be listed too")
+
+
+@e2e_test(tool="get_configuration_properties", kind="write-metadata")
+def test_reports_languages_in_use_and_not_in_use():
+    # Issue #298 follow-up: 'languages' alone tells an agent which codes are LEGAL to write a
+    # localized value (a synonym, a form title, an NStr() literal in BSL) under, but not which
+    # ones are worth filling in. The fixture's own synonym is filled in for 'en' (synonym:
+    # {en: Test configuration}), so 'en' must come back as in use. Declare a second language and
+    # leave the configuration's OWN synonym unset for it, so it lands on the OTHER side of the
+    # split - proving languagesNotInUse is a real, non-empty answer, not just an omitted key.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298DeOnConfig"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298DeOnConfig",
+                                       "properties": [{"name": "languageCode", "value": "de"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("get_configuration_properties", {"projectName": PROJECT})
+    assert_ok(r, "get_configuration_properties reports language usage")
+    assert_contains(r.text, "languagesInUse:", "the in-use codes block must be emitted")
+    assert_contains(r.text, "languagesNotInUse:", "the not-in-use codes block must be emitted")
+    # Slice the body around the two block headers (they are emitted in this fixed order) so 'en'
+    # and 'de' are checked against the RIGHT block, not just anywhere in the document - a tool
+    # that swapped the two lists, or put every declared code in both, would pass a plain
+    # assert_contains but fail this.
+    in_use_section = r.text.split("languagesInUse:", 1)[1].split("languagesNotInUse:", 1)[0]
+    not_in_use_section = r.text.split("languagesNotInUse:", 1)[1]
+    assert_contains(in_use_section, "- en",
+                    "the fixture's own synonym is filled in for 'en', so it must be in use")
+    assert_not_contains(in_use_section, "- de",
+                        "the newly-declared 'de' has no configuration synonym yet")
+    assert_contains(not_in_use_section, "- de",
+                    "'de' is declared but the configuration's own synonym has no text for it")
+    assert_not_contains(not_in_use_section, "- en",
+                        "'en' IS in use, so it must not also appear in the not-in-use list")
