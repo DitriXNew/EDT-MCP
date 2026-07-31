@@ -297,11 +297,17 @@ public final class ProjectStateChecker
         // renamed object. An extension whose pipeline is still busy collides with the batch
         // session exactly like the base one, so drain the others too - they share ONE deadline,
         // so this cannot multiply the wait by the number of projects in the workspace.
-        drainOtherOpenProjects(project, deadline);
-        // The refusal, though, is decided on the NAMED project only. It is always a participant,
-        // while an unrelated project that happens to be indexing must not be able to refuse every
-        // rename in the workspace - for those the drain above is the whole benefit.
-        return buildingErrorOrNull(project);
+        String stillBuilding = drainOtherOpenProjects(project, deadline);
+        String base = buildingErrorOrNull(project);
+        if (base != null)
+        {
+            return base;
+        }
+        // A PARTICIPATING extension that did not settle is refused like the base project would be:
+        // the cascade is about to enter its refactoring too. An UNRELATED project that happens to
+        // be indexing is not - it was drained as a courtesy, but letting it refuse would mean any
+        // busy project in the workspace blocks every rename.
+        return stillBuilding;
     }
 
     /**
@@ -309,21 +315,24 @@ public final class ProjectStateChecker
      *
      * @param except the project already drained by the caller
      * @param deadline absolute time (ms) the whole drain must not exceed
+     * @return the retryable message for a PARTICIPATING extension that is still building (naming
+     *         it), or {@code null} when every participant settled
      */
-    private static void drainOtherOpenProjects(IProject except, long deadline)
+    private static String drainOtherOpenProjects(IProject except, long deadline)
     {
         IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
         if (dtProjectManager == null)
         {
-            return;
+            return null;
         }
+        String participantStillBuilding = null;
         for (IProject other : org.eclipse.core.resources.ResourcesPlugin.getWorkspace().getRoot()
             .getProjects())
         {
             long remaining = deadline - System.currentTimeMillis();
             if (remaining <= 0)
             {
-                return;
+                return participantStillBuilding;
             }
             if (other.equals(except) || !other.exists() || !other.isOpen()
                 || dtProjectManager.getDtProject(other) == null)
@@ -331,7 +340,15 @@ public final class ProjectStateChecker
                 continue;
             }
             BuildUtils.waitForDerivedData(other, remaining);
+            if (participantStillBuilding == null && except.equals(
+                ExtensionOriginUtils.resolveBaseProject(other)) && buildingErrorOrNull(other) != null)
+            {
+                participantStillBuilding = "Project '" + other.getName() + "' extends '" //$NON-NLS-1$
+                    + except.getName() + "' and is still building, so it takes part in this " //$NON-NLS-1$
+                    + "cascade with an incomplete index. Please wait and retry."; //$NON-NLS-1$
+            }
         }
+        return participantStillBuilding;
     }
 
     /**
