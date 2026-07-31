@@ -87,17 +87,22 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 + "(e.g. 'CommonModules/MyModule/Module.bsl'). Optional but recommended when the same " //$NON-NLS-1$
                 + "check fires in several modules.") //$NON-NLS-1$
             .integerProperty(KEY_LINE,
-                "Narrow to the 1-based 'Line' from get_project_errors. Optional.") //$NON-NLS-1$
+                "Narrow to the 1-based 'Line' from get_project_errors. Optional; if supplied it must " //$NON-NLS-1$
+                + "be >= 1 - 0 or negative is rejected rather than treated as 'omitted'.") //$NON-NLS-1$
             .integerProperty(KEY_INDEX,
                 "1-based selector when the locator still matches several markers (the error lists " //$NON-NLS-1$
-                + "them). Omit for a single match. If supplied, it is validated strictly against the " //$NON-NLS-1$
-                + "CURRENT match count and rejected when out of range - even against a single match - " //$NON-NLS-1$
-                + "so a stale index from an earlier response is never silently applied to the wrong marker.") //$NON-NLS-1$
+                + "them). Omit for a single match. If supplied, it must be >= 1 (0 or negative is " //$NON-NLS-1$
+                + "rejected, never silently treated as 'omitted') and is validated strictly against " //$NON-NLS-1$
+                + "the CURRENT match count and rejected when out of range - even against a single " //$NON-NLS-1$
+                + "match - so a stale index from an earlier response is never silently applied to the " //$NON-NLS-1$
+                + "wrong marker.") //$NON-NLS-1$
             .integerProperty(KEY_VARIANT,
                 "1-based fix-variant index, required only when the chosen marker's fix exposes more " //$NON-NLS-1$
-                + "than one variant (the error then lists them). If supplied, it is validated strictly " //$NON-NLS-1$
-                + "against the CURRENT variant count and rejected when out of range - even against a " //$NON-NLS-1$
-                + "single variant - so a stale selector is never silently applied to the wrong fix.") //$NON-NLS-1$
+                + "than one variant (the error then lists them). If supplied, it must be >= 1 (0 or " //$NON-NLS-1$
+                + "negative is rejected, never silently treated as 'omitted') and is validated " //$NON-NLS-1$
+                + "strictly against the CURRENT variant count and rejected when out of range - even " //$NON-NLS-1$
+                + "against a single variant - so a stale selector is never silently applied to the " //$NON-NLS-1$
+                + "wrong fix.") //$NON-NLS-1$
             .build();
     }
 
@@ -124,9 +129,25 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, KEY_PROJECT);
         String checkId = JsonUtils.extractStringArgument(params, KEY_CHECK_ID);
         String modulePath = JsonUtils.extractStringArgument(params, KEY_MODULE_PATH);
-        int line = JsonUtils.extractIntArgument(params, KEY_LINE, -1);
-        int index = JsonUtils.extractIntArgument(params, KEY_INDEX, -1);
-        int variant = JsonUtils.extractIntArgument(params, KEY_VARIANT, -1);
+
+        SelectorArgument lineArg = extractSelectorArgument(params, KEY_LINE);
+        if (lineArg.isRejected())
+        {
+            return lineArg.rejection;
+        }
+        SelectorArgument indexArg = extractSelectorArgument(params, KEY_INDEX);
+        if (indexArg.isRejected())
+        {
+            return indexArg.rejection;
+        }
+        SelectorArgument variantArg = extractSelectorArgument(params, KEY_VARIANT);
+        if (variantArg.isRejected())
+        {
+            return variantArg.rejection;
+        }
+        int line = lineArg.value;
+        int index = indexArg.value;
+        int variant = variantArg.value;
 
         ProjectContext ctx = resolveProjectAndConfig(projectName);
         if (ctx.hasError())
@@ -281,6 +302,79 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             return selector <= count ? selector - 1 : -1;
         }
         return count == 1 ? 0 : -1;
+    }
+
+    /** The "no selector was supplied" sentinel fed to {@link #chooseIndex} and the {@code line} gate. */
+    private static final int SELECTOR_NOT_GIVEN = -1;
+
+    /**
+     * Extracts a 1-based selector argument ({@link #KEY_LINE}, {@link #KEY_INDEX} or
+     * {@link #KEY_VARIANT}), distinguishing "the caller omitted it" from "the caller explicitly
+     * supplied a value at or below 0" - a distinction {@link JsonUtils#extractIntArgument} cannot make
+     * on its own, since both resolve to the same {@code defaultValue}. Presence is checked directly
+     * against the raw {@code params} map FIRST:
+     * <ul>
+     * <li>absent / blank -&gt; {@link #SELECTOR_NOT_GIVEN} (unchanged behaviour: {@link #chooseIndex}
+     * auto-selects a sole candidate, or the {@code line} gate in {@link #findMatches} is skipped);</li>
+     * <li>present but its parsed value is &lt; 1 (including non-numeric garbage, which
+     * {@code extractIntArgument} would otherwise also silently default) -&gt; a rejection, so an
+     * explicit {@code index=0} / {@code variant=0} / {@code line=0} is never treated as if it had been
+     * omitted;</li>
+     * <li>present and &gt;= 1 -&gt; that value, used as-is.</li>
+     * </ul>
+     *
+     * @param params the raw string-valued params map (may be {@code null})
+     * @param argumentName the 1-based selector argument's name
+     * @return the resolved {@link SelectorArgument}: either a usable value or a ready-to-return error
+     */
+    static SelectorArgument extractSelectorArgument(Map<String, String> params, String argumentName)
+    {
+        String raw = params == null ? null : params.get(argumentName);
+        if (raw == null || raw.trim().isEmpty())
+        {
+            return SelectorArgument.of(SELECTOR_NOT_GIVEN);
+        }
+        int parsed = JsonUtils.extractIntArgument(params, argumentName, SELECTOR_NOT_GIVEN);
+        if (parsed < 1)
+        {
+            return SelectorArgument.rejected(ToolResult.error(argumentName + " must be >= 1 (it is 1-based), got '" //$NON-NLS-1$
+                + raw.trim() + "'. Omit " + argumentName + " entirely to use its default instead of " //$NON-NLS-1$ //$NON-NLS-2$
+                + "an explicit value.").toJson()); //$NON-NLS-1$
+        }
+        return SelectorArgument.of(parsed);
+    }
+
+    /**
+     * Outcome of {@link #extractSelectorArgument}: either a resolved value ({@link #SELECTOR_NOT_GIVEN}
+     * when the caller omitted the argument, or the caller's validated 1-based value), or a rejection
+     * error ready to return verbatim from {@code executeOnUiThread} when the caller supplied an
+     * explicit out-of-range value.
+     */
+    static final class SelectorArgument
+    {
+        final int value;
+        final String rejection;
+
+        private SelectorArgument(int value, String rejection)
+        {
+            this.value = value;
+            this.rejection = rejection;
+        }
+
+        static SelectorArgument of(int value)
+        {
+            return new SelectorArgument(value, null);
+        }
+
+        static SelectorArgument rejected(String rejection)
+        {
+            return new SelectorArgument(SELECTOR_NOT_GIVEN, rejection);
+        }
+
+        boolean isRejected()
+        {
+            return rejection != null;
+        }
     }
 
     /** Actionable "no quick-fix for this marker" error - either no fix process, or no variants. */

@@ -9,11 +9,16 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool.SelectorArgument;
 
 /**
  * Lightweight contract tests for {@link ApplyQuickFixTool}: tool metadata and JSON schema,
@@ -126,5 +131,79 @@ public class ApplyQuickFixToolTest
         // An explicit, IN-RANGE selector (1) against a single candidate is legitimate and must
         // still resolve - only an out-of-range selector is rejected.
         assertEquals(0, ApplyQuickFixTool.chooseIndex(1, 1));
+    }
+
+    // ---- extractSelectorArgument: presence-vs-default detection for index/variant/line ----------
+
+    @Test
+    public void testExtractSelectorArgumentOmittedYieldsNotGivenSentinel()
+    {
+        Map<String, String> params = new HashMap<>();
+        SelectorArgument result = ApplyQuickFixTool.extractSelectorArgument(params, "index"); //$NON-NLS-1$
+        assertFalse("an omitted argument must not be rejected", result.isRejected()); //$NON-NLS-1$
+        assertEquals(-1, result.value);
+    }
+
+    @Test
+    public void testExtractSelectorArgumentBlankYieldsNotGivenSentinel()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("index", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        SelectorArgument result = ApplyQuickFixTool.extractSelectorArgument(params, "index"); //$NON-NLS-1$
+        assertFalse("a blank argument must be treated as omitted, not rejected", result.isRejected()); //$NON-NLS-1$
+        assertEquals(-1, result.value);
+    }
+
+    @Test
+    public void testExtractSelectorArgumentValidValuePassesThrough()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("index", "2"); //$NON-NLS-1$ //$NON-NLS-2$
+        SelectorArgument result = ApplyQuickFixTool.extractSelectorArgument(params, "index"); //$NON-NLS-1$
+        assertFalse(result.isRejected());
+        assertEquals(2, result.value);
+    }
+
+    @Test
+    public void testExtractSelectorArgumentExplicitZeroIsRejectedNotDefaulted()
+    {
+        // The bug this guards: index=0 (or variant=0 / line=0) is invalid (1-based), but
+        // JsonUtils.extractIntArgument has no way to tell "explicit 0" from "omitted" - both would
+        // otherwise silently resolve to the same default. An explicit 0 must be REJECTED here.
+        Map<String, String> params = new HashMap<>();
+        params.put("index", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        SelectorArgument result = ApplyQuickFixTool.extractSelectorArgument(params, "index"); //$NON-NLS-1$
+        assertTrue("explicit index=0 must be rejected, not silently defaulted", result.isRejected()); //$NON-NLS-1$
+        assertNotNull(result.rejection);
+        assertTrue(result.rejection.contains("index")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractSelectorArgumentExplicitZeroRejectedForVariantAndLine()
+    {
+        Map<String, String> variantParams = new HashMap<>();
+        variantParams.put("variant", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(ApplyQuickFixTool.extractSelectorArgument(variantParams, "variant").isRejected()); //$NON-NLS-1$
+
+        Map<String, String> lineParams = new HashMap<>();
+        lineParams.put("line", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(ApplyQuickFixTool.extractSelectorArgument(lineParams, "line").isRejected()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractSelectorArgumentExplicitNegativeIsRejected()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("index", "-3"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(ApplyQuickFixTool.extractSelectorArgument(params, "index").isRejected()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtractSelectorArgumentNullParamsMapYieldsNotGivenSentinel()
+    {
+        SelectorArgument result = ApplyQuickFixTool.extractSelectorArgument(null, "index"); //$NON-NLS-1$
+        assertFalse(result.isRejected());
+        assertEquals(-1, result.value);
+        assertNull(result.rejection);
     }
 }
