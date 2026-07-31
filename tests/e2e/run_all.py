@@ -78,6 +78,19 @@ def write_junit(results, path, final_clean):
         f.write("\n".join(out))
 
 
+# Set when the run is abandoning a worker (a per-test timeout). The worker thread is a daemon
+# that was never actually stopped: if its slow call returns before the process exits, it would
+# walk on into its own post-test cleanup and git-reset files the server may still be writing -
+# the very race the abort is avoiding. It checks this flag before touching anything.
+_ABANDONED = False
+
+
+def abandon_workers():
+    """Tell any still-running worker to skip its cleanup (see _ABANDONED)."""
+    global _ABANDONED
+    _ABANDONED = True
+
+
 def _run_test_unit(harness, t):
     """All EDT-touching work for ONE test, timed as a unit: the test fn plus, for a
     write-metadata test, its model cleanup (reset_fixture reverts disk; reset_model =
@@ -91,6 +104,12 @@ def _run_test_unit(harness, t):
         # would race the very write we abandoned (clean_project against a live mutation).
         # The runner aborts on this, so no later test inherits the state either.
         raise
+    except harness.E2ESkip:
+        # A skip is not a failed write - it is a test that decided there was nothing to do
+        # (an unsupported seed that committed nothing). Paying the full cleanup budget for it
+        # would be waste at best, and at worst would turn a legitimate skip into a
+        # reset-failed / call-timeout if clean_project happens to be refused just then.
+        raise
     except BaseException:
         # Any OTHER failure still leaves the write applied, exactly like a passing test does.
         # Skipping the reset there is how ONE real failure became two: the next test read a
@@ -102,6 +121,10 @@ def _run_test_unit(harness, t):
 
 def _reset_after_write(harness, t):
     """reset_fixture (disk) + reset_model (in-memory) for a write-metadata test."""
+    if _ABANDONED:
+        # This worker was given up on; the main thread has already decided the fixtures are
+        # not safe to touch. Do not undo that decision from a thread nobody is waiting for.
+        return
     if t.get("kind") == "write-metadata":
         harness.reset_fixture()
         harness.reset_model()
@@ -139,6 +162,9 @@ def _run_with_timeout(harness, t, timeout_s):
     th.start()
     th.join(timeout_s)
     if th.is_alive():
+        # The worker is still running and cannot be stopped. Tell it to skip its own cleanup
+        # before we return: from here on nobody may touch the fixtures, this thread included.
+        abandon_workers()
         return ("timeout",
                 "TIMEOUT: test exceeded %gs and was considered FAILED. EDT is likely hung "
                 "(e.g. clean_project / ProjectRestartJob wedged); the remaining tests are "
