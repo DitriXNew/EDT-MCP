@@ -108,8 +108,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Output key: names of the optional attributes applied (XDTO member create only). */
     private static final String KEY_APPLIED = "applied"; //$NON-NLS-1$
 
-    /** Declared locales that still have no value for the localized property just written (#298). */
+    /** Locales IN USE that still have no value for the localized property just written (#298). */
     private static final String KEY_LOCALES_MISSING = "localesMissing"; //$NON-NLS-1$
+
+    /** Set when the write targets a declared language the configuration's own synonym does not use. */
+    private static final String KEY_LOCALE_UNUSED = "localeUnusedInConfiguration"; //$NON-NLS-1$
 
     /** Property / output key: the synonym display name. */
     private static final String KEY_SYNONYM = "synonym"; //$NON-NLS-1$
@@ -278,9 +281,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Language code the localized value (synonym, or a form element's title) was " //$NON-NLS-1$
                 + "written under") //$NON-NLS-1$
             .stringArrayProperty(KEY_LOCALES_MISSING,
-                "Declared language codes that still have NO value for the localized property just " //$NON-NLS-1$
-                + "written (empty when every declared language is translated); present only when a " //$NON-NLS-1$
-                + "localized value was written") //$NON-NLS-1$
+                "Language codes the configuration USES (its own synonym is filled in for them) that " //$NON-NLS-1$
+                + "still have NO value for the localized property just written; present only when a " //$NON-NLS-1$
+                + "localized value was written. A declared language the configuration does not use " //$NON-NLS-1$
+                + "is not reported - a multilingual configuration worked on in a single-language " //$NON-NLS-1$
+                + "branch must not nag about the others") //$NON-NLS-1$
+            .booleanProperty(KEY_LOCALE_UNUSED,
+                "Set when the value was written under a language the configuration itself does " //$NON-NLS-1$
+                + "not use (its own synonym has no text for that language). NOT an error - the " //$NON-NLS-1$
+                + "language IS declared, so the value will display - but a prompt to ASK the " //$NON-NLS-1$
+                + "user whether translating into it is really wanted: it may be a " //$NON-NLS-1$
+                + "single-language build, or a language this configuration does not support " //$NON-NLS-1$
+                + "yet") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
             .stringProperty(KEY_COMMON_MODULE_KIND,
@@ -442,14 +454,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // carry is the one being written - no model read needed. Issue #298.
         List<String> localesMissing = synonymLanguage == null ? null
             : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage));
+        // Writing into a language the configuration itself does not use is legal but worth a
+        // question: it may be a single-language build, or a language not supported yet.
+        boolean localeUnused = MetadataLanguageUtils.isDeclaredButUnused(config, synonymLanguage);
 
         if (target.topLevel)
         {
             return createTopLevel(new TopLevelRequest(project, config, projectName, target, normFqn,
-                props, synonymLanguage, localesMissing, typeSpecific, normReport));
+                props, synonymLanguage, localesMissing, localeUnused, typeSpecific, normReport));
         }
         return createMember(project, projectName, target, normFqn, props, synonymLanguage,
-            localesMissing, normReport);
+            localesMissing, localeUnused, normReport);
     }
 
     /**
@@ -873,14 +888,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonymLanguage;
         /** Declared locales with no synonym yet; {@code null} when no synonym was written. */
         final List<String> localesMissing;
+        /** Whether the synonym went to a declared language the configuration itself does not use. */
+        final boolean localeUnused;
         final TypeSpecific typeSpecific;
         final MdNameNormalizer.Report normReport;
 
         TopLevelRequest(IProject project, Configuration config, String projectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             CreateTarget target, String normFqn, Props props, String synonymLanguage,
-            List<String> localesMissing, TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
+            List<String> localesMissing, boolean localeUnused, TypeSpecific typeSpecific,
+            MdNameNormalizer.Report normReport)
         {
             this.localesMissing = localesMissing;
+            this.localeUnused = localeUnused;
             this.project = project;
             this.config = config;
             this.projectName = projectName;
@@ -986,7 +1005,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(req.project, exportFqns);
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
-            req.synonymLanguage, req.localesMissing, req.typeSpecific, req.normReport));
+            req.synonymLanguage, req.localesMissing, req.localeUnused, req.typeSpecific,
+            req.normReport));
     }
 
     /**
@@ -1022,7 +1042,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     private String createMember(IProject project, String projectName, CreateTarget target, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         String normFqn, Props props, String synonymLanguage, List<String> localesMissing,
-        MdNameNormalizer.Report normReport)
+        boolean localeUnused, MdNameNormalizer.Report normReport)
     {
         // Members are created inside a write transaction. Only TOP objects are re-fetchable by
         // bmId, so we re-fetch the TOP object and re-navigate to the leaf's owner BY NAME inside the
@@ -1073,7 +1093,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
         return success(new SuccessInfo(normFqn, createdKind, name, persisted, props, synonymLanguage,
-            localesMissing, null, normReport));
+            localesMissing, localeUnused, null, normReport));
     }
 
     /**
@@ -2164,15 +2184,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String synonymLanguage;
         /** Declared locales with no synonym yet; {@code null} when no synonym was written. */
         final List<String> localesMissing;
+        /** Whether the synonym went to a declared language the configuration itself does not use. */
+        final boolean localeUnused;
         /** Type-specific options to echo back; {@code null} for a member create. */
         final TypeSpecific typeSpecific;
         final MdNameNormalizer.Report normReport;
 
         SuccessInfo(String fqn, EClass kind, String name, boolean persisted, Props props, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-            String synonymLanguage, List<String> localesMissing, TypeSpecific typeSpecific,
-            MdNameNormalizer.Report normReport)
+            String synonymLanguage, List<String> localesMissing, boolean localeUnused,
+            TypeSpecific typeSpecific, MdNameNormalizer.Report normReport)
         {
             this.localesMissing = localesMissing;
+            this.localeUnused = localeUnused;
             this.fqn = fqn;
             this.kind = kind;
             this.name = name;
@@ -2198,6 +2221,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             if (info.localesMissing != null)
             {
                 result.put(KEY_LOCALES_MISSING, info.localesMissing);
+            }
+            if (info.localeUnused)
+            {
+                result.put(KEY_LOCALE_UNUSED, true);
             }
         }
         if (info.typeSpecific != null)

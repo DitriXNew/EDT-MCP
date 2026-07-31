@@ -122,8 +122,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Echoes the locale a localized property was actually written under (#298). */
     private static final String KEY_LANGUAGE = "language"; //$NON-NLS-1$
 
-    /** Declared locales that still have no value for a localized property just written (#298). */
+    /** Locales IN USE that still have no value for a localized property just written (#298). */
     private static final String KEY_LOCALES_MISSING = "localesMissing"; //$NON-NLS-1$
+
+    /** Set when a write targets a declared language the configuration's own synonym does not use. */
+    private static final String KEY_LOCALE_UNUSED = "localeUnusedInConfiguration"; //$NON-NLS-1$
 
     /** Output value for {@link McpKeys#ACTION}: the node was modified. */
     private static final String VAL_MODIFIED = "modified"; //$NON-NLS-1$
@@ -371,9 +374,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringProperty(KEY_LANGUAGE, "Language code a localized property was written under; " //$NON-NLS-1$
                 + "present only when this call wrote localized properties under exactly ONE code") //$NON-NLS-1$
             .stringArrayProperty(KEY_LOCALES_MISSING,
-                "Declared language codes that still have NO value for at least one of the localized " //$NON-NLS-1$
-                + "properties just written (empty when every declared language is translated); " //$NON-NLS-1$
-                + "present only when a localized property was written") //$NON-NLS-1$
+                "Language codes the configuration USES - the ones its OWN synonym is filled in for - " //$NON-NLS-1$
+                + "that still have NO value for at least one of the localized properties just " //$NON-NLS-1$
+                + "written (empty when every such language is translated); present only when a " //$NON-NLS-1$
+                + "localized property was written. A declared language the configuration itself does " //$NON-NLS-1$
+                + "not use is NOT reported: a multilingual configuration worked on in a " //$NON-NLS-1$
+                + "single-language branch must not nag about the others") //$NON-NLS-1$
+            .booleanProperty(KEY_LOCALE_UNUSED,
+                "Set when a value was written under a language the configuration itself does not " //$NON-NLS-1$
+                + "use (its own synonym has no text for that language). NOT an error - the language " //$NON-NLS-1$
+                + "IS declared, so the value will display - but a prompt to ASK the user whether " //$NON-NLS-1$
+                + "translating into it is really wanted: it may be a single-language build, or a " //$NON-NLS-1$
+                + "language this configuration does not support yet") //$NON-NLS-1$
             .objectProperty(KEY_CONTENT, "For a membership-list content change: the counts object. A " //$NON-NLS-1$
                 + "CommonAttribute / ExchangePlan change reports {added, updated, removed} (members " //$NON-NLS-1$
                 + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
@@ -2510,7 +2522,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     change.applyTo(applyTo, tx);
                 }
-                localizedReport.collect(applyTo, changes, declaredCodes);
+                localizedReport.collect(applyTo, changes, declaredCodes, config);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
                     XDTOPackage changedPkg = (XDTOPackage)applyTo;
@@ -3489,7 +3501,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     for (int i = 0; i < localizedChanges.size(); i++)
                     {
                         localizedReport.collect(localizedHolders.get(i),
-                            List.of(localizedChanges.get(i)), declaredCodes);
+                            List.of(localizedChanges.get(i)), declaredCodes, config);
                     }
                 });
         }
@@ -5322,9 +5334,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Collects what a modify wrote to LOCALIZED properties, so the result can tell the caller which
      * locale was actually used and which declared locales still owe a translation. Issue #298.
      *
-     * <p>A locale counts as MISSING when AT LEAST ONE of the localized properties written by this
-     * call has no value for it - the caller is told there is work left, without having to re-read the
-     * object. The present locales are read from the model right after the changes are applied, so an
+     * <p>A locale counts as MISSING when the configuration USES it (its own synonym is filled in
+     * for it) and AT LEAST ONE of the localized properties written by this call has no value for it -
+     * the caller is told there is work left, without having to re-read the object. The present locales are read from the model right after the changes are applied, so an
      * object that already carried other translations is reported correctly (unlike a create, where
      * the map is necessarily fresh).
      */
@@ -5333,14 +5345,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private final Set<String> languagesUsed = new LinkedHashSet<>();
         private final Set<String> missing = new LinkedHashSet<>();
         private boolean wrote;
+        private boolean unusedLocale;
 
         /**
          * Reads the localized maps of the just-applied changes. Call INSIDE the write transaction,
          * AFTER the changes are applied.
          */
         @SuppressWarnings("unchecked")
-        void collect(EObject target, List<PreparedChange> changes, List<String> declaredCodes)
+        void collect(EObject target, List<PreparedChange> changes, List<String> declaredCodes,
+            Configuration config)
         {
+            // Only the languages the configuration ACTUALLY uses are owed a translation; a declared
+            // one it never fills in is a language nobody is translating into (see localesInUse).
+            List<String> reportable = new ArrayList<>(declaredCodes);
+            List<String> inUse = MetadataLanguageUtils.localesInUse(config);
+            reportable.retainAll(inUse);
+            if (reportable.isEmpty())
+            {
+                // Disjoint - e.g. this very batch renamed the code the synonym is keyed under.
+                // Falling back to the declared list keeps a real translation gap visible.
+                reportable = declaredCodes;
+            }
             for (PreparedChange change : changes)
             {
                 if (!change.isLocalized())
@@ -5349,13 +5374,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 wrote = true;
                 languagesUsed.add(change.language());
+                unusedLocale |= declaredCodes.contains(change.language())
+                    && !inUse.contains(change.language());
                 Object map = target.eGet(change.feature());
                 if (!(map instanceof EMap))
                 {
                     continue;
                 }
                 Map<String, String> present = ((EMap<String, String>)map).map();
-                for (String declared : declaredCodes)
+                for (String declared : reportable)
                 {
                     String value = present.get(declared);
                     if (value == null || value.isEmpty())
@@ -5384,6 +5411,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 result.put(KEY_LANGUAGE, only);
             }
             result.put(KEY_LOCALES_MISSING, missing());
+            if (unusedLocale)
+            {
+                // Legal, but worth a question: the configuration's own synonym has no text for that
+                // language, so this may be a single-language build or one that does not support it
+                // yet. The caller's agent should ask rather than quietly populate it.
+                result.put(KEY_LOCALE_UNUSED, true);
+            }
         }
 
         /**

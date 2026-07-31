@@ -1696,9 +1696,11 @@ def test_create_stores_a_declared_locale_under_its_declared_spelling():
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_reports_the_locales_still_missing_a_translation():
-    # Issue #298 part 2: after a localized write the result lists the declared locales that still
-    # have NO value, so a caller building a multilingual configuration knows what it still owes.
-    # The fixture declares one language, so a second one is added here to make the list non-empty.
+    # Issue #298 part 2: after a localized write the result lists the locales that still have NO
+    # value, so a caller building a multilingual configuration knows what it still owes - but only
+    # for the languages the configuration ITSELF uses. The fixture is named in 'en' only, so the
+    # second language added here is declared and NOT in use: there is nothing to nag about, and a
+    # write under it is FLAGGED so the agent can ask whether translating into it is really wanted.
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnCreate"}),
               "add a second language to the configuration")
     wait_for_project_ready()
@@ -1715,8 +1717,20 @@ def test_create_reports_the_locales_still_missing_a_translation():
     assert_ok(r, "create with a synonym in one of the two declared locales")
     assert r.structured.get("language") == "en", \
         "the result must echo the locale used: %r" % (r.structured,)
-    assert r.structured.get("localesMissing") == ["fr"], \
-        "the untranslated locale must be reported: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [], \
+        "a language the configuration is not translated into is not owed one: %r" % (r.structured,)
+    assert "localeUnusedInConfiguration" not in r.structured, \
+        "a write in the language the configuration DOES use must not be questioned: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Z298Unused",
+        "properties": [{"name": "synonym", "value": "Marchandises", "language": "fr"}],
+    })
+    assert_ok(r, "a synonym in a declared but unused language is legal")
+    assert r.structured.get("localeUnusedInConfiguration") is True, \
+        "writing into a language the configuration does not use must be flagged: %r" % (r.structured,)
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -1752,7 +1766,7 @@ def test_create_form_object_reports_the_locales_still_missing_a_translation():
     })
     assert_ok(r, "create a form object with a synonym")
     assert r.structured.get("language") == "en",         "the form-object create must echo the locale used: %r" % (r.structured,)
-    assert r.structured.get("localesMissing") == ["fr"],         "the form-object create must report the untranslated locale: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [],         "the form-object create must carry the report - empty, the second language is unused: %r" % (r.structured,)
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -1780,7 +1794,7 @@ def test_create_table_without_a_title_still_reports_the_generated_titles_locale(
     })
     assert_ok(r, "create a table without an explicit title")
     assert r.structured.get("language") == "en",         "the generated title's locale must be reported: %r" % (r.structured,)
-    assert r.structured.get("localesMissing") == ["fr"],         "the untranslated locale must be reported for a generated title: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [],         "a generated title must carry the report too - empty, the second language is unused: %r" % (r.structured,)
     wait_for_project_ready()
 
     # And it must really be stored under the declared code - the pre-fix code wrote the script-variant

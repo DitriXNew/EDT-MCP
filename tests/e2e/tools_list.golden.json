@@ -599,8 +599,12 @@
           "description": "Language code the localized value (synonym, or a form element's title) was written under",
           "type": "string"
         },
+        "localeUnusedInConfiguration": {
+          "description": "Set when the value was written under a language the configuration itself does not use (its own synonym has no text for that language). NOT an error - the language IS declared, so the value will display - but a prompt to ASK the user whether translating into it is really wanted: it may be a single-language build, or a language this configuration does not support yet",
+          "type": "boolean"
+        },
         "localesMissing": {
-          "description": "Declared language codes that still have NO value for the localized property just written (empty when every declared language is translated); present only when a localized value was written",
+          "description": "Language codes the configuration USES (its own synonym is filled in for them) that still have NO value for the localized property just written; present only when a localized value was written. A declared language the configuration does not use is not reported - a multilingual configuration worked on in a single-language branch must not nag about the others",
           "items": {
             "type": "string"
           },
@@ -3448,8 +3452,12 @@
           "description": "Language code a localized property was written under; present only when this call wrote localized properties under exactly ONE code",
           "type": "string"
         },
+        "localeUnusedInConfiguration": {
+          "description": "Set when a value was written under a language the configuration itself does not use (its own synonym has no text for that language). NOT an error - the language IS declared, so the value will display - but a prompt to ASK the user whether translating into it is really wanted: it may be a single-language build, or a language this configuration does not support yet",
+          "type": "boolean"
+        },
         "localesMissing": {
-          "description": "Declared language codes that still have NO value for at least one of the localized properties just written (empty when every declared language is translated); present only when a localized property was written",
+          "description": "Language codes the configuration USES - the ones its OWN synonym is filled in for - that still have NO value for at least one of the localized properties just written (empty when every such language is translated); present only when a localized property was written. A declared language the configuration itself does not use is NOT reported: a multilingual configuration worked on in a single-language branch must not nag about the others",
           "items": {
             "type": "string"
           },

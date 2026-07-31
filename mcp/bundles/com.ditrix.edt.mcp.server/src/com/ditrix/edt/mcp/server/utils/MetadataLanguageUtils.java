@@ -320,14 +320,72 @@ public final class MetadataLanguageUtils
     public static List<String> localesMissing(Configuration config, Collection<String> present)
     {
         List<String> missing = new ArrayList<>();
-        for (String declared : declaredLanguageCodes(config))
+        for (String inUse : localesInUse(config))
         {
-            if (present == null || !present.contains(declared))
+            if (present == null || !present.contains(inUse))
             {
-                missing.add(declared);
+                missing.add(inUse);
             }
         }
         return missing;
+    }
+
+    /**
+     * The declared language codes the configuration ACTUALLY USES - the ones its OWN synonym is
+     * filled in for.
+     * <p>
+     * A language can be declared and yet not be in play: a multilingual configuration worked on in a
+     * single-language dev branch declares them all, but only one carries any text. Treating every
+     * declared code as owed a translation would nag about languages nobody is translating into,
+     * which is why {@link #localesMissing} asks THIS question rather than counting declarations.
+     * <p>
+     * When the configuration's synonym is empty for every language (a brand-new configuration), the
+     * declared codes are returned as-is: there is nothing to infer usage from, and reporting nothing
+     * would hide real work.
+     *
+     * @param config the configuration (may be {@code null})
+     * @return the codes in use, in declaration order, never {@code null}
+     */
+    public static List<String> localesInUse(Configuration config)
+    {
+        List<String> declared = declaredLanguageCodes(config);
+        if (config == null || declared.isEmpty())
+        {
+            return declared;
+        }
+        Map<String, String> synonym = config.getSynonym() == null ? Map.of() : config.getSynonym().map();
+        List<String> inUse = new ArrayList<>();
+        for (String code : declared)
+        {
+            String value = synonym.get(code);
+            if (value != null && !value.isEmpty())
+            {
+                inUse.add(code);
+            }
+        }
+        return inUse.isEmpty() ? declared : inUse;
+    }
+
+    /**
+     * Whether a value is being written under a declared code the configuration itself does not use -
+     * its own synonym has no text for that language.
+     * <p>
+     * Not an error: the language IS declared, so the value will display. It is a prompt to CHECK,
+     * because it may equally mean the caller is translating into a language this build does not
+     * really support yet. The caller surfaces it so an agent asks the user instead of quietly
+     * populating a language nobody asked for.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param code the code being written (may be {@code null})
+     * @return {@code true} when the code is declared but unused by the configuration's own synonym
+     */
+    public static boolean isDeclaredButUnused(Configuration config, String code)
+    {
+        if (config == null || code == null || code.isEmpty())
+        {
+            return false;
+        }
+        return declaredLanguageCodes(config).contains(code) && !localesInUse(config).contains(code);
     }
 
     /**

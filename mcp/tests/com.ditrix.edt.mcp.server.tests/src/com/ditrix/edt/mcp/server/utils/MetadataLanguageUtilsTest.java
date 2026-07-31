@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -19,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.eclipse.emf.common.util.BasicEList;
+import org.eclipse.emf.common.util.BasicEMap;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -45,6 +47,16 @@ public class MetadataLanguageUtilsTest
         Configuration config = mock(Configuration.class);
         when(config.getDefaultLanguage()).thenReturn(defaultLanguage);
         when(config.getLanguages()).thenReturn(new BasicEList<>(Arrays.asList(configured)));
+        return config;
+    }
+
+    /** A configuration whose OWN synonym carries text for the given codes only. */
+    private static Configuration configWithSynonym(Map<String, String> synonym, Language... configured)
+    {
+        Configuration config = config(configured.length == 0 ? null : configured[0], configured);
+        BasicEMap<String, String> map = new BasicEMap<>();
+        synonym.forEach(map::put);
+        when(config.getSynonym()).thenReturn(map);
         return config;
     }
 
@@ -243,6 +255,52 @@ public class MetadataLanguageUtilsTest
             MetadataLanguageUtils.localesMissing(config, Collections.singletonList("en_CA")));
         assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.localesMissing(config, null));
         assertTrue(MetadataLanguageUtils.localesMissing(config, Arrays.asList("en_CA", "fr_CA")).isEmpty());
+    }
+
+    @Test
+    public void localesInUseKeepsOnlyTheLanguagesTheConfigurationFillsIn()
+    {
+        // Declared: en_CA + fr_CA; the configuration itself is named in en_CA only. fr_CA is
+        // declared but nobody is translating into it - a single-language branch of a multilingual
+        // configuration - so it is not a translation gap.
+        Configuration config = configWithSynonym(Map.of("en_CA", "Trade"), language("en_CA"),
+            language("fr_CA"));
+        assertEquals(Arrays.asList("en_CA"), MetadataLanguageUtils.localesInUse(config));
+    }
+
+    @Test
+    public void localesInUseFallsBackToDeclaredWhenNothingIsTranslatedYet()
+    {
+        // A brand-new configuration has no synonym of its own: there is nothing to infer usage
+        // from, and reporting no gaps at all would hide real work.
+        Configuration config = configWithSynonym(Map.of(), language("en_CA"), language("fr_CA"));
+        assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.localesInUse(config));
+        assertTrue(MetadataLanguageUtils.localesInUse(null).isEmpty());
+    }
+
+    @Test
+    public void localesMissingSkipsADeclaredLanguageTheConfigurationDoesNotUse()
+    {
+        Configuration config = configWithSynonym(Map.of("en_CA", "Trade"), language("en_CA"),
+            language("fr_CA"));
+        // Without the in-use filter this would report fr_CA and nag about a language the
+        // configuration is not translated into either.
+        assertTrue(MetadataLanguageUtils.localesMissing(config, Collections.singletonList("en_CA")).isEmpty());
+        assertEquals(Arrays.asList("en_CA"), MetadataLanguageUtils.localesMissing(config, null));
+    }
+
+    @Test
+    public void isDeclaredButUnusedFlagsAWriteIntoALanguageNobodyTranslatesInto()
+    {
+        Configuration config = configWithSynonym(Map.of("en_CA", "Trade"), language("en_CA"),
+            language("fr_CA"));
+        assertTrue(MetadataLanguageUtils.isDeclaredButUnused(config, "fr_CA"));
+        // The language in use, an undeclared code and the degenerate inputs are all NOT the case
+        // this flag is about - an undeclared code is rejected outright, long before this.
+        assertFalse(MetadataLanguageUtils.isDeclaredButUnused(config, "en_CA"));
+        assertFalse(MetadataLanguageUtils.isDeclaredButUnused(config, "de"));
+        assertFalse(MetadataLanguageUtils.isDeclaredButUnused(config, null));
+        assertFalse(MetadataLanguageUtils.isDeclaredButUnused(null, "fr_CA"));
     }
 
     @Test

@@ -1691,9 +1691,11 @@ def test_modify_rejects_a_localized_property_in_an_undeclared_locale():
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_reports_the_locale_used_and_the_ones_still_untranslated():
-    # Issue #298 parts 2-3. A second language is added so the missing list is non-empty, then the
-    # SAME property is translated into it and the list empties - proving the report is read from the
-    # object (a modify target may already carry other translations), not guessed.
+    # Issue #298 parts 2-3. A second language is added, then the SAME property is translated into
+    # it - proving the report is read from the object (a modify target may already carry other
+    # translations), not guessed. The fixture's configuration is named in 'en' only, so that second
+    # language is declared but NOT in use: it is not owed a translation, and writing into it is
+    # flagged instead, so the agent asks the user before populating it.
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnModify"}),
               "add a second language to the configuration")
     wait_for_project_ready()
@@ -1709,8 +1711,10 @@ def test_modify_reports_the_locale_used_and_the_ones_still_untranslated():
     assert_ok(r, "set the synonym in the first declared locale")
     assert r.structured.get("language") == "en", \
         "the result must echo the locale used: %r" % (r.structured,)
-    assert r.structured.get("localesMissing") == ["fr"], \
-        "the untranslated locale must be reported: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [], \
+        "a language the configuration is not translated into is not owed one: %r" % (r.structured,)
+    assert "localeUnusedInConfiguration" not in r.structured, \
+        "a write in the language the configuration DOES use must not be questioned: %r" % (r.structured,)
     wait_for_project_ready()
 
     r2 = call("modify_metadata", {
@@ -1719,7 +1723,9 @@ def test_modify_reports_the_locale_used_and_the_ones_still_untranslated():
     })
     assert_ok(r2, "translate the same property into the second locale")
     assert r2.structured.get("localesMissing") == [], \
-        "with every declared locale translated the list must be empty: %r" % (r2.structured,)
+        "with every locale in USE translated the list must be empty: %r" % (r2.structured,)
+    assert r2.structured.get("localeUnusedInConfiguration") is True, \
+        "writing into a language the configuration does not use must be flagged: %r" % (r2.structured,)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -1755,7 +1761,7 @@ def test_modify_form_member_reports_the_locale_used_and_the_ones_still_untransla
     })
     assert_ok(r, "set a form field's title")
     assert r.structured.get("language") == "en",         "the form-member modify must echo the locale used: %r" % (r.structured,)
-    assert r.structured.get("localesMissing") == ["fr"],         "the form-member modify must report the untranslated locale: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [],         "the form-member modify must carry the report - empty, the second language is unused: %r" % (r.structured,)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
