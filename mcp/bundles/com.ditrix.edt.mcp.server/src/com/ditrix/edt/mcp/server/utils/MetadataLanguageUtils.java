@@ -188,26 +188,32 @@ public final class MetadataLanguageUtils
             throw new IllegalArgumentException("Cannot determine a language code for " + subject //$NON-NLS-1$
                 + " in this configuration. Specify a 'language' code (e.g. 'en' or 'ru')."); //$NON-NLS-1$
         }
-        // The fallback comes from the model, so it is declared - BEFORE this call. A batch that
-        // RENAMES the default language's code removes it, and the value would land under the code
-        // the same call deleted: invisible, which is the whole point of this guard.
-        //
-        // What replaces it is NOT a matter of counting what is left: with a second, untouched
-        // language around, two codes remain and neither counting nor guessing helps. The
-        // defaultLanguage reference still points at the SAME Language object, so the answer is that
-        // object's post-edit code - which the caller computes and passes as the FIRST override
-        // entry. Only when the caller cannot name it is the call refused.
-        if (declaredOverride != null && !declaredOverride.isEmpty() && !declaredOverride.contains(code))
+        // The fallback above comes from the MODEL, so it describes the configuration as it was
+        // BEFORE this call. When the same call changes the language codes, that answer is stale in
+        // two different ways, and only one of them is visible by looking for the old code:
+        //   - a RENAME deletes it, and the value would land under a code that no longer exists;
+        //   - giving the default language its FIRST code leaves the old fallback (borrowed from
+        //     whichever language did have one) perfectly valid - and wrong, because the write
+        //     belongs to the language the caller just made valid.
+        // Both are answered the same way: the defaultLanguage reference still points at the SAME
+        // Language object, so the fallback is THAT object's post-edit code, which the caller
+        // computes and passes as the FIRST override entry. Prefer it whenever it exists, rather
+        // than only when the old code vanished. Only when the caller cannot name it is the call
+        // refused - and only if the old code is gone too.
+        if (declaredOverride != null && !declaredOverride.isEmpty())
         {
             List<String> after = declaredOrOverride(config, declaredOverride);
             String postEditDefault = after.isEmpty() ? null : after.get(0);
-            if (postEditDefault != null)
+            if (postEditDefault != null && !postEditDefault.isEmpty())
             {
                 return postEditDefault;
             }
-            throw new IllegalArgumentException("This call changes the language codes, so the default "  //$NON-NLS-1$
-                + "code ('" + code + "') for " + subject + " no longer exists after it. Name the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "'language' explicitly."); //$NON-NLS-1$
+            if (!after.contains(code))
+            {
+                throw new IllegalArgumentException("This call changes the language codes, so the "  //$NON-NLS-1$
+                    + "default code ('" + code + "') for " + subject + " no longer exists after it. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Name the 'language' explicitly."); //$NON-NLS-1$
+            }
         }
         return code;
     }

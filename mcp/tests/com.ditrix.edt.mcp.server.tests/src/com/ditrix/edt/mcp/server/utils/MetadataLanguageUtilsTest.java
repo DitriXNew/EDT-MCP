@@ -498,7 +498,22 @@ public class MetadataLanguageUtilsTest
     public void aFallbackThatSurvivesTheCallIsLeftAlone()
     {
         // The batch declares another code but does NOT remove the default: the default still wins.
+        // (The override's FIRST entry is that same 'en', so preferring it changes nothing here.)
         Configuration config = config(language("en"), language("en"));
+        assertEquals("en", MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", null,
+            "the synonym", Arrays.asList("en", "fr")));
+    }
+
+    @Test
+    public void theFallbackFollowsTheDefaultThatJUSTGotItsFirstCode()
+    {
+        // The stale-fallback bug that is NOT visible by looking for the missing code: the default
+        // language had no languageCode at all, so the model-derived fallback borrowed 'fr' from the
+        // language that did have one. This call gives the default its first code, 'en' - and 'fr'
+        // is still perfectly valid, so nothing looks wrong, yet a write with no explicit 'language'
+        // belongs to 'en'. The caller passes the post-edit default first; prefer it (codex review).
+        Language withoutCode = mock(Language.class);          // the default: no languageCode yet
+        Configuration config = config(withoutCode, withoutCode, language("fr"));
         assertEquals("en", MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", null,
             "the synonym", Arrays.asList("en", "fr")));
     }
