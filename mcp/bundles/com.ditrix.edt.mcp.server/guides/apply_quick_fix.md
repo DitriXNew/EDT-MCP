@@ -30,8 +30,8 @@ variants** (e.g. "add to Public region" vs "Private"), the error lists those —
 - `projectName` (required) — the EDT project the marker belongs to.
 - `checkId` (required) — see above.
 - `modulePath`, `line` (optional) — narrow the locator to a BSL position.
-- `index` (optional) — 1-based selector among markers that share the locator.
-- `variant` (optional) — 1-based selector among the chosen fix's variants.
+- `index` (optional) — 1-based selector among markers that share the locator. Validated strictly against the CURRENT match count when supplied - out of range is rejected even against a single match, so a stale index from an earlier response can never silently apply to the wrong marker.
+- `variant` (optional) — 1-based selector among the chosen fix's variants. Same strict validation as `index`.
 
 ## What you get
 A JSON result:

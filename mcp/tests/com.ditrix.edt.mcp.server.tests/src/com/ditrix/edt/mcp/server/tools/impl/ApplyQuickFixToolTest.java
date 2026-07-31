@@ -83,4 +83,48 @@ public class ApplyQuickFixToolTest
         assertTrue(schema.contains("\"location\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"appliedVariant\"")); //$NON-NLS-1$
     }
+
+    // ---- chooseIndex: pure marker-index / fix-variant selection decision -----------------------
+
+    @Test
+    public void testChooseIndexNoSelectorSingleCandidateAutoSelects()
+    {
+        assertEquals(0, ApplyQuickFixTool.chooseIndex(1, -1));
+    }
+
+    @Test
+    public void testChooseIndexNoSelectorMultipleCandidatesIsAmbiguous()
+    {
+        assertEquals(-1, ApplyQuickFixTool.chooseIndex(3, -1));
+    }
+
+    @Test
+    public void testChooseIndexValidSelectorInRange()
+    {
+        assertEquals(0, ApplyQuickFixTool.chooseIndex(3, 1));
+        assertEquals(2, ApplyQuickFixTool.chooseIndex(3, 3));
+    }
+
+    @Test
+    public void testChooseIndexSelectorOutOfRangeIsRejected()
+    {
+        assertEquals(-1, ApplyQuickFixTool.chooseIndex(3, 4));
+    }
+
+    @Test
+    public void testChooseIndexStaleSelectorAgainstSingleCandidateIsRejectedNotSilentlyResolved()
+    {
+        // The bug this guards: a selector left over from an earlier multi-candidate response (index=2,
+        // say) must NOT be silently honored against a NOW-single candidate set - it must be rejected
+        // as out of range, exactly like it would be against the original multi-candidate set.
+        assertEquals(-1, ApplyQuickFixTool.chooseIndex(1, 2));
+    }
+
+    @Test
+    public void testChooseIndexSelectorOfOneAgainstSingleCandidateIsAccepted()
+    {
+        // An explicit, IN-RANGE selector (1) against a single candidate is legitimate and must
+        // still resolve - only an out-of-range selector is rejected.
+        assertEquals(0, ApplyQuickFixTool.chooseIndex(1, 1));
+    }
 }

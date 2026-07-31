@@ -90,10 +90,14 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 "Narrow to the 1-based 'Line' from get_project_errors. Optional.") //$NON-NLS-1$
             .integerProperty(KEY_INDEX,
                 "1-based selector when the locator still matches several markers (the error lists " //$NON-NLS-1$
-                + "them). Omit for a single match.") //$NON-NLS-1$
+                + "them). Omit for a single match. If supplied, it is validated strictly against the " //$NON-NLS-1$
+                + "CURRENT match count and rejected when out of range - even against a single match - " //$NON-NLS-1$
+                + "so a stale index from an earlier response is never silently applied to the wrong marker.") //$NON-NLS-1$
             .integerProperty(KEY_VARIANT,
                 "1-based fix-variant index, required only when the chosen marker's fix exposes more " //$NON-NLS-1$
-                + "than one variant (the error then lists them).") //$NON-NLS-1$
+                + "than one variant (the error then lists them). If supplied, it is validated strictly " //$NON-NLS-1$
+                + "against the CURRENT variant count and rejected when out of range - even against a " //$NON-NLS-1$
+                + "single variant - so a stale selector is never silently applied to the wrong fix.") //$NON-NLS-1$
             .build();
     }
 
@@ -157,19 +161,12 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 + "'. Run get_project_errors (responseFormat=detailed) and pick a row whose 'Fix' column is 'yes'.").toJson(); //$NON-NLS-1$
         }
 
-        MarkerMatch chosen;
-        if (matches.size() == 1)
-        {
-            chosen = matches.get(0);
-        }
-        else if (index >= 1 && index <= matches.size())
-        {
-            chosen = matches.get(index - 1);
-        }
-        else
+        int chosenIdx = chooseIndex(matches.size(), index);
+        if (chosenIdx < 0)
         {
             return multipleMarkersError(checkId, matches);
         }
+        MarkerMatch chosen = matches.get(chosenIdx);
 
         return applyFix(fixManager, dtProject, chosen, variant);
     }
@@ -237,19 +234,12 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 return noFixAvailableError(chosen);
             }
 
-            FixVariantDescriptor chosenVariant;
-            if (variants.size() == 1)
-            {
-                chosenVariant = variants.get(0);
-            }
-            else if (variant >= 1 && variant <= variants.size())
-            {
-                chosenVariant = variants.get(variant - 1);
-            }
-            else
+            int chosenIdx = chooseIndex(variants.size(), variant);
+            if (chosenIdx < 0)
             {
                 return multipleVariantsError(chosen, variants);
             }
+            FixVariantDescriptor chosenVariant = variants.get(chosenIdx);
 
             fixManager.selectFixVariant(chosenVariant, handle);
             fixManager.executeFix(handle, new NullProgressMonitor());
@@ -266,6 +256,31 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         {
             fixManager.finishFix(handle);
         }
+    }
+
+    /**
+     * Pure selection decision shared by the marker-{@code index} and fix-{@code variant} pickers (no
+     * live service needed - unit-testable in isolation): returns the 0-based index into the candidate
+     * list to use, or {@code -1} when the caller must see the "several match, pick one" error.
+     * <p>
+     * A supplied selector ({@code selector >= 1}) is honored STRICTLY: it must be in range
+     * {@code [1, count]} or this returns -1, even when {@code count == 1} - a stale selector carried
+     * over from an earlier multi-candidate response (the candidate set can change between calls, e.g.
+     * after an edit/revalidation, or between listing fix variants and applying one) must be rejected,
+     * not silently resolved to whatever happens to be the sole current candidate. Only when NO selector
+     * was supplied ({@code selector < 1}, the "not given" sentinel) does a single candidate auto-select.
+     *
+     * @param count the number of current candidates (markers, or applicable fix variants)
+     * @param selector the caller-supplied 1-based selector, or &lt; 1 when none was given
+     * @return the 0-based index to use, or -1 for "ambiguous / out of range"
+     */
+    static int chooseIndex(int count, int selector)
+    {
+        if (selector >= 1)
+        {
+            return selector <= count ? selector - 1 : -1;
+        }
+        return count == 1 ? 0 : -1;
     }
 
     /** Actionable "no quick-fix for this marker" error - either no fix process, or no variants. */
