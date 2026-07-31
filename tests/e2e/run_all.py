@@ -46,12 +46,16 @@ def parse_args():
     return ap.parse_args()
 
 
-def write_junit(results, path, final_clean):
+def write_junit(results, path, final_clean, cleanup_failed=False):
     # Skips are neither pass nor failure: they are reported as JUnit <skipped/> and
     # excluded from the failure count (the gated live-infobase suite skips in a
     # headless run and must not turn the report red).
-    total = len(results) + (0 if final_clean else 1)
-    fails = sum(1 for _, s, _, _ in results if s not in ("pass", "skip")) + (0 if final_clean else 1)
+    # A cleanup that failed is its own synthetic case: without it an all-green run whose
+    # final model sync never completed publishes a green report while the process exits
+    # non-zero, and the report is what the CI check reads.
+    extra = (0 if final_clean else 1) + (1 if cleanup_failed else 0)
+    total = len(results) + extra
+    fails = sum(1 for _, s, _, _ in results if s not in ("pass", "skip")) + extra
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
            '<testsuite name="edt-mcp-e2e" tests="%d" failures="%d">' % (total, fails)]
     for t, status, msg, dur in results:
@@ -73,6 +77,10 @@ def write_junit(results, path, final_clean):
     if not final_clean:
         out.append('  <testcase name="fixture::final_clean">'
                    '<failure>TestConfiguration left dirty after the run</failure></testcase>')
+    if cleanup_failed:
+        out.append('  <testcase name="fixture::final_cleanup">'
+                   '<failure>the final model sync did not complete: the workspace model may still '
+                   'differ from the committed disk</failure></testcase>')
     out.append('</testsuite>')
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
@@ -85,10 +93,19 @@ def write_junit(results, path, final_clean):
 _ABANDONED = False
 
 
-def abandon_workers():
-    """Tell any still-running worker to skip its cleanup (see _ABANDONED)."""
+def abandon_workers(harness):
+    """Give up on a worker we cannot stop: no more MCP calls, no cleanup, from anyone.
+
+    The flag alone is checked only AFTER the test function returns, which is too late for a
+    worker already inside reset_model or inside a test's own teardown - it would resume and
+    keep calling the server the moment its current request came back. So the harness latch is
+    armed as well: from here on every request is refused before it is sent.
+    """
     global _ABANDONED
     _ABANDONED = True
+    harness.abort_further_calls(
+        "the run abandoned a test that outlived its timeout, and the server may still be "
+        "working on it")
 
 
 def _run_test_unit(harness, t):
@@ -164,7 +181,7 @@ def _run_with_timeout(harness, t, timeout_s):
     if th.is_alive():
         # The worker is still running and cannot be stopped. Tell it to skip its own cleanup
         # before we return: from here on nobody may touch the fixtures, this thread included.
-        abandon_workers()
+        abandon_workers(harness)
         return ("timeout",
                 "TIMEOUT: test exceeded %gs and was considered FAILED. EDT is likely hung "
                 "(e.g. clean_project / ProjectRestartJob wedged); the remaining tests are "
@@ -317,7 +334,7 @@ def main():
         print("!! fixtures left dirty after cleanup:\n%s" % harness.all_fixtures_status()[:500])
 
     if args.junit:
-        write_junit(results, args.junit, final_clean)
+        write_junit(results, args.junit, final_clean, cleanup_failed)
         print("junit -> %s" % args.junit)
 
     # A skip is neither pass nor fail: the run is green when nothing FAILED and the

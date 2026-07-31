@@ -227,6 +227,7 @@ def _parse_response(text):
 # the request we walked away from. The run is over at that point; the latch just makes it true
 # everywhere instead of only where someone remembered to check.
 _TIMED_OUT = False
+_ABORT_REASON = "an earlier call timed out and may still be running"
 
 
 def _post(method, params):
@@ -244,8 +245,8 @@ def _post(method, params):
         headers["Mcp-Session-Id"] = _SESSION_ID
     if _TIMED_OUT:
         raise E2ECallTimeout(
-            "refusing to send %s: an earlier call timed out and may still be running, so the run "
-            "is over. (The latch, not a new timeout - see _TIMED_OUT.)" % method)
+            "refusing to send %s: %s, so the run is over. (The latch, not a new timeout - see "
+            "_TIMED_OUT.)" % (method, _ABORT_REASON))
     req = urllib.request.Request(MCP_URL, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=CALL_TIMEOUT) as resp:
@@ -276,8 +277,20 @@ def _post(method, params):
 
 def _arm_timeout_latch():
     """Remember that a call was abandoned - see _TIMED_OUT."""
-    global _TIMED_OUT
+    abort_further_calls("an earlier call timed out and may still be running")
+
+
+def abort_further_calls(reason):
+    """Refuse every SUBSEQUENT MCP call, whatever is still holding the wire.
+
+    Armed by a call timeout and by the orchestrator when it abandons a timed-out worker. Both
+    mean the same thing: something we cannot cancel is still working, and every later request -
+    a test's own teardown, a reset_model still in flight on the abandoned thread - would race it.
+    Refusing at the ONE place they all pass through beats hoping each caller checks a flag.
+    """
+    global _TIMED_OUT, _ABORT_REASON
     _TIMED_OUT = True
+    _ABORT_REASON = reason
 
 
 def _call_timeout_message(cause):
