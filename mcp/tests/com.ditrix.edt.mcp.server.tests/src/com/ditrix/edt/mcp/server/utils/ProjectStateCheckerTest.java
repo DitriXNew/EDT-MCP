@@ -93,6 +93,7 @@ public class ProjectStateCheckerTest
 
         CascadeEnvironment env = mock(CascadeEnvironment.class);
         when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(participant));
+        when(env.isExtensionProject(participant)).thenReturn(true);
         when(env.resolveBaseProject(participant)).thenReturn(base);
         when(env.isBuilding(participant)).thenReturn(true);
 
@@ -127,6 +128,29 @@ public class ProjectStateCheckerTest
     }
 
     @Test
+    public void busyExternalObjectsProjectIsNotACascadeParticipant()
+    {
+        // An EXTERNAL-OBJECTS project is dependent on the same base (resolveBaseProject answers
+        // identically to a real participant's), but it is not an EXTENSION, so it takes no part
+        // in the rename cascade: even while busy it must never be waited on and must never cause
+        // a refusal - doing either would spend the shared drain budget, or reject the rename, over
+        // a project the rename never touches.
+        IProject base = mockOpenProject("Base");
+        IProject externalObjects = mockOpenProject("ExternalObjects");
+
+        CascadeEnvironment env = mock(CascadeEnvironment.class);
+        when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(externalObjects));
+        when(env.resolveBaseProject(externalObjects)).thenReturn(base);
+        when(env.isExtensionProject(externalObjects)).thenReturn(false);
+        when(env.isBuilding(externalObjects)).thenReturn(true);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base, SETTLE_TIMEOUT_MS, env);
+
+        assertNull("a busy external-objects project must never cause a refusal", result);
+        verify(env, never()).waitForDerivedData(eq(externalObjects), anyLong());
+    }
+
+    @Test
     public void settledParticipantReturnsNull()
     {
         // A participant that is NOT building lets the cascade proceed.
@@ -135,6 +159,7 @@ public class ProjectStateCheckerTest
 
         CascadeEnvironment env = mock(CascadeEnvironment.class);
         when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(participant));
+        when(env.isExtensionProject(participant)).thenReturn(true);
         when(env.resolveBaseProject(participant)).thenReturn(base);
         when(env.isBuilding(participant)).thenReturn(false);
 
@@ -161,6 +186,8 @@ public class ProjectStateCheckerTest
 
         CascadeEnvironment env = mock(CascadeEnvironment.class);
         when(env.getOpenDtProjects()).thenReturn(Arrays.asList(participant1, participant2));
+        when(env.isExtensionProject(participant1)).thenReturn(true);
+        when(env.isExtensionProject(participant2)).thenReturn(true);
         when(env.resolveBaseProject(participant1)).thenReturn(base);
         when(env.resolveBaseProject(participant2)).thenReturn(base);
         when(env.isBuilding(participant1)).thenReturn(false);

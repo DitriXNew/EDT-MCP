@@ -354,7 +354,7 @@ public final class ProjectStateChecker
             {
                 continue;
             }
-            if (base.equals(env.resolveBaseProject(candidate)))
+            if (env.isExtensionProject(candidate) && base.equals(env.resolveBaseProject(candidate)))
             {
                 participants.add(candidate);
             }
@@ -407,10 +407,23 @@ public final class ProjectStateChecker
         List<IProject> getOpenDtProjects();
 
         /**
-         * Resolves the BASE (parent) project a dependent project (e.g. a configuration extension)
-         * derives from, or {@code null} when {@code project} is not dependent on another project.
+         * Resolves the BASE (parent) project a dependent project derives from, or {@code null} when
+         * {@code project} is not dependent on another project. NB an EXTERNAL-OBJECTS project is
+         * dependent too - see {@link #isExtensionProject(IProject)} for why that matters here.
          */
         IProject resolveBaseProject(IProject project);
+
+        /**
+         * Whether {@code project} is a configuration EXTENSION (not merely dependent).
+         * <p>
+         * The cascade builds one refactoring per EXTENSION of the renamed object's configuration.
+         * An external-objects project shares the same parent and would answer
+         * {@link #resolveBaseProject(IProject)} identically, yet takes no part in that cascade -
+         * treating it as a participant would let it spend the shared drain budget and, worse,
+         * refuse the rename with an "extends ... still building" error about a project the rename
+         * never touches.
+         */
+        boolean isExtensionProject(IProject project);
 
         /** Waits, bounded by {@code timeoutMs}, for {@code project}'s derived-data pipeline to drain. */
         void waitForDerivedData(IProject project, long timeoutMs);
@@ -446,6 +459,12 @@ public final class ProjectStateChecker
             public IProject resolveBaseProject(IProject project)
             {
                 return ExtensionOriginUtils.resolveBaseProject(project);
+            }
+
+            @Override
+            public boolean isExtensionProject(IProject project)
+            {
+                return ExtensionOriginUtils.isExtensionProject(project);
             }
 
             @Override
