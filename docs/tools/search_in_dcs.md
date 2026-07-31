@@ -1,6 +1,6 @@
 # search_in_dcs
 
-Literal/regex search across all Data Composition Schema (.dcs) files in a project - the serialized report / data-processor schemas (dataset query text, field paths, calculated/total expressions, parameters, and the selection/order/filter/variants of the settings). Matching is purely textual over the serialized XML and NOT ru/en dialect-aware. Use it to find where a field, query fragment or expression is used across report schemas; to EDIT a schema use create_metadata by FQN. Full parameters and examples: call get_tool_guide('search_in_dcs').
+Literal/regex search across all Data Composition Schema (.dcs) files in a project - the serialized report / data-processor schemas (dataset query text, field paths, calculated/total expressions, parameters, and the selection/order/filter/variants of the settings). Matching is purely textual over the serialized XML and NOT ru/en dialect-aware. Use it to find where a field, query fragment or expression is used across report schemas; to EDIT a schema use modify_metadata's dcs payload on the owning Report FQN (currently the only supported DCS authoring surface). Full parameters and examples: call get_tool_guide('search_in_dcs').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -25,7 +25,7 @@ Literal or regex search across every Data Composition Schema file (`*.dcs`) unde
 ## What it searches
 The `.dcs` is serialized XML, so this is a textual scan of that XML. It finds anything the schema stores: `<query>` text, `<dataPath>` / `<field>` field paths, `<expression>` of calculated / total fields, `<parameter>` names, and the settings (`<dcsset:selection>` / `<dcsset:order>` / `<dcsset:filter>` items, `<comparisonType>`, `<orderType>`, right-hand values, `<settingsVariant>` names). Matching is **purely textual and NOT ru/en dialect-aware**; each match is a single line (a pattern spanning lines will not match).
 
-To EDIT a schema (add datasets / fields / selection / order / filter / variants) use `create_metadata` by FQN, not this tool.
+To EDIT a schema (add datasets / fields / parameters / calculated fields) use `modify_metadata`'s `dcs` payload on the owning Report FQN (currently the only supported DCS authoring surface) - not this tool.
 
 ## Parameter details
 - `projectName` (required) - EDT project name.
