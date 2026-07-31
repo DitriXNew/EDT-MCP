@@ -151,7 +151,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.foo"), null, shown, filteredOut); //$NON-NLS-1$
+            singleton("catalog.foo"), null, null, shown, filteredOut); //$NON-NLS-1$
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -168,7 +168,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, shown, filteredOut);
+            Collections.emptySet(), null, null, shown, filteredOut);
 
         assertNotNull(error);
         assertEquals("<unresolved: Proj>", error.objectPresentation); //$NON-NLS-1$
@@ -188,7 +188,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, shown, filteredOut);
+            Collections.emptySet(), null, null, shown, filteredOut);
 
         assertNotNull(error);
         assertEquals("Catalog.Foo", error.objectPresentation); //$NON-NLS-1$
@@ -206,7 +206,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.foo"), null, shown, filteredOut); //$NON-NLS-1$
+            singleton("catalog.foo"), null, null, shown, filteredOut); //$NON-NLS-1$
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -224,7 +224,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, MarkerSeverity.MAJOR, null,
-            Collections.emptySet(), null, shown, filteredOut);
+            Collections.emptySet(), null, null, shown, filteredOut);
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -238,7 +238,7 @@ public class GetProjectErrorsToolTest
         when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.foo"), null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            singleton("catalog.foo"), null, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNotNull(error);
     }
@@ -250,7 +250,7 @@ public class GetProjectErrorsToolTest
         when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.bar"), null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            singleton("catalog.bar"), null, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNull(error);
     }
@@ -262,7 +262,7 @@ public class GetProjectErrorsToolTest
         when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, "su2",
-            Collections.emptySet(), null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            Collections.emptySet(), null, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNotNull(error);
     }
@@ -284,7 +284,7 @@ public class GetProjectErrorsToolTest
         when(repo.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, "temp",
-            Collections.emptySet(), repo, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            Collections.emptySet(), repo, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNotNull(error);
         assertEquals("SU23", error.checkCode); //$NON-NLS-1$
@@ -300,7 +300,7 @@ public class GetProjectErrorsToolTest
 
         // checkId does not match -> null before the presentation is read; no counter touched.
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, "zzz",
-            Collections.emptySet(), null, shown, filteredOut); //$NON-NLS-1$
+            Collections.emptySet(), null, null, shown, filteredOut); //$NON-NLS-1$
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -450,7 +450,7 @@ public class GetProjectErrorsToolTest
             "platform:/resource/Proj/src/CommonModules/MyModule/Module.bsl#/0", "13")); //$NON-NLS-1$ //$NON-NLS-2$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, new int[]{0}, new int[]{0});
+            Collections.emptySet(), null, null, new int[]{0}, new int[]{0});
 
         assertNotNull(error);
         assertEquals("CommonModules/MyModule/Module.bsl", error.modulePath); //$NON-NLS-1$
@@ -466,7 +466,7 @@ public class GetProjectErrorsToolTest
         // getExtraInfo() is left unstubbed -> returns null -> no locator.
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, new int[]{0}, new int[]{0});
+            Collections.emptySet(), null, null, new int[]{0}, new int[]{0});
 
         assertNotNull(error);
         assertNull(error.modulePath);
