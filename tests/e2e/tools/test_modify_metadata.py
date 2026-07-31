@@ -533,6 +533,89 @@ def test_modify_form_command_title():
     poll_diff_contains("Refresh now", ctx="the command title must land in the .form on disk")
 
 
+# ── Ergonomic addressing: short name / dotted path (resolveMemberFqn) ────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_member_by_short_name():
+    # A member leaf may be a SHORT NAME (no Kind token): resolveMemberFqn canonicalizes
+    # '...Form.ItemForm.ErgFld' -> '...Form.ItemForm.Field.ErgFld' before the normal modify runs.
+    _seed_form_field("ErgAttr", "ErgFld")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.ErgFld",
+        "properties": [{"name": "title", "value": "Ergo short name", "language": "en"}],
+    })
+    assert_ok(r, "modify a form field addressed by its short name (no Kind token)")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    assert (r.structured.get("fqn") or "").endswith("Field.ErgFld"), \
+        "the short name must be canonicalized to the Field FQN: %r" % (r.structured,)
+    assert "title" in (r.structured.get("applied") or []), "title must be applied: %r" % (r.structured,)
+    poll_diff_contains("Ergo short name",
+                       ctx="a short-name-addressed field title must land in the .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_member_by_dotted_path():
+    # A DOTTED PATH resolves the leaf segment-by-segment as direct children, disambiguating a name
+    # that may repeat across groups. Build a nested field (seed at root, then move into the group via
+    # the proven 'parent' move), then address it as 'PathGrp.PathFld' (no Kind token).
+    _seed_form_group("PathGrp")
+    _seed_form_field("PathAttr", "PathFld")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.PathFld",
+        "properties": [{"name": "parent", "value": "PathGrp"}]})
+    assert_ok(r, "nest the field under the group")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.PathGrp.PathFld",
+        "properties": [{"name": "title", "value": "Ergo dotted path", "language": "en"}]})
+    assert_ok(r, "modify a nested field addressed by a dotted path")
+    assert (r.structured.get("fqn") or "").endswith("Field.PathFld"), \
+        "the dotted path must canonicalize to the Field FQN: %r" % (r.structured,)
+    assert "title" in (r.structured.get("applied") or []), "title must be applied: %r" % (r.structured,)
+    poll_diff_contains("Ergo dotted path",
+                       ctx="a path-addressed field title must land in the .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_ambiguous_short_name_lists_matches():
+    # Two members share the 'Sum' suffix and there is no exact 'Sum'; the short name is ambiguous, so
+    # the modify is REJECTED with the candidate FQNs in multipleMatches and nothing is written.
+    for cmd in ("GoodsSum", "TotalSum"):
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+        assert_ok(r, "seed form command " + cmd)
+        wait_for_project_ready()
+    # The seeding above legitimately dirties the form; snapshot it so we assert the AMBIGUOUS modify
+    # itself writes nothing (it is rejected at resolution, before any mutation).
+    after_setup = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Sum",
+        "properties": [{"name": "title", "value": "ignored", "language": "en"}],
+    })
+    e = assert_error(r, "ambiguous short name")
+    assert_error_quality(e, names=["Sum"], suggests=["ambiguous", "match"],
+                         ctx="an ambiguous short name must say so")
+    matches = r.structured.get("multipleMatches") or []
+    assert len(matches) == 2, "must list both candidate FQNs: %r" % (r.structured,)
+    assert any(m.endswith("Command.GoodsSum") for m in matches), "GoodsSum candidate missing: %r" % matches
+    assert any(m.endswith("Command.TotalSum") for m in matches), "TotalSum candidate missing: %r" % matches
+    assert_tree_unchanged(after_setup, "an ambiguous-addressed modify must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_short_name_not_found_is_error():
+    # A short name that matches no member (after the suffix fallback) is rejected as not-found,
+    # distinct from a missing CANONICAL Kind.Name FQN.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.NoSuchErgoMember_zz",
+        "properties": [{"name": "title", "value": "ignored", "language": "en"}],
+    })
+    e = assert_error(r, "short name not found")
+    assert_error_quality(e, names=["NoSuchErgoMember_zz"], suggests=["not found"],
+                         ctx="an unknown short name must report not-found")
+    assert_no_diff("a rejected ergonomic modify must change nothing")
+
+
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_move_form_button_into_auto_command_bar():
     # Reparent an EXISTING button into the form's command bar via the 'parent' property - the move

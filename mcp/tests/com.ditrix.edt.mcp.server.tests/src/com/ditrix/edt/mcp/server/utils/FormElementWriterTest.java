@@ -38,6 +38,7 @@ import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormElementMatch;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.Kind;
@@ -2219,6 +2220,197 @@ public class FormElementWriterTest
     }
 
     // ==================== dynamic form-like EMF metamodel ====================
+
+    // ---- ergonomic name/path resolution (resolveElementRef) --------------------------------------
+
+    @Test
+    public void testResolveExactItemAcrossTree()
+    {
+        EObject form = newForm();
+        EObject group = addRootItem(form, MODEL.formGroup, "Header"); //$NON-NLS-1$
+        EObject price = addChildItem(group, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Price"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(price, matches.get(0).element);
+        assertEquals("Price", matches.get(0).name); //$NON-NLS-1$
+        assertEquals("Field", matches.get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveExactAttributeAndCommand()
+    {
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        addFormCmd(form, "Refresh"); //$NON-NLS-1$
+        List<FormElementMatch> attr = FormElementWriter.resolveElementRef(form, "Sum"); //$NON-NLS-1$
+        assertEquals(1, attr.size());
+        assertEquals("Attribute", attr.get(0).kindToken); //$NON-NLS-1$
+        List<FormElementMatch> command = FormElementWriter.resolveElementRef(form, "Refresh"); //$NON-NLS-1$
+        assertEquals(1, command.size());
+        assertEquals("Command", command.get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveSuffixFallbackWhenNoExact()
+    {
+        EObject form = newForm();
+        // The platform prefixes a created button, so the short name 'Add' must fall back to 'FormAdd'.
+        EObject formAdd = addRootItem(form, formEClass("Button"), "FormAdd"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Add"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(formAdd, matches.get(0).element);
+        assertEquals("Button", matches.get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveExactBeatsSuffix()
+    {
+        EObject form = newForm();
+        EObject exact = addRootItem(form, formEClass("FormField"), "Sum"); //$NON-NLS-1$ //$NON-NLS-2$
+        addRootItem(form, formEClass("FormField"), "GoodsSum"); //$NON-NLS-1$ //$NON-NLS-2$
+        // An exact match wins outright; the suffix fallback is NOT applied when an exact match exists.
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Sum"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(exact, matches.get(0).element);
+    }
+
+    @Test
+    public void testResolveAmbiguousReturnsAllCandidates()
+    {
+        EObject form = newForm();
+        addRootItem(form, formEClass("FormField"), "GoodsSum"); //$NON-NLS-1$ //$NON-NLS-2$
+        addRootItem(form, formEClass("FormField"), "TotalSum"); //$NON-NLS-1$ //$NON-NLS-2$
+        // No exact 'Sum'; two suffix matches -> the caller surfaces a multipleMatches.
+        assertEquals(2, FormElementWriter.resolveElementRef(form, "Sum").size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveDottedPathDisambiguates()
+    {
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        EObject goodsTotal = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = addRootItem(form, MODEL.formGroup, "Other"); //$NON-NLS-1$
+        addChildItem(other, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The bare name is ambiguous (two 'Total's); the path resolves the exact one.
+        assertEquals(2, FormElementWriter.resolveElementRef(form, "Total").size()); //$NON-NLS-1$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Goods.Total"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(goodsTotal, matches.get(0).element);
+    }
+
+    @Test
+    public void testResolvePathToleratesLeadingFormNameQualifier()
+    {
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        EObject total = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<FormElementMatch> matches =
+            FormElementWriter.resolveElementRef(form, "ItemForm.Goods.Total"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(total, matches.get(0).element);
+    }
+
+    @Test
+    public void testResolveRussianName()
+    {
+        EObject form = newForm();
+        String summa = fromCp(0x0421, 0x0443, 0x043c, 0x043c, 0x0430); // Summa
+        addFormAttr(form, summa);
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, summa);
+        assertEquals(1, matches.size());
+        assertEquals("Attribute", matches.get(0).kindToken); //$NON-NLS-1$
+        assertEquals(summa, matches.get(0).name);
+    }
+
+    @Test
+    public void testResolveNotFound()
+    {
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        assertTrue(FormElementWriter.resolveElementRef(form, "Nope").isEmpty()); //$NON-NLS-1$
+        assertTrue(FormElementWriter.resolveElementRef(form, "").isEmpty()); //$NON-NLS-1$
+        assertTrue(FormElementWriter.resolveElementRef(form, null).isEmpty());
+    }
+
+    @Test
+    public void testResolveKindTokensByEClass()
+    {
+        EObject form = newForm();
+        addRootItem(form, MODEL.formGroup, "Grp"); //$NON-NLS-1$
+        addRootItem(form, MODEL.table, "Tbl"); //$NON-NLS-1$
+        addRootItem(form, MODEL.decoration, "Dec"); //$NON-NLS-1$
+        assertEquals("Group", FormElementWriter.resolveElementRef(form, "Grp").get(0).kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Table", FormElementWriter.resolveElementRef(form, "Tbl").get(0).kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Decoration", //$NON-NLS-1$
+            FormElementWriter.resolveElementRef(form, "Dec").get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testIsCanonicalLeaf()
+    {
+        // A canonical Kind.Name (real kind) or a handler ref needs no name/path resolution.
+        assertTrue(FormElementWriter.isCanonicalLeaf(new String[] { "Field", "Price" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(FormElementWriter.isCanonicalLeaf(new String[] { "Attribute", "Sum" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(FormElementWriter.isCanonicalLeaf(new String[] { "Handler", "OnOpen" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(FormElementWriter.isCanonicalLeaf(
+            new String[] { "Field", "Price", "Handler", "OnChange" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // A short name or a dotted path is NOT canonical -> ergonomic resolution is needed.
+        assertFalse(FormElementWriter.isCanonicalLeaf(new String[] { "Price" })); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isCanonicalLeaf(new String[] { "Header", "Price" })); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFindExactMember()
+    {
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        addFormCmd(form, "Refresh"); //$NON-NLS-1$
+        EObject grp = addRootItem(form, MODEL.formGroup, "Header"); //$NON-NLS-1$
+        addChildItem(grp, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Exact match across attributes / commands / the items tree, with the element's actual kind.
+        assertEquals("Attribute", FormElementWriter.findExactMember(form, "Sum").kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Command", FormElementWriter.findExactMember(form, "refresh").kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Field", FormElementWriter.findExactMember(form, "Price").kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        // EXACT only — a suffix is NOT a match (unlike resolveElementRef's fallback); misses are null.
+        assertNull(FormElementWriter.findExactMember(form, "um")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExactMember(form, "Nope")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExactMember(form, null));
+    }
+
+    private static EObject addRootItem(EObject form, EClass type, String name)
+    {
+        return addChildItem(form, type, name);
+    }
+
+    private static EObject addChildItem(EObject parent, EClass type, String name)
+    {
+        EObject item = newObject(type);
+        item.eSet(feature(item, "name"), name); //$NON-NLS-1$
+        addTo(parent, "items", item); //$NON-NLS-1$
+        return item;
+    }
+
+    private static EObject addFormAttr(EObject form, String name)
+    {
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), name); //$NON-NLS-1$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return attribute;
+    }
+
+    private static EObject addFormCmd(EObject form, String name)
+    {
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), name); //$NON-NLS-1$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+        return command;
+    }
+
+    private static EClass formEClass(String name)
+    {
+        return (EClass)MODEL.form.getEPackage().getEClassifier(name);
+    }
 
     private static final FormLikeModel MODEL = new FormLikeModel();
 

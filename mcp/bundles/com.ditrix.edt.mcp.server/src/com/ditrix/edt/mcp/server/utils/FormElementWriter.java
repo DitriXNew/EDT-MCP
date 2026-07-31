@@ -4167,6 +4167,441 @@ public final class FormElementWriter
         return findFormItem(formModel, ref.name);
     }
 
+    // ---- ergonomic name/path resolution (address a form member by short name or dotted path) -------
+
+    /**
+     * One candidate from ergonomic name/path resolution: the resolved element plus its canonical
+     * English kind token (the {@code Attribute}/{@code Command}/{@code Field}/{@code Button}/
+     * {@code Group}/{@code Decoration}/{@code Table} token a member FQN uses) and its actual
+     * programmatic name. The kind token re-resolves the SAME element through
+     * {@link #resolveFormMember}, so a caller can synthesize a canonical member FQN from it.
+     */
+    public static final class FormElementMatch
+    {
+        /** The resolved form element. */
+        public final EObject element;
+        /** The element's canonical English kind token (a valid {@link #kindForToken} input). */
+        public final String kindToken;
+        /** The element's actual programmatic name (post platform prefixing). */
+        public final String name;
+
+        FormElementMatch(EObject element, String kindToken, String name)
+        {
+            this.element = element;
+            this.kindToken = kindToken;
+            this.name = name;
+        }
+    }
+
+    /**
+     * Resolves a form ELEMENT reference - a short name ({@code Sum}) or a dotted path
+     * ({@code Goods.Total}, {@code ItemForm.Header.Code}) - against the editable form content model,
+     * returning ALL candidates so the caller can tell apart not-found (0 results), resolved (exactly 1)
+     * and ambiguous (&gt;1, surfaced to the caller as a {@code multipleMatches}). A dotted path is
+     * resolved segment by segment as DIRECT children (a leading form-name qualifier is tolerated) and
+     * yields at most one candidate. A short name is matched EXACTLY (case-insensitive) across the
+     * attributes, the form commands and the whole items tree; only when nothing matches exactly is a
+     * SUFFIX fallback tried (an element whose name ends with the reference - the platform often
+     * prefixes a created element, e.g. {@code Add} -&gt; {@code FormAdd}). Pure: reads only
+     * {@code formModel}. Call on the (tx-bound or headless) content form.
+     */
+    public static List<FormElementMatch> resolveElementRef(EObject formModel, String elementRef)
+    {
+        if (formModel == null || elementRef == null)
+        {
+            return Collections.emptyList();
+        }
+        String ref = elementRef.trim();
+        if (ref.isEmpty())
+        {
+            return Collections.emptyList();
+        }
+        if (ref.indexOf('.') >= 0)
+        {
+            EObject byPath = resolveElementPath(formModel, ref);
+            return byPath == null ? Collections.emptyList() : Collections.singletonList(matchFor(byPath));
+        }
+        List<FormElementMatch> exact = collectMatches(formModel, ref, false);
+        if (!exact.isEmpty())
+        {
+            return exact;
+        }
+        return collectMatches(formModel, ref, true);
+    }
+
+    /**
+     * The form member with EXACTLY this name (case-insensitive) across the attributes, the form
+     * commands and the whole items tree, or {@code null}. This is the create-time existence namespace
+     * (a new member is rejected when a name collides anywhere in it), so it pairs with
+     * {@code create_metadata}'s upsert (idempotent create). Unlike {@link #resolveElementRef} it does
+     * NOT fall back to a suffix match - existence must be exact. Pure: reads only {@code formModel}.
+     */
+    public static FormElementMatch findExactMember(EObject formModel, String name)
+    {
+        if (formModel == null || name == null)
+        {
+            return null;
+        }
+        List<FormElementMatch> exact = collectMatches(formModel, name.trim(), false);
+        return exact.isEmpty() ? null : exact.get(0);
+    }
+
+    /** Builds a {@link FormElementMatch} for an already-resolved element (computes its kind token). */
+    private static FormElementMatch matchFor(EObject element)
+    {
+        return new FormElementMatch(element, kindTokenOf(element), stringFeature(element, FEATURE_NAME));
+    }
+
+    /**
+     * Collects every form element (attribute, form command, or item anywhere in the items tree) whose
+     * name matches {@code ref} - exactly (case-insensitive) when {@code suffix} is false, or ending
+     * with {@code ref} when {@code suffix} is true. Each matched element appears once.
+     */
+    private static List<FormElementMatch> collectMatches(EObject formModel, String ref, boolean suffix)
+    {
+        List<FormElementMatch> matches = new ArrayList<>();
+        for (EObject attribute : referenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            addIfNameMatches(matches, attribute, ref, suffix);
+        }
+        for (EObject command : referenceList(formModel, FEATURE_FORM_COMMANDS))
+        {
+            addIfNameMatches(matches, command, ref, suffix);
+        }
+        EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
+        if (formItem instanceof EClass)
+        {
+            collectItemsInto(formModel, ref, suffix, (EClass)formItem, matches);
+        }
+        return matches;
+    }
+
+    /** Depth-first walk of all contained {@code FormItem}s (descending only through items, like
+     * {@link #findItemIn}), adding each name match to {@code matches}. */
+    private static void collectItemsInto(EObject container, String ref, boolean suffix, EClass formItem,
+        List<FormElementMatch> matches)
+    {
+        for (EObject child : container.eContents())
+        {
+            if (!formItem.isInstance(child))
+            {
+                continue;
+            }
+            addIfNameMatches(matches, child, ref, suffix);
+            collectItemsInto(child, ref, suffix, formItem, matches);
+        }
+    }
+
+    /** Adds a {@link FormElementMatch} for {@code element} when its name matches {@code ref}
+     * (exact, or by suffix when {@code suffix} is true), case-insensitively. */
+    private static void addIfNameMatches(List<FormElementMatch> matches, EObject element, String ref,
+        boolean suffix)
+    {
+        String name = stringFeature(element, FEATURE_NAME);
+        if (name == null)
+        {
+            return;
+        }
+        boolean hit = suffix ? name.toLowerCase().endsWith(ref.toLowerCase()) : name.equalsIgnoreCase(ref);
+        if (hit)
+        {
+            matches.add(matchFor(element));
+        }
+    }
+
+    /**
+     * The canonical English kind token of a resolved form element, by its EClass: an attribute, a form
+     * command, or a visual item (Table / Group / Button / Decoration / Field). The token re-resolves
+     * the SAME element through {@link #resolveFormMember} (Table / Group / Button / Decoration / Field
+     * all route through the items tree, so the precise item token only matters to the kind-specific
+     * branches - a button's command, a dynamic-list attribute - of the caller).
+     */
+    private static String kindTokenOf(EObject element)
+    {
+        EPackage pkg = element.eClass().getEPackage();
+        if (isInstanceOf(element, pkg, ECLASS_ABSTRACT_FORM_ATTRIBUTE))
+        {
+            return "Attribute"; //$NON-NLS-1$
+        }
+        if (isInstanceOf(element, pkg, ECLASS_FORM_COMMAND))
+        {
+            return "Command"; //$NON-NLS-1$
+        }
+        if (isInstanceOf(element, pkg, ECLASS_TABLE))
+        {
+            return "Table"; //$NON-NLS-1$
+        }
+        if (isInstanceOf(element, pkg, ECLASS_FORM_GROUP))
+        {
+            return "Group"; //$NON-NLS-1$
+        }
+        if (isInstanceOf(element, pkg, ELEM_BUTTON))
+        {
+            return ELEM_BUTTON;
+        }
+        if (isInstanceOf(element, pkg, ECLASS_DECORATION))
+        {
+            return "Decoration"; //$NON-NLS-1$
+        }
+        return "Field"; //$NON-NLS-1$
+    }
+
+    /** Whether {@code element} is an instance of the form-package EClass named {@code eClassName}. */
+    private static boolean isInstanceOf(EObject element, EPackage pkg, String eClassName)
+    {
+        EClassifier classifier = pkg != null ? pkg.getEClassifier(eClassName) : null;
+        return classifier instanceof EClass && ((EClass)classifier).isInstance(element);
+    }
+
+    /**
+     * Resolves a dotted PATH ({@code Goods.Total}, {@code ItemForm.Header.Code}) to a single element by
+     * walking DIRECT children segment by segment - a top-level segment matches an attribute, a form
+     * command or a top item; a nested segment matches a child item of the current container. An
+     * unrecognized FIRST segment is tolerated as a form-name qualifier. Returns the element, or
+     * {@code null} when a segment does not resolve.
+     */
+    private static EObject resolveElementPath(EObject formModel, String path)
+    {
+        String[] segments = path.split("\\."); //$NON-NLS-1$
+        EObject current = null; // null == at the form root
+        for (int i = 0; i < segments.length; i++)
+        {
+            EObject child = directChild(formModel, current, segments[i].trim());
+            if (child == null)
+            {
+                // Tolerate a leading form-name qualifier (a path may start with the form's own name).
+                if (i == 0)
+                {
+                    continue;
+                }
+                return null;
+            }
+            current = child;
+        }
+        return current;
+    }
+
+    /**
+     * The DIRECT child named {@code name} (case-insensitive) of {@code parent}, or - when {@code parent}
+     * is {@code null} - of the form root (a top-level item, attribute or form command). A non-root
+     * parent is searched only among its child items.
+     */
+    private static EObject directChild(EObject formModel, EObject parent, String name)
+    {
+        if (parent == null)
+        {
+            EObject attribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), name);
+            if (attribute != null)
+            {
+                return attribute;
+            }
+            EObject command = findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), name);
+            if (command != null)
+            {
+                return command;
+            }
+            return findByName(referenceList(formModel, FEATURE_ITEMS), name);
+        }
+        return findByName(referenceList(parent, FEATURE_ITEMS), name);
+    }
+
+    /**
+     * The outcome of resolving a (possibly ergonomic) form-member FQN to a canonical one (see
+     * {@link #resolveMemberFqn}). Exactly one outcome holds: {@link #notForm} (not a form-member
+     * address - the caller resolves it as a metadata object), a non-null {@link #formError} (the form
+     * itself did not resolve - a ready JSON error), a non-null {@link #multipleMatches} (the leaf is
+     * ambiguous - ready candidate FQNs), {@link #notFound} (form resolved but no such element), or a
+     * non-null {@link #canonicalFqn} (resolved, or already canonical).
+     */
+    public static final class MemberFqnResolution
+    {
+        /** The canonical {@code Type.Object.Form.F.Kind.Name} FQN (unchanged when already canonical),
+         * or {@code null} for a non-resolved outcome. */
+        public final String canonicalFqn;
+        /** Ready candidate FQNs when the leaf is ambiguous, or {@code null}. */
+        public final List<String> multipleMatches;
+        /** Whether the FQN does not address a form member at all (the caller resolves it as an object). */
+        public final boolean notForm;
+        /** Whether the form resolved but no element matched the short name / path. */
+        public final boolean notFound;
+        /** The short name / dotted path that was looked up (for the caller's messages). */
+        public final String elementRef;
+        /** The user-facing form prefix ({@code Type.Object.Form.F} / {@code CommonForm.F}), for messages. */
+        public final String formPrefix;
+        /** A ready JSON error when the FORM itself did not resolve, or {@code null}. */
+        public final String formError;
+
+        private MemberFqnResolution(String canonicalFqn, List<String> multipleMatches, boolean notForm,
+            boolean notFound, String elementRef, String formPrefix, String formError)
+        {
+            this.canonicalFqn = canonicalFqn;
+            this.multipleMatches = multipleMatches;
+            this.notForm = notForm;
+            this.notFound = notFound;
+            this.elementRef = elementRef;
+            this.formPrefix = formPrefix;
+            this.formError = formError;
+        }
+
+        static MemberFqnResolution notFormAddress()
+        {
+            return new MemberFqnResolution(null, null, true, false, null, null, null);
+        }
+
+        static MemberFqnResolution canonical(String fqn)
+        {
+            return new MemberFqnResolution(fqn, null, false, false, null, null, null);
+        }
+
+        static MemberFqnResolution ambiguous(List<String> matches, String elementRef, String formPrefix)
+        {
+            return new MemberFqnResolution(null, matches, false, false, elementRef, formPrefix, null);
+        }
+
+        static MemberFqnResolution notFound(String elementRef, String formPrefix)
+        {
+            return new MemberFqnResolution(null, null, false, true, elementRef, formPrefix, null);
+        }
+
+        static MemberFqnResolution formError(String errorJson)
+        {
+            return new MemberFqnResolution(null, null, false, false, null, null, errorJson);
+        }
+    }
+
+    /**
+     * Resolves a possibly-ERGONOMIC form-member FQN to a canonical {@code Type.Object.Form.F.Kind.Name}
+     * (or {@code CommonForm.F.Kind.Name}) FQN. The member leaf may already be a canonical
+     * {@code Kind.Name} / handler ref (returned unchanged, no form opened), or a SHORT NAME / DOTTED
+     * PATH ({@code ...Form.F.Price} / {@code ...Form.F.Header.Price}) - which is resolved against the
+     * form's element tree via {@link #resolveElementRef} (opening the form READ-ONLY). See
+     * {@link MemberFqnResolution} for the outcomes; a non-form FQN returns
+     * {@link MemberFqnResolution#notFormAddress()} so the caller can resolve it as a metadata object.
+     */
+    public static MemberFqnResolution resolveMemberFqn(IProject project, Configuration config, String normFqn)
+    {
+        FormAddress address = parseFormAddress(normFqn);
+        if (address == null)
+        {
+            return MemberFqnResolution.notFormAddress();
+        }
+        if (isCanonicalLeaf(address.remainder))
+        {
+            return MemberFqnResolution.canonical(normFqn);
+        }
+        final String elementRef = String.join(".", address.remainder); //$NON-NLS-1$
+        List<String[]> found;
+        try
+        {
+            FormEditContext editCtx = resolveForEdit(project, config, address.formPath,
+                ToolResult.error("Form not found for '" + normFqn //$NON-NLS-1$
+                    + "'. Address a form member as 'Type.Object.Form.FormName.<name or path>' or " //$NON-NLS-1$
+                    + "'CommonForm.FormName.<name or path>'.").toJson());
+            // Resolve inside a READ transaction and return only the (kindToken, name) Strings - never a
+            // transaction-bound EObject - so nothing detached leaks out of the transaction.
+            found = readEditableForm(editCtx, "ResolveFormMember", (formModel, tx) -> //$NON-NLS-1$
+            {
+                List<String[]> pairs = new ArrayList<>();
+                for (FormElementMatch match : resolveElementRef(formModel, elementRef))
+                {
+                    pairs.add(new String[] { match.kindToken, match.name });
+                }
+                return pairs;
+            });
+        }
+        catch (Exception e)
+        {
+            String json = FormValidationException.jsonOf(e);
+            if (json != null)
+            {
+                return MemberFqnResolution.formError(json);
+            }
+            Activator.logError("Error resolving a form member by name", e); //$NON-NLS-1$
+            return MemberFqnResolution.formError(ToolResult.error(
+                "Failed to resolve the form member '" + elementRef + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + e.getMessage()).toJson());
+        }
+        if (found.isEmpty())
+        {
+            return MemberFqnResolution.notFound(elementRef, address.userPrefix);
+        }
+        if (found.size() > 1)
+        {
+            List<String> fqns = new ArrayList<>();
+            for (String[] pair : found)
+            {
+                fqns.add(address.userPrefix + "." + pair[0] + "." + pair[1]); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return MemberFqnResolution.ambiguous(fqns, elementRef, address.userPrefix);
+        }
+        String[] only = found.get(0);
+        return MemberFqnResolution.canonical(address.userPrefix + "." + only[0] + "." + only[1]); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A FQN split into its form prefix + member-leaf remainder (see {@link #parseFormAddress}). */
+    private static final class FormAddress
+    {
+        /** The canonical {@code Type.Object.forms.FormName} / {@code CommonForm.Name} form path. */
+        final String formPath;
+        /** The user-facing {@code Type.Object.Form.FormName} / {@code CommonForm.FormName} prefix. */
+        final String userPrefix;
+        /** The member-leaf tokens (length &gt;= 1): a {@code Kind.Name}, a short name, or a path. */
+        final String[] remainder;
+
+        FormAddress(String formPath, String userPrefix, String[] remainder)
+        {
+            this.formPath = formPath;
+            this.userPrefix = userPrefix;
+            this.remainder = remainder;
+        }
+    }
+
+    /**
+     * Splits a FQN into its form prefix + member-leaf remainder, or {@code null} when it does not
+     * address a form member: {@code Type.Object.Form(s).FormName.<remainder...>} (&gt;= 5 parts) or
+     * {@code CommonForm.FormName.<remainder...>} (&gt;= 3 parts). A 4-part form OBJECT FQN (no leaf) is
+     * not a member address and returns {@code null}.
+     */
+    private static FormAddress parseFormAddress(String normFqn)
+    {
+        if (normFqn == null)
+        {
+            return null;
+        }
+        String[] p = normFqn.split("\\."); //$NON-NLS-1$
+        if (p.length >= 5 && isFormToken(p[2]))
+        {
+            String userPrefix = p[0] + "." + p[1] + "." + p[2] + "." + p[3]; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return new FormAddress(formPathOf(p[0], p[1], p[3]), userPrefix,
+                java.util.Arrays.copyOfRange(p, 4, p.length));
+        }
+        if (p.length >= 3 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
+        {
+            return new FormAddress(p[0] + "." + p[1], p[0] + "." + p[1], //$NON-NLS-1$ //$NON-NLS-2$
+                java.util.Arrays.copyOfRange(p, 2, p.length));
+        }
+        return null;
+    }
+
+    /**
+     * Whether the member-leaf tokens are ALREADY a canonical ref that {@link #parse} handles directly -
+     * a {@code Kind.Name} with a real kind, a form-level {@code Handler.Event}, or an item-level
+     * {@code ItemKind.ItemName.Handler.Event} - and so need no name/path resolution. Package-visible
+     * for the headless unit test.
+     */
+    static boolean isCanonicalLeaf(String[] remainder)
+    {
+        if (remainder.length == 2)
+        {
+            return kindForToken(remainder[0]) != null || isHandlerToken(remainder[0]);
+        }
+        if (remainder.length == 4)
+        {
+            return isHandlerToken(remainder[2]);
+        }
+        return false;
+    }
+
     /**
      * Finds the event handler bound to {@code eventName} (English or Russian, case-insensitive) on
      * {@code container} (the form root or a form item), or {@code null}. Used to delete a handler by
@@ -4358,24 +4793,14 @@ public final class FormElementWriter
     /** The value of a single-valued EReference, or {@code null} when absent/unset/not a reference. */
     private static EObject singleReference(EObject owner, String featureName)
     {
-        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
-        if (!(feature instanceof EReference) || feature.isMany())
-        {
-            return null;
-        }
-        Object value = owner.eGet(feature);
-        return value instanceof EObject ? (EObject)value : null;
+        return EmfReflect.singleReference(owner, featureName);
     }
 
     /** Sets a single-valued EReference by feature name; a no-op when the feature is absent / not a
      * single-valued reference or {@code value} is {@code null} (best-effort, like the other setters). */
     private static void setSingleReference(EObject owner, String featureName, EObject value)
     {
-        EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
-        if (feature instanceof EReference && !feature.isMany() && value != null)
-        {
-            owner.eSet(feature, value);
-        }
+        EmfReflect.setSingleReference(owner, featureName, value);
     }
 
     /** The literal of a set EEnum attribute (e.g. a group's {@code type}), or {@code null}. */
@@ -4471,12 +4896,7 @@ public final class FormElementWriter
     @SuppressWarnings("unchecked")
     private static void addToList(EObject container, String featureName, EObject element)
     {
-        EStructuralFeature feature = container.eClass().getEStructuralFeature(featureName);
-        if (!(feature instanceof EReference) || !feature.isMany())
-        {
-            throw new IllegalArgumentException("Form feature '" + featureName + "' is not a list"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        ((EList<EObject>)container.eGet(feature)).add(element);
+        EmfReflect.addToList(container, featureName, element);
     }
 
     private static void recordKind(EObject element, String[] createdKind)
@@ -4503,29 +4923,17 @@ public final class FormElementWriter
 
     private static void setStringFeature(EObject object, String featureName, String value)
     {
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature != null)
-        {
-            object.eSet(feature, value);
-        }
+        EmfReflect.setString(object, featureName, value);
     }
 
     private static void setBooleanFeature(EObject object, String featureName, boolean value)
     {
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature != null)
-        {
-            object.eSet(feature, Boolean.valueOf(value));
-        }
+        EmfReflect.setBoolean(object, featureName, value);
     }
 
     private static void setIntFeature(EObject object, String featureName, int value)
     {
-        EStructuralFeature feature = object.eClass().getEStructuralFeature(featureName);
-        if (feature != null)
-        {
-            object.eSet(feature, Integer.valueOf(value));
-        }
+        EmfReflect.setInt(object, featureName, value);
     }
 
     private static void setEnumFeature(EObject object, String featureName, String literal)

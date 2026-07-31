@@ -86,6 +86,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Schema / param key: stale-intent precondition guard. */
     private static final String KEY_EXPECTED_NOT_EXISTS = "expectedNotExists"; //$NON-NLS-1$
 
+    /** Idempotent-create gate: when true, an already-existing FORM member is reported, not an error. */
+    private static final String KEY_UPSERT = "upsert"; //$NON-NLS-1$
+
     /** Schema / param key: register the new form as the owner's default form. */
     private static final String KEY_SET_AS_DEFAULT = "setAsDefault"; //$NON-NLS-1$
 
@@ -118,6 +121,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     /** Output value: the action a successful create reports. */
     private static final String VAL_CREATED = "created"; //$NON-NLS-1$
+
+    /** Output value: an idempotent upsert found the FORM member already present (nothing written). */
+    private static final String VAL_EXISTS = "exists"; //$NON-NLS-1$
 
     /** Error: required EDT services are not available. */
     private static final String ERR_SERVICES_UNAVAILABLE = "Required EDT services not available"; //$NON-NLS-1$
@@ -191,6 +197,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty(KEY_EXPECTED_NOT_EXISTS,
                 "Optional stale-intent guard (default false): assert the node does not yet exist for " //$NON-NLS-1$
                 + "a sharper precondition error. A real duplicate is always rejected anyway.") //$NON-NLS-1$
+            .booleanProperty(KEY_UPSERT,
+                "FORM members only (default false): idempotent create. When the addressed form member " //$NON-NLS-1$
+                + "already exists, return it (action='exists', persisted=false) instead of an error, so " //$NON-NLS-1$
+                + "a create can be re-run safely. To CHANGE an existing member's properties use " //$NON-NLS-1$
+                + "modify_metadata - upsert does not update an existing member.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing " //$NON-NLS-1$
                 + "FQN segment) and in any synonym / comment / predefined-item description value " //$NON-NLS-1$
@@ -262,7 +273,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the node was created", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty(McpKeys.ACTION, "'created' on success") //$NON-NLS-1$
+            .stringProperty(McpKeys.ACTION,
+                "'created' on success, or 'exists' when upsert found a form member already present") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
@@ -301,6 +313,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
         boolean expectedNotExists = JsonUtils.extractBooleanArgument(params, KEY_EXPECTED_NOT_EXISTS, false);
+        boolean upsert = JsonUtils.extractBooleanArgument(params, KEY_UPSERT, false);
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, "normalizeYo", true); //$NON-NLS-1$
         List<JsonObject> properties = JsonUtils.extractObjectArray(params, "properties"); //$NON-NLS-1$
         String callType = JsonUtils.extractStringArgument(params, KEY_CALL_TYPE);
@@ -326,7 +339,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "The FQN '" + fqn + "' is not a form event handler; omit callType.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         String formResult = tryDispatchFormFqn(projectName, normFqn, formRef, properties, params,
-            normReport, callType);
+            normReport, callType, upsert);
         if (formResult != null)
         {
             return formResult;
@@ -446,7 +459,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     private String tryDispatchFormFqn(String projectName, String normFqn,
         FormElementWriter.FormMemberRef formRef, List<JsonObject> properties, Map<String, String> params,
-        MdNameNormalizer.Report normReport, String callType)
+        MdNameNormalizer.Report normReport, String callType, boolean upsert)
     {
         if (formRef != null)
         {
@@ -454,7 +467,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return createFormHandler(projectName, normFqn, formRef, properties, callType);
             }
-            return createFormMember(projectName, normFqn, formRef, properties, normReport);
+            return createFormMember(projectName, normFqn, formRef, properties, normReport, upsert);
         }
 
         // A 4-part form FQN (Type.Object.Form.FormName) addresses the FORM OBJECT itself - neither a
@@ -1181,7 +1194,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     private String createFormMember(String projectName, String normFqn,
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
-        MdNameNormalizer.Report normReport)
+        MdNameNormalizer.Report normReport, boolean upsert)
     {
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
         if (kind == null)
@@ -1227,6 +1240,31 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 ref.formPath, "Form not found for '" + normFqn + "'. Address a form as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
                     + "get_metadata_objects and get_metadata_details."); //$NON-NLS-1$
+
+            // Idempotent create: when upsert is set and a member with this name already exists, report
+            // it (its ACTUAL kind/name) without writing - so a create can be re-run safely. A property
+            // CHANGE on an existing member is modify_metadata's job; upsert does not update it here.
+            // Only the leaf-element names share one namespace, so the existence check is exact.
+            if (upsert)
+            {
+                String[] existing = FormElementWriter.readEditableForm(fctx, "CheckFormMemberExists", //$NON-NLS-1$
+                    (formModel, tx) -> {
+                        FormElementWriter.FormElementMatch m =
+                            FormElementWriter.findExactMember(formModel, ref.name);
+                        return m == null ? null : new String[] { m.kindToken, m.name };
+                    });
+                if (existing != null)
+                {
+                    ToolResult exists = ToolResult.success()
+                        .put(McpKeys.ACTION, VAL_EXISTS)
+                        .put("fqn", normFqn) //$NON-NLS-1$
+                        .put("kind", existing[0]) //$NON-NLS-1$
+                        .put("name", existing[1]) //$NON-NLS-1$
+                        .put(KEY_PERSISTED, false);
+                    return exists.put(McpKeys.MESSAGE,
+                        "Form member already exists (upsert, not modified): " + normFqn).toJson(); //$NON-NLS-1$
+                }
+            }
 
             final String titleLanguage;
             try // NOSONAR nested try is intentional (distinct resource/exception scopes)

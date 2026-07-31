@@ -721,6 +721,39 @@ def test_create_form_object_then_add_member():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_existing_form_member_is_idempotent():
+    # Seed a form command, then create it AGAIN with upsert=true: instead of the "already exists"
+    # error the call succeeds, reports the EXISTING member (action='exists'), and writes nothing.
+    cmd = "UpsertCmd"
+    fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "seed the form command")
+    wait_for_project_ready()
+    before = tree_snapshot()
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "upsert": True})
+    assert_ok(r, "upsert an already-existing form member")
+    assert r.structured.get("action") == "exists", \
+        "upsert on an existing member must report exists: %r" % (r.structured,)
+    assert r.structured.get("persisted") is False, \
+        "an idempotent upsert must write nothing: %r" % (r.structured,)
+    assert r.structured.get("kind") == "Command", "must echo the actual kind: %r" % (r.structured,)
+    assert r.structured.get("name") == cmd, "must echo the actual name: %r" % (r.structured,)
+    assert_tree_unchanged(before, "an idempotent upsert must not mutate the form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_absent_form_member_creates_normally():
+    # When the member does NOT exist, upsert=true behaves exactly like a normal create.
+    cmd = "UpsertNewCmd"
+    fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "upsert": True})
+    assert_ok(r, "upsert-create a new form member")
+    assert r.structured.get("action") == "created", \
+        "a new member must be created, not 'exists': %r" % (r.structured,)
+    poll_diff_contains(cmd, ctx="the upsert-created member must land in the form's Form.form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_table_with_columns_and_additions_issue_177():
     # Issue #177: create a form:Table via create_metadata. The table must be built with its auto
     # columns (a LineNumber column + one InputField per tabular-section attribute) AND the three table
