@@ -295,7 +295,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
         if (formPath != null)
         {
-            String formStructure = renderFormStructure(ctx.config, ctx.bmModel, formPath, ctx.effectiveLanguage);
+            String formStructure =
+                renderFormStructure(ctx.config, ctx.bmModel, formPath, ctx.effectiveLanguage, ctx.includeHelp);
             if (formStructure == null)
             {
                 failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
@@ -1019,7 +1020,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      * content model (empty / legacy / not built) or the BM model is unavailable.
      */
     private static String renderFormStructure(Configuration config, IBmModel bmModel, String formPath,
-        String language)
+        String language, boolean includeHelp)
     {
         if (bmModel == null)
         {
@@ -1032,7 +1033,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
         final long mdFormBmId = ((IBmObject)mdForm).bmGetId();
         final String normalized = MetadataTypeUtils.normalizeFqn(formPath);
-        return BmTransactions.read(bmModel, "GetMetadataDetailsForm", (tx, monitor) -> //$NON-NLS-1$
+        String structure = BmTransactions.read(bmModel, "GetMetadataDetailsForm", (tx, monitor) -> //$NON-NLS-1$
         {
             EObject txMdForm = tx.getObjectById(mdFormBmId);
             if (txMdForm == null)
@@ -1046,6 +1047,14 @@ public class GetMetadataDetailsTool implements IMcpTool
             }
             return FormStructureReader.render(normalized, formModel, language);
         });
+        // The form itself (the BasicForm mdo, resolved above OUTSIDE the transaction) can carry its own
+        // authored Help/<lang>.html, distinct from its owner's - read it the same disk-based way the
+        // generic mdclass branch does, so includeHelp is honored for a form FQN too.
+        if (structure != null && includeHelp)
+        {
+            structure += formatHelp(mdForm);
+        }
+        return structure;
     }
 
     /**

@@ -5,15 +5,17 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.io.File;
 import java.io.FilenameFilter;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.core.resources.IFile;
-import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.dt.core.platform.IResourceLookup;
@@ -63,8 +65,32 @@ public final class ObjectHelpReader
         {
             return Collections.emptyList();
         }
-        File helpDir = helpDir(mdObject);
-        if (helpDir == null || !helpDir.isDirectory())
+        IResourceLookup lookup = ServiceAccess.get(IResourceLookup.class);
+        if (lookup == null)
+        {
+            return Collections.emptyList();
+        }
+        IFile mdo = lookup.getPlatformResource(mdObject);
+        if (mdo == null || mdo.getLocation() == null)
+        {
+            return Collections.emptyList();
+        }
+        IProject project = mdo.getProject();
+        if (project == null || project.getLocation() == null)
+        {
+            return Collections.emptyList();
+        }
+        File helpDir = mdo.getLocation().removeLastSegments(1).append(HELP_DIR).toFile();
+        if (!helpDir.isDirectory())
+        {
+            return Collections.emptyList();
+        }
+        Path projectRoot;
+        try
+        {
+            projectRoot = project.getLocation().toFile().toPath().toRealPath();
+        }
+        catch (IOException e)
         {
             return Collections.emptyList();
         }
@@ -81,7 +107,18 @@ public final class ObjectHelpReader
             String lang = name.substring(0, name.length() - HTML_EXT.length());
             try
             {
-                String html = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+                // toRealPath, not normalize: a help file that is (or sits under) a symlink/junction is
+                // lexically inside the project's Help/ dir while its content may live outside it - follow
+                // the link to see where it ACTUALLY resolves before reading, the same guard GitTool uses
+                // for a pathspec escape.
+                Path real = file.toPath().toRealPath();
+                if (!real.startsWith(projectRoot))
+                {
+                    Activator.logWarning("Skipped an object help page outside the project " //$NON-NLS-1$
+                        + "(symlink escape?): " + file.getAbsolutePath()); //$NON-NLS-1$
+                    continue;
+                }
+                String html = new String(Files.readAllBytes(real), StandardCharsets.UTF_8);
                 String markdown = HtmlToMarkdown.convert(html);
                 if (!markdown.isEmpty())
                 {
@@ -94,22 +131,5 @@ public final class ObjectHelpReader
             }
         }
         return pages;
-    }
-
-    /** The object's on-disk {@code Help} directory (sibling of its {@code .mdo}), or {@code null}. */
-    private static File helpDir(EObject mdObject)
-    {
-        IResourceLookup lookup = ServiceAccess.get(IResourceLookup.class);
-        if (lookup == null)
-        {
-            return null;
-        }
-        IFile mdo = lookup.getPlatformResource(mdObject);
-        if (mdo == null || mdo.getLocation() == null)
-        {
-            return null;
-        }
-        IPath helpPath = mdo.getLocation().removeLastSegments(1).append(HELP_DIR);
-        return helpPath.toFile();
     }
 }
