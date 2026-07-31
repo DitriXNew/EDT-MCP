@@ -2583,6 +2583,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // namespace change - null otherwise, so the cascade below never fires).
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
                     ? ((XDTOPackage)applyTo).getNamespace() : null;
+                localizedReport.rememberPreState(applyTo, changes);
                 for (PreparedChange change : changes)
                 {
                     change.applyTo(applyTo, tx);
@@ -3553,6 +3554,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         // validated. Mixing both in one call routes each change to its correct receiver.
                         EObject holder = hc.onExtInfo
                             ? FormElementWriter.ensureExtInfo(formModel, member) : member;
+                        // BEFORE the write: whether this locale already held text decides if the
+                        // OTHER locales go stale (see LocalizedWriteReport.rememberPreState).
+                        localizedReport.rememberPreState(holder, List.of(hc.change));
                         hc.change.applyTo(holder, tx);
                         applied.add(hc.change.featureName());
                         if (hc.change.isLocalized())
@@ -5410,8 +5414,50 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private final Set<String> languagesUsed = new LinkedHashSet<>();
         private final Set<String> missing = new LinkedHashSet<>();
         private final Set<String> stale = new LinkedHashSet<>();
+        /** (feature, language) pairs that already held text before this call applied anything. */
+        private final Set<String> overwrote = new LinkedHashSet<>();
         private boolean wrote;
         private boolean unusedLocale;
+
+        /**
+         * Records which of the localized changes will OVERWRITE existing text. Call INSIDE the write
+         * transaction, BEFORE the changes are applied.
+         * <p>
+         * The distinction decides whether the OTHER languages went stale. Overwriting the 'en' text
+         * of a property leaves the 'fr' one describing the previous value - that is the case worth
+         * reporting. FILLING IN a previously missing 'fr' does not touch 'en' at all: the English
+         * text is as current as it was, and calling it stale would be an invented warning.
+         *
+         * @param target the object the changes are about to be applied to
+         * @param changes the prepared changes
+         */
+        @SuppressWarnings("unchecked")
+        void rememberPreState(EObject target, List<PreparedChange> changes)
+        {
+            for (PreparedChange change : changes)
+            {
+                if (!change.isLocalized())
+                {
+                    continue;
+                }
+                Object map = target.eGet(change.feature());
+                if (!(map instanceof EMap))
+                {
+                    continue;
+                }
+                String had = ((EMap<String, String>)map).map().get(change.language());
+                if (had != null && !had.isEmpty())
+                {
+                    overwrote.add(preStateKey(change));
+                }
+            }
+        }
+
+        /** Identity of one (feature, language) pair - the granularity staleness is decided at. */
+        private static String preStateKey(PreparedChange change)
+        {
+            return change.feature().getName() + "/" + change.language(); //$NON-NLS-1$
+        }
 
         /**
          * Reads the localized maps of the just-applied changes. Call INSIDE the write transaction,
@@ -5459,12 +5505,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             missing.add(declared);
                         }
                     }
-                    else if (!declared.equals(change.language()))
+                    else if (!declared.equals(change.language()) && overwrote.contains(preStateKey(change)))
                     {
-                        // It HAS text, and this call did not write it: after changing the synonym
-                        // in one language the others still say what the object used to be called.
-                        // That is invisible to a "missing" list - the value is there, it is just
-                        // the OLD one - and it is exactly the case the caller must be told about.
+                        // It HAS text, this call did not write it, and the language it DID write
+                        // already had text of its own: the value CHANGED, so the others now say
+                        // what the object used to be called. Invisible to a "missing" list - the
+                        // value is there, it is just the OLD one. (Had this call merely filled in a
+                        // language that was empty, nothing would have gone stale - see
+                        // rememberPreState.)
                         stale.add(declared);
                     }
                 }

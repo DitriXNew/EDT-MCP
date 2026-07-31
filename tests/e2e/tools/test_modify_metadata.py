@@ -1781,6 +1781,18 @@ def test_modify_reports_the_locales_left_holding_the_previous_text():
     assert_ok(r, "translate both languages in the same call")
     assert "localesStale" not in r.structured, \
         "a language written by the same call is not stale: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # COMPLETING a translation is not the same as changing one: filling a language that was empty
+    # leaves the others exactly as current as they were, so nothing went stale. (The attribute is
+    # used here because its synonym has no text in either language yet.)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute.Attribute",
+        "properties": [{"name": "synonym", "value": "Titre", "language": "fr"}],
+    })
+    assert_ok(r, "fill in a language this property had no text in")
+    assert "localesStale" not in r.structured, \
+        "filling a missing translation must not make the others stale: %r" % (r.structured,)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
