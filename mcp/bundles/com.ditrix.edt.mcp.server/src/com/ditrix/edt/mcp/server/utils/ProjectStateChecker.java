@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.eclipse.core.resources.IProject;
 
 import com._1c.g5.v8.derived.DerivedDataStatus;
@@ -311,44 +314,73 @@ public final class ProjectStateChecker
     }
 
     /**
-     * Waits for every OTHER open EDT project's derived data, until the shared {@code deadline}.
+     * Waits for the other open EDT projects' derived data, until the shared {@code deadline}.
+     * <p>
+     * PARTICIPANTS FIRST, and verified unconditionally. The projects that take part in the cascade
+     * are the ones that extend {@code base}: the rename builds a refactoring for each of them, so
+     * one that is still building is the collision this whole pre-flight exists to prevent. An
+     * unrelated project is drained only with whatever time is left over - it is a courtesy, and it
+     * must never consume the deadline a participant needed, nor decide the answer.
      *
-     * @param except the project already drained by the caller
+     * @param base the project already drained by the caller
      * @param deadline absolute time (ms) the whole drain must not exceed
      * @return the retryable message for a PARTICIPATING extension that is still building (naming
      *         it), or {@code null} when every participant settled
      */
-    private static String drainOtherOpenProjects(IProject except, long deadline)
+    private static String drainOtherOpenProjects(IProject base, long deadline)
     {
         IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
         if (dtProjectManager == null)
         {
             return null;
         }
-        String participantStillBuilding = null;
+        List<IProject> participants = new ArrayList<>();
+        List<IProject> others = new ArrayList<>();
         for (IProject other : org.eclipse.core.resources.ResourcesPlugin.getWorkspace().getRoot()
             .getProjects())
         {
-            long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0)
-            {
-                return participantStillBuilding;
-            }
-            if (other.equals(except) || !other.exists() || !other.isOpen()
+            if (other.equals(base) || !other.exists() || !other.isOpen()
                 || dtProjectManager.getDtProject(other) == null)
             {
                 continue;
             }
-            BuildUtils.waitForDerivedData(other, remaining);
-            if (participantStillBuilding == null && except.equals(
-                ExtensionOriginUtils.resolveBaseProject(other)) && buildingErrorOrNull(other) != null)
+            if (base.equals(ExtensionOriginUtils.resolveBaseProject(other)))
             {
-                participantStillBuilding = "Project '" + other.getName() + "' extends '" //$NON-NLS-1$
-                    + except.getName() + "' and is still building, so it takes part in this " //$NON-NLS-1$
-                    + "cascade with an incomplete index. Please wait and retry."; //$NON-NLS-1$
+                participants.add(other);
+            }
+            else
+            {
+                others.add(other);
             }
         }
-        return participantStillBuilding;
+        drainAll(participants, deadline);
+        drainAll(others, deadline);
+        // Checked AFTER both drains and REGARDLESS of the remaining time: running out of deadline
+        // is not a reason to stop asking whether a participant is ready - it is a reason to say so.
+        for (IProject participant : participants)
+        {
+            if (buildingErrorOrNull(participant) != null)
+            {
+                return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
+                    + "' and is still building, so it takes part in this cascade with an " //$NON-NLS-1$
+                    + "incomplete index. Please wait and retry."; //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /** Drains each project in turn, giving up as soon as the shared deadline is spent. */
+    private static void drainAll(List<IProject> projects, long deadline)
+    {
+        for (IProject project : projects)
+        {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0)
+            {
+                return;
+            }
+            BuildUtils.waitForDerivedData(project, remaining);
+        }
     }
 
     /**
