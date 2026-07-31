@@ -339,7 +339,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "The FQN '" + fqn + "' is not a form event handler; omit callType.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         String formResult = tryDispatchFormFqn(projectName, normFqn, formRef, properties, params,
-            normReport, callType, upsert);
+            normReport, callType, upsert, expectedNotExists);
         if (formResult != null)
         {
             return formResult;
@@ -459,7 +459,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     private String tryDispatchFormFqn(String projectName, String normFqn,
         FormElementWriter.FormMemberRef formRef, List<JsonObject> properties, Map<String, String> params,
-        MdNameNormalizer.Report normReport, String callType, boolean upsert)
+        MdNameNormalizer.Report normReport, String callType, boolean upsert, boolean expectedNotExists)
     {
         if (formRef != null)
         {
@@ -467,7 +467,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return createFormHandler(projectName, normFqn, formRef, properties, callType);
             }
-            return createFormMember(projectName, normFqn, formRef, properties, normReport, upsert);
+            return createFormMember(projectName, normFqn, formRef, properties, normReport, upsert,
+                expectedNotExists);
         }
 
         // A 4-part form FQN (Type.Object.Form.FormName) addresses the FORM OBJECT itself - neither a
@@ -1194,7 +1195,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     private String createFormMember(String projectName, String normFqn,
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
-        MdNameNormalizer.Report normReport, boolean upsert)
+        MdNameNormalizer.Report normReport, boolean upsert, boolean expectedNotExists)
     {
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
         if (kind == null)
@@ -1259,6 +1260,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     });
                 if (existing != null)
                 {
+                    // expectedNotExists asserts absence - it takes PRIORITY over upsert's "return the
+                    // existing member" success, or a caller combining both (a guarded retry that also
+                    // wants idempotent creation) would have its stale-intent guard silently ignored.
+                    if (expectedNotExists)
+                    {
+                        return ToolResult.error("Precondition failed: you set expectedNotExists, but " //$NON-NLS-1$
+                            + normFqn + " already exists. Your snapshot is stale - re-read with " //$NON-NLS-1$
+                            + "get_metadata_details, then update the existing node instead of creating " //$NON-NLS-1$
+                            + "a duplicate.").toJson(); //$NON-NLS-1$
+                    }
                     ToolResult exists = ToolResult.success()
                         .put(McpKeys.ACTION, VAL_EXISTS)
                         .put("fqn", normFqn) //$NON-NLS-1$

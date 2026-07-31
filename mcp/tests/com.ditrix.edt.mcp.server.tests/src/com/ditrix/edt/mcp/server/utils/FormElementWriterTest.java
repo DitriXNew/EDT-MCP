@@ -298,12 +298,32 @@ public class FormElementWriterTest
     }
 
     @Test
-    public void testParseItemLevelNonHandlerReturnsNull()
+    public void testParseAcceptsDottedNameAfterKindWhenNotAHandlerShape()
     {
-        // A 4-token remainder whose third token is NOT a handler token is not a recognized form member.
-        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Command.X")); //$NON-NLS-1$
-        // A 3-token remainder (odd length) is not a recognized form member either.
-        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Handler")); //$NON-NLS-1$
+        // A member Name MAY itself be a dotted PATH (disambiguating duplicate leaf names sharing a
+        // name under different parents) - resolveMemberFqn canonicalizes to Kind.<path> instead of a
+        // bare Kind.Name in that case (see resolveFormMember, which then resolves a dotted name as a
+        // path walk, not a flat name search). A remainder is only the item-level HANDLER shape when
+        // its penultimate token is an actual Handler token; otherwise (as here - "Command" is not one)
+        // it is a plain member whose Name is the full joined remainder.
+        FormMemberRef ref =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Command.X"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Field", ref.kindToken); //$NON-NLS-1$
+        assertEquals("Price.Command.X", ref.name); //$NON-NLS-1$
+        assertNull("not an item-level ref", ref.itemKindToken); //$NON-NLS-1$
+
+        FormMemberRef ref2 = FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Handler"); //$NON-NLS-1$
+        assertNotNull(ref2);
+        assertEquals("Field", ref2.kindToken); //$NON-NLS-1$
+        assertEquals("Price.Handler", ref2.name); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseTailTooShortReturnsNull()
+    {
+        // A lone Kind token with no Name at all (tail < 2) is malformed.
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field")); //$NON-NLS-1$
     }
 
     @Test
@@ -2297,6 +2317,54 @@ public class FormElementWriterTest
         List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Goods.Total"); //$NON-NLS-1$
         assertEquals(1, matches.size());
         assertSame(goodsTotal, matches.get(0).element);
+        // The disambiguating path is preserved on the match (consumed segments, no qualifier) - this
+        // is what resolveMemberFqn uses to keep the canonical FQN re-resolvable without ambiguity.
+        assertEquals(java.util.Arrays.asList("Goods", "Total"), matches.get(0).path); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testResolveElementRefBareNameHasNoPath()
+    {
+        // A short-name/suffix match (no dot in the input) never carries a disambiguating path - there
+        // is nothing to preserve beyond the bare name itself.
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Sum"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertNull(matches.get(0).path);
+    }
+
+    @Test
+    public void testResolveFormMemberWithDottedNameResolvesAsPathWalkNotAmbiguous()
+    {
+        // The bug this guards: resolveMemberFqn preserves a disambiguating path by canonicalizing to
+        // Kind.Goods.Total (a dotted ref.name) instead of the bare Kind.Total. resolveFormMember must
+        // resolve that dotted name as a PATH WALK (unambiguous by construction) - NOT re-search by the
+        // bare leaf name (which would find TWO 'Total's and wrongly reject the legitimate,
+        // already-disambiguated request as ambiguous).
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        EObject goodsTotal = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = addRootItem(form, MODEL.formGroup, "Other"); //$NON-NLS-1$
+        addChildItem(other, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormMemberRef ref = FormElementWriter.parse("Catalog.X.Form.ItemForm.Field.Goods.Total"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertSame(goodsTotal, FormElementWriter.resolveFormMember(form, ref));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testResolveFormMemberWithBareAmbiguousNameStillRejects()
+    {
+        // The companion case: a BARE (non-dotted) name that is genuinely ambiguous must still be
+        // rejected (findUniqueFormItem), not silently resolved to the first match in traversal order.
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = addRootItem(form, MODEL.formGroup, "Other"); //$NON-NLS-1$
+        addChildItem(other, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormMemberRef ref = FormElementWriter.parse("Catalog.X.Form.ItemForm.Field.Total"); //$NON-NLS-1$
+        assertNotNull(ref);
+        FormElementWriter.resolveFormMember(form, ref);
     }
 
     @Test

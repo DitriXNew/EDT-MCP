@@ -754,6 +754,26 @@ def test_upsert_absent_form_member_creates_normally():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_with_expected_not_exists_on_existing_member_is_rejected():
+    # expectedNotExists asserts absence - it must take PRIORITY over upsert's "return the existing
+    # member" success. A caller combining both (a guarded retry that ALSO wants idempotent creation)
+    # must still see the stale-intent precondition fail, not a silent action='exists' success that
+    # papers over a snapshot that turned out to be stale.
+    cmd = "UpsertNotExistsCmd"
+    fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "seed the form command")
+    wait_for_project_ready()
+    before = tree_snapshot()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "upsert": True, "expectedNotExists": True})
+    err = assert_error(r, "upsert + expectedNotExists against an existing member must be rejected")
+    assert_error_quality(err, names=["expectedNotExists"], suggests=["stale"],
+                         ctx="the precondition failure must name the guard and steer to re-reading")
+    assert_tree_unchanged(before, "a rejected upsert+expectedNotExists call must not mutate the form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_upsert_is_scoped_to_the_requested_kind():
     # An Attribute and a Field/Command CAN share a name (they live in different collections on the
     # form). upsert must check ONLY the requested kind's own namespace - a same-named member of a

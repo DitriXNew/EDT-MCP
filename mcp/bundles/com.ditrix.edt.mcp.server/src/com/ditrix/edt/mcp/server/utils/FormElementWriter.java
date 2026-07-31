@@ -279,15 +279,20 @@ public final class FormElementWriter
             return null;
         }
         int tail = p.length - rem;
-        if (tail == 2)
-        {
-            // Form-level member or handler: Kind.Name.
-            return new FormMemberRef(formPath, p[rem], p[rem + 1], null, null);
-        }
         if (tail == 4 && isHandlerToken(p[rem + 2]))
         {
             // Item-level handler: ItemKind.ItemName.Handler.Event.
             return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1]);
+        }
+        if (tail >= 2)
+        {
+            // Form-level member: Kind.Name - Name MAY itself be a dotted PATH (Kind.Goods.Total) when
+            // it disambiguates duplicate leaf names sharing a name under different parents.
+            // resolveMemberFqn canonicalizes to this shape instead of a bare Kind.Name in that case;
+            // resolveFormMember resolves a dotted name as a path walk, not a flat name search. The
+            // common case (tail == 2) is a bare Kind.Name with no dot in the name.
+            String name = String.join(".", java.util.Arrays.copyOfRange(p, rem + 1, p.length)); //$NON-NLS-1$
+            return new FormMemberRef(formPath, p[rem], name, null, null);
         }
         return null;
     }
@@ -4153,13 +4158,15 @@ public final class FormElementWriter
      * member exists. A handler ref is NOT a member - resolve it via {@link #findFormHandler} on the
      * appropriate container.
      * <p>
-     * Uses {@link #findUniqueFormItem} (not the first-match {@link #findFormItem}) for the items-tree
-     * case: two items can legitimately share a name under DIFFERENT parents (e.g. 'Goods.Total' and
-     * 'Other.Total'), and the caller may have reached this bare {@code ref.name} by first disambiguating
-     * via a dotted path in {@code resolveMemberFqn} - which then canonicalizes BACK to a bare name,
-     * re-introducing the same ambiguity. Silently picking "the first match in traversal order" here
-     * would risk mutating the WRONG item; throwing (a clean, caught, actionable error) is the safe
-     * outcome for a write path instead.
+     * Two items can legitimately share a name under DIFFERENT parents (e.g. 'Goods.Total' and
+     * 'Other.Total'). {@code resolveMemberFqn} preserves that disambiguation by canonicalizing to a
+     * DOTTED {@code ref.name} ('Goods.Total') rather than the bare leaf ('Total') when the match was
+     * found via a path - so a dotted name here is resolved as a PATH WALK from the form root
+     * ({@link #resolveElementPath}, unambiguous by construction, no name search involved), not a flat
+     * name lookup. A bare (non-dotted) name uses {@link #findUniqueFormItem} (not the first-match
+     * {@link #findFormItem}): silently picking "the first match in traversal order" for a genuinely
+     * ambiguous bare name would risk mutating the WRONG item; throwing (a clean, caught, actionable
+     * error) is the safe outcome for a write path instead.
      */
     public static EObject resolveFormMember(EObject formModel, FormMemberRef ref)
     {
@@ -4171,6 +4178,10 @@ public final class FormElementWriter
         if (kind == Kind.COMMAND)
         {
             return findFormCommand(formModel, ref.name);
+        }
+        if (ref.name != null && ref.name.indexOf('.') >= 0)
+        {
+            return resolveElementPath(formModel, ref.name, null, null);
         }
         return findUniqueFormItem(formModel, ref.name);
     }
@@ -4192,12 +4203,19 @@ public final class FormElementWriter
         public final String kindToken;
         /** The element's actual programmatic name (post platform prefixing). */
         public final String name;
+        /** The disambiguating dotted path that reached this element (e.g. {@code ["Goods", "Total"]}),
+         * excluding any tolerated leading form-name qualifier - or {@code null} when this match came
+         * from a bare short-name/suffix lookup, not a path walk. Preserved by {@link #resolveMemberFqn}
+         * so a canonicalized FQN keeps enough context to re-resolve the SAME element even when its bare
+         * leaf name is not unique (see {@link #resolveFormMember}). */
+        public final List<String> path;
 
-        FormElementMatch(EObject element, String kindToken, String name)
+        FormElementMatch(EObject element, String kindToken, String name, List<String> path)
         {
             this.element = element;
             this.kindToken = kindToken;
             this.name = name;
+            this.path = path;
         }
     }
 
@@ -4241,8 +4259,10 @@ public final class FormElementWriter
         }
         if (ref.indexOf('.') >= 0)
         {
-            EObject byPath = resolveElementPath(formModel, ref, formName);
-            return byPath == null ? Collections.emptyList() : Collections.singletonList(matchFor(byPath));
+            List<String> consumedPath = new ArrayList<>();
+            EObject byPath = resolveElementPath(formModel, ref, formName, consumedPath);
+            return byPath == null ? Collections.emptyList()
+                : Collections.singletonList(matchForPath(byPath, consumedPath));
         }
         List<FormElementMatch> exact = collectMatches(formModel, ref, false);
         if (!exact.isEmpty())
@@ -4289,7 +4309,15 @@ public final class FormElementWriter
     /** Builds a {@link FormElementMatch} for an already-resolved element (computes its kind token). */
     private static FormElementMatch matchFor(EObject element)
     {
-        return new FormElementMatch(element, kindTokenOf(element), stringFeature(element, FEATURE_NAME));
+        return new FormElementMatch(element, kindTokenOf(element), stringFeature(element, FEATURE_NAME), null);
+    }
+
+    /** Like {@link #matchFor}, but carrying the disambiguating path that reached {@code element}
+     * (see {@link FormElementMatch#path}). {@code consumedPath} is copied, not aliased. */
+    private static FormElementMatch matchForPath(EObject element, List<String> consumedPath)
+    {
+        return new FormElementMatch(element, kindTokenOf(element), stringFeature(element, FEATURE_NAME),
+            new ArrayList<>(consumedPath));
     }
 
     /**
@@ -4400,8 +4428,14 @@ public final class FormElementWriter
      * unrecognized FIRST segment is tolerated as a form-name qualifier ONLY when it case-insensitively
      * equals {@code formName} ({@code null} disables the tolerance entirely). Returns the element, or
      * {@code null} when a segment does not resolve.
+     *
+     * @param outConsumedPath when non-{@code null}, appended with each REAL segment consumed to reach
+     *     the result (the tolerated form-name qualifier, if any, is NOT included) - lets the caller
+     *     preserve the disambiguating path (see {@link FormElementMatch#path}) instead of only the
+     *     final element's bare leaf name
      */
-    private static EObject resolveElementPath(EObject formModel, String path, String formName)
+    private static EObject resolveElementPath(EObject formModel, String path, String formName,
+        List<String> outConsumedPath)
     {
         String[] segments = path.split("\\."); //$NON-NLS-1$
         EObject current = null; // null == at the form root
@@ -4422,6 +4456,10 @@ public final class FormElementWriter
                 return null;
             }
             current = child;
+            if (outConsumedPath != null)
+            {
+                outConsumedPath.add(segment);
+            }
         }
         return current;
     }
@@ -4542,14 +4580,18 @@ public final class FormElementWriter
                 ToolResult.error("Form not found for '" + normFqn //$NON-NLS-1$
                     + "'. Address a form member as 'Type.Object.Form.FormName.<name or path>' or " //$NON-NLS-1$
                     + "'CommonForm.FormName.<name or path>'.").toJson());
-            // Resolve inside a READ transaction and return only the (kindToken, name) Strings - never a
-            // transaction-bound EObject - so nothing detached leaks out of the transaction.
+            // Resolve inside a READ transaction and return only (kindToken, name, disambiguating-path)
+            // Strings - never a transaction-bound EObject - so nothing detached leaks out of the
+            // transaction. The path (pair[2], null when the match came from a bare short-name/suffix
+            // lookup) is what lets the canonical FQN below preserve path disambiguation.
             found = readEditableForm(editCtx, "ResolveFormMember", (formModel, tx) -> //$NON-NLS-1$
             {
                 List<String[]> pairs = new ArrayList<>();
                 for (FormElementMatch match : resolveElementRef(formModel, elementRef, address.formName))
                 {
-                    pairs.add(new String[] { match.kindToken, match.name });
+                    String pathStr = match.path != null && !match.path.isEmpty()
+                        ? String.join(".", match.path) : null; //$NON-NLS-1$
+                    pairs.add(new String[] { match.kindToken, match.name, pathStr });
                 }
                 return pairs;
             });
@@ -4580,7 +4622,11 @@ public final class FormElementWriter
             return MemberFqnResolution.ambiguous(fqns, elementRef, address.userPrefix);
         }
         String[] only = found.get(0);
-        return MemberFqnResolution.canonical(address.userPrefix + "." + only[0] + "." + only[1]); //$NON-NLS-1$ //$NON-NLS-2$
+        // Preserve the disambiguating PATH (only[2]), not just the bare leaf name (only[1]), when the
+        // match was found via one: re-resolving by the bare name alone downstream (resolveFormMember)
+        // could hit a DIFFERENT element that happens to share the same leaf name under another parent.
+        String leaf = only[2] != null ? only[2] : only[1];
+        return MemberFqnResolution.canonical(address.userPrefix + "." + only[0] + "." + leaf); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** A FQN split into its form prefix + member-leaf remainder (see {@link #parseFormAddress}). */
