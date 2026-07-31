@@ -11,17 +11,24 @@ markdown. outputMode selects the shape:
   - "files":           "## DCS search files for \"<q>\"" + a "| File | Matches |" table.
 A query with no hits renders the literal sentinel "No matches found.".
 
-The base fixture has NO .dcs, so the real-match tests first create a DCS report+template
-(via create_metadata) whose Template.dcs then contains known, countable tokens; those
-tests are mutating and do NOT assert_no_diff. The zero-hit and negative tests stay
-read-only and DO assert_no_diff. Fixture is git-reset per-test, so each build is fresh.
+The base fixture has NO .dcs, so the real-match tests first create a DCS report, then author
+its schema via modify_metadata's `dcs` payload (the only supported DCS authoring surface -
+create_metadata creates a bare top object/member only; it has no templateType/query authoring
+for a DataCompositionSchema) so its Template.dcs then contains known, countable tokens; those
+tests are mutating (kind=write-metadata) and do NOT assert_no_diff. The zero-hit and negative
+tests stay read-only (kind=read) and DO assert_no_diff. Fixture is git-reset per-test, so each
+build is fresh.
 
-Created schema (report E2EDcsSearch, template MainSchema) serializes to
-Reports/E2EDcsSearch/Templates/MainSchema/Template.dcs with a local data source
-("DataSource1" on TWO lines: <name> and the dataset's <dataSource>) and a query dataset
-whose <query> holds "FROM Catalog.Catalog" (ONE line) and "<dataSet xsi:type=\"DataSetQuery\">"
-(ONE line). Those exact counts are the broken-proof signals.
+Created schema (report E2EDcsSearchXxx) serializes to
+Reports/E2EDcsSearchXxx/Templates/<Tpl>/Template.dcs (<Tpl> is modify_metadata's own choice of
+main-schema template name, discovered by walking the report's Templates tree - see
+test_modify_metadata_dcs.py's _find_report_dcs) with a local data source ("DataSource1" on TWO
+lines: <name> and the dataset's <dataSource>) and a query dataset whose <query> holds
+"FROM Catalog.Catalog" (ONE line) and "<dataSet xsi:type=\"DataSetQuery\">" (ONE line). Those
+exact counts are the broken-proof signals.
 """
+
+import os
 
 from harness import (
     call,
@@ -34,31 +41,50 @@ from harness import (
     wait_for_project_ready,
     e2e_test,
     PROJECT,
+    PROJECT_DIR,
 )
 
 _QUERY = "SELECT Catalog.Ref AS Ref, Catalog.Description AS Description FROM Catalog.Catalog AS Catalog"
 
 
+def _find_report_dcs(report_name):
+    """Locate the report's DCS content resource on disk: src/Reports/<Name>/Templates/<Tpl>/Template.dcs.
+    The template folder name (<Tpl>) is modify_metadata's own choice (the report's main schema
+    template), so WALK the report's Templates tree rather than hardcode it - mirrors
+    test_modify_metadata_dcs.py's _find_report_dcs."""
+    templates_dir = os.path.join(PROJECT_DIR, "src", "Reports", report_name, "Templates")
+    if not os.path.isdir(templates_dir):
+        return None
+    for root, _dirs, files in os.walk(templates_dir):
+        for fn in files:
+            if fn.lower() == "template.dcs":
+                return os.path.relpath(os.path.join(root, fn), PROJECT_DIR).replace(os.sep, "/")
+    return None
+
+
 def _make_schema(report):
-    """Create Report.<report> + a DataCompositionSchema template (query -> local source + dataset),
-    and return (fileMask, dcsPath) scoped to it. A UNIQUE name per test avoids colliding with the
-    reports left in EDT's in-memory model by earlier tests (git resets disk, not the loaded model);
-    the returned fileMask scopes each search to this one .dcs so on-disk accumulation can't skew counts.
+    """Create Report.<report>, then author its DCS via modify_metadata's `dcs` payload (a query
+    dataset -> auto-created local data source). Returns (fileMask, dcsPath) scoped to it. A UNIQUE
+    name per test avoids colliding with the reports left in EDT's in-memory model by earlier tests
+    (git resets disk, not the loaded model); the returned fileMask scopes each search to this one
+    .dcs so on-disk accumulation can't skew counts.
     """
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
               "create the DCS report")
     wait_for_project_ready()
-    assert_ok(call("create_metadata", {
-        "projectName": PROJECT, "fqn": "Report.%s.Template.MainSchema" % report,
-        "templateType": "DataCompositionSchema", "query": _QUERY}), "create the DCS template")
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"dataSets": [{"name": "DataSet1", "type": "query", "query": _QUERY,
+                              "autoFillFields": True}]},
+    }), "author the DCS via modify_metadata")
     wait_for_project_ready()
-    return "Reports/%s/" % report, "Reports/%s/Templates/MainSchema/Template.dcs" % report
+    return "Reports/%s/" % report, _find_report_dcs(report)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HAPPY PATHS (create a .dcs, then search it - scoped by fileMask to its own report)
 # ──────────────────────────────────────────────────────────────────────────────
-@e2e_test(tool="search_in_dcs", kind="read")
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_full_mode_finds_token_in_created_schema():
     """Default (full) mode: "FROM Catalog.Catalog" lives on the single <query> line of the
     created schema -> exactly one match, in one file, whose section and the matched XML line
@@ -75,7 +101,7 @@ def test_full_mode_finds_token_in_created_schema():
     assert_not_contains(r.text, "No matches found.", "a real hit must not render the sentinel")
 
 
-@e2e_test(tool="search_in_dcs", kind="read")
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_count_mode_reports_exact_totals():
     """count mode: "DataSource1" appears on TWO lines (the source <name> and the dataset's
     <dataSource>) of the created schema -> exactly 2 matches in 1 file (scoped). Exact totals
@@ -90,7 +116,7 @@ def test_count_mode_reports_exact_totals():
     assert_not_contains(r.text, "```xml", "count mode must not render context code fences")
 
 
-@e2e_test(tool="search_in_dcs", kind="read")
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_files_mode_lists_matching_file():
     """files mode renders a "| File | Matches |" table. "DataSetQuery" appears on exactly one
     line of the created schema -> that file, count 1 (scoped by fileMask)."""
@@ -102,7 +128,7 @@ def test_files_mode_lists_matching_file():
     assert_contains(r.text, dcs, "files mode must list the .dcs that contains the token")
 
 
-@e2e_test(tool="search_in_dcs", kind="read")
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_regex_mode_matches_pattern():
     """isRegex=true compiles the query as a regex. "Data\\w+Query" matches "DataSetQuery"
     (1 match); the SAME query as a LITERAL searches for the chars 'Data\\w+Query', which
@@ -122,7 +148,7 @@ def test_regex_mode_matches_pattern():
                     "literal 'Data\\w+Query' must NOT match (the literal chars are absent)")
 
 
-@e2e_test(tool="search_in_dcs", kind="read")
+@e2e_test(tool="search_in_dcs", kind="write-metadata")
 def test_file_mask_scopes_search():
     """fileMask is a case-insensitive path-substring filter. The token matches under the
     report's own path; a mask the path cannot contain must exclude it (no matches)."""

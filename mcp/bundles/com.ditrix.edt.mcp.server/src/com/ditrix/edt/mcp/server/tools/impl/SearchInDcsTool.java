@@ -66,7 +66,8 @@ public class SearchInDcsTool implements IMcpTool
             + "calculated/total expressions, parameters, and the selection/order/filter/variants of " //$NON-NLS-1$
             + "the settings). Matching is purely textual over the serialized XML and NOT ru/en " //$NON-NLS-1$
             + "dialect-aware. Use it to find where a field, query fragment or expression is used across " //$NON-NLS-1$
-            + "report schemas; to EDIT a schema use create_metadata by FQN. " //$NON-NLS-1$
+            + "report schemas; to EDIT a schema use modify_metadata's dcs payload on the owning " //$NON-NLS-1$
+            + "Report FQN (currently the only supported DCS authoring surface). " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('search_in_dcs')."; //$NON-NLS-1$
     }
 
