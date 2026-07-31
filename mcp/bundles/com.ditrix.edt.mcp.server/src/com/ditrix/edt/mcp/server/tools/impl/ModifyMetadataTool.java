@@ -385,12 +385,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "not use is NOT reported: a multilingual configuration worked on in a " //$NON-NLS-1$
                 + "single-language branch must not nag about the others") //$NON-NLS-1$
             .stringArrayProperty(KEY_LOCALES_STALE,
-                "Language codes whose value this call did NOT write while it changed the same " //$NON-NLS-1$
-                + "property in another language - they still carry the PREVIOUS text, so they now " //$NON-NLS-1$
-                + "describe the old state (rename the synonym in 'en' and the 'fr' one keeps the " //$NON-NLS-1$
-                + "old name). Only languages the configuration USES are reported, and a language " //$NON-NLS-1$
-                + "written by any change in the same call is not listed. Absent when there are " //$NON-NLS-1$
-                + "none") //$NON-NLS-1$
+                "Language codes whose value this call did NOT write while it REPLACED the text of " //$NON-NLS-1$
+                + "the same property in another language - they still carry the PREVIOUS text, so " //$NON-NLS-1$
+                + "they now describe the old state (rename the synonym in 'en' and the 'fr' one " //$NON-NLS-1$
+                + "keeps the old name). Reported for every DECLARED language that carries text - " //$NON-NLS-1$
+                + "unlike 'localesMissing', which asks whether the configuration USES the language, " //$NON-NLS-1$
+                + "because text that already exists is not work being demanded of anyone: it is " //$NON-NLS-1$
+                + "there, and this call just made it wrong. Decided per PROPERTY, so a language " //$NON-NLS-1$
+                + "written into that same property by this call is not listed. Absent when there " //$NON-NLS-1$
+                + "are none") //$NON-NLS-1$
             .booleanProperty(KEY_LOCALE_UNUSED,
                 "Set when a value was written under a language the configuration itself does not " //$NON-NLS-1$
                 + "use (its own synonym has no text for that language). NOT an error - the language " //$NON-NLS-1$
@@ -5491,8 +5494,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private final Map<String, Set<String>> staleByProperty = new LinkedHashMap<>();
         /** Per PROPERTY: the locales this call actually wrote - the ones that are NOT left behind. */
         private final Map<String, Set<String>> writtenByProperty = new LinkedHashMap<>();
-        /** (receiver, feature, language) triples whose text this call REPLACED with a different one. */
-        private final Set<String> overwrote = new LinkedHashSet<>();
+        /** (receiver, feature, language) -> the text that was there BEFORE this call touched it. */
+        private final Map<String, String> textBefore = new LinkedHashMap<>();
+        /** (receiver, feature, language) -> the text the LAST change in this call writes there. */
+        private final Map<String, String> textAfter = new LinkedHashMap<>();
         private boolean wrote;
         private boolean unusedLocale;
 
@@ -5523,12 +5528,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     continue;
                 }
                 String had = ((EMap<String, String>)map).map().get(change.language());
-                if (had != null && !had.isEmpty() && !had.equals(change.localizedValue))
-                {
-                    // REPLACED, not merely rewritten: writing the same text again changes nothing,
-                    // so the other languages still describe the same value they always did.
-                    overwrote.add(preStateKey(target, change));
-                }
+                String key = preStateKey(target, change);
+                // The FIRST pre-state seen for a key is the real "before": a batch may write the
+                // same property and language more than once, and the later writes see what the
+                // earlier ones left, not what the call started from.
+                textBefore.putIfAbsent(key, had == null ? "" : had); //$NON-NLS-1$
+                // The LAST write is what the model ends up with, and only the end state can make
+                // another language out of date. Writing 'New' and then putting 'Old' back leaves
+                // the property exactly as it was, so nothing behind it went stale.
+                textAfter.put(key, change.localizedValue == null ? "" : change.localizedValue); //$NON-NLS-1$
             }
         }
 
@@ -5542,6 +5550,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private static String preStateKey(EObject target, PreparedChange change)
         {
             return propertyKey(target, change) + "/" + change.language(); //$NON-NLS-1$
+        }
+
+        /**
+         * Whether this call left that (receiver, feature, language) holding DIFFERENT text than it
+         * found there. Empty before means there was nothing to make out of date; equal before and
+         * after means the value never moved, however many writes passed through it.
+         */
+        private boolean replaced(String key)
+        {
+            String before = textBefore.get(key);
+            return before != null && !before.isEmpty() && !before.equals(textAfter.get(key));
         }
 
         /** Identity of one PROPERTY - one receiver's one feature; staleness is decided per property. */
@@ -5598,8 +5617,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             missing.add(declared);
                         }
                     }
-                    else if (!declared.equals(change.language())
-                        && overwrote.contains(preStateKey(target, change)))
+                    else if (!declared.equals(change.language()) && replaced(preStateKey(target, change)))
                     {
                         // It HAS text, this call did not write it, and the language it DID write
                         // already had text of its own: the value CHANGED, so the others now say

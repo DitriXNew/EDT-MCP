@@ -3464,7 +3464,7 @@
           "type": "array"
         },
         "localesStale": {
-          "description": "Language codes whose value this call did NOT write while it changed the same property in another language - they still carry the PREVIOUS text, so they now describe the old state (rename the synonym in 'en' and the 'fr' one keeps the old name). Only languages the configuration USES are reported, and a language written by any change in the same call is not listed. Absent when there are none",
+          "description": "Language codes whose value this call did NOT write while it REPLACED the text of the same property in another language - they still carry the PREVIOUS text, so they now describe the old state (rename the synonym in 'en' and the 'fr' one keeps the old name). Reported for every DECLARED language that carries text - unlike 'localesMissing', which asks whether the configuration USES the language, because text that already exists is not work being demanded of anyone: it is there, and this call just made it wrong. Decided per PROPERTY, so a language written into that same property by this call is not listed. Absent when there are none",
           "items": {
             "type": "string"
           },

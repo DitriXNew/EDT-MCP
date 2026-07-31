@@ -1832,6 +1832,35 @@ def test_modify_rewriting_the_same_text_does_not_report_stale():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_putting_the_old_text_back_in_one_call_reports_nothing_stale():
+    # A batch may write the same property and language more than once. What can make another
+    # language out of date is where the value ENDS UP, not what it passed through: writing a new
+    # name and then putting the original back leaves the property exactly as it was.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298BackFr"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298BackFr",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+    for code, text in (("en", "Goods"), ("fr", "Marchandises")):
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": "Catalog.Catalog",
+            "properties": [{"name": "synonym", "value": text, "language": code}]}),
+            "seed the synonym in %s" % code)
+        wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Wares", "language": "en"},
+                       {"name": "synonym", "value": "Goods", "language": "en"}],
+    })
+    assert_ok(r, "change the synonym and put the original back in the same call")
+    assert "localesStale" not in r.structured, \
+        "the value ended where it started, so nothing behind it went stale: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_cross_property_locales_stale_are_reported_per_property():
     # Two DIFFERENT localized properties on the SAME form member: change 'title' in en and 'toolTip'
     # in fr in ONE call. Staleness is decided PER PROPERTY, so title's untouched 'fr' and toolTip's
