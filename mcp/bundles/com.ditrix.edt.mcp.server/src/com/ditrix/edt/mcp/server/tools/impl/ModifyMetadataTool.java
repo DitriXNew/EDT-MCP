@@ -1256,12 +1256,85 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec,
         Set<String> used)
     {
-        List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
-        if (declared.isEmpty() || dcsSpec == null)
+        if (dcsSpec == null)
         {
             return null;
         }
+        List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
+        if (declared.isEmpty())
+        {
+            // No declared code makes EVERY code undeclared, so a localized title here would be
+            // stored where nothing can display it. The property pipeline refuses this case; the
+            // dcs route must not be the hole it slips through. A payload with no localized title
+            // is untouched - only an actual {code: text} map is refused.
+            String firstLocale = firstDcsTitleLocale(dcsSpec);
+            if (firstLocale == null)
+            {
+                return null;
+            }
+            return ToolResult.error("This configuration declares no language codes, so '" //$NON-NLS-1$ //$NON-NLS-2$
+                + firstLocale + "' in a dcs title cannot be stored where anything would display " //$NON-NLS-1$
+                + "it. Add a Language object with a 'languageCode' first (create_metadata " //$NON-NLS-1$
+                + "'Language.<Name>' + modify_metadata 'languageCode'), then write the title.") //$NON-NLS-1$
+                    .toJson();
+        }
         return normalizeDcsTitleLocales(config, declared, dcsSpec, used);
+    }
+
+    /**
+     * The first language code any STORED dcs title is keyed by, or {@code null} when the payload
+     * carries no localized title at all. Used only to name a value in the no-declared-language
+     * refusal - the walk itself is {@link #normalizeDcsTitleLocales}.
+     */
+    private static String firstDcsTitleLocale(JsonObject dcsSpec)
+    {
+        for (String member : new String[] {KEY_DCS_PARAMETERS, KEY_DCS_CALCULATED_FIELDS})
+        {
+            String code = firstTitleLocaleOfEntries(dcsSpec.get(member));
+            if (code != null)
+            {
+                return code;
+            }
+        }
+        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
+        if (dataSets == null || !dataSets.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement dataSet : dataSets.getAsJsonArray())
+        {
+            if (dataSet != null && dataSet.isJsonObject())
+            {
+                String code = firstTitleLocaleOfEntries(dataSet.getAsJsonObject().get(KEY_DCS_FIELDS));
+                if (code != null)
+                {
+                    return code;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The first language key of the first object-valued {@code title} in one array of entries. */
+    private static String firstTitleLocaleOfEntries(JsonElement entries)
+    {
+        if (entries == null || !entries.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement entry : entries.getAsJsonArray())
+        {
+            if (entry == null || !entry.isJsonObject())
+            {
+                continue;
+            }
+            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
+            if (title != null && title.isJsonObject() && !title.getAsJsonObject().keySet().isEmpty())
+            {
+                return title.getAsJsonObject().keySet().iterator().next();
+            }
+        }
+        return null;
     }
 
     /** The dcs payload members the writer reads a storable {@code title} from (see DcsWriter). */
