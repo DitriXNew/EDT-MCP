@@ -2475,7 +2475,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').",
+    "description": "Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. A SYSTEM ENUMERATION (e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. For a TYPE, detailed output also carries the descriptions from the platform's own documentation. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').",
     "inputSchema": {
       "properties": {
         "category": {

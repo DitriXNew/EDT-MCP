@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -128,6 +129,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
     /** Error: required EDT services are not available. */
     private static final String ERR_SERVICES_UNAVAILABLE = "Required EDT services not available"; //$NON-NLS-1$
+
+    /** Error: the service that names a form's content object is unavailable. */
+    private static final String ERR_NO_FQN_GENERATOR =
+        "ITopObjectFqnGenerator not available (needed to attach the content form under its " //$NON-NLS-1$
+            + "canonical FQN)"; //$NON-NLS-1$
 
     /** Error prefix: could not resolve the V8 project. */
     private static final String ERR_NO_V8_PROJECT = "Could not resolve V8 project for: "; //$NON-NLS-1$
@@ -940,11 +946,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String configFeatureName = req.target.configFeatureName;
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
-        // Only needed for an XDTOPackage create (below); resolved up front like the rest of the BM
-        // services this method uses, not inside the transaction.
+        // Needed to name the external-property content of a CommonForm and of an XDTOPackage
+        // (both below); resolved up front like the rest of the BM services this method uses, not
+        // inside the transaction.
         final ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+        // The FORM factory + script variant build that content form the same way the owned-form path
+        // does (issue #297).
+        final IModelObjectFactory formFactory = Activator.getDefault().getFormModelObjectFactory();
+        final boolean russianAutoNames = req.config.getScriptVariant() == ScriptVariant.RUSSIAN;
+        // For a FORM the generator is mandatory, exactly as on the owned-form path: a form whose
+        // content could not be attached under its canonical FQN is precisely the half-created object
+        // issue #297 is about, so refuse rather than report success for a form nothing can be added
+        // to. Every other top type still creates without it (the XDTOPackage content below is
+        // best-effort by design), so the check is scoped to forms.
+        if (fqnGenerator == null && MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(eClass))
+        {
+            return ToolResult.error(ERR_NO_FQN_GENERATOR).toJson();
+        }
 
         final String[] xdtoContentFqnHolder = { null };
+        final String[] formContentFqnHolder = { null };
         final EClass createdKind;
         try
         {
@@ -968,7 +989,24 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 req.typeSpecific.applyTo(newObject);
                 tx.attachTopObject((IBmObject)newObject, req.normFqn);
                 addToCollection(cfg, configFeatureName, newObject);
+                // A CommonForm is a BasicForm: without its content Form (the file Form.form) the
+                // form is a descriptor only - the content object is never a BM top object, so every
+                // later member create fails with "bmGetFqn may be called on attached BM objects
+                // only" and the editor renders it empty. Seeded HERE, in the creating transaction,
+                // for the same reason the XDTOPackage content is (below): a later, separate
+                // transaction does not durably serialize a freshly materialized external property.
+                // Same order as the owned-form path: attach the content, then fillDefaultReferences,
+                // then re-assert the command bar's id sentinel it resets (issue #189).
+                if (newObject instanceof BasicForm)
+                {
+                    formContentFqnHolder[0] = FormElementWriter.createCommonFormContent(tx,
+                        (BasicForm)newObject, formFactory, fqnGenerator, version, russianAutoNames);
+                }
                 factory.fillDefaultReferences(newObject);
+                if (formContentFqnHolder[0] != null)
+                {
+                    FormElementWriter.enforceContentFormCommandBarId((BasicForm)newObject);
+                }
                 // An XDTOPackage's content (Package.xdto) is a lazy @ExternalProperty; a live-stand
                 // finding showed the platform does NOT durably serialize it when it is first
                 // materialized in a LATER, separate transaction (the first member-edit call) - each
@@ -998,6 +1036,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
 
         List<String> exportFqns = dirtyFqns(req.normFqn, configFqn);
+        String formContentFqn = formContentFqnHolder[0];
+        if (formContentFqn != null && !exportFqns.contains(formContentFqn))
+        {
+            exportFqns.add(formContentFqn);
+        }
         String xdtoContentFqn = xdtoContentFqnHolder[0];
         if (xdtoContentFqn != null && !exportFqns.contains(xdtoContentFqn))
         {
@@ -1678,8 +1721,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         if (svc.fqnGenerator == null)
         {
-            svc.error = ToolResult.error("ITopObjectFqnGenerator not available (needed to attach the " //$NON-NLS-1$
-                + "content form under its canonical FQN)").toJson(); //$NON-NLS-1$
+            svc.error = ToolResult.error(ERR_NO_FQN_GENERATOR).toJson();
             return svc;
         }
         IV8Project v8Project = v8ProjectManager.getProject(project);

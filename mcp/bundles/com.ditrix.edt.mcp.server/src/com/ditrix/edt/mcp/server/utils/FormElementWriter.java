@@ -977,6 +977,70 @@ public final class FormElementWriter
     }
 
     /**
+     * Creates and attaches the content {@code Form} of a TOP-LEVEL form object (a {@code CommonForm}),
+     * the standalone counterpart of what {@link #createForm} does for a form owned by an object.
+     *
+     * <p>A {@code CommonForm} is a {@link BasicForm}: it carries the same {@code form} reference to a
+     * content {@code Form}, which is what serializes to {@code Form.form} and what every form MEMBER
+     * attaches to. Created without it, the form exists only as a descriptor: its content object is
+     * never a BM top object, so the first {@code create_metadata} of an attribute/field/command fails
+     * with "bmGetFqn may be called on attached BM objects only", and the editor renders it empty.
+     *
+     * <p>Call INSIDE the create transaction, AFTER the form itself has been attached and added to the
+     * configuration collection: the canonical external-property FQN is derived from the form's parent
+     * chain. The caller then runs its usual {@code fillDefaultReferences} and finally
+     * {@link #enforceContentFormCommandBarId} — the same order {@link #createForm} uses, because the
+     * BM integration resets the predefined command bar's id sentinel (issue #189).
+     *
+     * @param tx the open write transaction
+     * @param commonForm the freshly created top-level form object
+     * @param formFactory the FORM model-object factory (may be {@code null} — a minimal renderable
+     *            form is then built by hand)
+     * @param fqnGenerator the top-object FQN generator
+     * @param version the platform version
+     * @param russianAutoNames whether the configuration script variant is Russian
+     * @return the content form's own FQN, to be force-exported with the owner
+     */
+    public static String createCommonFormContent(IBmTransaction tx, BasicForm commonForm,
+        IModelObjectFactory formFactory, ITopObjectFqnGenerator fqnGenerator, Version version,
+        boolean russianAutoNames)
+    {
+        EObject content = createContentForm(formFactory, commonForm, version, russianAutoNames);
+        commonForm.eSet(MdClassPackage.Literals.BASIC_FORM__FORM, content);
+        setSingleReference(content, FEATURE_MD_FORM, commonForm);
+        String contentFqn = fqnGenerator.generateExternalPropertyFqn(commonForm,
+            MdClassPackage.Literals.BASIC_FORM__FORM);
+        if (contentFqn == null || contentFqn.isEmpty())
+        {
+            // Undo the reference to the content that will never be attached. The caller rolls the
+            // transaction back on this exception, but a BM-attached owner pointing at an unattached
+            // object fails the commit with "Failed to persist reference value" - the same trap
+            // XdtoWriter hit for the XDTO package content.
+            commonForm.eUnset(MdClassPackage.Literals.BASIC_FORM__FORM);
+            throw new IllegalStateException("Could not generate the content-form FQN for: " //$NON-NLS-1$
+                + commonForm.getName());
+        }
+        tx.attachTopObject((IBmObject)content, contentFqn);
+        return contentFqn;
+    }
+
+    /**
+     * Re-asserts the predefined command bar's {@code id = -1} sentinel on a top-level form's content,
+     * after the caller's {@code fillDefaultReferences} has reset it. A no-op when the form has no
+     * content or no command bar. See {@link #enforceAutoCommandBarIdSentinel} (issue #189).
+     *
+     * @param commonForm the top-level form object
+     */
+    public static void enforceContentFormCommandBarId(BasicForm commonForm)
+    {
+        Object content = commonForm.eGet(MdClassPackage.Literals.BASIC_FORM__FORM);
+        if (content instanceof EObject)
+        {
+            enforceAutoCommandBarIdSentinel((EObject)content);
+        }
+    }
+
+    /**
      * Builds the content {@code Form} with EDT's default structure. Prefers the FORM model factory
      * ({@code FormObjectFactory}) - {@code create(Form, owner, version)} produces exactly what the
      * "New form" wizard builds (predefined {@code autoCommandBar}, command interface, form flags).

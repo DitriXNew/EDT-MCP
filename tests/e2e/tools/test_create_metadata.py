@@ -45,6 +45,7 @@ from harness import (
     assert_tree_unchanged,
     diff,
     poll_diff_contains,
+    poll_disk_contains,
     read_disk,
     reset_all_fixtures,
     tree_snapshot,
@@ -486,7 +487,9 @@ def test_create_form_object_default_seeds_no_attributes():
     assert_ok(r, "create form object without generateContent")
     assert r.structured.get("generateContent") is False, \
         "the default create must echo generateContent=false: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the empty form must land on disk")
+    # Wait on the .form FILE: the form name lands in the owner .mdo first, so waiting on the diff
+    # can release before the content form is exported and the read below hits a missing file.
+    poll_disk_contains(form_rel, "<autoCommandBar>", ctx="the empty form must land on disk")
     form_xml = read_disk(form_rel)
     assert "<attributes>" not in form_xml, \
         "an unseeded object form must carry no <attributes> block: %s" % form_xml
@@ -625,7 +628,10 @@ def test_create_form_object_explicit_object_fields_seeds_only_listed():
     assert_ok(r, "create document form with an explicit single objectFields list")
     assert r.structured.get("generateContent") is True, \
         "the create must echo generateContent=true: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    # Wait on the .form FILE (see above): the name reaches the owner .mdo before the content is
+    # exported, and the assertions below read the content form itself.
+    poll_disk_contains(form_rel, "<name>Object</name>",
+                       ctx="the seeded document form must land on disk")
     form_xml = read_disk(form_rel)
     # The main Object attribute is still seeded, and the one listed field binds to Object.Number.
     assert "<name>Object</name>" in form_xml, \
@@ -677,7 +683,10 @@ def test_create_form_object_empty_object_fields_seeds_only_main_attribute():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": fqn, "generateContent": True, "objectFields": []})
     assert_ok(r, "create document form with an empty objectFields list")
-    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    # Wait on the .form FILE (see above): the name reaches the owner .mdo before the content is
+    # exported, and the assertions below read the content form itself.
+    poll_disk_contains(form_rel, "<name>Object</name>",
+                       ctx="the seeded document form must land on disk")
     form_xml = read_disk(form_rel)
     assert "<name>Object</name>" in form_xml, \
         "the main Object attribute must still be seeded: %s" % form_xml
@@ -968,6 +977,90 @@ def test_create_form_object_invalid_name_is_error():
     assert_error_quality(e, names=["1Bad-Form"], suggests=["must start with"],
                          ctx="an invalid form name is a clean error")
     assert_no_diff("a rejected form create must not change the project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# A STANDALONE form (CommonForm) owns a content form of its own — issue #297.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _read_disk_or_fail(rel_path, what):
+    """read_disk, but a MISSING file fails as a plain assertion instead of raising
+    FileNotFoundError — here the missing file IS the regression under test (issue #297), so it
+    must be reported as such and not as a harness crash."""
+    try:
+        return read_disk(rel_path)
+    except FileNotFoundError:
+        _fail("%s was never written: %s is missing on disk" % (what, rel_path))
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_common_form_writes_the_descriptor_and_the_content_form():
+    """Issue #297: creating a CommonForm wrote ONLY the descriptor <Name>.mdo. Its content form
+    (the file Form.form — what the editor renders and what every form element attaches to) was
+    never created, so the form opened empty and the first element create failed with "bmGetFqn may
+    be called on attached BM objects only".
+
+    Covers the whole round trip: create the form, add an element to it (a Decoration — a label),
+    then assert BOTH files exist on disk AND carry the expected content.
+    """
+    form, label = "Z_McpCommonForm", "Z_McpCommonFormLabel"
+    mdo_rel = "src/CommonForms/%s/%s.mdo" % (form, form)
+    content_rel = "src/CommonForms/%s/Form.form" % form
+
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "CommonForm." + form})
+    assert_ok(r, "create a standalone CommonForm")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert r.structured.get("name") == form, "name must be the form name: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the new common form must register in the configuration on disk")
+    # Then poll a marker that ONLY the content file carries: the name lands in Configuration.mdo
+    # first, so polling on it alone races the .form export and the reads below could hit a file
+    # that is not there yet (same reason as the object-form tests above).
+    poll_diff_contains("<autoCommandBar>",
+                       ctx="the new common form's content .form must land on disk")
+
+    # 1) The DESCRIPTOR — src/CommonForms/<Name>/<Name>.mdo.
+    mdo_xml = _read_disk_or_fail(mdo_rel, "the CommonForm descriptor")
+    assert "mdclass:CommonForm" in mdo_xml, \
+        "the descriptor must be a CommonForm: %s" % mdo_xml
+    assert "<name>%s</name>" % form in mdo_xml, \
+        "the descriptor must carry the form name: %s" % mdo_xml
+
+    # 2) The CONTENT form — src/CommonForms/<Name>/Form.form. THIS is the file issue #297 was
+    # missing entirely. It must be a real form root carrying the render-critical predefined
+    # command bar with its -1 id sentinel (issue #189) — the same shape an owned form gets.
+    content_xml = _read_disk_or_fail(content_rel, "the CommonForm content form")
+    assert "form:Form" in content_xml, \
+        "the content must be a form root: %s" % content_xml
+    assert "<autoCommandBar>" in content_xml, \
+        "the content form must carry the predefined command bar: %s" % content_xml
+    assert "<id>-1</id>" in content_xml, \
+        "the predefined command bar must keep its -1 id sentinel: %s" % content_xml
+    # The rest of the designer form root the issue lists. Read BEFORE any item is added, so these
+    # can only come from the root itself.
+    for marker in ("<autoTitle>true</autoTitle>", "<autoFillCheck>true</autoFillCheck>",
+                   "<enabled>true</enabled>", "<commandInterface>"):
+        assert marker in content_xml, \
+            "the content form must carry the designer form default %s: %s" % (marker, content_xml)
+
+    # 3) An ELEMENT added afterwards must attach to that content form and serialize into it. Before
+    # the fix this call failed outright — the content form was never a BM top object.
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "CommonForm.%s.Decoration.%s" % (form, label)})
+    assert_ok(r2, "add a label (Decoration) to the new common form")
+    poll_diff_contains(label, ctx="the label must land in the common form's Form.form on disk")
+    content_xml = _read_disk_or_fail(content_rel, "the CommonForm content form after the label")
+    assert 'xsi:type="form:Decoration"' in content_xml, \
+        "the label must serialize as a form Decoration: %s" % content_xml
+    assert "<name>%s</name>" % label in content_xml, \
+        "the label must serialize under its own name: %s" % content_xml
+
+    # 4) MODEL read-back over the wire: the form renders its structure (which only resolves when
+    # the content was attached under its canonical FQN) and that structure names the label.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["CommonForm." + form]})
+    assert_ok(d, "render the new common form's structure")
+    assert_contains(d.text, "Form Structure", "the common form must render a structure")
+    assert_contains(d.text, label, "the rendered structure must name the added label")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

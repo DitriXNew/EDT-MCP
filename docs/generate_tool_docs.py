@@ -85,20 +85,44 @@ def main():
         print("No tools returned by tools/list — is the server up?", file=sys.stderr)
         sys.exit(1)
     tools_by_name = {t["name"]: t for t in tools}
-    names = sorted(tools_by_name)
 
     # Toolset grouping for the index (best-effort: if list_toolsets is hidden/absent,
     # fall back to a single flat group).
+    #
+    # list_toolsets also names tools that tools/list does NOT return: a toolset that is OFF by
+    # default (today: `git`) stays hidden until the user enables it. Generating solely from
+    # tools/list therefore silently dropped such a tool from a reference that calls itself full -
+    # the count read one short and the page did not exist at all. Their names are collected here
+    # and their pages are generated from get_tool_guide, which answers for a hidden tool too, so
+    # nothing has to be enabled on the server to document it.
     groups = []  # list of (title, description, [tool names])
+    hidden = set()
+    # Absence from tools/list has TWO different causes and only one of them means "disabled":
+    # with progressive disclosure ON the server hides every non-core toolset until enable_toolset
+    # reveals it, so labelling those "not enabled by default" would tell readers that the metadata /
+    # debug / code tools are off - which they are not. The flag says which world we are in; when it
+    # is on, the run cannot tell the two apart, so it labels nothing.
+    disclosure = False
     try:
         ts = call_structured(url, "list_toolsets", {})
+        disclosure = bool(ts.get("progressiveDisclosure"))
         for toolset in ts.get("toolsets", []):
-            tnames = [n for n in toolset.get("tools", []) if n in tools_by_name]
+            tnames = sorted(toolset.get("tools", []))
+            hidden.update(n for n in tnames if n not in tools_by_name)
             if tnames:
                 groups.append((toolset.get("title") or toolset.get("id"),
-                               toolset.get("description") or "", sorted(tnames)))
+                               toolset.get("description") or "", tnames))
     except Exception as e:  # noqa: BLE001
         print("list_toolsets unavailable (%s) — using a flat index" % e, file=sys.stderr)
+
+    names = sorted(set(tools_by_name) | hidden)
+    # Only a tool missing from tools/list while progressive disclosure is OFF is genuinely disabled.
+    default_disabled = set() if disclosure else set(hidden)
+    if hidden:
+        print("tools absent from tools/list (documented anyway): %s%s"
+              % (", ".join(sorted(hidden)),
+                 " [progressive disclosure is ON - not labelling them as disabled]"
+                 if disclosure else ""))
     grouped = {n for _t, _d, ns in groups for n in ns}
     ungrouped = [n for n in names if n not in grouped]
     if ungrouped:
@@ -106,8 +130,16 @@ def main():
 
     os.makedirs(OUT_DIR, exist_ok=True)
     written = 0
+    guide_summary = {}
     for name in names:
         md = call_text(url, "get_tool_guide", {"toolName": name})
+        if name in hidden and md:
+            # First non-heading, non-empty line of the guide: the tool's own description.
+            for line in md.replace("\r\n", "\n").split("\n"):
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    guide_summary[name] = stripped
+                    break
         if not md:
             md = "# %s\n\n%s\n" % (name, tools_by_name[name].get("description", ""))
         # Footer: these are generated; point readers at the generator.
@@ -133,11 +165,16 @@ def main():
                 out += ["", "> %s" % desc]
             out += ["", "| Tool | Description |", "|------|-------------|"]
             for n in ns:
-                d = (tools_by_name[n].get("description") or "").replace("\n", " ").strip()
+                d = (tools_by_name.get(n, {}).get("description") or "").replace("\n", " ").strip()
+                if not d:
+                    # A tool hidden from tools/list has no description there; take the guide's
+                    # opening line, which IS the description.
+                    d = guide_summary.get(n, "")
                 if len(d) > 160:
                     d = d[:157].rstrip() + "…"
                 d = d.replace("|", "\\|")
-                out.append("| [`%s`](%s%s.md) | %s |" % (n, link_prefix, n, d))
+                mark = " *(not enabled by default)*" if n in default_disabled else ""
+                out.append("| [`%s`](%s%s.md) | %s%s |" % (n, link_prefix, n, d, mark))
             out.append("")
         return out
 
