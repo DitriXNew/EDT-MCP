@@ -12,13 +12,13 @@ Write BSL source code to a 1C metadata object module. Use to edit a module: sear
 | source | yes | string | BSL source to write (required): full file for replace, new fragment for searchReplace, text to add for append. |
 | oldSource | — | string | Fragment to find and replace; required for searchReplace, must match exactly once. |
 | mode | — | string (one of: searchReplace, replace, append, replaceMethod, insertBefore, insertAfter) | Write mode (default searchReplace). replaceMethod swaps a whole method by name; insertBefore/insertAfter add source before/after a named method. |
-| methodName | — | string | Target/anchor method (case-insensitive); required for replaceMethod, insertBefore and insertAfter. replaceMethod swaps its full definition (incl. leading doc-comment); insertBefore/After splice source just before/after it. |
+| methodName | — | string | Target/anchor method (case-insensitive); required for replaceMethod, insertBefore and insertAfter. replaceMethod swaps its full definition (incl. leading annotation/doc-comment); insertBefore/After splice source just before/after it. |
 | formName | — | string | Form name; required when moduleType=FormModule (e.g. 'ItemForm'). |
 | commandName | — | string | Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate'). |
 | skipSyntaxCheck | — | boolean | Skip the BSL syntax check (default false). |
 | expectedSource | — | string | Lost-update guard for mode=replace: the module content you last read; mismatch rejects. |
 | overwrite | — | boolean | Force mode=replace over an existing module without an expectedSource check (default false). |
-| expectedHash | — | string | Lost-update guard for any mode: the contentHash from your last read; mismatch rejects. |
+| expectedHash | REQUIRED for replaceMethod; optional otherwise | string | Lost-update guard: the contentHash from your last read; mismatch rejects. REQUIRED for replaceMethod (it blindly swaps the whole method body). |
 | dryRun | — | boolean | Preview only (default false): compute the resulting module and run the syntax check, but do NOT write. Returns the would-be content + line counts so you can review a fix before committing it. Works with every mode. |
 
 ## Guide
@@ -55,7 +55,7 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `skipSyntaxCheck` | optional | default false. |
 | `expectedSource` | mode=replace | lost-update guard. |
 | `overwrite` | mode=replace | force without expectedSource. |
-| `expectedHash` | any mode | cheap lost-update guard. |
+| `expectedHash` | REQUIRED for replaceMethod; optional otherwise | cheap lost-update guard. |
 | `dryRun` | optional | preview only — compute + syntax-check, do NOT write. Any mode. Default false. |
 
 ## moduleType to path
@@ -65,18 +65,18 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 ## Modes
 
 - `searchReplace` (default): finds `oldSource` and replaces it with `source`. `oldSource` is REQUIRED and must match EXACTLY ONE location — zero matches or multiple matches are rejected with a steer to read again / give a larger fragment. The match runs on the raw file content (trailing newline preserved), so a fragment ending at EOF including its final newline is found. The file must already exist.
-- `replaceMethod`: swaps a WHOLE method by `methodName` (case-insensitive) — no need to quote the old body as `oldSource`. The replaced span is the method's full definition INCLUDING its leading doc-comment block, so `source` should be the complete new method (add your own doc-comment if you want one). If the method is not found, the error lists the module's available method names. The file must already exist. Ideal for a `code_review` fix: read the method, hand back the corrected method.
-- `insertBefore` / `insertAfter`: splice `source` in just BEFORE (ahead of its leading doc-comment) or just AFTER the `methodName` anchor method — the way to add a NEW method next to an existing one. `source` is inserted verbatim, so include your own blank line(s) for separation. Same not-found error as replaceMethod; the file must already exist.
+- `replaceMethod`: swaps a WHOLE method by `methodName` (case-insensitive) — no need to quote the old body as `oldSource`. The replaced span is the method's full definition INCLUDING its leading annotation (`&AtClient` etc.) and doc-comment block, so `source` should be the complete new method (add your own annotation/doc-comment if you want one). REQUIRES `expectedHash` (see Lost-update guards) - unlike insertBefore/insertAfter, it discards the whole current body, so a stale read must be caught before the write. If the method is not found, the error lists the module's available method names. The file must already exist. Ideal for a `code_review` fix: read the method, hand back the corrected method.
+- `insertBefore` / `insertAfter`: splice `source` in just BEFORE (ahead of its leading annotation/doc-comment) or just AFTER the `methodName` anchor method — the way to add a NEW method next to an existing one. `source` is inserted verbatim, so include your own blank line(s) for separation. Same not-found error as replaceMethod; the file must already exist.
 - `replace`: replaces the entire file. The ONLY mode that can CREATE a new module (creates parent folders). Over an EXISTING module it is guarded (see Lost-update guards).
 - `append`: adds `source` to the end. The file must already exist.
 
 ## Lost-update guards
 
 Concurrent edits between your read and write are caught by:
-- `expectedHash` (ANY mode): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Ignored when creating a new module.
+- `expectedHash` (any mode; REQUIRED for `replaceMethod`): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Ignored when creating a new module.
 - `expectedSource` (mode=replace): pass the exact content you last read. Mismatch is rejected.
 - `overwrite=true` (mode=replace): force the overwrite with no content check.
-A bare `replace` over an existing module with none of these is rejected and steers you toward expectedSource / overwrite / searchReplace. A matching `expectedHash` already satisfies the replace precondition. All comparisons are `\n`-normalized, so a CRLF/LF-only difference is not a spurious mismatch.
+A bare `replace` over an existing module with none of these is rejected and steers you toward expectedSource / overwrite / searchReplace. `replaceMethod` has no expectedSource/overwrite equivalent - it always requires `expectedHash` since it blindly discards the whole current method body (insertBefore/insertAfter are purely additive, so they do NOT require it). A matching `expectedHash` already satisfies the replace precondition. All comparisons are `\n`-normalized, so a CRLF/LF-only difference is not a spurious mismatch.
 
 ## BSL syntax check
 
@@ -115,10 +115,10 @@ Surgical edit (default mode):
   "oldSource": "Return 1;", "source": "Return 2;" }
 ```
 
-Replace a whole method by name (e.g. a code_review remediation):
+Replace a whole method by name (e.g. a code_review remediation - expectedHash from your last read is REQUIRED):
 ```
 { "projectName": "MyProj", "modulePath": "CommonModules/Calc/Module.bsl",
-  "mode": "replaceMethod", "methodName": "Test",
+  "mode": "replaceMethod", "methodName": "Test", "expectedHash": "a1b2c3d4e5f60718",
   "source": "Процедура Test() Экспорт\n\tAddend = 2;\n\tAdd(1, Addend);\nКонецПроцедуры" }
 ```
 
