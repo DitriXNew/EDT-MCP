@@ -1740,6 +1740,50 @@ def test_modify_reports_the_locale_used_and_the_ones_still_untranslated():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_reports_the_locales_left_holding_the_previous_text():
+    # The case the rule is really about: you RENAME a synonym in one language and the other
+    # languages keep the old wording. They are not "missing" - they have a value - so only a
+    # separate list can surface them.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298StaleFr"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298StaleFr",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    # Both languages carry a synonym...
+    for code, text in (("en", "Goods"), ("fr", "Marchandises")):
+        assert_ok(call("modify_metadata", {
+            "projectName": PROJECT, "fqn": "Catalog.Catalog",
+            "properties": [{"name": "synonym", "value": text, "language": code}]}),
+            "seed the synonym in %s" % code)
+        wait_for_project_ready()
+
+    # ... and now only ONE of them is renamed: the other still says "Marchandises".
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Wares", "language": "en"}],
+    })
+    assert_ok(r, "rename the synonym in one language only")
+    assert r.structured.get("localesStale") == ["fr"], \
+        "the language left holding the previous text must be reported: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [], \
+        "a language that HAS text is not missing one: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # Writing both in one call leaves nothing behind.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog",
+        "properties": [{"name": "synonym", "value": "Items", "language": "en"},
+                       {"name": "synonym", "value": "Articles", "language": "fr"}],
+    })
+    assert_ok(r, "translate both languages in the same call")
+    assert "localesStale" not in r.structured, \
+        "a language written by the same call is not stale: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_without_a_localized_property_reports_no_locales():
     # The localized report belongs to a localized write: a plain scalar edit must not grow the
     # payload (its absence is what tells a caller no localized value was touched).

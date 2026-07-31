@@ -128,6 +128,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Set when a write targets a declared language the configuration's own synonym does not use. */
     private static final String KEY_LOCALE_UNUSED = "localeUnusedInConfiguration"; //$NON-NLS-1$
 
+    /** Locales whose EXISTING text this call did not touch - they now describe the old value. */
+    private static final String KEY_LOCALES_STALE = "localesStale"; //$NON-NLS-1$
+
     /** Output value for {@link McpKeys#ACTION}: the node was modified. */
     private static final String VAL_MODIFIED = "modified"; //$NON-NLS-1$
 
@@ -380,6 +383,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "localized property was written. A declared language the configuration itself does " //$NON-NLS-1$
                 + "not use is NOT reported: a multilingual configuration worked on in a " //$NON-NLS-1$
                 + "single-language branch must not nag about the others") //$NON-NLS-1$
+            .stringArrayProperty(KEY_LOCALES_STALE,
+                "Language codes whose value this call did NOT write while it changed the same " //$NON-NLS-1$
+                + "property in another language - they still carry the PREVIOUS text, so they now " //$NON-NLS-1$
+                + "describe the old state (rename the synonym in 'en' and the 'fr' one keeps the " //$NON-NLS-1$
+                + "old name). Only languages the configuration USES are reported, and a language " //$NON-NLS-1$
+                + "written by any change in the same call is not listed. Absent when there are " //$NON-NLS-1$
+                + "none") //$NON-NLS-1$
             .booleanProperty(KEY_LOCALE_UNUSED,
                 "Set when a value was written under a language the configuration itself does not " //$NON-NLS-1$
                 + "use (its own synonym has no text for that language). NOT an error - the language " //$NON-NLS-1$
@@ -5399,6 +5409,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         private final Set<String> languagesUsed = new LinkedHashSet<>();
         private final Set<String> missing = new LinkedHashSet<>();
+        private final Set<String> stale = new LinkedHashSet<>();
         private boolean wrote;
         private boolean unusedLocale;
 
@@ -5431,12 +5442,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     continue;
                 }
                 Map<String, String> present = ((EMap<String, String>)map).map();
-                for (String declared : inUse)
+                // MISSING and STALE ask different questions, so they read different sets. Owing a
+                // NEW translation is what the in-use rule is about: a language the configuration
+                // itself is not named in is one nobody is translating into, and nagging about it
+                // is what the rule forbids. Text that is ALREADY THERE is not owed - it exists,
+                // and this call just made it describe the old value - so staleness is asked about
+                // every DECLARED language: whoever wrote that text is translating into it,
+                // whatever the configuration's own synonym says.
+                for (String declared : declaredCodes)
                 {
                     String value = present.get(declared);
                     if (value == null || value.isEmpty())
                     {
-                        missing.add(declared);
+                        if (inUse.contains(declared))
+                        {
+                            missing.add(declared);
+                        }
+                    }
+                    else if (!declared.equals(change.language()))
+                    {
+                        // It HAS text, and this call did not write it: after changing the synonym
+                        // in one language the others still say what the object used to be called.
+                        // That is invisible to a "missing" list - the value is there, it is just
+                        // the OLD one - and it is exactly the case the caller must be told about.
+                        stale.add(declared);
                     }
                 }
             }
@@ -5460,6 +5489,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 result.put(KEY_LANGUAGE, only);
             }
             result.put(KEY_LOCALES_MISSING, missing());
+            List<String> stillOld = staleLocales();
+            if (!stillOld.isEmpty())
+            {
+                result.put(KEY_LOCALES_STALE, stillOld);
+            }
             if (unusedLocale)
             {
                 // Legal, but worth a question: the configuration's own synonym has no text for that
@@ -5467,6 +5501,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // yet. The caller's agent should ask rather than quietly populate it.
                 result.put(KEY_LOCALE_UNUSED, true);
             }
+        }
+
+        /**
+         * The locales that CARRY TEXT this call did not rewrite - the old wording of a property
+         * whose other language just changed. A locale written by any change in the SAME batch is
+         * excluded: translating en and fr in one call leaves neither of them behind.
+         *
+         * @return the codes, in declaration order of what was collected, never {@code null}
+         */
+        List<String> staleLocales()
+        {
+            List<String> out = new ArrayList<>(stale);
+            out.removeAll(languagesUsed);
+            return out;
         }
 
         /**

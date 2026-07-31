@@ -3463,6 +3463,13 @@
           },
           "type": "array"
         },
+        "localesStale": {
+          "description": "Language codes whose value this call did NOT write while it changed the same property in another language - they still carry the PREVIOUS text, so they now describe the old state (rename the synonym in 'en' and the 'fr' one keeps the old name). Only languages the configuration USES are reported, and a language written by any change in the same call is not listed. Absent when there are none",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "message": {
           "description": "Human-readable confirmation message",
           "type": "string"
