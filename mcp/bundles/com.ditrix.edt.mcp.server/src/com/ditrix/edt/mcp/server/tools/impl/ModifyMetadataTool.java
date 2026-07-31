@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -5413,8 +5414,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         private final Set<String> languagesUsed = new LinkedHashSet<>();
         private final Set<String> missing = new LinkedHashSet<>();
-        private final Set<String> stale = new LinkedHashSet<>();
-        /** (feature, language) pairs that already held text before this call applied anything. */
+        /** Per PROPERTY (one receiver's one feature): the locales this call left holding old text. */
+        private final Map<String, Set<String>> staleByProperty = new LinkedHashMap<>();
+        /** Per PROPERTY: the locales this call actually wrote - the ones that are NOT left behind. */
+        private final Map<String, Set<String>> writtenByProperty = new LinkedHashMap<>();
+        /** (receiver, feature, language) triples whose text this call REPLACED with a different one. */
         private final Set<String> overwrote = new LinkedHashSet<>();
         private boolean wrote;
         private boolean unusedLocale;
@@ -5446,17 +5450,31 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     continue;
                 }
                 String had = ((EMap<String, String>)map).map().get(change.language());
-                if (had != null && !had.isEmpty())
+                if (had != null && !had.isEmpty() && !had.equals(change.localizedValue))
                 {
-                    overwrote.add(preStateKey(change));
+                    // REPLACED, not merely rewritten: writing the same text again changes nothing,
+                    // so the other languages still describe the same value they always did.
+                    overwrote.add(preStateKey(target, change));
                 }
             }
         }
 
-        /** Identity of one (feature, language) pair - the granularity staleness is decided at. */
-        private static String preStateKey(PreparedChange change)
+        /**
+         * Identity of one (receiver, feature, language) triple.
+         * <p>
+         * The receiver is part of it because a form call writes the same feature name on DIFFERENT
+         * objects (a title on the member and one on its extInfo, or on two different items), and the
+         * language because that is what a single change writes.
+         */
+        private static String preStateKey(EObject target, PreparedChange change)
         {
-            return change.feature().getName() + "/" + change.language(); //$NON-NLS-1$
+            return propertyKey(target, change) + "/" + change.language(); //$NON-NLS-1$
+        }
+
+        /** Identity of one PROPERTY - one receiver's one feature; staleness is decided per property. */
+        private static String propertyKey(EObject target, PreparedChange change)
+        {
+            return System.identityHashCode(target) + "#" + change.feature().getName(); //$NON-NLS-1$
         }
 
         /**
@@ -5480,6 +5498,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 wrote = true;
                 languagesUsed.add(change.language());
+                writtenByProperty.computeIfAbsent(propertyKey(target, change), k -> new LinkedHashSet<>())
+                    .add(change.language());
                 unusedLocale |= declaredCodes.contains(change.language())
                     && !inUse.contains(change.language());
                 Object map = target.eGet(change.feature());
@@ -5505,7 +5525,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             missing.add(declared);
                         }
                     }
-                    else if (!declared.equals(change.language()) && overwrote.contains(preStateKey(change)))
+                    else if (!declared.equals(change.language())
+                        && overwrote.contains(preStateKey(target, change)))
                     {
                         // It HAS text, this call did not write it, and the language it DID write
                         // already had text of its own: the value CHANGED, so the others now say
@@ -5513,7 +5534,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         // value is there, it is just the OLD one. (Had this call merely filled in a
                         // language that was empty, nothing would have gone stale - see
                         // rememberPreState.)
-                        stale.add(declared);
+                        staleByProperty.computeIfAbsent(propertyKey(target, change),
+                            k -> new LinkedHashSet<>()).add(declared);
                     }
                 }
             }
@@ -5553,16 +5575,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         /**
          * The locales that CARRY TEXT this call did not rewrite - the old wording of a property
-         * whose other language just changed. A locale written by any change in the SAME batch is
-         * excluded: translating en and fr in one call leaves neither of them behind.
+         * whose other language just changed.
+         * <p>
+         * Decided PER PROPERTY. A call that changes {@code title} in en and {@code toolTip} in fr
+         * leaves title.fr and toolTip.en behind: excluding every language the call touched anywhere
+         * would hide both. Only the property's OWN written locales are excluded, so translating en
+         * and fr of the SAME property in one call still leaves neither of them behind.
          *
-         * @return the codes, in declaration order of what was collected, never {@code null}
+         * @return the codes, deduplicated across properties, never {@code null}
          */
         List<String> staleLocales()
         {
-            List<String> out = new ArrayList<>(stale);
-            out.removeAll(languagesUsed);
-            return out;
+            Set<String> out = new LinkedHashSet<>();
+            for (Map.Entry<String, Set<String>> entry : staleByProperty.entrySet())
+            {
+                Set<String> left = new LinkedHashSet<>(entry.getValue());
+                left.removeAll(writtenByProperty.getOrDefault(entry.getKey(), Set.of()));
+                out.addAll(left);
+            }
+            return new ArrayList<>(out);
         }
 
         /**

@@ -193,8 +193,12 @@ public class MetadataLanguageUtilsTest
     @Test
     public void resolveSynonymLanguageResolvesCodeForPresentValue()
     {
+        // 'en' has to BE declared for an explicit 'en' to resolve - an undeclared code is refused,
+        // and a configuration that declares nothing refuses every code (see the tests below).
+        Configuration bilingual = config(language("ru"), language("ru"), language("en"));
         assertEquals("en",
-            MetadataLanguageUtils.resolveSynonymLanguage(config(language("ru")), "Goods", "en", "the synonym"));
+            MetadataLanguageUtils.resolveSynonymLanguage(bilingual, "Goods", "en", "the synonym"));
+        // The FALLBACK is the default language's own code and needs no declaration lookup.
         assertEquals("ru",
             MetadataLanguageUtils.resolveSynonymLanguage(config(language("ru")), "Goods", null, "the synonym"));
     }
@@ -250,7 +254,11 @@ public class MetadataLanguageUtilsTest
     @Test
     public void localesMissingListsTheDeclaredCodesWithNoValue()
     {
-        Configuration config = config(language("en_CA"), language("en_CA"), language("fr_CA"));
+        // Named in BOTH languages: only then is either of them owed a translation (a configuration
+        // that is named in neither uses neither - see localesInUseIsEmptyWhenTheConfigurationIsNamedInNoLanguage).
+        Configuration config = configWithSynonym(
+            new java.util.LinkedHashMap<>(Map.of("en_CA", "Trade", "fr_CA", "Commerce")),
+            language("en_CA"), language("fr_CA"));
         assertEquals(Arrays.asList("fr_CA"),
             MetadataLanguageUtils.localesMissing(config, Collections.singletonList("en_CA")));
         assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.localesMissing(config, null));
@@ -269,12 +277,14 @@ public class MetadataLanguageUtilsTest
     }
 
     @Test
-    public void localesInUseFallsBackToDeclaredWhenNothingIsTranslatedYet()
+    public void localesInUseIsEmptyWhenTheConfigurationIsNamedInNoLanguage()
     {
-        // A brand-new configuration has no synonym of its own: there is nothing to infer usage
-        // from, and reporting no gaps at all would hide real work.
+        // A configuration whose own synonym is empty everywhere uses NO language. Treating them all
+        // as in use would suppress the confirmation the caller is owed and then demand translations
+        // into every declared language on top of it.
         Configuration config = configWithSynonym(Map.of(), language("en_CA"), language("fr_CA"));
-        assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.localesInUse(config));
+        assertTrue(MetadataLanguageUtils.localesInUse(config).isEmpty());
+        assertTrue(MetadataLanguageUtils.isDeclaredButUnused(config, "en_CA"));
         assertTrue(MetadataLanguageUtils.localesInUse(null).isEmpty());
     }
 
@@ -289,29 +299,31 @@ public class MetadataLanguageUtilsTest
         assertEquals(Arrays.asList("en_CA"),
             MetadataLanguageUtils.localesInUse(config, Arrays.asList("en_CA", "de")));
 
-        // With NO synonym at all there is nothing to infer usage from, so the fallback must cover
-        // the code this call declares too - otherwise a real translation gap goes unreported.
+        // With NO synonym at all NOTHING is in use - not even the code this call declares. The
+        // write into it is the one that has to ask for confirmation.
         Configuration fresh = configWithSynonym(Map.of(), language("en_CA"));
-        assertEquals(Arrays.asList("en_CA", "de"),
-            MetadataLanguageUtils.localesInUse(fresh, Arrays.asList("en_CA", "de")));
+        assertTrue(MetadataLanguageUtils.localesInUse(fresh, Arrays.asList("en_CA", "de")).isEmpty());
         assertTrue(MetadataLanguageUtils.localesInUse(fresh, null).isEmpty());
+        // A null configuration is a different thing entirely: nothing to read, so nothing is
+        // claimed either way and the caller's declared set stands.
         assertEquals(Arrays.asList("en_CA", "de"),
             MetadataLanguageUtils.localesInUse(null, Arrays.asList("en_CA", "de")));
     }
 
     @Test
-    public void localesInUseSeparatesOrphanedTextFromNoTextAtAll()
+    public void localesInUseIsEmptyForOrphanedTextAndForNoTextAtAll()
     {
-        // A batch that RENAMES the only language's code leaves the configuration's name behind under
-        // the OLD key: text exists, but no DECLARED language carries it. That is not the same as a
-        // configuration nobody has named yet - there NOTHING can be inferred, so every declared code
-        // counts as in use. Collapsing the two would hide the question on the rename.
+        // Two ways to end up with nothing in use, and both answer the same: a batch that RENAMES
+        // the only language's code leaves the configuration's name under the OLD key (text exists,
+        // but no DECLARED language carries it), and a configuration nobody has named yet has no
+        // text at all. Either way the write is the one that must ask for confirmation.
         Configuration renamed = configWithSynonym(Map.of("en", "Trade"), language("fr"));
         assertTrue(MetadataLanguageUtils.localesInUse(renamed, Arrays.asList("fr")).isEmpty());
         assertTrue(MetadataLanguageUtils.isDeclaredButUnused(renamed, "fr"));
 
         Configuration fresh = configWithSynonym(Map.of(), language("fr"));
-        assertEquals(Arrays.asList("fr"), MetadataLanguageUtils.localesInUse(fresh, Arrays.asList("fr")));
+        assertTrue(MetadataLanguageUtils.localesInUse(fresh, Arrays.asList("fr")).isEmpty());
+        assertTrue(MetadataLanguageUtils.isDeclaredButUnused(fresh, "fr"));
     }
 
     @Test
@@ -378,13 +390,21 @@ public class MetadataLanguageUtilsTest
     }
 
     @Test
-    public void resolveSynonymLanguageStillAcceptsAnyCodeWhenNothingIsDeclared()
+    public void resolveSynonymLanguageRefusesEveryCodeWhenNothingIsDeclared()
     {
-        // A configuration that declares no language code gives nothing to validate against; refusing
-        // every localized write there would be worse than the bug being fixed.
-        Configuration config = config(language("ru"));
-        assertEquals("de",
-            MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", "de", "the synonym"));
+        // An EMPTY declaration set makes every code undeclared, not every code acceptable: a value
+        // stored there is displayed by nothing at all. The error has to say how to get out of it.
+        Configuration config = config(language("ru"));   // a Language with no languageCode set
+        try
+        {
+            MetadataLanguageUtils.resolveSynonymLanguage(config, "Goods", "de", "the synonym");
+            fail("expected an undeclared-language refusal"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("declares no language codes")); //$NON-NLS-1$
+            assertTrue(e.getMessage(), e.getMessage().contains("languageCode")); //$NON-NLS-1$
+        }
     }
 
     @Test

@@ -157,7 +157,18 @@ public final class MetadataLanguageUtils
         if (explicitLanguage != null && !explicitLanguage.isEmpty())
         {
             List<String> declared = declaredOrOverride(config, declaredOverride);
-            if (!declared.isEmpty())
+            if (declared.isEmpty())
+            {
+                // An EMPTY declaration set does not make an arbitrary code declared - it makes
+                // EVERY code undeclared. Storing the value anyway is precisely the invisible write
+                // this guard exists to stop: nothing would ever display it. Say what is wrong and
+                // what to do about it instead.
+                throw new IllegalArgumentException("This configuration declares no language codes, " //$NON-NLS-1$
+                    + "so '" + explicitLanguage + "' for " + subject + " cannot be stored where " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "anything would display it. Add a Language object with a 'languageCode' " //$NON-NLS-1$
+                    + "first (create_metadata 'Language.<Name>' + modify_metadata 'languageCode'), " //$NON-NLS-1$
+                    + "then write the localized value."); //$NON-NLS-1$
+            }
             {
                 String canonical = canonicalOf(declared, explicitLanguage);
                 if (canonical == null)
@@ -170,9 +181,6 @@ public final class MetadataLanguageUtils
                 }
                 return canonical;
             }
-            // The configuration declares no language code at all (a brand-new or unresolved
-            // configuration): nothing to validate against, so take the caller's code as before
-            // rather than rejecting every localized write.
         }
         String code = resolveLanguageCode(config, explicitLanguage);
         if (code == null)
@@ -377,30 +385,20 @@ public final class MetadataLanguageUtils
         }
         Map<String, String> synonym = config.getSynonym() == null ? Map.of() : config.getSynonym().map();
         List<String> inUse = new ArrayList<>();
-        boolean anyText = false;
         for (Map.Entry<String, String> entry : synonym.entrySet())
         {
             String value = entry.getValue();
-            if (value == null || value.isEmpty())
-            {
-                continue;
-            }
-            anyText = true;
-            if (declared.contains(entry.getKey()))
+            if (value != null && !value.isEmpty() && declared.contains(entry.getKey()))
             {
                 inUse.add(entry.getKey());
             }
         }
-        if (!inUse.isEmpty() || anyText)
-        {
-            // Either some declared language carries the configuration's name, or its name lives
-            // under a code nothing declares any more (a renamed language leaves the old key behind).
-            // The second case means NO declared language is in use - not that usage is unknowable.
-            return orderedAsDeclared(declared, inUse);
-        }
-        // No text at all: a brand-new configuration. There is nothing to infer usage from, and
-        // reporting nothing would hide real work, so every declared code counts as in use.
-        return declared;
+        // A configuration whose own synonym is empty everywhere has NO language in use - the answer
+        // is the empty list, not "all of them". Calling them all in use would suppress the very
+        // question the caller is owed ("this configuration is not named in that language - do you
+        // really want to translate into it?") and would demand translations into every declared
+        // language on top of it.
+        return orderedAsDeclared(declared, inUse);
     }
 
     /** {@code inUse} in DECLARATION order - the order every list this class returns is read in. */
