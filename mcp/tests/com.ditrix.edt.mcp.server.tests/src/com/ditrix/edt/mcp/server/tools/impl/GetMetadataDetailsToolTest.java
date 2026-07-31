@@ -126,13 +126,6 @@ public class GetMetadataDetailsToolTest
         // The authored-help opt-in (execute() reads it; schema parity).
         assertTrue("schema must declare the includeHelp opt-in", //$NON-NLS-1$
             schema.contains("\"includeHelp\"")); //$NON-NLS-1$
-        // The Data Composition Schema (СКД) structured-read parameters (execute() reads all three).
-        assertTrue("schema must declare the dcsInclude expansion parameter", //$NON-NLS-1$
-            schema.contains("\"dcsInclude\"")); //$NON-NLS-1$
-        assertTrue("schema must declare the dcsDataSet selector", //$NON-NLS-1$
-            schema.contains("\"dcsDataSet\"")); //$NON-NLS-1$
-        assertTrue("schema must declare the dcsVariant selector", //$NON-NLS-1$
-            schema.contains("\"dcsVariant\"")); //$NON-NLS-1$
     }
 
     /**
@@ -794,7 +787,7 @@ public class GetMetadataDetailsToolTest
         PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
 
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0, null); //$NON-NLS-1$
+            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Catalog.Colors.Predefined.Blue"); //$NON-NLS-1$
@@ -815,7 +808,7 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0, null); //$NON-NLS-1$
+            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Document.Order.Predefined.X"); //$NON-NLS-1$
@@ -834,7 +827,7 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0, null); //$NON-NLS-1$
+            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref =
