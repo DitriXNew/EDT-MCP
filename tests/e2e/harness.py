@@ -121,11 +121,16 @@ class E2ECallTimeout(Exception):
 
 
 class E2EModelResetFailed(Exception):
-    """reset_model exhausted its attempts without a successful clean_project.
+    """clean_project could not be gotten to succeed within its retry budget - raised by both
+    reset_model() (per-test model cleanup) and final_cleanup() (start/end-of-run sync), and by
+    either one's FINAL settle wait reporting the project still not ready afterward.
 
-    The in-memory model still carries the finished test's write, so the NEXT test would read it -
-    the exact cascade this reset exists to prevent. Silently continuing is what used to turn one
-    real failure into two, so this is raised and the runner aborts on it.
+    Either way the in-memory model may still carry an unsynchronised change (the just-finished
+    test's write, or whatever a stale session/manual edit left behind), and the next reader - the
+    next test, or a caller trusting a "clean" run - would inherit it. Silently continuing is what
+    used to turn one real failure into two (or report a run green over a model that was never
+    actually back in sync), so this is raised rather than swallowed, and callers must not treat
+    it as best-effort.
     """
 
 
@@ -528,7 +533,12 @@ def reset_model():
             "the last test's write. Continuing would hand it to the next test.")
     # Final settle: clean_project's revalidation re-triggers derived data; make sure the
     # next test starts on a fully-indexed model regardless of which branch above we took.
-    wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+    # A negative result here is the same hazard as the exhausted-retries branch above (the
+    # model is not guaranteed to be back in sync) and must not be swallowed either.
+    if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+        raise E2EModelResetFailed(
+            "clean_project succeeded, but the final settle did not report the project ready "
+            "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
 
 
 def all_fixtures_status():
@@ -547,27 +557,47 @@ def final_cleanup():
     """Leave the working tree verifiably clean ('no diff' == the session passed and left
     nothing behind).
 
-    Reverts BOTH fixtures on disk, then clean_projects BOTH. The clean_project is the part
-    that defeats the autosave resurrection: it tears down EDT's in-memory model and
-    re-imports it from the now-clean disk (synchronously — the call blocks on the project
-    restart + derived-data rebuild), so a STALE model (e.g. a manual edit made in the EDT
-    editor, or a metadata write whose model change was not flushed) no longer has a pending
-    change to AUTOSAVE back and re-dirty the tree (the Compute/Goods whack-a-mole). The
-    final reset_all_fixtures() only mops up any file clean_project itself re-touched (e.g. a
-    CRLF/marker touch). Best-effort on the MCP calls (a wedged EDT must not make teardown
-    raise). Run at startup AND at the end."""
+    Reverts BOTH fixtures on disk, then clean_projects BOTH, with the SAME retry-until-synced
+    contract as reset_model() (wait for the project to settle, THEN clean_project, retried up
+    to 3 times each): call() only raises on a TIMEOUT, so a clean_project that came back with
+    isError (e.g. the derived-data pipeline outlived BUILDING_RETRY_TIMEOUT and the server
+    refused it) used to be swallowed by a bare `except Exception: pass`, silently declaring an
+    unsynchronised model clean. The clean_project is the part that defeats the autosave
+    resurrection: it tears down EDT's in-memory model and re-imports it from the now-clean disk
+    (synchronously — the call blocks on the project restart + derived-data rebuild), so a STALE
+    model (e.g. a manual edit made in the EDT editor, or a metadata write whose model change was
+    not flushed) no longer has a pending change to AUTOSAVE back and re-dirty the tree (the
+    Compute/Goods whack-a-mole). If a project still refuses after the retry budget - or the
+    final settle never reports every project ready - that must be EXPLICIT: raises
+    E2EModelResetFailed rather than let a run be reported green over a model nobody actually
+    verified is back in sync. The final reset_all_fixtures() only mops up any file clean_project
+    itself re-touched (e.g. a CRLF/marker touch). Run at startup AND at the end."""
     reset_all_fixtures()
     for proj in (PROJECT, TESTS_PROJECT):
-        try:
-            call("clean_project", {"projectName": proj})
-        except E2ECallTimeout:
-            # The one failure a best-effort catch must NOT swallow: the server is still running
-            # that call, so retrying - or reporting success - hides it from the runner, the only
-            # place that can stop the run before the next test reads a model it is still writing.
-            raise
-        except Exception:
-            pass
-    wait_for_project_ready()
+        cleaned = False
+        for _ in range(3):
+            wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+            try:
+                if not call("clean_project", {"projectName": proj}).is_error:
+                    cleaned = True
+                    break
+            except E2ECallTimeout:
+                # The one failure a best-effort catch must NOT swallow: the server is still running
+                # that call, so retrying - or reporting success - hides it from the runner, the only
+                # place that can stop the run before the next test reads a model it is still writing.
+                raise
+            except Exception:
+                pass
+        if not cleaned:
+            raise E2EModelResetFailed(
+                "clean_project did not succeed in 3 attempts for project %r, so its in-memory "
+                "model may still carry an unsynchronised change - reporting this run clean would "
+                "be a lie." % proj)
+    if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+        raise E2EModelResetFailed(
+            "clean_project succeeded for every project, but the final settle did not report "
+            "every project ready within %ds, so the model is not guaranteed to be back in "
+            "sync." % MODEL_SETTLE_TIMEOUT)
     reset_all_fixtures()
 
 

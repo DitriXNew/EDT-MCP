@@ -280,6 +280,22 @@ public final class ProjectStateChecker
         }
         IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
             .getRoot().getProject(projectName);
+        return settleBeforeCascadeOrError(project, settleTimeoutMs, CascadeEnvironment.DEFAULT);
+    }
+
+    /**
+     * Seam-taking variant of {@link #settleBeforeCascadeOrError(String, long)}, package-visible so a
+     * unit test can drive it with a fake {@link CascadeEnvironment} and no live workspace / EDT
+     * services. Production code only ever reaches this through the {@code (String, long)} overload,
+     * which resolves {@code project} from the workspace and injects {@link CascadeEnvironment#DEFAULT}.
+     *
+     * @param project the project the cascade will mutate
+     * @param settleTimeoutMs how long to wait for the pipeline to drain
+     * @param env the seam over the workspace/derived-data services
+     * @return the building message with a retry hint, or {@code null} when the cascade may proceed
+     */
+    static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs, CascadeEnvironment env)
+    {
         if (!project.exists() || !project.isOpen())
         {
             // Nothing to drain, and asking anyway can block on a project EDT is still disposing.
@@ -294,72 +310,61 @@ public final class ProjectStateChecker
         // an EDT project at all) waitAllComputations returns immediately, so the cost is zero
         // where there is nothing to wait for.
         long deadline = System.currentTimeMillis() + settleTimeoutMs;
-        BuildUtils.waitForDerivedData(project, settleTimeoutMs);
+        env.waitForDerivedData(project, settleTimeoutMs);
         // A cascade is not confined to the named project: a rename builds one refactoring per
-        // participating project, which includes the configuration EXTENSIONS that adopt the
-        // renamed object. An extension whose pipeline is still busy collides with the batch
-        // session exactly like the base one, so drain the others too - they share ONE deadline,
-        // so this cannot multiply the wait by the number of projects in the workspace.
-        String stillBuilding = drainOtherOpenProjects(project, deadline);
-        String base = buildingErrorOrNull(project);
-        if (base != null)
+        // PARTICIPATING project, which includes the configuration EXTENSIONS that adopt the
+        // renamed object - drain those too, sharing the SAME deadline, so this cannot multiply
+        // the wait. An unrelated open project takes no part in the refactoring and cannot collide
+        // with its batch session, so it is never drained or asked about here: one slow, unrelated
+        // project must not eat the shared deadline and delay a rename of an otherwise-ready project.
+        String stillBuilding = drainParticipants(project, deadline, env);
+        if (env.isBuilding(project))
         {
-            return base;
+            // Shaped by buildingErrorOrNull, the single place that composes this message.
+            return buildingErrorOrNull(project);
         }
         // A PARTICIPATING extension that did not settle is refused like the base project would be:
-        // the cascade is about to enter its refactoring too. An UNRELATED project that happens to
-        // be indexing is not - it was drained as a courtesy, but letting it refuse would mean any
-        // busy project in the workspace blocks every rename.
+        // the cascade is about to enter its refactoring too.
         return stillBuilding;
     }
 
     /**
-     * Waits for the other open EDT projects' derived data, until the shared {@code deadline}.
+     * Waits for the PARTICIPATING open EDT projects' derived data, until the shared
+     * {@code deadline}, then verifies them unconditionally.
      * <p>
-     * PARTICIPANTS FIRST, and verified unconditionally. The projects that take part in the cascade
-     * are the ones that extend {@code base}: the rename builds a refactoring for each of them, so
-     * one that is still building is the collision this whole pre-flight exists to prevent. An
-     * unrelated project is drained only with whatever time is left over - it is a courtesy, and it
-     * must never consume the deadline a participant needed, nor decide the answer.
+     * The projects that take part in the cascade are the ones that extend {@code base} (per
+     * {@link CascadeEnvironment#resolveBaseProject(IProject)}): the rename builds a refactoring
+     * for each of them, so one that is still building is the collision this whole pre-flight
+     * exists to prevent. An unrelated open project is not a participant - it cannot collide with
+     * this cascade, so it is never drained, never asked about, and never able to consume the
+     * shared deadline or cause a refusal.
      *
      * @param base the project already drained by the caller
      * @param deadline absolute time (ms) the whole drain must not exceed
+     * @param env the seam over the workspace/derived-data services
      * @return the retryable message for a PARTICIPATING extension that is still building (naming
      *         it), or {@code null} when every participant settled
      */
-    private static String drainOtherOpenProjects(IProject base, long deadline)
+    private static String drainParticipants(IProject base, long deadline, CascadeEnvironment env)
     {
-        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
-        if (dtProjectManager == null)
-        {
-            return null;
-        }
         List<IProject> participants = new ArrayList<>();
-        List<IProject> others = new ArrayList<>();
-        for (IProject other : org.eclipse.core.resources.ResourcesPlugin.getWorkspace().getRoot()
-            .getProjects())
+        for (IProject candidate : env.getOpenDtProjects())
         {
-            if (other.equals(base) || !other.exists() || !other.isOpen()
-                || dtProjectManager.getDtProject(other) == null)
+            if (candidate.equals(base))
             {
                 continue;
             }
-            if (base.equals(ExtensionOriginUtils.resolveBaseProject(other)))
+            if (base.equals(env.resolveBaseProject(candidate)))
             {
-                participants.add(other);
-            }
-            else
-            {
-                others.add(other);
+                participants.add(candidate);
             }
         }
-        drainAll(participants, deadline);
-        drainAll(others, deadline);
-        // Checked AFTER both drains and REGARDLESS of the remaining time: running out of deadline
+        drainAll(participants, deadline, env);
+        // Checked AFTER the drain and REGARDLESS of the remaining time: running out of deadline
         // is not a reason to stop asking whether a participant is ready - it is a reason to say so.
         for (IProject participant : participants)
         {
-            if (buildingErrorOrNull(participant) != null)
+            if (env.isBuilding(participant))
             {
                 return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
                     + "' and is still building, so it takes part in this cascade with an " //$NON-NLS-1$
@@ -370,7 +375,7 @@ public final class ProjectStateChecker
     }
 
     /** Drains each project in turn, giving up as soon as the shared deadline is spent. */
-    private static void drainAll(List<IProject> projects, long deadline)
+    private static void drainAll(List<IProject> projects, long deadline, CascadeEnvironment env)
     {
         for (IProject project : projects)
         {
@@ -379,8 +384,82 @@ public final class ProjectStateChecker
             {
                 return;
             }
-            BuildUtils.waitForDerivedData(project, remaining);
+            env.waitForDerivedData(project, remaining);
         }
+    }
+
+    /**
+     * Seam over the workspace / derived-data services the cascade pre-flight needs, so a unit
+     * test can substitute a fake and exercise {@link #drainParticipants(IProject, long,
+     * CascadeEnvironment)} (and {@link #settleBeforeCascadeOrError(IProject, long,
+     * CascadeEnvironment)}) with no live workspace. {@link #DEFAULT} delegates to the same EDT
+     * services ({@link IDtProjectManager}, {@link ExtensionOriginUtils#resolveBaseProject(IProject)},
+     * {@link BuildUtils#waitForDerivedData(IProject, long)}) this pre-flight always used.
+     * <p>
+     * Public (unlike the package-visible {@code settleBeforeCascadeOrError} overload that takes
+     * it): Mockito's proxy generation cannot mock a non-public type across the fragment-test /
+     * host-bundle classloader split this test bundle runs under, so the type itself must be
+     * accessible even though only test code in this package ever implements or references it.
+     */
+    public interface CascadeEnvironment
+    {
+        /** The open EDT projects currently in the workspace (participants and unrelated alike). */
+        List<IProject> getOpenDtProjects();
+
+        /**
+         * Resolves the BASE (parent) project a dependent project (e.g. a configuration extension)
+         * derives from, or {@code null} when {@code project} is not dependent on another project.
+         */
+        IProject resolveBaseProject(IProject project);
+
+        /** Waits, bounded by {@code timeoutMs}, for {@code project}'s derived-data pipeline to drain. */
+        void waitForDerivedData(IProject project, long timeoutMs);
+
+        /** Whether {@code project}'s derived-data pipeline is still (transiently) building. */
+        boolean isBuilding(IProject project);
+
+        /** Delegates to the live, {@code Activator}-backed EDT services. */
+        CascadeEnvironment DEFAULT = new CascadeEnvironment()
+        {
+            @Override
+            public List<IProject> getOpenDtProjects()
+            {
+                List<IProject> result = new ArrayList<>();
+                IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+                if (dtProjectManager == null)
+                {
+                    return result;
+                }
+                for (IProject candidate : org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+                    .getRoot().getProjects())
+                {
+                    if (candidate.exists() && candidate.isOpen()
+                        && dtProjectManager.getDtProject(candidate) != null)
+                    {
+                        result.add(candidate);
+                    }
+                }
+                return result;
+            }
+
+            @Override
+            public IProject resolveBaseProject(IProject project)
+            {
+                return ExtensionOriginUtils.resolveBaseProject(project);
+            }
+
+            @Override
+            public void waitForDerivedData(IProject project, long timeoutMs)
+            {
+                BuildUtils.waitForDerivedData(project, timeoutMs);
+            }
+
+            @Override
+            public boolean isBuilding(IProject project)
+            {
+                return buildingErrorOrNull(project) != null;
+            }
+        };
     }
 
     /**

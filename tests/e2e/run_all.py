@@ -198,6 +198,12 @@ def main():
         # here would bury the reason.
         print("!! setup cleanup timed out: %s" % e)
         sys.exit(2)
+    except harness.E2EModelResetFailed as e:
+        # Every call RETURNED (nothing hung), but clean_project could not be gotten to succeed,
+        # so the model is not verifiably in sync before a single test has run - nothing to run
+        # against that would be trustworthy either.
+        print("!! setup cleanup could not sync the model: %s" % e)
+        sys.exit(2)
 
     # Each test (incl. its write-metadata model cleanup, see _run_test_unit) runs under a
     # per-test wall-clock timeout. If a test exceeds it, EDT is almost certainly hung (the
@@ -206,7 +212,14 @@ def main():
     # full timeout. No EDT auto-relaunch — restart it and re-run.
     results = []
     aborted_after = None
-    call_timeout_in = None
+    # Set for EITHER race that can leave a live worker behind: a per-CALL timeout (the server
+    # never answered) or a per-TEST timeout (the worker THREAD is still alive when --test-timeout
+    # elapses - it was only abandoned, never actually stopped, so it may still be blocked inside
+    # that same kind of unresponsive call, or inside its own reset_model()). Both mean the same
+    # thing to the cleanup below: a git reset now could race a write the server may still be
+    # performing. "reset-failed" is NOT one of these - every call involved already RETURNED
+    # (clean_project came back isError, not hung), so there is no live worker to race.
+    still_running_in = None
     cleanup_failed = False
     for t in tests:
         if aborted_after is not None:
@@ -229,16 +242,20 @@ def main():
         # model it is still writing.
         if timed_out or status in ("call-timeout", "reset-failed"):
             aborted_after = "%s::%s" % (t["tool"], t["name"])
-            if status == "call-timeout":
-                call_timeout_in = aborted_after
+            if timed_out or status == "call-timeout":
+                still_running_in = aborted_after
 
     # Final cleanliness guarantee across BOTH fixtures (base + extension). On a normal run,
     # full cleanup (revert + EDT model sync) so a stale model can't autosave changes back
-    # after the run. On an ABORT the EDT is wedged, so model-sync would hang — do git-only.
-    if call_timeout_in is not None and aborted_after == call_timeout_in:
-        # A CALL timeout means the server may still be writing these very files: a git reset now
-        # races EDT (it can rename/overwrite underneath us, or re-dirty right after). Leave the
-        # tree alone - the run is over, and the workspace is disposable.
+    # after the run. When a live worker may still be running (a per-CALL OR per-TEST timeout),
+    # any reset - even git-only - would race it, so leave the tree alone. Any OTHER abort (e.g.
+    # reset-failed: clean_project came back isError, not hung) has no live worker to race, so a
+    # git-only reset is still safe.
+    if still_running_in is not None and aborted_after == still_running_in:
+        # The server may still be writing these very files (or the abandoned worker may still be
+        # inside its own reset_model()): a git reset now races EDT (it can rename/overwrite
+        # underneath us, or re-dirty right after). Leave the tree alone - the run is over, and
+        # the workspace is disposable.
         print("!! left the fixtures untouched: %s may still be running server-side" % aborted_after)
     elif aborted_after:
         harness.reset_all_fixtures()
@@ -250,6 +267,12 @@ def main():
             # call the run green either: the server may still be finishing that clean_project and
             # can re-dirty the fixture right after the status check below.
             print("!! final cleanup timed out (fixtures may be dirty): %s" % e)
+            cleanup_failed = True
+        except harness.E2EModelResetFailed as e:
+            # Same idea, different failure mode: every call RETURNED (nothing hung), but
+            # clean_project kept refusing (or the final settle never reported ready), so the
+            # model may still be out of sync. Do not call the run green over that either.
+            print("!! final cleanup could not sync the model: %s" % e)
             cleanup_failed = True
     final_clean = (harness.all_fixtures_status() == "")
 
