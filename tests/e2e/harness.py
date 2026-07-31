@@ -120,6 +120,15 @@ class E2ECallTimeout(Exception):
     """
 
 
+class E2EModelResetFailed(Exception):
+    """reset_model exhausted its attempts without a successful clean_project.
+
+    The in-memory model still carries the finished test's write, so the NEXT test would read it -
+    the exact cascade this reset exists to prevent. Silently continuing is what used to turn one
+    real failure into two, so this is raised and the runner aborts on it.
+    """
+
+
 class E2ESkip(Exception):
     """Raised to SKIP a test (an unmet precondition, not a failure).
 
@@ -207,6 +216,14 @@ def _parse_response(text):
     return json.loads(t)  # last resort: raise with detail
 
 
+# Set once a call times out. After that the server is still busy with work nobody can cancel,
+# so EVERY later call is refused HERE rather than at each call site: a test-level `finally` that
+# tears down its fixture (delete_project, delete_metadata, remove_breakpoint) would otherwise race
+# the request we walked away from. The run is over at that point; the latch just makes it true
+# everywhere instead of only where someone remembered to check.
+_TIMED_OUT = False
+
+
 def _post(method, params):
     global _REQUEST_ID, _SESSION_ID
     _REQUEST_ID += 1
@@ -220,6 +237,10 @@ def _post(method, params):
     }
     if _SESSION_ID:
         headers["Mcp-Session-Id"] = _SESSION_ID
+    if _TIMED_OUT:
+        raise E2ECallTimeout(
+            "refusing to send %s: an earlier call timed out and may still be running, so the run "
+            "is over. (The latch, not a new timeout - see _TIMED_OUT.)" % method)
     req = urllib.request.Request(MCP_URL, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=CALL_TIMEOUT) as resp:
@@ -232,17 +253,26 @@ def _post(method, params):
             text = e.read().decode("utf-8", "replace")
         except (TimeoutError, socket.timeout) as body_timeout:
             # Headers arrived, the body did not - still a call we cannot account for.
+            _arm_timeout_latch()
             raise E2ECallTimeout(_call_timeout_message(body_timeout))
     except urllib.error.URLError as e:
         # A socket read timeout arrives either bare or wrapped in URLError, depending on the
         # Python build; only the timeout becomes E2ECallTimeout - a refused connection is a
         # different failure and must keep its own traceback.
         if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            _arm_timeout_latch()
             raise E2ECallTimeout(_call_timeout_message(e))
         raise
     except (TimeoutError, socket.timeout) as e:
+        _arm_timeout_latch()
         raise E2ECallTimeout(_call_timeout_message(e))
     return _parse_response(text)
+
+
+def _arm_timeout_latch():
+    """Remember that a call was abandoned - see _TIMED_OUT."""
+    global _TIMED_OUT
+    _TIMED_OUT = True
 
 
 def _call_timeout_message(cause):
@@ -475,10 +505,12 @@ def reset_model():
     rebuild). Retry if a late-starting recompute re-flags BUILDING between the wait and the
     call — a successful clean_project is the guarantee the model was actually reset.
     """
+    cleaned = False
     for _ in range(3):
         wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
         try:
             if not call("clean_project", {"projectName": PROJECT}).is_error:
+                cleaned = True
                 break
         except E2ECallTimeout:
             # The one failure a best-effort catch must NOT swallow: the server is still running
@@ -487,6 +519,13 @@ def reset_model():
             raise
         except Exception:
             pass
+    if not cleaned:
+        # Three refusals in a row: the model still carries the finished test's write, and the next
+        # test would read it. That is the cascade this reset exists to prevent, so stop the run
+        # instead of continuing on a model we know is stale.
+        raise E2EModelResetFailed(
+            "clean_project did not succeed in 3 attempts, so the in-memory model still carries "
+            "the last test's write. Continuing would hand it to the next test.")
     # Final settle: clean_project's revalidation re-triggers derived data; make sure the
     # next test starts on a fully-indexed model regardless of which branch above we took.
     wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)

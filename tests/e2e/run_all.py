@@ -32,13 +32,15 @@ def parse_args():
     ap.add_argument("--junit-xml", dest="junit", default=None)
     ap.add_argument("--filter", default=None, help="substring filter on test name or tool")
     ap.add_argument("--test-timeout", type=float,
-                    default=float(os.environ.get("MCP_TEST_TIMEOUT", "2400")),
-                    help="per-test wall-clock timeout in seconds (default 2400). Must exceed the "
+                    default=float(os.environ.get("MCP_TEST_TIMEOUT", "3600")),
+                    help="per-test wall-clock timeout in seconds (default 3600). Must exceed the "
                          "slowest LEGIT test, and that chain is long: the test call (up to "
                          "MCP_CALL_TIMEOUT, 600 on CI) plus reset_model, which can spend "
                          "MODEL_SETTLE_TIMEOUT (600 on CI, pinned there for exactly this reason) "
                          "BEFORE and after its clean_project. The old 600 - and even 1200 - could report a "
-                         "legitimately slow test as a hang, which is the one thing this timeout "
+                         "legitimately slow test as a hang - and the CI maxima already sum to 2400 "
+                         "(call 600 + settle 600 + clean_project 600 + settle 600), so the cap has "
+                         "to sit ABOVE that chain, not on it. That is the one thing this timeout "
                          "must never do: it FAILS the test and SKIPS all the rest. No auto-relaunch "
                          "- restart EDT and re-run.")
     return ap.parse_args()
@@ -124,6 +126,8 @@ def _run_with_timeout(harness, t, timeout_s):
             box["r"] = ("pass", "")
         except harness.E2ECallTimeout as e:
             box["r"] = ("call-timeout", str(e))
+        except harness.E2EModelResetFailed as e:
+            box["r"] = ("reset-failed", str(e))
         except harness.E2ESkip as e:
             box["r"] = ("skip", str(e))
         except harness.E2EAssertion as e:
@@ -203,6 +207,7 @@ def main():
     results = []
     aborted_after = None
     call_timeout_in = None
+    cleanup_failed = False
     for t in tests:
         if aborted_after is not None:
             results.append((t, "skip",
@@ -222,7 +227,7 @@ def main():
         # A per-CALL timeout aborts the run for the same reason a per-TEST one does: the server
         # is still busy with work we cannot cancel, and every later test would be reading a
         # model it is still writing.
-        if timed_out or status == "call-timeout":
+        if timed_out or status in ("call-timeout", "reset-failed"):
             aborted_after = "%s::%s" % (t["tool"], t["name"])
             if status == "call-timeout":
                 call_timeout_in = aborted_after
@@ -241,8 +246,11 @@ def main():
         try:
             harness.final_cleanup()
         except harness.E2ECallTimeout as e:
-            # Do not lose the summary and the JUnit report over a cleanup that hung.
+            # Do not lose the summary and the JUnit report over a cleanup that hung - but do not
+            # call the run green either: the server may still be finishing that clean_project and
+            # can re-dirty the fixture right after the status check below.
             print("!! final cleanup timed out (fixtures may be dirty): %s" % e)
+            cleanup_failed = True
     final_clean = (harness.all_fixtures_status() == "")
 
     npass = sum(1 for _, s, _, _ in results if s == "pass")
@@ -265,7 +273,9 @@ def main():
 
     # A skip is neither pass nor fail: the run is green when nothing FAILED and the
     # fixture is clean (skipped gated tests do not block a headless green run).
-    sys.exit(0 if (nfail == 0 and final_clean) else 1)
+    # A cleanup that timed out is a failed run even when every test passed and the tree LOOKS
+    # clean: the server may still be finishing that call and can re-dirty it after this check.
+    sys.exit(0 if (nfail == 0 and final_clean and not cleanup_failed) else 1)
 
 
 if __name__ == "__main__":
