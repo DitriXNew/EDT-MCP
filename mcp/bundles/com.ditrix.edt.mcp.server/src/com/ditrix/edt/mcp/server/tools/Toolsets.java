@@ -131,7 +131,7 @@ public final class Toolsets
 
         assign(METADATA,
             "create_metadata", "modify_metadata", "delete_metadata", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "rename_metadata_object", "adopt_metadata_object", //$NON-NLS-1$ //$NON-NLS-2$
+            "rename_metadata_object", "adopt_metadata_object", "search_in_dcs", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "list_common_pictures", "export_common_picture", //$NON-NLS-1$ //$NON-NLS-2$
             "get_subsystem_content", "list_subsystems", //$NON-NLS-1$ //$NON-NLS-2$
             "get_configuration_properties", "list_configurations", //$NON-NLS-1$ //$NON-NLS-2$

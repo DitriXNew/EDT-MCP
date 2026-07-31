@@ -77,6 +77,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ResyncToDiskTool;
 import com.ditrix.edt.mcp.server.tools.impl.RevalidateObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
+import com.ditrix.edt.mcp.server.tools.impl.SearchInDcsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBranchInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetVariableTool;
@@ -196,6 +197,7 @@ public final class BuiltInToolRegistrar
         registry.register(new GetModuleStructureTool());
         registry.register(new ListModulesTool());
         registry.register(new SearchInCodeTool());
+        registry.register(new SearchInDcsTool());
         registry.register(new ReadMethodSourceTool());
         registry.register(new GetMethodCallHierarchyTool());
         registry.register(new GetOutgoingStructuresTool());
