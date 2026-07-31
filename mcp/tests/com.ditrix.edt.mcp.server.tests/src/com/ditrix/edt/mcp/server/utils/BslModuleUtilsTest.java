@@ -368,6 +368,40 @@ public class BslModuleUtilsTest
     }
 
     @Test
+    public void testFindMethodViaTextIncludesAnnotationLine()
+    {
+        // A compilation-directive annotation (&AtClient) immediately above the method keyword
+        // must be part of the span, or insertBefore/replaceMethod would split it from the
+        // method it decorates (silently moving it onto inserted content, or leaving it dangling
+        // above a swapped-in body).
+        List<String> lines = List.of(
+            "&AtClient",                    // 0 //$NON-NLS-1$
+            "Procedure Delta()",            // 1 //$NON-NLS-1$
+            "EndProcedure");                // 2 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Delta"); //$NON-NLS-1$
+        assertTrue(tm.found);
+        assertEquals(0, tm.startLine); // includes the &AtClient line
+        assertEquals(2, tm.endLine);
+    }
+
+    @Test
+    public void testFindMethodViaTextIncludesDocCommentAboveAnnotation()
+    {
+        // The usual 1C order is doc-comment, then annotation, then the method keyword - the
+        // doc-comment search must run AFTER backing up over the annotation, not before, or it
+        // would stop at the annotation line and miss the comment above it.
+        List<String> lines = List.of(
+            "// Does something on the client.", // 0 //$NON-NLS-1$
+            "&AtClient",                         // 1 //$NON-NLS-1$
+            "Procedure Epsilon()",               // 2 //$NON-NLS-1$
+            "EndProcedure");                     // 3 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Epsilon"); //$NON-NLS-1$
+        assertTrue(tm.found);
+        assertEquals(0, tm.startLine); // includes both the doc-comment AND the annotation
+        assertEquals(3, tm.endLine);
+    }
+
+    @Test
     public void testFindMethodViaTextEmptyInputNotFoundEmptyNames()
     {
         BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(List.of(), "Whatever"); //$NON-NLS-1$

@@ -127,7 +127,10 @@ public class WriteModuleSourceTool implements IMcpTool
             .booleanProperty("overwrite", //$NON-NLS-1$
                 "Force mode=replace over an existing module without an expectedSource check (default false).") //$NON-NLS-1$
             .stringProperty("expectedHash", //$NON-NLS-1$
-                "Lost-update guard for any mode: the contentHash from your last read; mismatch rejects.") //$NON-NLS-1$
+                "Lost-update guard: the contentHash from your last read; mismatch rejects. Optional for " //$NON-NLS-1$
+                    + "searchReplace/replace/append/insertBefore/insertAfter, REQUIRED for " //$NON-NLS-1$
+                    + "replaceMethod (it blindly swaps the whole method body, so a stale read must be " //$NON-NLS-1$
+                    + "caught before that write, not just discovered after).") //$NON-NLS-1$
             .booleanProperty("dryRun", //$NON-NLS-1$
                 "Preview only (default false): compute the resulting module and run the syntax check, " //$NON-NLS-1$
                     + "but do NOT write. Returns the would-be content + line counts so you can review a " //$NON-NLS-1$
@@ -599,6 +602,22 @@ public class WriteModuleSourceTool implements IMcpTool
             case MODE_INSERT_BEFORE:
             case MODE_INSERT_AFTER:
             {
+                // Lost-update guard for replaceMethod: unlike insertBefore/insertAfter (purely
+                // additive - they never discard existing text), replaceMethod swaps the WHOLE
+                // current method body for the caller's source, so a stale read silently clobbers
+                // any edit made to that method since. expectedHash is ALREADY validated to match
+                // (checkExpectedHashGuard ran before this) when one is supplied - it is required
+                // HERE, not re-checked - mirroring MODE_REPLACE's expectedSource/overwrite guard for
+                // whole-file replace.
+                if (MODE_REPLACE_METHOD.equals(req.mode)
+                    && (req.expectedHash == null || req.expectedHash.isEmpty()))
+                {
+                    return new NewLinesResult(ToolResult.error("replaceMethod requires expectedHash - " //$NON-NLS-1$
+                        + "the contentHash from your last read_module_source / write_module_source " //$NON-NLS-1$
+                        + "call for this module - so a concurrent edit to '" + req.methodName //$NON-NLS-1$
+                        + "' is not silently lost. Read the module first (or reuse the hash you " //$NON-NLS-1$
+                        + "already have) and pass it as expectedHash.").toJson(), null); //$NON-NLS-1$
+                }
                 // Locate the anchor method (its full definition incl. leading doc-comment) via the
                 // shared text scan — 0-based [startLine, endLine] inclusive into originalLines. Text-
                 // based (not AST) so the doc-comment block is part of the span and no EMF load is

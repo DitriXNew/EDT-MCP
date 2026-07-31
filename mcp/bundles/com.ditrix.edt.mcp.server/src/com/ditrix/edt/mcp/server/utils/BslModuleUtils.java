@@ -366,8 +366,19 @@ public final class BslModuleUtils
             methodEnd = allLines.size() - 1;
         }
 
-        // Include the doc-comment block preceding the method keyword.
-        int docStart = findDocCommentStartLine(allLines, methodStart + 1) - 1;
+        // Back up over any contiguous annotation line(s) (&AtClient, &AtServer, &Before("..."), ...)
+        // immediately preceding the method keyword FIRST - a compilation-directive/extension
+        // annotation is not itself a doc-comment, so findDocCommentStartLine alone would leave it
+        // outside the span. Without this, insertBefore splices new source AFTER the annotation
+        // (silently moving it onto the inserted method) and replaceMethod leaves it dangling above
+        // the swapped-in source (a stale or duplicate directive).
+        int annotationStart = methodStart;
+        while (annotationStart > 0 && allLines.get(annotationStart - 1).trim().startsWith("&")) //$NON-NLS-1$
+        {
+            annotationStart--;
+        }
+        // Include the doc-comment block preceding the (possibly annotation-adjusted) start.
+        int docStart = findDocCommentStartLine(allLines, annotationStart + 1) - 1;
         return new TextMethod(true, docStart, methodEnd, matchedName, isFunction, allMethodNames);
     }
 

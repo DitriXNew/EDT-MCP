@@ -366,15 +366,17 @@ def _seed_two_methods():
 @e2e_test(tool="write_module_source", kind="write")
 def test_replacemethod_swaps_named_method_only():
     """replaceMethod swaps ONE method by name: the new body lands, the old body is gone,
-    and the OTHER method is left intact. No oldSource needed."""
+    and the OTHER method is left intact. No oldSource needed (expectedHash IS needed - see
+    test_replacemethod_requires_expected_hash)."""
     _seed_two_methods()
+    token = _read_content_hash()
     new_test = ("Процедура Test() Экспорт\n"
                 "\tСлагаемое = 2;\n"
                 "\tAdd(1, Слагаемое);\n"
                 "КонецПроцедуры")
     r = call("write_module_source", {
         "projectName": PROJECT, "modulePath": MODULE,
-        "mode": "replaceMethod", "methodName": "Test", "source": new_test,
+        "mode": "replaceMethod", "methodName": "Test", "source": new_test, "expectedHash": token,
     })
     assert_ok(r, "replaceMethod must succeed for an existing method")
     src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
@@ -388,10 +390,11 @@ def test_replacemethod_unknown_method_rejected_and_keeps_content():
     """An unknown methodName is rejected with the available method names, and nothing is
     written (the seeded content survives)."""
     _seed_two_methods()
+    token = _read_content_hash()
     r = call("write_module_source", {
         "projectName": PROJECT, "modulePath": MODULE,
         "mode": "replaceMethod", "methodName": "NoSuchMethod_e2e",
-        "source": "Процедура X() Экспорт\nКонецПроцедуры",
+        "source": "Процедура X() Экспорт\nКонецПроцедуры", "expectedHash": token,
     })
     err = assert_error(r, "replaceMethod for an absent method must be rejected")
     # Actionable: the error lists the real method names so the caller can correct it.
@@ -414,13 +417,35 @@ def test_replacemethod_missing_methodname_rejected():
 
 
 @e2e_test(tool="write_module_source", kind="write")
+def test_replacemethod_requires_expected_hash():
+    """replaceMethod blindly swaps the whole method body, so (unlike insertBefore/insertAfter,
+    which only ADD text) it requires expectedHash - without one, a stale read could silently
+    clobber a concurrent edit to the same method. Rejected before the method lookup even runs,
+    and nothing is written."""
+    _seed_two_methods()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replaceMethod", "methodName": "Test",
+        "source": "Процедура Test() Экспорт\nКонецПроцедуры",
+    })
+    err = assert_error(r, "replaceMethod without expectedHash must be rejected")
+    assert_error_quality(err, names=["expectedHash"], suggests=["read_module_source"],
+                          ctx="missing expectedHash names the param + steers to re-read")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Результат = Add(1, 2);",
+                    "a rejected replaceMethod must not have altered the module")
+
+
+@e2e_test(tool="write_module_source", kind="write")
 def test_replacemethod_dryrun_previews_without_writing():
     """replaceMethod honors dryRun: the preview shows the swapped module, disk is untouched."""
     _seed_two_methods()
+    token = _read_content_hash()
     new_test = "Процедура Test() Экспорт\n\tВозврат;\nКонецПроцедуры"
     r = call("write_module_source", {
         "projectName": PROJECT, "modulePath": MODULE,
         "mode": "replaceMethod", "methodName": "Test", "source": new_test, "dryRun": True,
+        "expectedHash": token,
     })
     assert_ok(r, "replaceMethod dryRun must succeed")
     assert_contains(r.text, "status: preview", "must be a preview")
