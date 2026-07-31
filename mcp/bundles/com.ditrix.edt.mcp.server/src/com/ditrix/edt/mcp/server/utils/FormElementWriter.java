@@ -4152,6 +4152,14 @@ public final class FormElementWriter
      * Group / Decoration / Table / ...) &rarr; the items tree by name. Returns {@code null} if no such
      * member exists. A handler ref is NOT a member - resolve it via {@link #findFormHandler} on the
      * appropriate container.
+     * <p>
+     * Uses {@link #findUniqueFormItem} (not the first-match {@link #findFormItem}) for the items-tree
+     * case: two items can legitimately share a name under DIFFERENT parents (e.g. 'Goods.Total' and
+     * 'Other.Total'), and the caller may have reached this bare {@code ref.name} by first disambiguating
+     * via a dotted path in {@code resolveMemberFqn} - which then canonicalizes BACK to a bare name,
+     * re-introducing the same ambiguity. Silently picking "the first match in traversal order" here
+     * would risk mutating the WRONG item; throwing (a clean, caught, actionable error) is the safe
+     * outcome for a write path instead.
      */
     public static EObject resolveFormMember(EObject formModel, FormMemberRef ref)
     {
@@ -4164,7 +4172,7 @@ public final class FormElementWriter
         {
             return findFormCommand(formModel, ref.name);
         }
-        return findFormItem(formModel, ref.name);
+        return findUniqueFormItem(formModel, ref.name);
     }
 
     // ---- ergonomic name/path resolution (address a form member by short name or dotted path) -------
@@ -4194,18 +4202,33 @@ public final class FormElementWriter
     }
 
     /**
+     * {@link #resolveElementRef(EObject, String, String)} with no known form name - a leading path
+     * segment that fails to resolve as a direct child is NEVER tolerated (there is nothing to validate
+     * it against). Kept for callers that genuinely don't have the form's own name; the real ergonomic
+     * entry point ({@link #resolveMemberFqn}) always supplies one via the 3-arg overload.
+     */
+    public static List<FormElementMatch> resolveElementRef(EObject formModel, String elementRef)
+    {
+        return resolveElementRef(formModel, elementRef, null);
+    }
+
+    /**
      * Resolves a form ELEMENT reference - a short name ({@code Sum}) or a dotted path
      * ({@code Goods.Total}, {@code ItemForm.Header.Code}) - against the editable form content model,
      * returning ALL candidates so the caller can tell apart not-found (0 results), resolved (exactly 1)
      * and ambiguous (&gt;1, surfaced to the caller as a {@code multipleMatches}). A dotted path is
-     * resolved segment by segment as DIRECT children (a leading form-name qualifier is tolerated) and
-     * yields at most one candidate. A short name is matched EXACTLY (case-insensitive) across the
-     * attributes, the form commands and the whole items tree; only when nothing matches exactly is a
-     * SUFFIX fallback tried (an element whose name ends with the reference - the platform often
-     * prefixes a created element, e.g. {@code Add} -&gt; {@code FormAdd}). Pure: reads only
-     * {@code formModel}. Call on the (tx-bound or headless) content form.
+     * resolved segment by segment as DIRECT children; a leading segment that fails to resolve is
+     * tolerated as a form-name qualifier ONLY when it case-insensitively equals {@code formName} (pass
+     * {@code null} to never tolerate one) - an arbitrary unresolved first segment is NOT skipped, or a
+     * stale/mistyped qualifier could silently resolve against the form ROOT instead of reporting
+     * not-found. A short name is matched EXACTLY (case-insensitive) across the attributes, the form
+     * commands and the whole items tree; only when nothing matches exactly is a SUFFIX fallback tried
+     * (an element whose name ends with the reference - the platform often prefixes a created element,
+     * e.g. {@code Add} -&gt; {@code FormAdd}). Pure: reads only {@code formModel}. Call on the (tx-bound
+     * or headless) content form.
      */
-    public static List<FormElementMatch> resolveElementRef(EObject formModel, String elementRef)
+    public static List<FormElementMatch> resolveElementRef(EObject formModel, String elementRef,
+        String formName)
     {
         if (formModel == null || elementRef == null)
         {
@@ -4218,7 +4241,7 @@ public final class FormElementWriter
         }
         if (ref.indexOf('.') >= 0)
         {
-            EObject byPath = resolveElementPath(formModel, ref);
+            EObject byPath = resolveElementPath(formModel, ref, formName);
             return byPath == null ? Collections.emptyList() : Collections.singletonList(matchFor(byPath));
         }
         List<FormElementMatch> exact = collectMatches(formModel, ref, false);
@@ -4230,20 +4253,37 @@ public final class FormElementWriter
     }
 
     /**
-     * The form member with EXACTLY this name (case-insensitive) across the attributes, the form
-     * commands and the whole items tree, or {@code null}. This is the create-time existence namespace
-     * (a new member is rejected when a name collides anywhere in it), so it pairs with
-     * {@code create_metadata}'s upsert (idempotent create). Unlike {@link #resolveElementRef} it does
-     * NOT fall back to a suffix match - existence must be exact. Pure: reads only {@code formModel}.
+     * The form member of EXACTLY {@code kind}'s own namespace with this name (case-insensitive), or
+     * {@code null}. Pairs with {@code create_metadata}'s upsert (idempotent create) - scoped to the
+     * SAME per-collection boundaries real (non-upsert) creation enforces: {@code createAttribute}
+     * checks only the attributes collection, {@code createCommand} only the form commands, and
+     * {@code createItem} only the items tree (where every visual kind - Group / Decoration / Field /
+     * Button / Table - DOES share one namespace, since the platform items tree itself has no
+     * per-kind separation). An Attribute and a Field can legitimately share a name (different
+     * collections) - a cross-kind name search here would wrongly report an unrelated member as
+     * 'exists' and skip the create the caller actually asked for. Pure: reads only {@code formModel}.
      */
-    public static FormElementMatch findExactMember(EObject formModel, String name)
+    public static FormElementMatch findExistingOfKind(EObject formModel, Kind kind, String name)
     {
-        if (formModel == null || name == null)
+        if (formModel == null || kind == null || name == null)
         {
             return null;
         }
-        List<FormElementMatch> exact = collectMatches(formModel, name.trim(), false);
-        return exact.isEmpty() ? null : exact.get(0);
+        String trimmed = name.trim();
+        EObject element;
+        switch (kind)
+        {
+        case ATTRIBUTE:
+            element = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), trimmed);
+            break;
+        case COMMAND:
+            element = findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), trimmed);
+            break;
+        default:
+            element = findItem(formModel, trimmed);
+            break;
+        }
+        return element == null ? null : matchFor(element);
     }
 
     /** Builds a {@link FormElementMatch} for an already-resolved element (computes its kind token). */
@@ -4357,20 +4397,25 @@ public final class FormElementWriter
      * Resolves a dotted PATH ({@code Goods.Total}, {@code ItemForm.Header.Code}) to a single element by
      * walking DIRECT children segment by segment - a top-level segment matches an attribute, a form
      * command or a top item; a nested segment matches a child item of the current container. An
-     * unrecognized FIRST segment is tolerated as a form-name qualifier. Returns the element, or
+     * unrecognized FIRST segment is tolerated as a form-name qualifier ONLY when it case-insensitively
+     * equals {@code formName} ({@code null} disables the tolerance entirely). Returns the element, or
      * {@code null} when a segment does not resolve.
      */
-    private static EObject resolveElementPath(EObject formModel, String path)
+    private static EObject resolveElementPath(EObject formModel, String path, String formName)
     {
         String[] segments = path.split("\\."); //$NON-NLS-1$
         EObject current = null; // null == at the form root
         for (int i = 0; i < segments.length; i++)
         {
-            EObject child = directChild(formModel, current, segments[i].trim());
+            String segment = segments[i].trim();
+            EObject child = directChild(formModel, current, segment);
             if (child == null)
             {
-                // Tolerate a leading form-name qualifier (a path may start with the form's own name).
-                if (i == 0)
+                // Tolerate a leading form-name qualifier - but ONLY when it actually IS the form's own
+                // name; an arbitrary unresolved first segment (a mistyped or stale qualifier) must NOT
+                // be silently skipped, or the remaining segments would resolve against the form ROOT
+                // instead of correctly reporting not-found.
+                if (i == 0 && formName != null && formName.equalsIgnoreCase(segment))
                 {
                     continue;
                 }
@@ -4502,7 +4547,7 @@ public final class FormElementWriter
             found = readEditableForm(editCtx, "ResolveFormMember", (formModel, tx) -> //$NON-NLS-1$
             {
                 List<String[]> pairs = new ArrayList<>();
-                for (FormElementMatch match : resolveElementRef(formModel, elementRef))
+                for (FormElementMatch match : resolveElementRef(formModel, elementRef, address.formName))
                 {
                     pairs.add(new String[] { match.kindToken, match.name });
                 }
@@ -4547,12 +4592,16 @@ public final class FormElementWriter
         final String userPrefix;
         /** The member-leaf tokens (length &gt;= 1): a {@code Kind.Name}, a short name, or a path. */
         final String[] remainder;
+        /** The form's own name (the FQN's form-name segment) - the ONLY value a leading ergonomic
+         * path segment may be tolerated against (see {@link #resolveElementPath}). */
+        final String formName;
 
-        FormAddress(String formPath, String userPrefix, String[] remainder)
+        FormAddress(String formPath, String userPrefix, String[] remainder, String formName)
         {
             this.formPath = formPath;
             this.userPrefix = userPrefix;
             this.remainder = remainder;
+            this.formName = formName;
         }
     }
 
@@ -4573,12 +4622,12 @@ public final class FormElementWriter
         {
             String userPrefix = p[0] + "." + p[1] + "." + p[2] + "." + p[3]; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return new FormAddress(formPathOf(p[0], p[1], p[3]), userPrefix,
-                java.util.Arrays.copyOfRange(p, 4, p.length));
+                java.util.Arrays.copyOfRange(p, 4, p.length), p[3]);
         }
         if (p.length >= 3 && "CommonForm".equalsIgnoreCase(MetadataTypeUtils.toEnglishSingular(p[0]))) //$NON-NLS-1$
         {
             return new FormAddress(p[0] + "." + p[1], p[0] + "." + p[1], //$NON-NLS-1$ //$NON-NLS-2$
-                java.util.Arrays.copyOfRange(p, 2, p.length));
+                java.util.Arrays.copyOfRange(p, 2, p.length), p[1]);
         }
         return null;
     }
@@ -4586,8 +4635,12 @@ public final class FormElementWriter
     /**
      * Whether the member-leaf tokens are ALREADY a canonical ref that {@link #parse} handles directly -
      * a {@code Kind.Name} with a real kind, a form-level {@code Handler.Event}, or an item-level
-     * {@code ItemKind.ItemName.Handler.Event} - and so need no name/path resolution. Package-visible
-     * for the headless unit test.
+     * {@code ItemKind.ItemName.Handler.Event} with a REAL item kind token - and so need no name/path
+     * resolution. The 4-token case checks {@code remainder[0]} is a genuine kind token (not just that
+     * {@code remainder[2]} is a handler token): otherwise an ergonomic dotted handler path shaped like
+     * {@code Header.Price.Handler.OnChange} (Header a group, not a kind) would be wrongly accepted as
+     * already-canonical, parsing "Header" itself AS the item kind instead of resolving the Header ->
+     * Price path. Package-visible for the headless unit test.
      */
     static boolean isCanonicalLeaf(String[] remainder)
     {
@@ -4597,7 +4650,7 @@ public final class FormElementWriter
         }
         if (remainder.length == 4)
         {
-            return isHandlerToken(remainder[2]);
+            return kindForToken(remainder[0]) != null && isHandlerToken(remainder[2]);
         }
         return false;
     }

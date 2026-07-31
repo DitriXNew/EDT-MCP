@@ -577,6 +577,23 @@ def test_modify_form_member_by_dotted_path():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_dotted_path_rejects_wrong_qualifier():
+    # A first path segment that is neither an existing group NOR the form's real name ("ItemForm")
+    # must be rejected as not-found - NOT silently tolerated as a "form-name qualifier" and skipped,
+    # which would wrongly resolve against the form ROOT's same-named field instead.
+    _seed_form_field("BogusQualAttr", "QualPrice")
+    before = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Bogus.QualPrice",
+        "properties": [{"name": "title", "value": "ignored", "language": "en"}],
+    })
+    e = assert_error(r, "a bogus leading path segment must be rejected, not tolerated")
+    assert_error_quality(e, names=["QualPrice"], suggests=["not found"],
+                         ctx="a wrong qualifier must report not-found, not resolve the root field")
+    assert_tree_unchanged(before, "a rejected dotted-path modify must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_form_ambiguous_short_name_lists_matches():
     # Two members share the 'Sum' suffix and there is no exact 'Sum'; the short name is ambiguous, so
     # the modify is REJECTED with the candidate FQNs in multipleMatches and nothing is written.

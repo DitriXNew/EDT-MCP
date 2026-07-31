@@ -2305,10 +2305,28 @@ public class FormElementWriterTest
         EObject form = newForm();
         EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
         EObject total = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The qualifier is tolerated ONLY when it matches the REAL form name, passed explicitly.
         List<FormElementMatch> matches =
-            FormElementWriter.resolveElementRef(form, "ItemForm.Goods.Total"); //$NON-NLS-1$
+            FormElementWriter.resolveElementRef(form, "ItemForm.Goods.Total", "ItemForm"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(1, matches.size());
         assertSame(total, matches.get(0).element);
+    }
+
+    @Test
+    public void testResolvePathDoesNotToleratesWrongOrMissingQualifier()
+    {
+        // The bug this guards: a stale/mistyped first segment ("Header", not the form's real name and
+        // not an existing group) must NOT be silently skipped just because it fails to resolve - or
+        // "Header.Price" would wrongly resolve against the form ROOT's "Price" instead of reporting
+        // not-found (a real root-level "Price" exists here specifically to prove that would be the
+        // WRONG element if it were returned).
+        EObject form = newForm();
+        addRootItem(form, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a first segment that is neither an existing child nor the real form name must " //$NON-NLS-1$
+            + "NOT be tolerated", //$NON-NLS-1$
+            FormElementWriter.resolveElementRef(form, "Header.Price", "ItemForm").isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        // No formName supplied at all (the 2-arg overload) -> never tolerated either.
+        assertTrue(FormElementWriter.resolveElementRef(form, "Header.Price").isEmpty()); //$NON-NLS-1$
     }
 
     @Test
@@ -2358,24 +2376,51 @@ public class FormElementWriterTest
         // A short name or a dotted path is NOT canonical -> ergonomic resolution is needed.
         assertFalse(FormElementWriter.isCanonicalLeaf(new String[] { "Price" })); //$NON-NLS-1$
         assertFalse(FormElementWriter.isCanonicalLeaf(new String[] { "Header", "Price" })); //$NON-NLS-1$ //$NON-NLS-2$
+        // A 4-token remainder ending in Handler.Event is canonical ONLY when the FIRST token is a real
+        // item kind - "Header" is a group NAME used ergonomically, not a kind token, so this must NOT
+        // be mistaken for the canonical ItemKind.ItemName.Handler.Event shape (the bug this guards: it
+        // would otherwise parse "Header" itself as the item kind instead of resolving Header -> Price).
+        assertFalse(FormElementWriter.isCanonicalLeaf(
+            new String[] { "Header", "Price", "Handler", "OnChange" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     @Test
-    public void testFindExactMember()
+    public void testFindExistingOfKind()
     {
         EObject form = newForm();
         addFormAttr(form, "Sum"); //$NON-NLS-1$
         addFormCmd(form, "Refresh"); //$NON-NLS-1$
         EObject grp = addRootItem(form, MODEL.formGroup, "Header"); //$NON-NLS-1$
         addChildItem(grp, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
-        // Exact match across attributes / commands / the items tree, with the element's actual kind.
-        assertEquals("Attribute", FormElementWriter.findExactMember(form, "Sum").kindToken); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("Command", FormElementWriter.findExactMember(form, "refresh").kindToken); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("Field", FormElementWriter.findExactMember(form, "Price").kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        // Exact match, scoped to the requested kind's own namespace.
+        assertEquals("Attribute", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "Sum").kindToken); //$NON-NLS-1$
+        assertEquals("Command", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.COMMAND, "refresh").kindToken); //$NON-NLS-1$
+        assertEquals("Field", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.FIELD, "Price").kindToken); //$NON-NLS-1$
         // EXACT only — a suffix is NOT a match (unlike resolveElementRef's fallback); misses are null.
-        assertNull(FormElementWriter.findExactMember(form, "um")); //$NON-NLS-1$
-        assertNull(FormElementWriter.findExactMember(form, "Nope")); //$NON-NLS-1$
-        assertNull(FormElementWriter.findExactMember(form, null));
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "um")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "Nope")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, null));
+        assertNull(FormElementWriter.findExistingOfKind(form, null, "Sum")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindExistingOfKindIsScopedNotCrossKind()
+    {
+        // The bug this guards: an Attribute and a Field/Command can legitimately share a NAME (they
+        // live in different collections) - upsert's existence check must NOT treat one kind's member
+        // as proof another kind's member "already exists", or it would report action='exists' and
+        // skip creating the member the caller actually asked for.
+        EObject form = newForm();
+        addFormAttr(form, "Price"); //$NON-NLS-1$
+        // An Attribute named "Price" exists, but asking for a FIELD named "Price" must find nothing -
+        // the field genuinely does not exist yet, regardless of the same-named attribute.
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.FIELD, "Price")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.COMMAND, "Price")); //$NON-NLS-1$
+        assertEquals("Attribute", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "Price").kindToken); //$NON-NLS-1$
     }
 
     private static EObject addRootItem(EObject form, EClass type, String name)

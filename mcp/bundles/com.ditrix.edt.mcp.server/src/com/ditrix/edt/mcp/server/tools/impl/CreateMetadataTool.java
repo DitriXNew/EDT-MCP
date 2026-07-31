@@ -1241,16 +1241,20 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
                     + "get_metadata_objects and get_metadata_details."); //$NON-NLS-1$
 
-            // Idempotent create: when upsert is set and a member with this name already exists, report
-            // it (its ACTUAL kind/name) without writing - so a create can be re-run safely. A property
-            // CHANGE on an existing member is modify_metadata's job; upsert does not update it here.
-            // Only the leaf-element names share one namespace, so the existence check is exact.
+            // Idempotent create: when upsert is set and a member of the SAME kind with this name
+            // already exists, report it (its ACTUAL kind/name) without writing - so a create can be
+            // re-run safely. A property CHANGE on an existing member is modify_metadata's job; upsert
+            // does not update it here. Scoped to the requested kind's own namespace (attributes /
+            // commands / the items tree are separate collections, exactly like real non-upsert
+            // creation's own duplicate checks) - an Attribute and a Field/Button/... CAN share a name,
+            // so a cross-kind name match here would wrongly report 'exists' for a member the caller
+            // did NOT ask about, silently skipping the create it actually requested.
             if (upsert)
             {
                 String[] existing = FormElementWriter.readEditableForm(fctx, "CheckFormMemberExists", //$NON-NLS-1$
                     (formModel, tx) -> {
                         FormElementWriter.FormElementMatch m =
-                            FormElementWriter.findExactMember(formModel, ref.name);
+                            FormElementWriter.findExistingOfKind(formModel, fKind, ref.name);
                         return m == null ? null : new String[] { m.kindToken, m.name };
                     });
                 if (existing != null)

@@ -754,6 +754,28 @@ def test_upsert_absent_form_member_creates_normally():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_is_scoped_to_the_requested_kind():
+    # An Attribute and a Field/Command CAN share a name (they live in different collections on the
+    # form). upsert must check ONLY the requested kind's own namespace - a same-named member of a
+    # DIFFERENT kind must NOT be reported as 'exists' (which would silently skip the create the
+    # caller actually asked for).
+    name = "SharedNameUpsert"
+    attr_fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + name
+    field_fqn = "Catalog.Catalog.Form.ItemForm.Field." + name
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": attr_fqn})
+    assert_ok(r, "seed a form attribute")
+    wait_for_project_ready()
+    # A Field of the SAME name does not exist yet - upsert must CREATE it, not report 'exists'
+    # against the same-named attribute.
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": field_fqn, "upsert": True})
+    assert_ok(r, "upsert-create a field whose name collides with an existing attribute")
+    assert r.structured.get("action") == "created", \
+        "a same-named member of a DIFFERENT kind must be created, not reported as existing: %r" % (
+            r.structured,)
+    poll_diff_contains(name, ctx="the upsert-created field must land in the form's Form.form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_table_with_columns_and_additions_issue_177():
     # Issue #177: create a form:Table via create_metadata. The table must be built with its auto
     # columns (a LineNumber column + one InputField per tabular-section attribute) AND the three table
