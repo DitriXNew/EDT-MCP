@@ -85,6 +85,7 @@ from harness import (
     assert_no_diff,
     e2e_test,
     wait_for_project_ready,
+    reset_model,
     PROJECT,
     PROJECT_DIR,
 )
@@ -187,8 +188,16 @@ def test_full_export_reexports_every_top_object():
 
     Mutation thinking: a fullExport that silently stayed on the subset path would
     report objectsExported==0 here; an export that produced different bytes for an
-    unchanged model would fail assert_no_diff."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    unchanged model would fail assert_no_diff.
+
+    Precondition: this is the ONLY resync test that writes the WHOLE model back to disk,
+    so it is the only one that exposes a prior write-metadata test whose model reset did
+    not fully settle (git resets the DISK, not EDT's in-memory model — a leaked model
+    change would be re-exported here and fail assert_no_diff). Re-establish the in-sync
+    precondition ourselves via reset_model (clean_project re-imports the committed disk),
+    so the idempotency check is deterministic regardless of the preceding test. A genuine
+    non-idempotent export for an in-sync model would STILL fail assert_no_diff below."""
+    reset_model()  # guarantee the model matches the committed disk before the idempotency check
     r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True, "overwriteDiskEdits": True})
     assert_ok(r, "resync_to_disk fullExport=true overwriteDiskEdits=true")
 
