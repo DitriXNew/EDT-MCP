@@ -290,8 +290,48 @@ public final class ProjectStateChecker
         // skipped on the very call it exists for. With a quiet pipeline (or a name that is not
         // an EDT project at all) waitAllComputations returns immediately, so the cost is zero
         // where there is nothing to wait for.
+        long deadline = System.currentTimeMillis() + settleTimeoutMs;
         BuildUtils.waitForDerivedData(project, settleTimeoutMs);
+        // A cascade is not confined to the named project: a rename builds one refactoring per
+        // participating project, which includes the configuration EXTENSIONS that adopt the
+        // renamed object. An extension whose pipeline is still busy collides with the batch
+        // session exactly like the base one, so drain the others too - they share ONE deadline,
+        // so this cannot multiply the wait by the number of projects in the workspace.
+        drainOtherOpenProjects(project, deadline);
+        // The refusal, though, is decided on the NAMED project only. It is always a participant,
+        // while an unrelated project that happens to be indexing must not be able to refuse every
+        // rename in the workspace - for those the drain above is the whole benefit.
         return buildingErrorOrNull(project);
+    }
+
+    /**
+     * Waits for every OTHER open EDT project's derived data, until the shared {@code deadline}.
+     *
+     * @param except the project already drained by the caller
+     * @param deadline absolute time (ms) the whole drain must not exceed
+     */
+    private static void drainOtherOpenProjects(IProject except, long deadline)
+    {
+        IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
+        if (dtProjectManager == null)
+        {
+            return;
+        }
+        for (IProject other : org.eclipse.core.resources.ResourcesPlugin.getWorkspace().getRoot()
+            .getProjects())
+        {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0)
+            {
+                return;
+            }
+            if (other.equals(except) || !other.exists() || !other.isOpen()
+                || dtProjectManager.getDtProject(other) == null)
+            {
+                continue;
+            }
+            BuildUtils.waitForDerivedData(other, remaining);
+        }
     }
 
     /**
