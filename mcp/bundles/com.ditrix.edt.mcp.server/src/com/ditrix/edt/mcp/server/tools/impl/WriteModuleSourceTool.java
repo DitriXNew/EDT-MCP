@@ -47,6 +47,12 @@ public class WriteModuleSourceTool implements IMcpTool
     private static final String MODE_REPLACE = "replace"; //$NON-NLS-1$
     private static final String MODE_APPEND = "append"; //$NON-NLS-1$
     private static final String MODE_SEARCH_REPLACE = "searchReplace"; //$NON-NLS-1$
+    private static final String MODE_REPLACE_METHOD = "replaceMethod"; //$NON-NLS-1$
+    private static final String MODE_INSERT_BEFORE = "insertBefore"; //$NON-NLS-1$
+    private static final String MODE_INSERT_AFTER = "insertAfter"; //$NON-NLS-1$
+
+    /** Max lines of would-be content echoed back in a {@code dryRun} preview (bounds the response). */
+    private static final int PREVIEW_MAX_LINES = 400;
 
     private static final String PROJECT_NAME = "projectName"; //$NON-NLS-1$
     private static final String MODULE_PATH = "modulePath"; //$NON-NLS-1$
@@ -74,9 +80,10 @@ public class WriteModuleSourceTool implements IMcpTool
     {
         return "Write BSL source code to a 1C metadata object module. " + //$NON-NLS-1$
             "Use to edit a module: searchReplace a fragment (default, needs oldSource), " + //$NON-NLS-1$
-            "replace the whole file, or append. " + //$NON-NLS-1$
+            "replaceMethod / insertBefore / insertAfter (by method name), replace the whole file, or append. " + //$NON-NLS-1$
             "Target the module by EITHER modulePath OR objectName (mutually exclusive — pass exactly one). " + //$NON-NLS-1$
             "Runs a BSL syntax check before writing (skipSyntaxCheck=true to force). " + //$NON-NLS-1$
+            "Pass dryRun=true to preview the result (content + syntax check) WITHOUT writing. " + //$NON-NLS-1$
             "Full parameters and examples: call get_tool_guide('write_module_source')."; //$NON-NLS-1$
     }
 
@@ -101,8 +108,14 @@ public class WriteModuleSourceTool implements IMcpTool
             .stringProperty("oldSource", //$NON-NLS-1$
                 "Fragment to find and replace; required for searchReplace, must match exactly once.") //$NON-NLS-1$
             .enumProperty("mode", //$NON-NLS-1$
-                "Write mode (default searchReplace).", //$NON-NLS-1$
-                MODE_SEARCH_REPLACE, MODE_REPLACE, MODE_APPEND)
+                "Write mode (default searchReplace). replaceMethod swaps a whole method by name; " //$NON-NLS-1$
+                    + "insertBefore/insertAfter add source before/after a named method.", //$NON-NLS-1$
+                MODE_SEARCH_REPLACE, MODE_REPLACE, MODE_APPEND, MODE_REPLACE_METHOD,
+                MODE_INSERT_BEFORE, MODE_INSERT_AFTER)
+            .stringProperty("methodName", //$NON-NLS-1$
+                "Target/anchor method (case-insensitive); required for replaceMethod, insertBefore " //$NON-NLS-1$
+                    + "and insertAfter. replaceMethod swaps its full definition (incl. leading " //$NON-NLS-1$
+                    + "doc-comment); insertBefore/After splice source just before/after it.") //$NON-NLS-1$
             .stringProperty("formName", //$NON-NLS-1$
                 "Form name; required when moduleType=FormModule (e.g. 'ItemForm').") //$NON-NLS-1$
             .stringProperty("commandName", //$NON-NLS-1$
@@ -115,6 +128,10 @@ public class WriteModuleSourceTool implements IMcpTool
                 "Force mode=replace over an existing module without an expectedSource check (default false).") //$NON-NLS-1$
             .stringProperty("expectedHash", //$NON-NLS-1$
                 "Lost-update guard for any mode: the contentHash from your last read; mismatch rejects.") //$NON-NLS-1$
+            .booleanProperty("dryRun", //$NON-NLS-1$
+                "Preview only (default false): compute the resulting module and run the syntax check, " //$NON-NLS-1$
+                    + "but do NOT write. Returns the would-be content + line counts so you can review a " //$NON-NLS-1$
+                    + "fix before committing it. Works with every mode.") //$NON-NLS-1$
             .build();
     }
 
@@ -210,6 +227,8 @@ public class WriteModuleSourceTool implements IMcpTool
         final String expectedSource;
         final boolean overwrite;
         final String expectedHash;
+        final boolean dryRun;
+        final String methodName;
 
         private WriteRequest(Map<String, String> params)
         {
@@ -230,6 +249,8 @@ public class WriteModuleSourceTool implements IMcpTool
             this.expectedSource = JsonUtils.extractStringArgument(params, "expectedSource"); //$NON-NLS-1$
             this.overwrite = JsonUtils.extractBooleanArgument(params, "overwrite", false); //$NON-NLS-1$
             this.expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
+            this.dryRun = JsonUtils.extractBooleanArgument(params, "dryRun", false); //$NON-NLS-1$
+            this.methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
         }
 
         static WriteRequest from(Map<String, String> params)
@@ -302,6 +323,14 @@ public class WriteModuleSourceTool implements IMcpTool
             }
         }
 
+        // dryRun: everything above ran (guards + compute + syntax check) but nothing is written —
+        // return the would-be content so the caller can review the fix before committing it.
+        if (req.dryRun)
+        {
+            return buildPreviewResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
+                newLines, fileExists, totalOriginal);
+        }
+
         // Write file (the mutating step — kept inline under the passed guards)
         writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
 
@@ -358,16 +387,26 @@ public class WriteModuleSourceTool implements IMcpTool
 
         // Validate mode
         if (!MODE_REPLACE.equals(mode) && !MODE_APPEND.equals(mode)
-            && !MODE_SEARCH_REPLACE.equals(mode))
+            && !MODE_SEARCH_REPLACE.equals(mode) && !isMethodMode(mode))
         {
             return ToolResult.error("invalid mode '" + mode + "'. " + //$NON-NLS-1$ //$NON-NLS-2$
-                "Allowed: searchReplace, replace, append").toJson(); //$NON-NLS-1$
+                "Allowed: searchReplace, replace, append, replaceMethod, insertBefore, insertAfter").toJson(); //$NON-NLS-1$
         }
 
         // Validate oldSource for searchReplace mode
         if (MODE_SEARCH_REPLACE.equals(mode) && (oldSource == null || oldSource.isEmpty()))
         {
             return ToolResult.error("oldSource is required for searchReplace mode").toJson(); //$NON-NLS-1$
+        }
+
+        // Validate methodName for the method-targeting modes (replaceMethod / insertBefore / insertAfter)
+        if (isMethodMode(mode))
+        {
+            String methodName = JsonUtils.extractStringArgument(params, "methodName"); //$NON-NLS-1$
+            if (methodName == null || methodName.isEmpty())
+            {
+                return ToolResult.error("methodName is required for mode '" + mode + "'").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
         }
         return null;
     }
@@ -471,6 +510,13 @@ public class WriteModuleSourceTool implements IMcpTool
         }
     }
 
+    /** @return true for the modes that target/anchor on a method by {@code methodName}. */
+    private static boolean isMethodMode(String mode)
+    {
+        return MODE_REPLACE_METHOD.equals(mode) || MODE_INSERT_BEFORE.equals(mode)
+            || MODE_INSERT_AFTER.equals(mode);
+    }
+
     /**
      * Computes the new module content for the request's mode (read-only — no file is
      * written; only the already-read {@code file}/{@code originalLines} content is
@@ -549,6 +595,53 @@ public class WriteModuleSourceTool implements IMcpTool
                 return new NewLinesResult(null, splitSourceLines(sr.newContent));
             }
 
+            case MODE_REPLACE_METHOD:
+            case MODE_INSERT_BEFORE:
+            case MODE_INSERT_AFTER:
+            {
+                // Locate the anchor method (its full definition incl. leading doc-comment) via the
+                // shared text scan — 0-based [startLine, endLine] inclusive into originalLines. Text-
+                // based (not AST) so the doc-comment block is part of the span and no EMF load is
+                // needed in the write path.
+                BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(originalLines, req.methodName);
+                if (!tm.found)
+                {
+                    // A write MUST fail hard when the target method is absent (buildTextMethodNotFound
+                    // is a read-oriented, non-error response). Return a real ToolResult.error that lists
+                    // the available method names so the caller can correct the methodName.
+                    String available = tm.allMethodNames.isEmpty()
+                        ? "(none)" : String.join(", ", tm.allMethodNames); //$NON-NLS-1$ //$NON-NLS-2$
+                    return new NewLinesResult(ToolResult.error("Method '" + req.methodName //$NON-NLS-1$
+                        + "' not found in " + req.modulePath //$NON-NLS-1$
+                        + ". Available methods: " + available //$NON-NLS-1$
+                        + ". Pass an exact methodName (case-insensitive).").toJson(), null); //$NON-NLS-1$
+                }
+                List<String> sourceLines = splitSourceLines(source);
+                List<String> out = new ArrayList<>();
+                if (MODE_INSERT_BEFORE.equals(req.mode))
+                {
+                    // Splice source just BEFORE the anchor (ahead of its leading doc-comment).
+                    out.addAll(originalLines.subList(0, tm.startLine));
+                    out.addAll(sourceLines);
+                    out.addAll(originalLines.subList(tm.startLine, originalLines.size()));
+                }
+                else if (MODE_INSERT_AFTER.equals(req.mode))
+                {
+                    // Splice source just AFTER the anchor's EndProcedure/EndFunction line.
+                    out.addAll(originalLines.subList(0, tm.endLine + 1));
+                    out.addAll(sourceLines);
+                    out.addAll(originalLines.subList(tm.endLine + 1, originalLines.size()));
+                }
+                else
+                {
+                    // replaceMethod: swap the whole span [startLine, endLine] for the new source.
+                    out.addAll(originalLines.subList(0, tm.startLine));
+                    out.addAll(sourceLines);
+                    out.addAll(originalLines.subList(tm.endLine + 1, originalLines.size()));
+                }
+                return new NewLinesResult(null, out);
+            }
+
             default:
                 return new NewLinesResult(ToolResult.error("unsupported mode: " + req.mode).toJson(), null); //$NON-NLS-1$
         }
@@ -608,6 +701,51 @@ public class WriteModuleSourceTool implements IMcpTool
         }
 
         return fm.wrapContent("File written successfully"); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds the {@code dryRun} preview: the same frontmatter as a real write but with
+     * {@code status: preview} / {@code written: false}, and the would-be module content
+     * (capped at {@link #PREVIEW_MAX_LINES}) as the body so the caller can review a fix
+     * before committing it. No file is touched.
+     */
+    private static String buildPreviewResponse(String projectName, String modulePath, String mode,
+        boolean skipSyntaxCheck, List<String> newLines, boolean fileExists, int totalOriginal)
+    {
+        FrontMatter fm = FrontMatter.create()
+            .put("tool", NAME) //$NON-NLS-1$
+            .put(PROJECT_NAME, projectName)
+            .put(MODULE_PATH, modulePath)
+            .put("mode", mode) //$NON-NLS-1$
+            .put("status", "preview") //$NON-NLS-1$ //$NON-NLS-2$
+            .put("dryRun", true) //$NON-NLS-1$
+            .put("written", false) //$NON-NLS-1$
+            .put("linesAfter", newLines.size()) //$NON-NLS-1$
+            .put("syntaxCheck", skipSyntaxCheck ? "skipped" : "passed"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        if (fileExists)
+        {
+            fm.put("linesBefore", totalOriginal); //$NON-NLS-1$
+        }
+        else
+        {
+            fm.put("newFile", true); //$NON-NLS-1$
+        }
+
+        StringBuilder body = new StringBuilder();
+        body.append("Dry run - nothing was written. Resulting module content:\n\n```bsl\n"); //$NON-NLS-1$
+        int shown = Math.min(newLines.size(), PREVIEW_MAX_LINES);
+        for (int i = 0; i < shown; i++)
+        {
+            body.append(newLines.get(i)).append('\n');
+        }
+        body.append("```"); //$NON-NLS-1$
+        if (newLines.size() > PREVIEW_MAX_LINES)
+        {
+            body.append("\n\n_[preview truncated: showing ").append(PREVIEW_MAX_LINES) //$NON-NLS-1$
+                .append(" of ").append(newLines.size()).append(" lines]_"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return fm.wrapContent(body.toString());
     }
 
     /**

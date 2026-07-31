@@ -117,8 +117,23 @@ public class WriteModuleSourceToolTest
         // Lost-update guard params for mode=replace over an existing module.
         assertTrue(schema.contains("\"expectedSource\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"overwrite\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"expectedHash\"")); //$NON-NLS-1$
+        // Preview flag: compute + syntax-check without writing.
+        assertTrue(schema.contains("\"dryRun\"")); //$NON-NLS-1$
+        // Method-targeting modes + their target param.
+        assertTrue(schema.contains("\"methodName\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("replaceMethod")); //$NON-NLS-1$
+        assertTrue(schema.contains("insertBefore")); //$NON-NLS-1$
+        assertTrue(schema.contains("insertAfter")); //$NON-NLS-1$
         // The new params are OPTIONAL — required stays projectName + source only.
         assertTrue(schema.contains("\"required\":[\"projectName\",\"source\"]")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionMentionsDryRunPreview()
+    {
+        String desc = new WriteModuleSourceTool().getDescription();
+        assertTrue("description must advertise the dryRun preview", desc.contains("dryRun")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -368,7 +383,9 @@ public class WriteModuleSourceToolTest
     public void testExecuteOldLineModes()
     {
         WriteModuleSourceTool tool = new WriteModuleSourceTool();
-        String[] removedModes = { "insertBefore", "insertAfter", "replaceLines" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // insertBefore/insertAfter are now VALID method-anchored modes (they take methodName,
+        // not line numbers); only the line-range mode replaceLines remains unimplemented/rejected.
+        String[] removedModes = { "replaceLines" }; //$NON-NLS-1$
 
         for (String mode : removedModes)
         {
