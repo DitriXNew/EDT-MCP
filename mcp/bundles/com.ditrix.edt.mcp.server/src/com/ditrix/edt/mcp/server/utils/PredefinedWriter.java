@@ -60,8 +60,9 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 
 /**
- * Standalone helper authoring PREDEFINED items on a {@code Catalog} or
- * {@code ChartOfCharacteristicTypes}, addressed by a dedicated FQN grammar:
+ * Standalone helper authoring PREDEFINED items on a {@code Catalog},
+ * {@code ChartOfCharacteristicTypes}, {@code ChartOfAccounts} or
+ * {@code ChartOfCalculationTypes}, addressed by a dedicated FQN grammar:
  * {@code <OwnerType>.<OwnerName>.Predefined.<ItemName>} (English {@code Predefined} or its Russian
  * equivalent; the owner TYPE token itself is bilingual like every other FQN in this plugin).
  * <p>
@@ -411,8 +412,14 @@ public final class PredefinedWriter
     }
 
     /**
-     * Parses the {@code properties} array into {@code out}. Supported names: {@code description},
-     * {@code code}, {@code isFolder}, and (create only) {@code parent}. {@code name} is always
+     * Parses the {@code properties} array into {@code out}. Supported names: {@code description}
+     * and {@code code} on every owner; {@code isFolder} on a {@code Catalog} /
+     * {@code ChartOfCharacteristicTypes}; {@code valueType} (alias {@code type}) on a
+     * {@code ChartOfCharacteristicTypes}; {@code accountType} / {@code offBalance} / {@code order} /
+     * {@code accountingFlags} / {@code extDimensionTypes} on a {@code ChartOfAccounts};
+     * {@code base} / {@code displaced} / {@code leading} / {@code actionPeriodIsBase} on a
+     * {@code ChartOfCalculationTypes}; and (create only) {@code parent}. The owner gate itself lives
+     * in {@code rejectCrossOwnerProps} - this only parses the shapes. {@code name} is always
      * refused - a predefined item's identity is the FQN leaf, not a renamable property (delete and
      * re-create instead). On modify, {@code parent} (a move) is refused with an actionable
      * "not yet supported" message rather than silently ignored.
@@ -482,7 +489,7 @@ public final class PredefinedWriter
             case PROP_PARENT:
                 if (isModify)
                 {
-                    return ToolResult.error("Moving a predefined item to a different parent folder is " //$NON-NLS-1$
+                    return ToolResult.error("Moving a predefined item under a different parent is " //$NON-NLS-1$
                         + "not yet supported by modify_metadata; delete the item and re-create it with " //$NON-NLS-1$
                         + "the new 'parent' (a create-time-only property).").toJson(); //$NON-NLS-1$
                 }
@@ -524,11 +531,13 @@ public final class PredefinedWriter
                 return applyExtDimensionTypesProperty(prop, out);
             default:
                 return ToolResult.error("Property '" + name + "' is not supported for a predefined item. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Supported: description, code, isFolder, valueType (alias 'type'; " //$NON-NLS-1$
+                    + "Supported: description, code (every owner), isFolder (Catalog / " //$NON-NLS-1$
+                    + "ChartOfCharacteristicTypes only), valueType (alias 'type'; " //$NON-NLS-1$
                     + "ChartOfCharacteristicTypes only), accountType / offBalance / order / " //$NON-NLS-1$
                     + "accountingFlags / extDimensionTypes (ChartOfAccounts only), base / displaced / " //$NON-NLS-1$
                     + "leading / actionPeriodIsBase (ChartOfCalculationTypes only)" //$NON-NLS-1$
-                    + (isModify ? "" : ", parent (create only)") + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                    + (isModify ? "" : ", parent (create only; not on a ChartOfCalculationTypes)") //$NON-NLS-1$
+                    + ".").toJson(); //$NON-NLS-1$
         }
     }
 
@@ -551,7 +560,12 @@ public final class PredefinedWriter
         return null;
     }
 
-    /** {@code parent} (create only) must be the non-empty Name of an existing predefined folder. */
+    /**
+     * {@code parent} (create only) must be the non-empty Name of an existing predefined item on the
+     * same owner - a FOLDER on a Catalog / ChartOfCharacteristicTypes, the parent ACCOUNT on a
+     * ChartOfAccounts (which has no folders). Checked against the owner later, in
+     * {@code resolveParent}; here only the shape.
+     */
     private static String applyParentProperty(JsonObject prop, ItemProps out)
     {
         JsonElement v = prop.get(KEY_VALUE);
@@ -559,8 +573,9 @@ public final class PredefinedWriter
             || v.getAsString().trim().isEmpty())
         {
             return ToolResult.error("'parent' must be a non-empty JSON string (the Name of an " //$NON-NLS-1$
-                + "existing predefined FOLDER on the same owner); got " + jsonLabel(v) + ". Omit it " //$NON-NLS-1$ //$NON-NLS-2$
-                + "entirely for a top-level item.").toJson(); //$NON-NLS-1$
+                + "existing predefined item on the same owner - a FOLDER on a Catalog / " //$NON-NLS-1$
+                + "ChartOfCharacteristicTypes, the parent ACCOUNT on a ChartOfAccounts); got " //$NON-NLS-1$
+                + jsonLabel(v) + ". Omit it entirely for a top-level item.").toJson(); //$NON-NLS-1$
         }
         out.parentName = v.getAsString();
         return null;
@@ -948,7 +963,8 @@ public final class PredefinedWriter
      * with a yo-normalized fallback (see {@link #locateYo}) - a read/modify/delete lookup, not the
      * create-time duplicate check.
      *
-     * @param owner the owner object ({@link Catalog} or {@link ChartOfCharacteristicTypes})
+     * @param owner the owner object (a {@link Catalog}, {@link ChartOfCharacteristicTypes},
+     *     {@code ChartOfAccounts} or {@code ChartOfCalculationTypes})
      * @param name the item's programmatic Name
      * @return the found item, or {@code null}
      */
@@ -1218,14 +1234,16 @@ public final class PredefinedWriter
 
     /**
      * Creates a new predefined item named {@code itemName} on {@code owner}. Validates the exact
-     * (recursive) duplicate check, resolves an optional {@code parent} FOLDER, lazily creates the
+     * (recursive) duplicate check, resolves an optional {@code parent} (a FOLDER on a Catalog /
+     * ChartOfCharacteristicTypes, the parent ACCOUNT on a ChartOfAccounts), lazily creates the
      * owner's {@code predefined} container when absent, sets a mandatory random {@code id}, the
      * {@code description} (defaulting to {@code itemName} when omitted), the optional
      * {@code isFolder} flag and the optional {@code code} (matched to the owner's code type; omitted
      * -&gt; left UNSET, never invented/autonumbered).
      *
-     * @param owner the (already re-fetched, tx-bound) owner - must be a {@link Catalog} or
-     *     {@link ChartOfCharacteristicTypes}
+     * @param owner the (already re-fetched, tx-bound) owner - a {@link Catalog},
+     *     {@link ChartOfCharacteristicTypes}, {@code ChartOfAccounts} or
+     *     {@code ChartOfCalculationTypes}
      * @param itemName the new item's programmatic Name (already identifier-validated by the caller)
      * @param props the parsed create-time properties
      * @param expectedNotExists when {@code true}, a duplicate reports a sharper "stale snapshot" error
@@ -1371,7 +1389,9 @@ public final class PredefinedWriter
     }
 
     /**
-     * Modifies an existing predefined item's {@code description} / {@code code} / {@code isFolder}.
+     * Modifies an existing predefined item's properties - {@code description} / {@code code} on
+     * every owner, {@code isFolder} / {@code valueType} and the ChartOfAccounts /
+     * ChartOfCalculationTypes owner-specific ones where they apply (see {@link #parseProperties}).
      * A folder-&gt;item transition ({@code isFolder=false} on a folder that still has children) is
      * rejected (remove/move the children first). {@code parent} (a move) is refused upstream in
      * {@link #parseProperties} before this is ever called.
@@ -1440,7 +1460,11 @@ public final class PredefinedWriter
 
     // ---- delete (two-phase: preview + confirm) ----------------------------------------------------
 
-    /** The delete preview: whether found, whether a folder, and (if a folder) every descendant. */
+    /**
+     * The delete preview: whether found, whether a folder, and every descendant it would cascade -
+     * the children of a FOLDER, or of a {@code ChartOfAccounts} parent account (which is not a
+     * folder: that owner has none).
+     */
     public static final class DeletePreview
     {
         public final boolean found;
@@ -2086,8 +2110,8 @@ public final class PredefinedWriter
             || !(item instanceof ChartOfCharacteristicTypesPredefinedItem cctItem))
         {
             return "'valueType' applies only to a ChartOfCharacteristicTypes predefined item; " //$NON-NLS-1$
-                + ownerLabel(owner) + " does not support it (use 'code'/'description'/'isFolder' " //$NON-NLS-1$
-                + "instead)."; //$NON-NLS-1$
+                + ownerLabel(owner) + " does not support it (it takes 'description'/'code', and its " //$NON-NLS-1$
+                + "own owner-specific properties - see the modify_metadata description)."; //$NON-NLS-1$
         }
         JsonElement valueType = props.valueType;
         if (valueType == null || valueType.isJsonNull())

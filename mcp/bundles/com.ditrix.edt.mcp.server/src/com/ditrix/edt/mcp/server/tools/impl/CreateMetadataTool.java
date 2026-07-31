@@ -187,8 +187,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "same-package reference, or an object {nsUri, name}) plus the optional 'lowerBound' / " //$NON-NLS-1$
                 + "'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' " //$NON-NLS-1$
                 + "(booleans, 'fixed'=true needs a 'default') and 'default' (string). A PREDEFINED " //$NON-NLS-1$
-                + "item ('...Predefined.<Item>') uses yet another vocabulary: common 'description' / " //$NON-NLS-1$
-                + "'code' / 'isFolder' / 'parent' plus owner-specific properties - 'valueType' (alias " //$NON-NLS-1$
+            + "item ('...Predefined.<Item>') uses yet another vocabulary: 'description' / 'code' " //$NON-NLS-1$
+                + "on every owner, 'isFolder' / 'parent' on a Catalog / ChartOfCharacteristicTypes (a " //$NON-NLS-1$
+                + "ChartOfAccounts nests through 'parent' too; a ChartOfCalculationTypes takes neither), " //$NON-NLS-1$
+                + "plus owner-specific properties - 'valueType' (alias " //$NON-NLS-1$
                 + "'type'; same {types:[...]} shape as an mdclass attribute's 'type') on a " //$NON-NLS-1$
                 + "ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / " //$NON-NLS-1$
                 + "'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$

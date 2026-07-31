@@ -255,15 +255,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "(string). " //$NON-NLS-1$
             + "Set a PREDEFINED item's properties with 'properties' on its own FQN " //$NON-NLS-1$
             + "('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, " //$NON-NLS-1$
-            + "ChartOfAccounts or ChartOfCalculationTypes): common description / code / isFolder / " //$NON-NLS-1$
-            + "parent (folder->item with existing children is refused; moving to a different 'parent' " //$NON-NLS-1$
-            + "is not yet supported - delete and re-create) plus owner-specific properties - " //$NON-NLS-1$
+            + "ChartOfAccounts or ChartOfCalculationTypes): description / code on every owner, " //$NON-NLS-1$
+            + "isFolder on a Catalog / ChartOfCharacteristicTypes only (folder->item with existing " //$NON-NLS-1$
+            + "children is refused), plus owner-specific properties - " //$NON-NLS-1$
             + "'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; a " //$NON-NLS-1$
             + "JSON null clears it) on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' " //$NON-NLS-1$
             + "/ 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
             + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see " //$NON-NLS-1$
             + "the guide for which apply to each owner) - the documented set, no assignable-schema " //$NON-NLS-1$
-            + "round-trip needed. " //$NON-NLS-1$
+            + "round-trip needed. 'parent' is CREATE-time only: moving an item to a different folder " //$NON-NLS-1$
+            + "(or an account under a different parent account) is refused here - delete and " //$NON-NLS-1$
+            + "re-create it with the new 'parent'. " //$NON-NLS-1$
             + "For other nodes, discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -628,7 +630,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("'rights'/'templates'/'roleProperties'/'content' do not apply to " //$NON-NLS-1$
                 + "a predefined item; '" + normFqn + "' addresses a predefined item. Use 'properties' " //$NON-NLS-1$ //$NON-NLS-2$
-                + "(description / code / isFolder / valueType).").toJson(); //$NON-NLS-1$
+                + "(description / code on every owner, isFolder on a Catalog / " //$NON-NLS-1$ //$NON-NLS-2$
+                + "ChartOfCharacteristicTypes, plus the owner-specific properties named in this " //$NON-NLS-1$
+                + "tool's description).").toJson(); //$NON-NLS-1$
         }
 
         String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);

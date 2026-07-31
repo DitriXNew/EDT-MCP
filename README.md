@@ -553,8 +553,9 @@ package-local structure, without hand-editing XML:
   `fixed`+`default` round out the vocabulary. See `get_tool_guide('create_metadata')`
   for the full parameter list.
 - **`validate_xdto_package`** runs EDT's own configuration validation scoped to one
-  package and returns a pass/fail verdict plus any problems found (e.g. a Property left
-  referencing an ObjectType that was since deleted) — a thin, read-only wrapper over
+  package and returns a one-line verdict — valid, problems found, or undecided when
+  nothing matched but a marker's location could not be resolved — plus any problems found
+  (e.g. a Property left referencing an ObjectType that was since deleted) — a thin, read-only wrapper over
   `get_project_errors`, handy right after authoring or editing package members.
 
 ## Output Formats

@@ -376,6 +376,46 @@ public class DeleteMetadataToolTest
         assertTrue("description must mention the blocked path", desc.contains("blocked")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("description must mention dangling references left by force", //$NON-NLS-1$
             desc.contains("dangling")); //$NON-NLS-1$
+        assertTrue("description must name the force override itself", desc.contains("force=true")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The blocked outcome belongs to the md-refactoring path; a description that promised it for
+        // every FQN shape (the pre-#321 text) said something the form / XDTO branches never do.
+        assertTrue("description must attribute the cascade to the refactoring path", //$NON-NLS-1$
+            desc.contains("md-refactoring")); //$NON-NLS-1$
+    }
+
+    /**
+     * The cascade/blocking contract belongs to the mdclass path. A FORM member and an XDTO package
+     * member are removed from their OWN content model - no reference is rewritten and nothing blocks
+     * - so a description that folded them into one contract promised a cleanup they never get
+     * (issue #321).
+     */
+    @Test
+    public void testDescriptionSeparatesTheBranchesWithoutAReferenceCascade()
+    {
+        String desc = new DeleteMetadataTool().getDescription().toLowerCase();
+        // All three of them, named in the SAME sentence as the no-block statement: an old universal
+        // description with a disclaimer appended somewhere else must not pass this.
+        int start = desc.indexOf("an owned form object"); //$NON-NLS-1$
+        assertTrue("description must name the owned FORM object as a direct-delete branch", //$NON-NLS-1$
+            start >= 0);
+        // Bounded to the sentence that starts there: an assertion over the whole tail would be
+        // satisfied by wording anywhere else in the description.
+        int stop = desc.indexOf("re-check with get_metadata_details", start); //$NON-NLS-1$
+        assertTrue("the clause must end with the re-check advice", stop > start); //$NON-NLS-1$ //$NON-NLS-2$
+        String clause = desc.substring(start, stop);
+        assertTrue("the same clause must name the form member", clause.contains("form member")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the same clause must name the xdto package member", //$NON-NLS-1$
+            clause.contains("xdto package member")); //$NON-NLS-1$
+        assertTrue("the same clause must say nothing blocks them", //$NON-NLS-1$
+            clause.contains("nothing blocks them")); //$NON-NLS-1$
+        assertTrue("the same clause must say force is ignored there", //$NON-NLS-1$
+            clause.contains("force is ignored")); //$NON-NLS-1$
+        assertTrue("the same clause must say the cross-reference is not rewritten", //$NON-NLS-1$
+            clause.contains("not rewritten")); //$NON-NLS-1$
+        // ... and must NOT overstate it: an owned form delete does clear the owner's default-form
+        // settings, so "no cleanup at all" would be its own inaccuracy.
+        assertTrue("the description must still credit the owner-local cleanup", //$NON-NLS-1$
+            desc.contains("owner's own pointers")); //$NON-NLS-1$
     }
 
     /**

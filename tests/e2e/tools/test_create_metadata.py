@@ -1657,9 +1657,9 @@ def test_create_xdto_package_with_target_namespace():
     assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
     assert r.structured.get("targetNamespace") == ns, \
         "the create must echo the written XDTO namespace: %r" % (r.structured,)
-    # Model read-back via get_metadata_details: get_metadata_objects has no 'xDTOPackages'
-    # type filter (its supported-type list is the common-object subset), so read the created
-    # package back by its FQN instead — same model-visibility proof, supported channel.
+    # Model read-back via get_metadata_details, by FQN: a targeted read of THIS package is the
+    # sharper proof of model visibility than finding its row among every package the
+    # get_metadata_objects 'xdtoPackages' filter lists (that filter is covered by its own test).
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["XDTOPackage." + name]})
     assert_ok(d, "get_metadata_details read-back (XDTOPackage.%s)" % name)
     assert_contains(d.text, name, "the new XDTO package must appear in the model read-back")

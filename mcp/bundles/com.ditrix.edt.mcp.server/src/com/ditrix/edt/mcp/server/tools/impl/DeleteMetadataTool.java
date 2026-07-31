@@ -63,8 +63,13 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
 /**
  * Deletes a metadata node (a top-level object or a subordinate member) addressed by a 1C full-name
- * FQN, cascading the cleanup of every reference (BSL code, forms, other metadata) via EDT's
- * md-refactoring service. Two-phase: a bare call previews the affected references; {@code confirm=true}
+ * FQN. A TOP-LEVEL object, and an mdclass MEMBER of one, goes through EDT's md-refactoring
+ * service, which cascades the cleanup of every reference it CAN clean (BSL code, forms, other
+ * metadata); one it cannot blocks the delete instead. A member living inside another object's own
+ * content (an owned form object, a form member, an XDTO package member) is removed from that
+ * container directly, with no CROSS-object cascade - only the owner's own pointers (a default-form
+ * setting naming the deleted form) are cleaned.
+ * Two-phase: a bare call previews the affected references; {@code confirm=true}
  * performs the delete. Replaces the former {@code delete_metadata_object}.
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
@@ -107,12 +112,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "'...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item " //$NON-NLS-1$
             + "'<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / " //$NON-NLS-1$
             + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
-            + "addressed by a 1C full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
-            + "references in BSL code, forms and other metadata. Two-phase: call without confirm to " //$NON-NLS-1$
+            + "addressed by a 1C full-name FQN. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
-            + "If the node is still referenced by metadata the refactoring cannot auto-clean, a " //$NON-NLS-1$
-            + "confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true " //$NON-NLS-1$
-            + "to delete anyway (those references are left dangling). " //$NON-NLS-1$
+            + "A top-level object goes through EDT's md-refactoring, which CASCADES the cleanup of " //$NON-NLS-1$
+            + "references in BSL code, forms and other metadata; when a reference cannot be " //$NON-NLS-1$
+            + "auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed " //$NON-NLS-1$
+            + "- pass force=true to delete anyway and leave those references dangling. A PREDEFINED " //$NON-NLS-1$
+            + "item is checked for incoming references the same way. An owned FORM object, a FORM " //$NON-NLS-1$
+            + "member and an XDTO package member are removed from their own container instead: " //$NON-NLS-1$
+            + "nothing blocks them (force is ignored), and no CROSS-object cascade runs - a " //$NON-NLS-1$
+            + "reference from elsewhere (a field's dataPath, a Property whose type points at the " //$NON-NLS-1$
+            + "deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details. Only the " //$NON-NLS-1$
+            + "owner's OWN pointers are cleaned: deleting an owned form clears the default-form " //$NON-NLS-1$
+            + "settings that named it. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
@@ -1159,7 +1171,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Collects incoming references to the predefined item {@code ref.itemName} on {@code owner} AND -
-     * when it is a FOLDER - every descendant it would cascade (issue #296 P1), REUSING the exact same
+     * when it has children (a FOLDER, or a ChartOfAccounts parent account) - every descendant it would
+     * cascade (issue #296 P1), REUSING the exact same
      * reference-collection engine {@code find_references} uses ({@link
      * MetadataReferenceService#collectReferencesForObjectStrict}, issue #293) rather than a hand-rolled
      * subset of it. This closes two gaps the former hand-rolled scan had: (1) it now ALSO covers BSL

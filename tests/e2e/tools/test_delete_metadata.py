@@ -3,15 +3,18 @@ e2e tests for delete_metadata (kind: write-metadata).
 
 delete_metadata deletes a metadata node (a top-level object or a subordinate member:
 attribute / tabular section / dimension / resource / enum value) addressed by a 1C
-full-name FQN, via EDT's refactoring service, cleaning up every reference in BSL code,
-forms and other metadata. It folds the former delete_metadata_object onto the unified
+full-name FQN. A TOP-LEVEL object goes via EDT's refactoring service, which cleans up
+the references it CAN auto-clean in BSL code, forms and other metadata (one it cannot
+blocks the delete instead); a form object / form member / XDTO member is removed from
+its own container with no reference cascade at all. It folds the former delete_metadata_object onto the unified
 `fqn` parameter and the shared MetadataNodeResolver.
 
 JSON-responseType tool (payload in r.structured). Two-phase:
   * confirm absent/false -> PREVIEW: action="preview", refactoringTitle, items,
     blocking, blockingReferences, blockingReferencesCount, message. Model NOT mutated.
-  * confirm=true         -> EXECUTE: action="executed"; the node is gone and its
-    references are cleaned.
+  * confirm=true         -> EXECUTE: action="executed"; the node is gone. On the
+    md-refactoring path its auto-cleanable references are cleaned too (with force,
+    the ones that blocked are left dangling); a form / XDTO member gets no cleanup.
 
 reset: kind="write-metadata" -> the orchestrator runs reset_model() (clean_project,
 discarding the unsaved delete) AFTER each test, so each test starts clean.

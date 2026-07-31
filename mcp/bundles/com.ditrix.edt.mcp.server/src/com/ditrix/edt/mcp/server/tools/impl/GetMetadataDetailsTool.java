@@ -127,8 +127,14 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "is what modify_metadata can set; FQNs may address members (e.g. " + //$NON-NLS-1$
                 "'Catalog.Products.Attribute.Weight'), but NOT a predefined item " + //$NON-NLS-1$
                 "('...Predefined.<Item>' is not resolvable in this mode - its settable surface is " + //$NON-NLS-1$
-                "fixed: description / code / isFolder, plus 'valueType' for a " + //$NON-NLS-1$
-                "ChartOfCharacteristicTypes item only).") //$NON-NLS-1$
+                "FIXED and depends on the OWNER: description / code everywhere; isFolder on a Catalog " + //$NON-NLS-1$
+                "/ ChartOfCharacteristicTypes; valueType (alias 'type') on a " + //$NON-NLS-1$
+                "ChartOfCharacteristicTypes; accountType / offBalance / order / accountingFlags / " + //$NON-NLS-1$
+                "extDimensionTypes on a ChartOfAccounts; base / displaced / leading / " + //$NON-NLS-1$
+                "actionPeriodIsBase on a ChartOfCalculationTypes; and 'parent' at CREATE time only " + //$NON-NLS-1$
+                "(Catalog / ChartOfCharacteristicTypes / ChartOfAccounts). " + //$NON-NLS-1$
+                "modify_metadata names the same set in its own description, and its guide says which " + //$NON-NLS-1$
+                "owner each belongs to).") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
