@@ -269,3 +269,28 @@ def test_dcs_title_in_an_undeclared_locale_is_rejected():
     assert_not_contains(diff(), "fr_CA", "a rejected dcs write must not reach the disk")
     assert_not_contains(diff(), "Periode", "a rejected dcs write must not reach the disk")
 
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_locale_is_stored_under_the_declared_spelling():
+    # The DCS writer stores the payload key verbatim, so a declared code given in another case has to
+    # be rewritten to the configuration's own spelling - otherwise accepting it (the match is
+    # case-insensitive) would create a second, never-displayed key. The property pipeline already
+    # canonicalizes; the two paths must not disagree (issue #298 review).
+    report = "Z298DcsCase"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"EN": "Period"}}]},
+    })
+    assert_ok(r, "a declared locale in another case must be accepted")
+    wait_for_project_ready()
+    # The DCS template folder is chosen by the tool, so use the suite's locator rather than a guess.
+    dcs_rel = _find_report_dcs(report)
+    assert dcs_rel, "the dcs write must have created the report's .dcs content resource"
+    dcs = read_disk(dcs_rel)
+    assert ">en<" in dcs,         "the title must be stored under the DECLARED spelling 'en': %s" % dcs[:700]
+    assert ">EN<" not in dcs,         "the requested casing must not create a second, never-displayed key: %s" % dcs[:700]
+

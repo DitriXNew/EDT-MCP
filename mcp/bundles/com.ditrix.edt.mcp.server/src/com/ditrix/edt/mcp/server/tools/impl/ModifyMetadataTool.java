@@ -1230,48 +1230,87 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        for (String code : collectDcsTitleLocales(dcsSpec, new ArrayList<>()))
-        {
-            if (MetadataLanguageUtils.canonicalLanguageCode(config, code) == null)
-            {
-                return ToolResult.error("Unknown language '" + code + "' for a dcs title. This " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
-                    + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
-            }
-        }
-        return null;
+        return normalizeDcsTitleLocales(config, declared, dcsSpec);
     }
 
-    /** Collects the keys of every OBJECT-valued {@code title} anywhere in the payload. */
-    private static List<String> collectDcsTitleLocales(JsonElement element, List<String> out)
+    /**
+     * Walks every OBJECT-valued {@code title} in the payload, rejecting a code the configuration does
+     * not declare and REWRITING a declared one to the configuration's own spelling.
+     * <p>
+     * The rewrite matters as much as the rejection: the DCS writer stores the payload's key verbatim,
+     * so accepting {@code EN} against a configuration that declares {@code en_CA} - which the
+     * case-insensitive match does - would store a second, never-displayed key. That is the same
+     * canonicalization the property pipeline performs; the two paths must not disagree.
+     *
+     * @return a ready JSON error for the first undeclared code, or {@code null} when all are fine
+     */
+    private static String normalizeDcsTitleLocales(Configuration config, List<String> declared,
+        JsonElement element)
     {
         if (element == null || element.isJsonNull())
         {
-            return out;
+            return null;
         }
         if (element.isJsonArray())
         {
             for (JsonElement item : element.getAsJsonArray())
             {
-                collectDcsTitleLocales(item, out);
+                String error = normalizeDcsTitleLocales(config, declared, item);
+                if (error != null)
+                {
+                    return error;
+                }
             }
-            return out;
+            return null;
         }
         if (!element.isJsonObject())
         {
-            return out;
+            return null;
         }
         for (java.util.Map.Entry<String, JsonElement> member : element.getAsJsonObject().entrySet())
         {
             JsonElement value = member.getValue();
             if ("title".equals(member.getKey()) && value != null && value.isJsonObject()) //$NON-NLS-1$
             {
-                out.addAll(value.getAsJsonObject().keySet());
+                String error = canonicalizeTitleKeys(config, declared, value.getAsJsonObject());
+                if (error != null)
+                {
+                    return error;
+                }
                 continue;
             }
-            collectDcsTitleLocales(value, out);
+            String error = normalizeDcsTitleLocales(config, declared, value);
+            if (error != null)
+            {
+                return error;
+            }
         }
-        return out;
+        return null;
+    }
+
+    /** Validates and canonicalizes the keys of ONE {@code {code: text}} title object, in place. */
+    private static String canonicalizeTitleKeys(Configuration config, List<String> declared,
+        JsonObject title)
+    {
+        java.util.Map<String, JsonElement> rewritten = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, JsonElement> entry : title.entrySet())
+        {
+            String code = entry.getKey();
+            String canonical = MetadataLanguageUtils.canonicalLanguageCode(config, code);
+            if (canonical == null)
+            {
+                return ToolResult.error("Unknown language '" + code + "' for a dcs title. This " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
+            }
+            rewritten.put(canonical, entry.getValue());
+        }
+        for (String key : new ArrayList<>(title.keySet()))
+        {
+            title.remove(key);
+        }
+        rewritten.forEach(title::add);
+        return null;
     }
 
     /**
