@@ -221,15 +221,20 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         int variant)
     {
         FixProcessHandle handle = fixManager.prepareFix(chosen.marker, dtProject);
+        if (handle == null)
+        {
+            // No fix process could be prepared for this marker's check at all (e.g. the check has no
+            // registered quick-fix) - report the same "no fix available" outcome as the empty-variants
+            // case below, WITHOUT feeding a null handle into getApplicableFixVariants/finishFix (both
+            // require a real handle per the EDT quick-fix lifecycle).
+            return noFixAvailableError(chosen);
+        }
         try
         {
             List<FixVariantDescriptor> variants = new ArrayList<>(fixManager.getApplicableFixVariants(handle));
             if (variants.isEmpty())
             {
-                return ToolResult.error("No quick-fix is available for check '" + chosen.checkId //$NON-NLS-1$
-                    + "'" + locatorSuffix(chosen.modulePath, chosen.line == null ? -1 : chosen.line) //$NON-NLS-1$
-                    + ". Not every validation check has an auto-fix; fix it manually via " //$NON-NLS-1$
-                    + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
+                return noFixAvailableError(chosen);
             }
 
             FixVariantDescriptor chosenVariant;
@@ -261,6 +266,15 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         {
             fixManager.finishFix(handle);
         }
+    }
+
+    /** Actionable "no quick-fix for this marker" error - either no fix process, or no variants. */
+    private static String noFixAvailableError(MarkerMatch chosen)
+    {
+        return ToolResult.error("No quick-fix is available for check '" + chosen.checkId //$NON-NLS-1$
+            + "'" + locatorSuffix(chosen.modulePath, chosen.line == null ? -1 : chosen.line) //$NON-NLS-1$
+            + ". Not every validation check has an auto-fix; fix it manually via " //$NON-NLS-1$
+            + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
     }
 
     /** Actionable "several markers match — pick one" error, listing each with its 1-based index. */
