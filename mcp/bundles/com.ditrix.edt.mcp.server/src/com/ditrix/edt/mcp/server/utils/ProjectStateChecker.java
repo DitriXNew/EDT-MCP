@@ -250,6 +250,51 @@ public final class ProjectStateChecker
     }
 
     /**
+     * The pre-flight for a CASCADE operation (a rename / delete refactoring): actively waits for the
+     * project's derived-data pipeline to drain, then re-checks, and returns the "still building"
+     * message when it did not settle in time.
+     * <p>
+     * {@link #buildingErrorOrNull(IProject)} alone is an INSTANT probe, and a cascade needs more than
+     * that. EDT's refactoring opens a BM batch session; a derived-data task that is still pending when
+     * it does cannot run ("Unable to execute task because batch session is active") and the refactoring
+     * then waits for the pipeline from INSIDE the session - measured at 301 seconds on CI, with the
+     * call finally succeeding. Whoever is on the wire has long since timed out, which is what made
+     * this look like a flaky test rather than what it is: an unbounded wait we walked into.
+     * <p>
+     * So: drain first, on the CALLER's thread (never inside the UI-thread scope - the pipeline may
+     * need it), and if the pipeline is still busy afterwards, refuse with the same actionable,
+     * retryable message every other tool uses instead of blocking the wire for five minutes.
+     *
+     * @param projectName the project the cascade will mutate (a null/empty name skips the check)
+     * @param settleTimeoutMs how long to wait for the pipeline to drain
+     * @return the building message with a retry hint, or {@code null} when the cascade may proceed
+     */
+    public static String settleBeforeCascadeOrError(String projectName, long settleTimeoutMs)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return null;
+        }
+        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+            .getRoot().getProject(projectName);
+        if (!project.exists() || !project.isOpen())
+        {
+            // Nothing to drain, and asking anyway can block on a project EDT is still disposing.
+            // A missing / closed project is not this method's error to report either - the caller's
+            // own resolution names the value ("Project not found: X").
+            return null;
+        }
+        // Drain UNCONDITIONALLY - do not gate this on the instant probe. On the CI run that
+        // exposed this, the probe answered READY and a derived-data task was executing one
+        // second later, so a drain that only ran when the probe said BUILDING would have been
+        // skipped on the very call it exists for. With a quiet pipeline (or a name that is not
+        // an EDT project at all) waitAllComputations returns immediately, so the cost is zero
+        // where there is nothing to wait for.
+        BuildUtils.waitForDerivedData(project, settleTimeoutMs);
+        return buildingErrorOrNull(project);
+    }
+
+    /**
      * Name-based variant of {@link #buildingErrorOrNull(IProject)}. A null/empty name
      * skips the check (returns {@code null}), leaving the caller's required-argument
      * handling to produce the proper error.

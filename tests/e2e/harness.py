@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 import time
 import urllib.request
@@ -104,6 +105,19 @@ _SESSION_ID = None
 # ──────────────────────────────────────────────────────────────────────────────
 class E2EAssertion(Exception):
     """Raised when an e2e assertion fails (a normal test failure)."""
+
+
+class E2ECallTimeout(Exception):
+    """One MCP call exceeded MCP_CALL_TIMEOUT.
+
+    NOT the same as a failed call: the request was never answered, so the server may still be
+    RUNNING it - a write tool keeps mutating the model after we walk away. Measured on CI: a
+    rename_metadata_object the client abandoned at 300s completed server-side at 301s
+    ("Completed tools/call: rename_metadata_object in 301090ms, outcome=ok" followed by
+    "Client connection lost: Broken pipe") and left the object renamed, so the next test failed
+    on a fixture nobody had touched. Nothing here can cancel that call, so the run must STOP
+    rather than read - or try to reset - a model somebody else is still writing.
+    """
 
 
 class E2ESkip(Exception):
@@ -214,8 +228,29 @@ def _post(method, params):
                 _SESSION_ID = sid
             text = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        text = e.read().decode("utf-8", "replace")
+        try:
+            text = e.read().decode("utf-8", "replace")
+        except (TimeoutError, socket.timeout) as body_timeout:
+            # Headers arrived, the body did not - still a call we cannot account for.
+            raise E2ECallTimeout(_call_timeout_message(body_timeout))
+    except urllib.error.URLError as e:
+        # A socket read timeout arrives either bare or wrapped in URLError, depending on the
+        # Python build; only the timeout becomes E2ECallTimeout - a refused connection is a
+        # different failure and must keep its own traceback.
+        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            raise E2ECallTimeout(_call_timeout_message(e))
+        raise
+    except (TimeoutError, socket.timeout) as e:
+        raise E2ECallTimeout(_call_timeout_message(e))
     return _parse_response(text)
+
+
+def _call_timeout_message(cause):
+    return ("no response in %gs (MCP_CALL_TIMEOUT). The server may still be RUNNING this call, "
+            "so the model is not safe to read or even to reset - the run stops here. Check the "
+            "EDT log for the matching 'Completed tools/call: ... in Nms' line to see whether it "
+            "finished late (raise MCP_CALL_TIMEOUT) or never finished (a real hang). %s"
+            % (CALL_TIMEOUT, cause))
 
 
 def _is_transient_building(result):
@@ -334,6 +369,11 @@ def wait_for_project_ready(timeout=None):
             text = (call("list_projects", {}).text or "").lower()
             if text and "building" not in text and "not_available" not in text:
                 return True
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
         except Exception:
             pass
         now = time.time()
@@ -440,6 +480,11 @@ def reset_model():
         try:
             if not call("clean_project", {"projectName": PROJECT}).is_error:
                 break
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
         except Exception:
             pass
     # Final settle: clean_project's revalidation re-triggers derived data; make sure the
@@ -476,6 +521,11 @@ def final_cleanup():
     for proj in (PROJECT, TESTS_PROJECT):
         try:
             call("clean_project", {"projectName": proj})
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
         except Exception:
             pass
     wait_for_project_ready()
@@ -771,9 +821,15 @@ def any_launch_running(config_name=None):
 def terminate_all_live_launches():
     """Teardown helper: kill EVERY live EDT launch (all=true,confirm=true). Idempotent
     and safe when nothing is running (returns the benign not_found sentinel). Best
-    effort — never raises, so it can run in a finally block."""
+    effort in a finally block: it swallows every failure EXCEPT a call timeout, which means
+    the server is still busy and must not be hidden."""
     try:
         call("terminate_launch", {"all": True, "confirm": True})
+    except E2ECallTimeout:
+        # The one failure a best-effort catch must NOT swallow: the server is still running
+        # that call, so retrying - or reporting success - hides it from the runner, the only
+        # place that can stop the run before the next test reads a model it is still writing.
+        raise
     except Exception:
         pass
 
@@ -787,6 +843,11 @@ def wait_until_no_running_launch(config_name=None, timeout=60):
         try:
             if not any_launch_running(config_name):
                 return True
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
         except Exception:
             pass
         time.sleep(2)

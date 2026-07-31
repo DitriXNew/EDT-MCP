@@ -34,6 +34,7 @@ Fixture inventory (TestConfiguration, English Names):
 import xml.etree.ElementTree as ET
 
 from harness import (
+    E2ECallTimeout,
     call,
     assert_ok,
     assert_error,
@@ -571,14 +572,25 @@ def test_create_form_object_generate_content_extension_owned_owner_gets_value_ty
         assert_contains(d.text, "DataProcessorObject.%s" % obj,
                         "the main Object attribute must carry the DataProcessorObject value type even "
                         "though the owner was created in an extension (issue #262)")
-    finally:
-        # Revert the EXTENSION fixture on disk, then re-sync ITS in-memory model from the clean disk -
-        # the same two-step final_cleanup() uses for both fixtures, scoped here to just the extension
-        # (the orchestrator's kind="write-metadata" post-test hook already handles the BASE fixture).
-        reset_all_fixtures()
-        call("clean_project", {"projectName": TESTS_PROJECT})
-        wait_for_project_ready()
-        reset_all_fixtures()
+    except E2ECallTimeout:
+        # NO cleanup here: the timed-out call may still be writing these very files, and a git
+        # reset would race it. The orchestrator aborts the run on this.
+        raise
+    except BaseException:
+        _restore_extension_fixture()
+        raise
+    else:
+        _restore_extension_fixture()
+
+
+def _restore_extension_fixture():
+    """Revert the EXTENSION fixture on disk, then re-sync ITS in-memory model from the clean disk -
+    the same two-step final_cleanup() uses for both fixtures, scoped here to just the extension
+    (the orchestrator's kind="write-metadata" post-test hook already handles the BASE fixture)."""
+    reset_all_fixtures()
+    call("clean_project", {"projectName": TESTS_PROJECT})
+    wait_for_project_ready()
+    reset_all_fixtures()
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

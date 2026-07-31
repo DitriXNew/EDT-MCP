@@ -32,13 +32,15 @@ def parse_args():
     ap.add_argument("--junit-xml", dest="junit", default=None)
     ap.add_argument("--filter", default=None, help="substring filter on test name or tool")
     ap.add_argument("--test-timeout", type=float,
-                    default=float(os.environ.get("MCP_TEST_TIMEOUT", "600")),
-                    help="per-test wall-clock timeout in seconds (default 600). Must exceed the "
-                         "slowest LEGIT test: a write-metadata unit chains the test call + "
-                         "clean_project + wait_for_project_ready, each bounded by MCP_CALL_TIMEOUT "
-                         "(~180s), so keep it well above ~3x that. If a test exceeds the timeout it "
-                         "is FAILED (timeout) and ALL remaining tests are SKIPPED (a hung EDT makes "
-                         "them hang too). No auto-relaunch - restart EDT and re-run.")
+                    default=float(os.environ.get("MCP_TEST_TIMEOUT", "2400")),
+                    help="per-test wall-clock timeout in seconds (default 2400). Must exceed the "
+                         "slowest LEGIT test, and that chain is long: the test call (up to "
+                         "MCP_CALL_TIMEOUT, 600 on CI) plus reset_model, which can spend "
+                         "MODEL_SETTLE_TIMEOUT (600 on CI, pinned there for exactly this reason) "
+                         "BEFORE and after its clean_project. The old 600 - and even 1200 - could report a "
+                         "legitimately slow test as a hang, which is the one thing this timeout "
+                         "must never do: it FAILS the test and SKIPS all the rest. No auto-relaunch "
+                         "- restart EDT and re-run.")
     return ap.parse_args()
 
 
@@ -80,7 +82,24 @@ def _run_test_unit(harness, t):
     clean_project refreshes the in-memory model — the step that actually hung when EDT's
     ProjectRestartJob wedged). The pre-test reset_fixture is fast local git and is done by
     the caller OUTSIDE the timeout."""
-    t["func"]()
+    try:
+        t["func"]()
+    except harness.E2ECallTimeout:
+        # Deliberately NO reset: the call may still be running server-side, and reset_model
+        # would race the very write we abandoned (clean_project against a live mutation).
+        # The runner aborts on this, so no later test inherits the state either.
+        raise
+    except BaseException:
+        # Any OTHER failure still leaves the write applied, exactly like a passing test does.
+        # Skipping the reset there is how ONE real failure became two: the next test read a
+        # model that still carried the previous test's rename and reported "object not found".
+        _reset_after_write(harness, t)
+        raise
+    _reset_after_write(harness, t)
+
+
+def _reset_after_write(harness, t):
+    """reset_fixture (disk) + reset_model (in-memory) for a write-metadata test."""
     if t.get("kind") == "write-metadata":
         harness.reset_fixture()
         harness.reset_model()
@@ -103,6 +122,8 @@ def _run_with_timeout(harness, t, timeout_s):
         try:
             _run_test_unit(harness, t)
             box["r"] = ("pass", "")
+        except harness.E2ECallTimeout as e:
+            box["r"] = ("call-timeout", str(e))
         except harness.E2ESkip as e:
             box["r"] = ("skip", str(e))
         except harness.E2EAssertion as e:
@@ -165,8 +186,14 @@ def main():
         except Exception as e:  # noqa: BLE001
             print("(could not read list_projects: %s)" % e)
         sys.exit(2)
-    harness.final_cleanup()  # clean start: revert BOTH fixtures + sync EDT model so the run
-                             # does not begin on a stale extension edit (e.g. a manual experiment)
+    try:
+        harness.final_cleanup()  # clean start: revert BOTH fixtures + sync EDT model so the run
+                                 # does not begin on a stale extension edit (e.g. a manual run)
+    except harness.E2ECallTimeout as e:
+        # The server did not answer the very first call: nothing to run against, and a traceback
+        # here would bury the reason.
+        print("!! setup cleanup timed out: %s" % e)
+        sys.exit(2)
 
     # Each test (incl. its write-metadata model cleanup, see _run_test_unit) runs under a
     # per-test wall-clock timeout. If a test exceeds it, EDT is almost certainly hung (the
@@ -175,11 +202,12 @@ def main():
     # full timeout. No EDT auto-relaunch — restart it and re-run.
     results = []
     aborted_after = None
+    call_timeout_in = None
     for t in tests:
         if aborted_after is not None:
             results.append((t, "skip",
-                            "skipped: run aborted after a TIMEOUT in %s (EDT likely hung; "
-                            "restart it and re-run)" % aborted_after, 0.0))
+                            "skipped: run aborted after a TIMEOUT in %s (EDT is still busy or "
+                            "hung; restart it and re-run)" % aborted_after, 0.0))
             print("[%-7s] %s::%s - aborted after timeout in %s"
                   % ("SKIP", t["tool"], t["name"], aborted_after))
             continue
@@ -191,16 +219,30 @@ def main():
         head = msg.splitlines()[0] if msg else ""
         print("[%-7s] %s::%s (%.2fs)%s" % (status.upper(), t["tool"], t["name"], dur,
                                            " - " + head if head else ""))
-        if timed_out:
+        # A per-CALL timeout aborts the run for the same reason a per-TEST one does: the server
+        # is still busy with work we cannot cancel, and every later test would be reading a
+        # model it is still writing.
+        if timed_out or status == "call-timeout":
             aborted_after = "%s::%s" % (t["tool"], t["name"])
+            if status == "call-timeout":
+                call_timeout_in = aborted_after
 
     # Final cleanliness guarantee across BOTH fixtures (base + extension). On a normal run,
     # full cleanup (revert + EDT model sync) so a stale model can't autosave changes back
     # after the run. On an ABORT the EDT is wedged, so model-sync would hang — do git-only.
-    if aborted_after:
+    if call_timeout_in is not None and aborted_after == call_timeout_in:
+        # A CALL timeout means the server may still be writing these very files: a git reset now
+        # races EDT (it can rename/overwrite underneath us, or re-dirty right after). Leave the
+        # tree alone - the run is over, and the workspace is disposable.
+        print("!! left the fixtures untouched: %s may still be running server-side" % aborted_after)
+    elif aborted_after:
         harness.reset_all_fixtures()
     else:
-        harness.final_cleanup()
+        try:
+            harness.final_cleanup()
+        except harness.E2ECallTimeout as e:
+            # Do not lose the summary and the JUnit report over a cleanup that hung.
+            print("!! final cleanup timed out (fixtures may be dirty): %s" % e)
     final_clean = (harness.all_fixtures_status() == "")
 
     npass = sum(1 for _, s, _, _ in results if s == "pass")

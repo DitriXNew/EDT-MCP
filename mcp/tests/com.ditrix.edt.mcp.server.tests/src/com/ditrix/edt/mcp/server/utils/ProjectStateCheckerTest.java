@@ -37,4 +37,15 @@ public class ProjectStateCheckerTest
         // empty name short-circuits to null before any workspace access.
         assertNull(ProjectStateChecker.buildingErrorOrNull(""));
     }
+
+    @Test
+    public void settleBeforeCascadeShortCircuitsWithoutWaitingWhenNothingIsBuilding()
+    {
+        // The cascade pre-flight drains the pipeline unconditionally for a REAL project, but a
+        // null/empty name has no project to drain: it must return before any workspace access,
+        // leaving the caller's required-argument error to speak. (A regression here would show as
+        // this test hanging on the drain rather than failing.)
+        assertNull(ProjectStateChecker.settleBeforeCascadeOrError(null, 60_000L));
+        assertNull(ProjectStateChecker.settleBeforeCascadeOrError("", 60_000L));
+    }
 }
