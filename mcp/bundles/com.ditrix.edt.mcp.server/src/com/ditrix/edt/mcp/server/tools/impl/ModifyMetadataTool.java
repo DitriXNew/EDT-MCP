@@ -392,12 +392,44 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ctx.error;
         }
+        Configuration config = ctx.config;
 
         String normFqn = MetadataTypeUtils.normalizeFqn(args.fqn);
 
         // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
         // branch: form members live on the editable Form content model (a cross-model hop), not the
-        // mdclass tree. A Role / content payload addressed to a form member is refused there.
+        // mdclass tree. The validation + change pipeline (prepare / PreparedChange) is reused as-is.
+        // Besides the canonical 'Type.Object.Form.F.Kind.Name', the member may be addressed
+        // ERGONOMICALLY by a short name or a dotted path ('...Form.F.Price' / '...Form.F.Header.Price');
+        // resolveMemberFqn canonicalizes that (opening the form read-only only when a name/path actually
+        // needs resolving), reports an ambiguous leaf as multipleMatches and an unknown leaf as
+        // not-found, and leaves a non-form FQN for the metadata-object resolver below.
+        FormElementWriter.MemberFqnResolution memberFqn =
+            FormElementWriter.resolveMemberFqn(ctx.project, config, normFqn);
+        if (memberFqn.formError != null)
+        {
+            return memberFqn.formError;
+        }
+        if (memberFqn.multipleMatches != null)
+        {
+            return ToolResult.error("Ambiguous form element '" + memberFqn.elementRef + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + memberFqn.formPrefix + ": " + memberFqn.multipleMatches.size() //$NON-NLS-1$
+                + " members match. Re-address it by a full 'Kind.Name' FQN or a dotted path " //$NON-NLS-1$
+                + "(one of the listed matches).") //$NON-NLS-1$
+                .put("multipleMatches", memberFqn.multipleMatches).toJson(); //$NON-NLS-1$
+        }
+        if (memberFqn.notFound)
+        {
+            return ToolResult.error("Form element not found: '" + memberFqn.elementRef + "' on " //$NON-NLS-1$ //$NON-NLS-2$
+                + memberFqn.formPrefix + ". Use get_metadata_details on the form to list its members " //$NON-NLS-1$
+                + "(item / attribute / command).").toJson(); //$NON-NLS-1$
+        }
+        if (!memberFqn.notForm)
+        {
+            normFqn = memberFqn.canonicalFqn;
+        }
+
+        // A Role / content payload addressed to a form member is refused in dispatchFormMember.
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
@@ -3981,8 +4013,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
             final String mdFormName = fctx.mdForm.getName();
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
-                (formModel, tx) -> destination[0] = FormElementWriter.moveItem(formModel, itemName,
-                    targetParentFinal, positionFinal, mdFormName));
+                (formModel, tx) ->
+                {
+                    // Path-aware resolution (resolveFormMember), NOT the flat-name moveItem(formModel,
+                    // itemName, ...) overload: ref.name may be a disambiguating dotted path
+                    // (resolveMemberFqn preserves one when the bare leaf name is ambiguous), which a
+                    // flat name search would never match (reporting a clean not-found instead of
+                    // moving the intended item) or - for a genuinely ambiguous bare name - must still
+                    // reject rather than silently move the first match.
+                    EObject item = FormElementWriter.resolveFormMember(formModel, ref);
+                    if (item == null)
+                    {
+                        throw new IllegalArgumentException("Form item not found: '" + itemName //$NON-NLS-1$
+                            + "'. Use get_metadata_details on the form to inspect its items."); //$NON-NLS-1$
+                    }
+                    destination[0] =
+                        FormElementWriter.moveItem(formModel, item, targetParentFinal, positionFinal, mdFormName);
+                });
         }
         catch (Exception e)
         {
@@ -4138,10 +4185,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    // Strict resolution: an AMBIGUOUS button name (several items by that name anywhere
-                    // in the form-item tree) is rejected with a clear error instead of silently
-                    // re-pointing the first match (findUniqueFormItem throws; the tx rolls back).
-                    EObject button = FormElementWriter.findUniqueFormItem(formModel, buttonName);
+                    // Path-aware resolution (resolveFormMember): ref.name may be a disambiguating
+                    // dotted path (resolveMemberFqn preserves one when the bare leaf name is
+                    // ambiguous) - a flat findUniqueFormItem(formModel, buttonName) lookup would never
+                    // match a dotted name. A genuinely AMBIGUOUS bare button name (several items by
+                    // that name anywhere in the form-item tree) is still rejected with a clear error
+                    // instead of silently re-pointing the first match (resolveFormMember's bare-name
+                    // path still uses findUniqueFormItem internally, which throws; the tx rolls back).
+                    EObject button = FormElementWriter.resolveFormMember(formModel, ref);
                     if (button == null)
                     {
                         throw new FormValidationException(ToolResult.error("Form button not found: " //$NON-NLS-1$

@@ -41,6 +41,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormElementMatch;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.Kind;
@@ -300,12 +301,32 @@ public class FormElementWriterTest
     }
 
     @Test
-    public void testParseItemLevelNonHandlerReturnsNull()
+    public void testParseAcceptsDottedNameAfterKindWhenNotAHandlerShape()
     {
-        // A 4-token remainder whose third token is NOT a handler token is not a recognized form member.
-        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Command.X")); //$NON-NLS-1$
-        // A 3-token remainder (odd length) is not a recognized form member either.
-        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Handler")); //$NON-NLS-1$
+        // A member Name MAY itself be a dotted PATH (disambiguating duplicate leaf names sharing a
+        // name under different parents) - resolveMemberFqn canonicalizes to Kind.<path> instead of a
+        // bare Kind.Name in that case (see resolveFormMember, which then resolves a dotted name as a
+        // path walk, not a flat name search). A remainder is only the item-level HANDLER shape when
+        // its penultimate token is an actual Handler token; otherwise (as here - "Command" is not one)
+        // it is a plain member whose Name is the full joined remainder.
+        FormMemberRef ref =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Command.X"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Field", ref.kindToken); //$NON-NLS-1$
+        assertEquals("Price.Command.X", ref.name); //$NON-NLS-1$
+        assertNull("not an item-level ref", ref.itemKindToken); //$NON-NLS-1$
+
+        FormMemberRef ref2 = FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price.Handler"); //$NON-NLS-1$
+        assertNotNull(ref2);
+        assertEquals("Field", ref2.kindToken); //$NON-NLS-1$
+        assertEquals("Price.Handler", ref2.name); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseTailTooShortReturnsNull()
+    {
+        // A lone Kind token with no Name at all (tail < 2) is malformed.
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field")); //$NON-NLS-1$
     }
 
     @Test
@@ -2222,6 +2243,290 @@ public class FormElementWriterTest
     }
 
     // ==================== dynamic form-like EMF metamodel ====================
+
+    // ---- ergonomic name/path resolution (resolveElementRef) --------------------------------------
+
+    @Test
+    public void testResolveExactItemAcrossTree()
+    {
+        EObject form = newForm();
+        EObject group = addRootItem(form, MODEL.formGroup, "Header"); //$NON-NLS-1$
+        EObject price = addChildItem(group, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Price"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(price, matches.get(0).element);
+        assertEquals("Price", matches.get(0).name); //$NON-NLS-1$
+        assertEquals("Field", matches.get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveExactAttributeAndCommand()
+    {
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        addFormCmd(form, "Refresh"); //$NON-NLS-1$
+        List<FormElementMatch> attr = FormElementWriter.resolveElementRef(form, "Sum"); //$NON-NLS-1$
+        assertEquals(1, attr.size());
+        assertEquals("Attribute", attr.get(0).kindToken); //$NON-NLS-1$
+        List<FormElementMatch> command = FormElementWriter.resolveElementRef(form, "Refresh"); //$NON-NLS-1$
+        assertEquals(1, command.size());
+        assertEquals("Command", command.get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveSuffixFallbackWhenNoExact()
+    {
+        EObject form = newForm();
+        // The platform prefixes a created button, so the short name 'Add' must fall back to 'FormAdd'.
+        EObject formAdd = addRootItem(form, formEClass("Button"), "FormAdd"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Add"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(formAdd, matches.get(0).element);
+        assertEquals("Button", matches.get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveExactBeatsSuffix()
+    {
+        EObject form = newForm();
+        EObject exact = addRootItem(form, formEClass("FormField"), "Sum"); //$NON-NLS-1$ //$NON-NLS-2$
+        addRootItem(form, formEClass("FormField"), "GoodsSum"); //$NON-NLS-1$ //$NON-NLS-2$
+        // An exact match wins outright; the suffix fallback is NOT applied when an exact match exists.
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Sum"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(exact, matches.get(0).element);
+    }
+
+    @Test
+    public void testResolveAmbiguousReturnsAllCandidates()
+    {
+        EObject form = newForm();
+        addRootItem(form, formEClass("FormField"), "GoodsSum"); //$NON-NLS-1$ //$NON-NLS-2$
+        addRootItem(form, formEClass("FormField"), "TotalSum"); //$NON-NLS-1$ //$NON-NLS-2$
+        // No exact 'Sum'; two suffix matches -> the caller surfaces a multipleMatches.
+        assertEquals(2, FormElementWriter.resolveElementRef(form, "Sum").size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveDottedPathDisambiguates()
+    {
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        EObject goodsTotal = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = addRootItem(form, MODEL.formGroup, "Other"); //$NON-NLS-1$
+        addChildItem(other, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The bare name is ambiguous (two 'Total's); the path resolves the exact one.
+        assertEquals(2, FormElementWriter.resolveElementRef(form, "Total").size()); //$NON-NLS-1$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Goods.Total"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertSame(goodsTotal, matches.get(0).element);
+        // The disambiguating path is preserved on the match (consumed segments, no qualifier) - this
+        // is what resolveMemberFqn uses to keep the canonical FQN re-resolvable without ambiguity.
+        assertEquals(java.util.Arrays.asList("Goods", "Total"), matches.get(0).path); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testResolveElementRefBareNameHasNoPath()
+    {
+        // A short-name/suffix match (no dot in the input) never carries a disambiguating path - there
+        // is nothing to preserve beyond the bare name itself.
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, "Sum"); //$NON-NLS-1$
+        assertEquals(1, matches.size());
+        assertNull(matches.get(0).path);
+    }
+
+    @Test
+    public void testResolveFormMemberWithDottedNameResolvesAsPathWalkNotAmbiguous()
+    {
+        // The bug this guards: resolveMemberFqn preserves a disambiguating path by canonicalizing to
+        // Kind.Goods.Total (a dotted ref.name) instead of the bare Kind.Total. resolveFormMember must
+        // resolve that dotted name as a PATH WALK (unambiguous by construction) - NOT re-search by the
+        // bare leaf name (which would find TWO 'Total's and wrongly reject the legitimate,
+        // already-disambiguated request as ambiguous).
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        EObject goodsTotal = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = addRootItem(form, MODEL.formGroup, "Other"); //$NON-NLS-1$
+        addChildItem(other, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormMemberRef ref = FormElementWriter.parse("Catalog.X.Form.ItemForm.Field.Goods.Total"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertSame(goodsTotal, FormElementWriter.resolveFormMember(form, ref));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testResolveFormMemberWithBareAmbiguousNameStillRejects()
+    {
+        // The companion case: a BARE (non-dotted) name that is genuinely ambiguous must still be
+        // rejected (findUniqueFormItem), not silently resolved to the first match in traversal order.
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject other = addRootItem(form, MODEL.formGroup, "Other"); //$NON-NLS-1$
+        addChildItem(other, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormMemberRef ref = FormElementWriter.parse("Catalog.X.Form.ItemForm.Field.Total"); //$NON-NLS-1$
+        assertNotNull(ref);
+        FormElementWriter.resolveFormMember(form, ref);
+    }
+
+    @Test
+    public void testResolvePathToleratesLeadingFormNameQualifier()
+    {
+        EObject form = newForm();
+        EObject goods = addRootItem(form, MODEL.formGroup, "Goods"); //$NON-NLS-1$
+        EObject total = addChildItem(goods, formEClass("FormField"), "Total"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The qualifier is tolerated ONLY when it matches the REAL form name, passed explicitly.
+        List<FormElementMatch> matches =
+            FormElementWriter.resolveElementRef(form, "ItemForm.Goods.Total", "ItemForm"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, matches.size());
+        assertSame(total, matches.get(0).element);
+    }
+
+    @Test
+    public void testResolvePathDoesNotToleratesWrongOrMissingQualifier()
+    {
+        // The bug this guards: a stale/mistyped first segment ("Header", not the form's real name and
+        // not an existing group) must NOT be silently skipped just because it fails to resolve - or
+        // "Header.Price" would wrongly resolve against the form ROOT's "Price" instead of reporting
+        // not-found (a real root-level "Price" exists here specifically to prove that would be the
+        // WRONG element if it were returned).
+        EObject form = newForm();
+        addRootItem(form, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a first segment that is neither an existing child nor the real form name must " //$NON-NLS-1$
+            + "NOT be tolerated", //$NON-NLS-1$
+            FormElementWriter.resolveElementRef(form, "Header.Price", "ItemForm").isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        // No formName supplied at all (the 2-arg overload) -> never tolerated either.
+        assertTrue(FormElementWriter.resolveElementRef(form, "Header.Price").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveRussianName()
+    {
+        EObject form = newForm();
+        String summa = fromCp(0x0421, 0x0443, 0x043c, 0x043c, 0x0430); // Summa
+        addFormAttr(form, summa);
+        List<FormElementMatch> matches = FormElementWriter.resolveElementRef(form, summa);
+        assertEquals(1, matches.size());
+        assertEquals("Attribute", matches.get(0).kindToken); //$NON-NLS-1$
+        assertEquals(summa, matches.get(0).name);
+    }
+
+    @Test
+    public void testResolveNotFound()
+    {
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        assertTrue(FormElementWriter.resolveElementRef(form, "Nope").isEmpty()); //$NON-NLS-1$
+        assertTrue(FormElementWriter.resolveElementRef(form, "").isEmpty()); //$NON-NLS-1$
+        assertTrue(FormElementWriter.resolveElementRef(form, null).isEmpty());
+    }
+
+    @Test
+    public void testResolveKindTokensByEClass()
+    {
+        EObject form = newForm();
+        addRootItem(form, MODEL.formGroup, "Grp"); //$NON-NLS-1$
+        addRootItem(form, MODEL.table, "Tbl"); //$NON-NLS-1$
+        addRootItem(form, MODEL.decoration, "Dec"); //$NON-NLS-1$
+        assertEquals("Group", FormElementWriter.resolveElementRef(form, "Grp").get(0).kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Table", FormElementWriter.resolveElementRef(form, "Tbl").get(0).kindToken); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Decoration", //$NON-NLS-1$
+            FormElementWriter.resolveElementRef(form, "Dec").get(0).kindToken); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testIsCanonicalLeaf()
+    {
+        // A canonical Kind.Name (real kind) or a handler ref needs no name/path resolution.
+        assertTrue(FormElementWriter.isCanonicalLeaf(new String[] { "Field", "Price" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(FormElementWriter.isCanonicalLeaf(new String[] { "Attribute", "Sum" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(FormElementWriter.isCanonicalLeaf(new String[] { "Handler", "OnOpen" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(FormElementWriter.isCanonicalLeaf(
+            new String[] { "Field", "Price", "Handler", "OnChange" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // A short name or a dotted path is NOT canonical -> ergonomic resolution is needed.
+        assertFalse(FormElementWriter.isCanonicalLeaf(new String[] { "Price" })); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isCanonicalLeaf(new String[] { "Header", "Price" })); //$NON-NLS-1$ //$NON-NLS-2$
+        // A 4-token remainder ending in Handler.Event is canonical ONLY when the FIRST token is a real
+        // item kind - "Header" is a group NAME used ergonomically, not a kind token, so this must NOT
+        // be mistaken for the canonical ItemKind.ItemName.Handler.Event shape (the bug this guards: it
+        // would otherwise parse "Header" itself as the item kind instead of resolving Header -> Price).
+        assertFalse(FormElementWriter.isCanonicalLeaf(
+            new String[] { "Header", "Price", "Handler", "OnChange" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testFindExistingOfKind()
+    {
+        EObject form = newForm();
+        addFormAttr(form, "Sum"); //$NON-NLS-1$
+        addFormCmd(form, "Refresh"); //$NON-NLS-1$
+        EObject grp = addRootItem(form, MODEL.formGroup, "Header"); //$NON-NLS-1$
+        addChildItem(grp, formEClass("FormField"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Exact match, scoped to the requested kind's own namespace.
+        assertEquals("Attribute", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "Sum").kindToken); //$NON-NLS-1$
+        assertEquals("Command", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.COMMAND, "refresh").kindToken); //$NON-NLS-1$
+        assertEquals("Field", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.FIELD, "Price").kindToken); //$NON-NLS-1$
+        // EXACT only — a suffix is NOT a match (unlike resolveElementRef's fallback); misses are null.
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "um")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "Nope")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, null));
+        assertNull(FormElementWriter.findExistingOfKind(form, null, "Sum")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindExistingOfKindIsScopedNotCrossKind()
+    {
+        // The bug this guards: an Attribute and a Field/Command can legitimately share a NAME (they
+        // live in different collections) - upsert's existence check must NOT treat one kind's member
+        // as proof another kind's member "already exists", or it would report action='exists' and
+        // skip creating the member the caller actually asked for.
+        EObject form = newForm();
+        addFormAttr(form, "Price"); //$NON-NLS-1$
+        // An Attribute named "Price" exists, but asking for a FIELD named "Price" must find nothing -
+        // the field genuinely does not exist yet, regardless of the same-named attribute.
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.FIELD, "Price")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.COMMAND, "Price")); //$NON-NLS-1$
+        assertEquals("Attribute", //$NON-NLS-1$
+            FormElementWriter.findExistingOfKind(form, FormElementWriter.Kind.ATTRIBUTE, "Price").kindToken); //$NON-NLS-1$
+    }
+
+    private static EObject addRootItem(EObject form, EClass type, String name)
+    {
+        return addChildItem(form, type, name);
+    }
+
+    private static EObject addChildItem(EObject parent, EClass type, String name)
+    {
+        EObject item = newObject(type);
+        item.eSet(feature(item, "name"), name); //$NON-NLS-1$
+        addTo(parent, "items", item); //$NON-NLS-1$
+        return item;
+    }
+
+    private static EObject addFormAttr(EObject form, String name)
+    {
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), name); //$NON-NLS-1$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return attribute;
+    }
+
+    private static EObject addFormCmd(EObject form, String name)
+    {
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), name); //$NON-NLS-1$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+        return command;
+    }
+
+    private static EClass formEClass(String name)
+    {
+        return (EClass)MODEL.form.getEPackage().getEClassifier(name);
+    }
 
     private static final FormLikeModel MODEL = new FormLikeModel();
 

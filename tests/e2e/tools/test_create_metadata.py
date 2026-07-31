@@ -730,6 +730,81 @@ def test_create_form_object_then_add_member():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_existing_form_member_is_idempotent():
+    # Seed a form command, then create it AGAIN with upsert=true: instead of the "already exists"
+    # error the call succeeds, reports the EXISTING member (action='exists'), and writes nothing.
+    cmd = "UpsertCmd"
+    fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "seed the form command")
+    wait_for_project_ready()
+    before = tree_snapshot()
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "upsert": True})
+    assert_ok(r, "upsert an already-existing form member")
+    assert r.structured.get("action") == "exists", \
+        "upsert on an existing member must report exists: %r" % (r.structured,)
+    assert r.structured.get("persisted") is False, \
+        "an idempotent upsert must write nothing: %r" % (r.structured,)
+    assert r.structured.get("kind") == "Command", "must echo the actual kind: %r" % (r.structured,)
+    assert r.structured.get("name") == cmd, "must echo the actual name: %r" % (r.structured,)
+    assert_tree_unchanged(before, "an idempotent upsert must not mutate the form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_absent_form_member_creates_normally():
+    # When the member does NOT exist, upsert=true behaves exactly like a normal create.
+    cmd = "UpsertNewCmd"
+    fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn, "upsert": True})
+    assert_ok(r, "upsert-create a new form member")
+    assert r.structured.get("action") == "created", \
+        "a new member must be created, not 'exists': %r" % (r.structured,)
+    poll_diff_contains(cmd, ctx="the upsert-created member must land in the form's Form.form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_with_expected_not_exists_on_existing_member_is_rejected():
+    # expectedNotExists asserts absence - it must take PRIORITY over upsert's "return the existing
+    # member" success. A caller combining both (a guarded retry that ALSO wants idempotent creation)
+    # must still see the stale-intent precondition fail, not a silent action='exists' success that
+    # papers over a snapshot that turned out to be stale.
+    cmd = "UpsertNotExistsCmd"
+    fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "seed the form command")
+    wait_for_project_ready()
+    before = tree_snapshot()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn, "upsert": True, "expectedNotExists": True})
+    err = assert_error(r, "upsert + expectedNotExists against an existing member must be rejected")
+    assert_error_quality(err, names=["expectedNotExists"], suggests=["stale"],
+                         ctx="the precondition failure must name the guard and steer to re-reading")
+    assert_tree_unchanged(before, "a rejected upsert+expectedNotExists call must not mutate the form")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_upsert_is_scoped_to_the_requested_kind():
+    # An Attribute and a Field/Command CAN share a name (they live in different collections on the
+    # form). upsert must check ONLY the requested kind's own namespace - a same-named member of a
+    # DIFFERENT kind must NOT be reported as 'exists' (which would silently skip the create the
+    # caller actually asked for).
+    name = "SharedNameUpsert"
+    attr_fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + name
+    field_fqn = "Catalog.Catalog.Form.ItemForm.Field." + name
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": attr_fqn})
+    assert_ok(r, "seed a form attribute")
+    wait_for_project_ready()
+    # A Field of the SAME name does not exist yet - upsert must CREATE it, not report 'exists'
+    # against the same-named attribute.
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": field_fqn, "upsert": True})
+    assert_ok(r, "upsert-create a field whose name collides with an existing attribute")
+    assert r.structured.get("action") == "created", \
+        "a same-named member of a DIFFERENT kind must be created, not reported as existing: %r" % (
+            r.structured,)
+    poll_diff_contains(name, ctx="the upsert-created field must land in the form's Form.form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_table_with_columns_and_additions_issue_177():
     # Issue #177: create a form:Table via create_metadata. The table must be built with its auto
     # columns (a LineNumber column + one InputField per tabular-section attribute) AND the three table
