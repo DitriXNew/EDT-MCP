@@ -1384,6 +1384,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             formResult.put(KEY_LANGUAGE, writtenTitleLanguage).put(KEY_LOCALES_MISSING,
                 MetadataLanguageUtils.localesMissing(config,
                     Collections.singletonList(writtenTitleLanguage)));
+            if (MetadataLanguageUtils.isDeclaredButUnused(config, writtenTitleLanguage))
+            {
+                formResult.put(KEY_LOCALE_UNUSED, true);
+            }
         }
         normReport.addTo(formResult);
         return formResult.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
@@ -1655,7 +1659,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             effectiveGenerateContent, props, synonymLanguage,
             synonymLanguage == null ? null
                 : MetadataLanguageUtils.localesMissing(config, Collections.singletonList(synonymLanguage)),
-            normReport);
+            MetadataLanguageUtils.isDeclaredButUnused(config, synonymLanguage), normReport);
     }
 
     /**
@@ -1762,7 +1766,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Builds the success JSON for a created form OBJECT. Side-effect-free: pure formatting. */
     private String buildFormObjectResult(String normFqn, String formName, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         boolean setAsDefault, boolean generateContent, Props props, String synonymLanguage,
-        List<String> localesMissing, MdNameNormalizer.Report normReport)
+        List<String> localesMissing, boolean localeUnused, MdNameNormalizer.Report normReport)
     {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_CREATED)
@@ -1778,6 +1782,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             if (localesMissing != null)
             {
                 result.put(KEY_LOCALES_MISSING, localesMissing);
+            }
+            if (localeUnused)
+            {
+                result.put(KEY_LOCALE_UNUSED, true);
             }
         }
         normReport.addTo(result);

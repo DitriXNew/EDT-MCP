@@ -348,22 +348,73 @@ public final class MetadataLanguageUtils
      */
     public static List<String> localesInUse(Configuration config)
     {
-        List<String> declared = declaredLanguageCodes(config);
+        return localesInUse(config, declaredLanguageCodes(config));
+    }
+
+    /**
+     * The same question asked about a GIVEN set of declared codes rather than the model's own.
+     * <p>
+     * A batch that declares a new language code in the very call that writes a value under it has a
+     * declaration set the model does not carry yet. Reading the languages from the model would then
+     * answer for the before-state while the caller reports on the after-state, and a code this call
+     * declares could never be "in use" - reported as a language nobody translates into, on the one
+     * write that just started translating into it.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param declared the codes that count as declared for this call (may be {@code null})
+     * @return the subset the configuration's own synonym is filled in for, or all of them when it is
+     *         filled in for none; never {@code null}
+     */
+    public static List<String> localesInUse(Configuration config, List<String> declared)
+    {
+        if (declared == null)
+        {
+            return List.of();
+        }
         if (config == null || declared.isEmpty())
         {
             return declared;
         }
         Map<String, String> synonym = config.getSynonym() == null ? Map.of() : config.getSynonym().map();
         List<String> inUse = new ArrayList<>();
-        for (String code : declared)
+        boolean anyText = false;
+        for (Map.Entry<String, String> entry : synonym.entrySet())
         {
-            String value = synonym.get(code);
-            if (value != null && !value.isEmpty())
+            String value = entry.getValue();
+            if (value == null || value.isEmpty())
             {
-                inUse.add(code);
+                continue;
+            }
+            anyText = true;
+            if (declared.contains(entry.getKey()))
+            {
+                inUse.add(entry.getKey());
             }
         }
-        return inUse.isEmpty() ? declared : inUse;
+        if (!inUse.isEmpty() || anyText)
+        {
+            // Either some declared language carries the configuration's name, or its name lives
+            // under a code nothing declares any more (a renamed language leaves the old key behind).
+            // The second case means NO declared language is in use - not that usage is unknowable.
+            return orderedAsDeclared(declared, inUse);
+        }
+        // No text at all: a brand-new configuration. There is nothing to infer usage from, and
+        // reporting nothing would hide real work, so every declared code counts as in use.
+        return declared;
+    }
+
+    /** {@code inUse} in DECLARATION order - the order every list this class returns is read in. */
+    private static List<String> orderedAsDeclared(List<String> declared, List<String> inUse)
+    {
+        List<String> ordered = new ArrayList<>(inUse.size());
+        for (String code : declared)
+        {
+            if (inUse.contains(code))
+            {
+                ordered.add(code);
+            }
+        }
+        return ordered;
     }
 
     /**

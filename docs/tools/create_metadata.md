@@ -114,6 +114,8 @@ The kind + modifiers map to ONE canonical 8-flag combination; an illegal mix (e.
 ## Bilingual (ru/en)
 The synonym EMap is keyed by the language CODE (`ru`/`en`), never the language name. Objects are resolved by programmatic Name; only the type / kind tokens are dialect-aware.
 
+A `language` CODE must be one the configuration DECLARES (`get_configuration_properties` lists them all under `languages`). An undeclared code is REJECTED with the declared list: the platform has no fallback between locale codes, so a value stored under a code nothing declares is simply never displayed - a blank label whose cause is invisible until someone opens the form. A declared code given in a different case is accepted and stored under the configuration's own spelling. After a localized write the result echoes the `language` used and `localesMissing` - the languages the configuration USES that still have no translation. A language is "in use" when the configuration's OWN synonym is filled in for it: a multilingual configuration worked on in a single-language branch declares the others but is not translated into them, and nobody wants to be nagged about those. Writing a value UNDER such a language is legal (it is declared, so it will display) but comes back with `localeUnusedInConfiguration: true` - ASK the user whether translating into it is really wanted before filling in more: it may be a single-language build, or a language this configuration does not support yet.
+
 ## Examples
 - Top object: `{projectName: 'P', fqn: 'Catalog.Products'}`
 - With synonym: `{projectName: 'P', fqn: 'Document.Invoice', properties: [{name: 'synonym', value: 'Invoice', language: 'en'}]}`

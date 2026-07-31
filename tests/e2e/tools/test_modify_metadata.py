@@ -1807,6 +1807,9 @@ def test_modify_accepts_a_locale_the_same_batch_declares():
     applied = r.structured.get("applied") or []
     assert "languageCode" in applied and "synonym" in applied,         "both properties must be applied: %r" % (r.structured,)
     assert r.structured.get("language") == "fr",         "the result must echo the just-declared locale: %r" % (r.structured,)
+    # The code this very batch declares is judged by the SAME rule as any other: the configuration
+    # is not named in it, so the write is flagged for the agent to ask about rather than refused.
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "a write under the just-declared, unused locale must be flagged: %r" % (r.structured,)
     wait_for_project_ready()
 
     # A code that NOBODY declares - neither the model nor this batch - is still refused.

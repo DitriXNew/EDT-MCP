@@ -1212,12 +1212,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // going through the property pipeline where the undeclared-locale guard lives - so without
         // this the very hole issue #298 closes stayed open on this route. Checked HERE, before any
         // write, so a bad code fails the call with nothing applied.
-        String localeError = dcsTitleLocaleError(ctx.config, args.dcsSpec);
+        Set<String> titleLocales = new LinkedHashSet<>();
+        String localeError = dcsTitleLocaleError(ctx.config, args.dcsSpec, titleLocales);
         if (localeError != null)
         {
             return localeError;
         }
-        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec);
+        // A dcs title is a localized write like any other, so the same question applies: is the
+        // configuration even translated into that language? The report's per-property missing list
+        // has no meaning here (a payload writes many titles at once), but the prompt to ASK does.
+        boolean localeUnused = titleLocales.stream()
+            .anyMatch(code -> MetadataLanguageUtils.isDeclaredButUnused(ctx.config, code));
+        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec, localeUnused);
     }
 
 
@@ -1233,65 +1239,106 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      *
      * @param config the configuration
      * @param dcsSpec the raw dcs payload
+     * @param used collects the canonical codes the payload's titles write under
      * @return a JSON error, or {@code null} when the payload's locales are acceptable
      */
-    private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec)
+    private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec,
+        Set<String> used)
     {
         List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
         if (declared.isEmpty() || dcsSpec == null)
         {
             return null;
         }
-        return normalizeDcsTitleLocales(config, declared, dcsSpec);
+        return normalizeDcsTitleLocales(config, declared, dcsSpec, used);
     }
 
+    /** The dcs payload members the writer reads a storable {@code title} from (see DcsWriter). */
+    private static final String DCS_DATA_SETS = "dataSets"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_FIELDS = "fields"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_PARAMETERS = "parameters"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_CALCULATED_FIELDS = "calculatedFields"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_TITLE = "title"; //$NON-NLS-1$
+
     /**
-     * Walks every OBJECT-valued {@code title} in the payload, rejecting a code the configuration does
-     * not declare and REWRITING a declared one to the configuration's own spelling.
+     * Validates and CANONICALIZES the language keys of every {@code title} the DCS writer actually
+     * stores, rejecting a code the configuration does not declare.
      * <p>
      * The rewrite matters as much as the rejection: the DCS writer stores the payload's key verbatim,
      * so accepting {@code EN} against a configuration that declares {@code en_CA} - which the
      * case-insensitive match does - would store a second, never-displayed key. That is the same
      * canonicalization the property pipeline performs; the two paths must not disagree.
+     * <p>
+     * The walk follows the writer's OWN shape - a dataset's {@code fields}, the schema
+     * {@code parameters} and the {@code calculatedFields}, mirroring DcsWriter's three
+     * {@code parseTitle} call sites - rather than hunting for any member named {@code title}. A title
+     * the writer never reads (on a data SOURCE, or nested in a member it ignores) reaches no model
+     * object: rejecting its code would fail a call over a value that was never going to be stored,
+     * and counting it would raise a question about a translation that never happened.
      *
+     * @param used collects the canonical codes the stored titles write under
      * @return a ready JSON error for the first undeclared code, or {@code null} when all are fine
      */
     private static String normalizeDcsTitleLocales(Configuration config, List<String> declared,
-        JsonElement element)
+        JsonObject dcsSpec, Set<String> used)
     {
-        if (element == null || element.isJsonNull())
+        String error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_PARAMETERS), used);
+        if (error != null)
+        {
+            return error;
+        }
+        error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_CALCULATED_FIELDS), used);
+        if (error != null)
+        {
+            return error;
+        }
+        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
+        if (dataSets == null || !dataSets.isJsonArray())
         {
             return null;
         }
-        if (element.isJsonArray())
+        for (JsonElement dataSet : dataSets.getAsJsonArray())
         {
-            for (JsonElement item : element.getAsJsonArray())
+            if (dataSet == null || !dataSet.isJsonObject())
             {
-                String error = normalizeDcsTitleLocales(config, declared, item);
-                if (error != null)
-                {
-                    return error;
-                }
-            }
-            return null;
-        }
-        if (!element.isJsonObject())
-        {
-            return null;
-        }
-        for (java.util.Map.Entry<String, JsonElement> member : element.getAsJsonObject().entrySet())
-        {
-            JsonElement value = member.getValue();
-            if ("title".equals(member.getKey()) && value != null && value.isJsonObject()) //$NON-NLS-1$
-            {
-                String error = canonicalizeTitleKeys(config, declared, value.getAsJsonObject());
-                if (error != null)
-                {
-                    return error;
-                }
                 continue;
             }
-            String error = normalizeDcsTitleLocales(config, declared, value);
+            error = normalizeEntryTitles(config, declared,
+                dataSet.getAsJsonObject().get(KEY_DCS_FIELDS), used);
+            if (error != null)
+            {
+                return error;
+            }
+        }
+        return null;
+    }
+
+    /** Validates the object-valued {@code title} of every entry in one array of writer entries. */
+    private static String normalizeEntryTitles(Configuration config, List<String> declared,
+        JsonElement entries, Set<String> used)
+    {
+        if (entries == null || !entries.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement entry : entries.getAsJsonArray())
+        {
+            if (entry == null || !entry.isJsonObject())
+            {
+                continue;
+            }
+            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
+            if (title == null || !title.isJsonObject())
+            {
+                // A plain-string title is language-neutral, and anything else is the writer's own
+                // error to report - this guard only judges LANGUAGE keys.
+                continue;
+            }
+            String error = canonicalizeTitleKeys(config, declared, title.getAsJsonObject(), used);
             if (error != null)
             {
                 return error;
@@ -1302,7 +1349,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** Validates and canonicalizes the keys of ONE {@code {code: text}} title object, in place. */
     private static String canonicalizeTitleKeys(Configuration config, List<String> declared,
-        JsonObject title)
+        JsonObject title, Set<String> used)
     {
         java.util.Map<String, JsonElement> rewritten = new java.util.LinkedHashMap<>();
         for (java.util.Map.Entry<String, JsonElement> entry : title.entrySet())
@@ -1325,6 +1372,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         .toJson();
             }
             rewritten.put(canonical, entry.getValue());
+            used.add(canonical);
         }
         for (String key : new ArrayList<>(title.keySet()))
         {
@@ -1991,7 +2039,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@link #dcsMixError} / {@link #dcsOnlyForReportFqnError}), so this method is entered only for a Report
      * FQN with a lone {@code dcs} payload.</p>
      */
-    private String modifyDcsContent(ProjectContext ctx, String normFqn, Report report, JsonObject dcsSpec)
+    private String modifyDcsContent(ProjectContext ctx, String normFqn, Report report, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        JsonObject dcsSpec, boolean localeUnused)
     {
         // The Report is a top BM object - capture its bmGetId up front, re-fetch inside the tx (a top
         // object's eContainer() does not reliably climb).
@@ -2042,7 +2091,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted =
             !exportFqns.isEmpty() && BmTransactions.forceExportToDisk(ctx.project, exportFqns);
-        return buildDcsResult(normFqn, result, persisted);
+        return buildDcsResult(normFqn, result, persisted, localeUnused);
     }
 
     /**
@@ -2259,7 +2308,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * ({@code dataSources} / {@code dataSets} / {@code fields} / {@code parameters}) plus {@code persisted}
      * and a confirmation message. Pure helper.
      */
-    private static String buildDcsResult(String normFqn, DcsWriter.Result result, boolean persisted)
+    private static String buildDcsResult(String normFqn, DcsWriter.Result result, boolean persisted,
+        boolean localeUnused)
     {
         JsonObject applied = new JsonObject();
         applied.addProperty("dataSources", result.dataSources); //$NON-NLS-1$
@@ -2267,11 +2317,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty("fields", result.fields); //$NON-NLS-1$
         applied.addProperty("parameters", result.parameters); //$NON-NLS-1$
         applied.addProperty("calculatedFields", result.calculatedFields); //$NON-NLS-1$
-        return ToolResult.success()
+        ToolResult dcsResult = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_DCS, applied)
-            .put(KEY_PERSISTED, persisted)
+            .put(KEY_PERSISTED, persisted);
+        if (localeUnused)
+        {
+            dcsResult.put(KEY_LOCALE_UNUSED, true);
+        }
+        return dcsResult
             .put(McpKeys.MESSAGE, "Modified DCS of report " + normFqn + " (dataSources: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.dataSources + ", dataSets: " + result.dataSets + ", fields: " + result.fields //$NON-NLS-1$ //$NON-NLS-2$
                 + ", parameters: " + result.parameters + ", calculatedFields: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -5357,15 +5412,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             // Only the languages the configuration ACTUALLY uses are owed a translation; a declared
             // one it never fills in is a language nobody is translating into (see localesInUse).
-            List<String> reportable = new ArrayList<>(declaredCodes);
-            List<String> inUse = MetadataLanguageUtils.localesInUse(config);
-            reportable.retainAll(inUse);
-            if (reportable.isEmpty())
-            {
-                // Disjoint - e.g. this very batch renamed the code the synonym is keyed under.
-                // Falling back to the declared list keeps a real translation gap visible.
-                reportable = declaredCodes;
-            }
+            // The question is asked about declaredCodes - the AFTER-batch set this call reports on -
+            // so a code this very batch declares is judged by the same rule as any other.
+            List<String> inUse = MetadataLanguageUtils.localesInUse(config, declaredCodes);
             for (PreparedChange change : changes)
             {
                 if (!change.isLocalized())
@@ -5382,7 +5431,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     continue;
                 }
                 Map<String, String> present = ((EMap<String, String>)map).map();
-                for (String declared : reportable)
+                for (String declared : inUse)
                 {
                     String value = present.get(declared);
                     if (value == null || value.isEmpty())

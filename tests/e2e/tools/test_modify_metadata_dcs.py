@@ -296,6 +296,66 @@ def test_dcs_title_locale_is_stored_under_the_declared_spelling():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_in_a_language_the_configuration_does_not_use_is_flagged():
+    # A dcs title is a localized write that bypasses the property pipeline, so it needs its own
+    # proof that the "the configuration is not translated into this language - ask the user" prompt
+    # reaches the caller. The fixture is named in 'en' only, so the second language declared here is
+    # declared and unused: the write is legal and the answer carries the question (issue #298).
+    report = "Z298DcsUnused"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298DcsFr"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298DcsFr",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"fr": "P\u00e9riode"}}]},
+    })
+    assert_ok(r, "a title in a declared but unused language is legal")
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "the dcs path must flag a title written into an unused language: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"en": "Period"}}]},
+    })
+    assert_ok(r, "a title in the language the configuration uses")
+    assert "localeUnusedInConfiguration" not in r.structured,         "the language the configuration DOES use must not be questioned: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # A 'title' on a member the writer does not read (a data SOURCE has none) reaches no model
+    # object. Neither the question nor the undeclared-code rejection may fire on it: both would
+    # report a value that was never going to be stored.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"dataSources": [{"name": "DataSource1", "type": "Local",
+                                 "title": {"fr": "Ignor\u00e9"}}],
+                "parameters": [{"name": "Period", "title": {"en": "Period"}}]},
+    })
+    assert_ok(r, "an inert title must not be judged")
+    assert "localeUnusedInConfiguration" not in r.structured,         "a title the writer never reads must not raise the question: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # Same rule one level deeper: the guard follows the writer's OWN shape, so a member merely NAMED
+    # like a writer container ('parameters' nested in a data source) is inert too - it must neither
+    # raise the question nor reject an undeclared code the writer would have ignored.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"dataSources": [{"name": "DataSource1", "type": "Local",
+                                 "parameters": [{"title": {"fr_CA": "Ignor\u00e9"}}]}],
+                "parameters": [{"name": "Period", "title": {"en": "Period"}}]},
+    })
+    assert_ok(r, "an inert title nested in a look-alike member must not be judged")
+    assert "localeUnusedInConfiguration" not in r.structured,         "a nested inert title must not raise the question either: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_dcs_title_naming_one_locale_twice_is_rejected():
     # {"en": ..., "EN": ...} both canonicalize to the declared 'en'. Rewriting them would silently
     # drop one translation, and WHICH one survived would depend on map order - so the call is

@@ -1860,6 +1860,25 @@ def test_create_form_object_reports_the_locales_still_missing_a_translation():
     assert_ok(r, "create a form object with a synonym")
     assert r.structured.get("language") == "en",         "the form-object create must echo the locale used: %r" % (r.structured,)
     assert r.structured.get("localesMissing") == [],         "the form-object create must carry the report - empty, the second language is unused: %r" % (r.structured,)
+    assert "localeUnusedInConfiguration" not in r.structured,         "the language the configuration uses must not be questioned: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.Z298LocFormFr",
+        "properties": [{"name": "synonym", "value": "Formulaire", "language": "fr"}],
+    })
+    assert_ok(r, "create a form object with a synonym in the unused language")
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "the form-object create must flag a write into an unused language: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.Z298LocFormFr.Decoration.Z298DecoFr",
+        "properties": [{"name": "title", "value": "Étiquette", "language": "fr"}],
+    })
+    assert_ok(r, "create a form element with a title in the unused language")
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "the form-MEMBER create must flag it too - that path builds its own payload: %r" % (r.structured,)
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

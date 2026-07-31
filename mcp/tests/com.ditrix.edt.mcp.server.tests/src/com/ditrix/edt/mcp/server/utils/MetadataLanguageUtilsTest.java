@@ -279,6 +279,52 @@ public class MetadataLanguageUtilsTest
     }
 
     @Test
+    public void localesInUseAnswersAboutTheCodesTHISCallDeclares()
+    {
+        // A batch that declares a new language code in the very call that writes under it has a
+        // declaration set the model does not carry yet. Asking the model would answer for the
+        // before-state: the new code could never be in use, and the one write that just started
+        // translating into it would be reported as a language nobody translates into.
+        Configuration config = configWithSynonym(Map.of("en_CA", "Trade"), language("en_CA"));
+        assertEquals(Arrays.asList("en_CA"),
+            MetadataLanguageUtils.localesInUse(config, Arrays.asList("en_CA", "de")));
+
+        // With NO synonym at all there is nothing to infer usage from, so the fallback must cover
+        // the code this call declares too - otherwise a real translation gap goes unreported.
+        Configuration fresh = configWithSynonym(Map.of(), language("en_CA"));
+        assertEquals(Arrays.asList("en_CA", "de"),
+            MetadataLanguageUtils.localesInUse(fresh, Arrays.asList("en_CA", "de")));
+        assertTrue(MetadataLanguageUtils.localesInUse(fresh, null).isEmpty());
+        assertEquals(Arrays.asList("en_CA", "de"),
+            MetadataLanguageUtils.localesInUse(null, Arrays.asList("en_CA", "de")));
+    }
+
+    @Test
+    public void localesInUseSeparatesOrphanedTextFromNoTextAtAll()
+    {
+        // A batch that RENAMES the only language's code leaves the configuration's name behind under
+        // the OLD key: text exists, but no DECLARED language carries it. That is not the same as a
+        // configuration nobody has named yet - there NOTHING can be inferred, so every declared code
+        // counts as in use. Collapsing the two would hide the question on the rename.
+        Configuration renamed = configWithSynonym(Map.of("en", "Trade"), language("fr"));
+        assertTrue(MetadataLanguageUtils.localesInUse(renamed, Arrays.asList("fr")).isEmpty());
+        assertTrue(MetadataLanguageUtils.isDeclaredButUnused(renamed, "fr"));
+
+        Configuration fresh = configWithSynonym(Map.of(), language("fr"));
+        assertEquals(Arrays.asList("fr"), MetadataLanguageUtils.localesInUse(fresh, Arrays.asList("fr")));
+    }
+
+    @Test
+    public void localesInUseKeepsDeclarationOrder()
+    {
+        // The synonym map's own iteration order is not the declaration order callers read the
+        // report in, so a configuration named in both languages must still answer in that order.
+        Configuration config = configWithSynonym(new java.util.LinkedHashMap<>(
+            Map.of("fr_CA", "Commerce", "en_CA", "Trade")), language("en_CA"), language("fr_CA"));
+        assertEquals(Arrays.asList("en_CA", "fr_CA"), MetadataLanguageUtils.localesInUse(config));
+    }
+
+    @Test
     public void localesMissingSkipsADeclaredLanguageTheConfigurationDoesNotUse()
     {
         Configuration config = configWithSynonym(Map.of("en_CA", "Trade"), language("en_CA"),
