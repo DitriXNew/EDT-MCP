@@ -114,7 +114,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
             + "addressed by a 1C full-name FQN. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
-            + "A top-level object goes through EDT's md-refactoring, which CASCADES the cleanup of " //$NON-NLS-1$
+            + "A top-level object - and equally an mdclass MEMBER of one (attribute / tabular " //$NON-NLS-1$
+            + "section / dimension / resource / enum value) - goes through EDT's md-refactoring, " //$NON-NLS-1$
+            + "which CASCADES the cleanup of " //$NON-NLS-1$
             + "references in BSL code, forms and other metadata; when a reference cannot be " //$NON-NLS-1$
             + "auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed " //$NON-NLS-1$
             + "- pass force=true to delete anyway and leave those references dangling. A PREDEFINED " //$NON-NLS-1$
