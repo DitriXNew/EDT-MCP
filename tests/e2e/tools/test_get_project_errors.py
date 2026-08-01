@@ -299,6 +299,24 @@ def test_substring_filter_is_not_reported_as_missing():
 
 
 @e2e_test(tool="get_project_errors", kind="read")
+def test_clean_object_addressed_by_fragment_is_not_reported_as_missing():
+    """A fragment naming a REAL but CLEAN object must not be called missing either.
+
+    The reported-row check cannot see this case: a clean object produces no row to match against
+    (and rows dropped by `limit` are invisible there too). The object's existence is therefore
+    decided against the MODEL, by looking inside the one collection its type token names.
+    """
+    # Severity NONE keeps the filter valid while guaranteeing an empty result set.
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objects": ["Catalog.Cat"], "severity": "NONE"})
+    assert_ok(r, "fragment filter over a result set forced empty by severity")
+    assert_not_contains(r.text, "objectsNotFound",
+                        "a fragment naming a real object must not be reported as missing when the "
+                        "result set happens to be empty")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
 def test_common_form_member_filter_is_not_reported_as_missing():
     """A CommonForm MEMBER filter must not be called missing.
 

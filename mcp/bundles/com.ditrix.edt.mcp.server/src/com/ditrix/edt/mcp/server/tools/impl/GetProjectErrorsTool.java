@@ -18,11 +18,14 @@ import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -500,6 +503,65 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
+     * Whether {@code fqn} is a legitimate PARTIAL address of a real object - the model-side twin of
+     * the substring test the filter performs on marker presentations. Only the type token and the
+     * object-name fragment are considered: the type resolves to exactly ONE configuration collection,
+     * so this reads a single typed list rather than scanning the model.
+     *
+     * <p>It answers the case the reported-row check cannot: a fragment naming a real object that is
+     * simply CLEAN produces no row to match against, and rows dropped by {@code limit} are invisible
+     * there too. In both situations the object exists, so the filter must not be called missing.</p>
+     *
+     * <p>Call inside a BM read transaction bound to this configuration's model.</p>
+     *
+     * @param config the configuration to look in
+     * @param fqn the requested filter, as the caller wrote it
+     * @return {@code true} when some object of that type has the fragment inside its name
+     */
+    private static boolean namesAnExistingObjectByFragment(Configuration config, String fqn)
+    {
+        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+        // Only a SHORT filter can be a fragment of an object name. Once the FQN descends into a
+        // member ('Catalog.Products.Attribute.Weight'), the head already resolved exactly and it is
+        // the LEAF that failed - which is a genuine miss and must stay reported.
+        if (parts.length > 2)
+        {
+            return false;
+        }
+        MetadataTypeUtils.MetadataTypeInfo typeInfo = MetadataTypeUtils.resolve(parts[0]);
+        if (typeInfo == null)
+        {
+            return false;
+        }
+        EStructuralFeature collection =
+            config.eClass().getEStructuralFeature(typeInfo.getConfigReferenceName());
+        if (!(collection instanceof EReference) || !collection.isMany())
+        {
+            return false;
+        }
+        Object value = config.eGet(collection);
+        if (!(value instanceof List))
+        {
+            return false;
+        }
+        // A bare type token ('Catalog') addresses every object of that type.
+        String fragment = parts.length > 1 ? parts[1].toLowerCase() : ""; //$NON-NLS-1$
+        for (Object element : (List<?>)value)
+        {
+            if (!(element instanceof MdObject))
+            {
+                continue;
+            }
+            String name = ((MdObject)element).getName();
+            if (name != null && name.toLowerCase().contains(fragment))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether {@code fqn} names something that exists in {@code config}. A FORM FQN is decided by the
      * form reader, every other shape by the shared node resolver applied to {@code decidablePrefix}.
      *
@@ -518,6 +580,14 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     private static boolean resolvesIn(Configuration config, String fqn, String decidablePrefix)
     {
+        if (namesAnExistingObjectByFragment(config, fqn))
+        {
+            // The filter is documented as a PARTIAL match, so a deliberate fragment ('Catalog.Prod')
+            // addresses a real object without being its FQN. Exact resolution alone would call it
+            // missing - and it would say so even when that object is simply CLEAN, or when its rows
+            // fell outside `limit`, neither of which the reported-row check downstream can see.
+            return true;
+        }
         String formPath = FormElementWriter.parseFormPath(fqn);
         if (formPath == null)
         {
