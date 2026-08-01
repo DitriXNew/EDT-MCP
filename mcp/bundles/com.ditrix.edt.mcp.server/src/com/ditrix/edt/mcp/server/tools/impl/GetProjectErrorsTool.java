@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,6 +22,7 @@ import org.eclipse.emf.common.util.URI;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -39,6 +41,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -75,7 +80,7 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         return "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. " + //$NON-NLS-1$
                "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
-               "Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). " + //$NON-NLS-1$
+               "Object FQN filters accept English or Russian tokens at EVERY level, nested FQNs included (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); requested FQNs that match no object are reported back under objectsNotFound. " + //$NON-NLS-1$
                "Use this for the detailed marker list; for severity totals only call get_problem_summary. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
@@ -88,7 +93,7 @@ public class GetProjectErrorsTool implements IMcpTool
             .enumProperty("severity", "Filter by severity (optional)", //$NON-NLS-1$ //$NON-NLS-2$
                 "ERRORS", "BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL", "NONE") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty("objects", "Filter by object FQNs, e.g. ['Catalog.Products']; English or Russian type names accepted (optional)") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringArrayProperty("objects", "Filter by object FQNs, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian tokens accepted at every level; FQNs matching no object are listed back under objectsNotFound (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$
@@ -238,6 +243,12 @@ public class GetProjectErrorsTool implements IMcpTool
             final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
                 collectContext);
 
+            // Requested FQNs that resolve to no object at all. Resolved against the MODEL, not
+            // derived from the marker stream: an FQN that filtered everything away is
+            // indistinguishable from a genuinely clean object in the output otherwise.
+            final List<String> objectsNotFound =
+                resolveMissingObjectFilters(objects, projectName, bmModelManager);
+
             // Build Markdown response for better readability and context efficiency
             StringBuilder md = new StringBuilder();
 
@@ -250,6 +261,9 @@ public class GetProjectErrorsTool implements IMcpTool
                 appendProblemsTable(md, errors, limit, detailed);
             }
 
+            // Appended AFTER either branch on purpose: a partial miss (some FQNs matched, some
+            // did not) must be surfaced next to the results too, not only on the empty report.
+            appendObjectsNotFoundWarning(md, objectsNotFound);
             appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
 
             return md.toString();
@@ -302,6 +316,217 @@ public class GetProjectErrorsTool implements IMcpTool
             }
         }
         return finalObjects;
+    }
+
+    /**
+     * Resolves every requested {@code objects} FQN against the metadata model and returns the
+     * ones that match NO object in any project in scope.
+     *
+     * <p>This is the honest "you filtered on something that does not exist" signal. It is
+     * deliberately NOT derived from the {@code unresolvedFilteredOut} counter: that counter
+     * measures markers whose LOCATION could not be resolved, which says nothing about whether the
+     * requested FQN names a real object.</p>
+     *
+     * <p>The resolution is conservative in both directions, because a false "not found" is as
+     * harmful as the false "clean report" this warning exists to prevent:</p>
+     * <ul>
+     *   <li>only FQNs the shared resolver can actually DECIDE are candidates - see
+     *       {@link #decidableFqnPrefix(String)};</li>
+     *   <li>if the model cannot be consulted at all (no BM model manager, no project in scope,
+     *       an unavailable configuration, or a failure while resolving) NOTHING is reported.</li>
+     * </ul>
+     *
+     * <p>Each project's resolution runs inside a BM READ transaction, the same boundary
+     * {@link #collectErrors} uses for marker presentations.</p>
+     *
+     * @param objects the requested object FQN filters, may be {@code null}/empty
+     * @param projectName the project filter, may be {@code null}/empty for all projects
+     * @param bmModelManager the BM model manager, may be {@code null}
+     * @return the requested FQNs that resolve nowhere, in request order (never {@code null};
+     *     empty whenever the answer could not be established with certainty)
+     */
+    private static List<String> resolveMissingObjectFilters(List<String> objects, String projectName,
+        IBmModelManager bmModelManager)
+    {
+        if (objects == null || objects.isEmpty() || bmModelManager == null)
+        {
+            return Collections.emptyList();
+        }
+
+        // Requested FQN -> the longest prefix of it the resolver can decide.
+        Map<String, String> candidates = new LinkedHashMap<>();
+        for (String fqn : objects)
+        {
+            String prefix = decidableFqnPrefix(fqn);
+            if (prefix != null)
+            {
+                candidates.put(fqn, prefix);
+            }
+        }
+        if (candidates.isEmpty())
+        {
+            return Collections.emptyList();
+        }
+
+        final Set<String> found = new HashSet<>();
+        boolean inspectedAny = false;
+        boolean inspectionIncomplete = false;
+        for (IProject project : resolutionScopeProjects(projectName))
+        {
+            IBmModel bmModel = bmModelManager.getModel(project);
+            if (bmModel == null)
+            {
+                // Not an EDT project (the same test collectErrors uses): it cannot host metadata
+                // objects, so skipping it can never hide a match.
+                continue;
+            }
+            ProjectContext.ConfigurationResult configResult =
+                ProjectContext.of(project.getName()).resolveConfiguration();
+            final Configuration config = configResult.ok() ? configResult.configuration() : null;
+            if (config == null)
+            {
+                // An EDT project whose configuration is not available (e.g. still loading):
+                // membership is undecidable here, so no FQN may be declared missing.
+                inspectionIncomplete = true;
+                continue;
+            }
+            try
+            {
+                BmTransactions.<Void>read(bmModel, "ResolveErrorObjectFilters", (tx, pm) -> { //$NON-NLS-1$
+                    for (Map.Entry<String, String> candidate : candidates.entrySet())
+                    {
+                        if (!found.contains(candidate.getKey())
+                            && resolvesIn(config, candidate.getKey(), candidate.getValue()))
+                        {
+                            found.add(candidate.getKey());
+                        }
+                    }
+                    return null;
+                });
+                inspectedAny = true;
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Failed to resolve the objects filter in project " //$NON-NLS-1$
+                    + project.getName(), e);
+                inspectionIncomplete = true;
+            }
+        }
+
+        if (!inspectedAny || inspectionIncomplete)
+        {
+            return Collections.emptyList();
+        }
+
+        List<String> missing = new ArrayList<>();
+        for (String fqn : candidates.keySet())
+        {
+            if (!found.contains(fqn))
+            {
+                missing.add(fqn);
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * Whether {@code fqn} names something that exists in {@code config}. A FORM FQN is decided by the
+     * form reader, every other shape by the shared node resolver applied to {@code decidablePrefix}.
+     *
+     * <p>The split matters: {@link MetadataNodeResolver} navigates only the child kinds it maps to an
+     * EMF containment feature, and {@code Form} is not among them, so a form FQN would otherwise be
+     * judged on its {@code Type.Name} head alone - and a typo in the FORM NAME, the very shape issue
+     * #312 was reported for, would go unreported. {@link FormElementWriter#parseFormPath} accepts both
+     * {@code Type.Object.Form.Name} and {@code CommonForm.Name} in either language.</p>
+     *
+     * <p>Call inside a BM read transaction bound to this configuration's model.</p>
+     *
+     * @param config the configuration to resolve against
+     * @param fqn the requested FQN, as the caller wrote it
+     * @param decidablePrefix the prefix {@link #decidableFqnPrefix} extracted from {@code fqn}
+     * @return {@code true} when the FQN resolves in this configuration
+     */
+    private static boolean resolvesIn(Configuration config, String fqn, String decidablePrefix)
+    {
+        String formPath = FormElementWriter.parseFormPath(fqn);
+        if (formPath != null)
+        {
+            return FormStructureReader.resolveMdForm(config, formPath) != null;
+        }
+        return MetadataNodeResolver.resolveExisting(config, decidablePrefix) != null;
+    }
+
+    /**
+     * Returns the projects the {@code objects} filters are resolved against - the SAME scope the
+     * marker scan used: the named project alone, or every open workspace project.
+     *
+     * <p>Deliberately not the key set of {@link #groupMarkersByProject}: a project with zero
+     * markers never appears there, and an object living in such a (perfectly clean) project would
+     * then be reported as "not found". The scope is a superset of the projects that produced
+     * markers, so widening it can only REMOVE false "not found" entries.</p>
+     *
+     * @param projectName the project filter, may be {@code null}/empty for all projects
+     * @return the projects to resolve in (never {@code null}; possibly empty)
+     */
+    private static List<IProject> resolutionScopeProjects(String projectName)
+    {
+        List<IProject> scope = new ArrayList<>();
+        if (projectName != null && !projectName.isEmpty())
+        {
+            ProjectContext ctx = ProjectContext.of(projectName);
+            if (ctx.isOpen())
+            {
+                scope.add(ctx.project());
+            }
+            return scope;
+        }
+        for (IProject project : ProjectContext.allProjects())
+        {
+            if (project.isOpen())
+            {
+                scope.add(project);
+            }
+        }
+        return scope;
+    }
+
+    /**
+     * Returns the longest prefix of {@code fqn} whose existence the shared
+     * {@link MetadataNodeResolver} can actually DECIDE, or {@code null} when even the leading
+     * {@code Type.Name} pair is undecidable.
+     *
+     * <p>A prefix is used rather than the whole FQN because the resolver only navigates the
+     * child kinds it maps to an EMF containment feature. A kind it does not navigate (a form
+     * segment, for instance) is a genuine "cannot tell", never a "does not exist" - and the
+     * {@code objects} filter is a SUBSTRING test, so a shorter prefix that does resolve proves
+     * the filter is meaningful. Concretely:</p>
+     * <ul>
+     *   <li>{@code Catalog.Products.Attribute.Weight} - fully decidable (whole FQN);</li>
+     *   <li>{@code Catalog.Products.Form.ItemForm} - decidable up to {@code Catalog.Products};</li>
+     *   <li>{@code Attribute.Weight} / {@code Products} - {@code null}: the leading token is not a
+     *       top-level type, so this is a fragment whose match cannot be judged.</li>
+     * </ul>
+     *
+     * @param fqn the requested object FQN (may be {@code null})
+     * @return the decidable prefix, or {@code null} when nothing about the FQN can be decided
+     */
+    static String decidableFqnPrefix(String fqn)
+    {
+        if (fqn == null || fqn.isEmpty())
+        {
+            return null;
+        }
+        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+        if (parts.length < 2 || MetadataTypeUtils.resolve(parts[0]) == null)
+        {
+            return null;
+        }
+        int end = 2;
+        while (end + 1 < parts.length && MetadataNodeResolver.featureNameForKind(parts[end]) != null)
+        {
+            end += 2;
+        }
+        return String.join(".", Arrays.copyOfRange(parts, 0, end)); //$NON-NLS-1$
     }
 
     /**
@@ -537,6 +762,28 @@ public class GetProjectErrorsTool implements IMcpTool
             md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
                 modulePathCell, lineCell, checkCell));
         }
+    }
+
+    /**
+     * Appends the {@code objectsNotFound} warning block to {@code md} when at least one requested
+     * {@code objects} FQN was PROVEN to match no object (see
+     * {@link #resolveMissingObjectFilters(List, String, IBmModelManager)}). Nothing is appended for
+     * an empty list, so a report where every FQN resolved keeps its previous shape exactly.
+     *
+     * @param md the Markdown builder to append to
+     * @param objectsNotFound the requested FQNs that resolve to no object, may be
+     *     {@code null}/empty
+     */
+    static void appendObjectsNotFoundWarning(StringBuilder md, List<String> objectsNotFound)
+    {
+        if (objectsNotFound == null || objectsNotFound.isEmpty())
+        {
+            return;
+        }
+        md.append("\n> ⚠️ objectsNotFound: ") //$NON-NLS-1$
+          .append(String.join(", ", objectsNotFound)) //$NON-NLS-1$
+          .append(" — these FQNs match no object in the project(s), so they filtered nothing. ") //$NON-NLS-1$
+          .append("Check the name/type token, or list objects with get_metadata_objects."); //$NON-NLS-1$
     }
 
     /**

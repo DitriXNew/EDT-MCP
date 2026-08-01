@@ -10,7 +10,7 @@ Lists EDT configuration problems (validation markers: the same set EDT shows in 
 - `projectName` - EDT project name. Omit to scan all projects. An unknown project returns an error; a project still indexing returns a not-ready error.
 - `severity` - one of `ERRORS`, `BLOCKER`, `CRITICAL`, `MAJOR`, `MINOR`, `TRIVIAL`, `NONE` (case-insensitive). An out-of-set value is rejected (the filter is never silently widened to "all"). Matches that exact severity only (it is not a >= threshold).
 - `checkId` - case-insensitive substring matched against EITHER the symbolic check id (e.g. `ql-temp-table-index`) OR the short UID (e.g. `SU23`). The short UID alone is rarely what you want, so the symbolic id is matched too.
-- `objects` - array of object FQNs; returns problems only from these objects. Matching is a case-insensitive substring test against the resolved object presentation.
+- `objects` - array of object FQNs, nested ones included (`Catalog.Products.Form.ItemForm`, `Catalog.Products.TabularSection.Goods.Attribute.Price`); returns problems only from these objects. Matching is a case-insensitive substring test against the resolved object presentation, after EVERY structural token of the FQN has been normalized to both languages. A requested FQN that matches no object in the scanned project(s) is listed back in an `objectsNotFound` warning instead of silently filtering everything away.
 - `limit` - max rows; default 100, max 1000. When reached, the output appends a limit-reached notice; narrow the filters to see the rest.
 - `responseFormat` - `concise` (default) or `detailed`. `concise` trims tokens by dropping the secondary `Has docs` column; every actionable column (`Description`, `Location`, `Module path`, `Line`, `Check code`) and the unresolved-marker warnings are kept. `detailed` adds the `Has docs` column back (true when `get_check_description` has detail for that check). An absent/unrecognized value defaults to `concise`.
 
@@ -18,16 +18,20 @@ Lists EDT configuration problems (validation markers: the same set EDT shows in 
 `Description` | `Location` | `Module path` | `Line` | `Check code` | `Has docs`. `Module path` + `Line` are populated only for problems that resolve to a `.bsl` module under `src/` (empty for metadata-only problems). `Check code` shows the symbolic id when known, else the short UID. `Has docs=true` means `get_check_description` has detail for that check (the `Has docs` column appears only with `responseFormat: detailed`).
 
 ## Bilingual (ru/en) note
-The `objects` filter accepts the TYPE token in English or Russian; each FQN is expanded to all language variants before matching, so `Document.SalesOrder` and the Russian `Документ.ПродажаТоваров` both resolve. The object NAME after the dot must still be the real programmatic name, not a synonym.
+The `objects` filter accepts EVERY structural token in English or Russian - the leading TYPE token and every nested KIND token (`Form`/`Форма`, `Attribute`/`Реквизит`, `TabularSection`/`ТабличнаяЧасть`, `Command`/`Команда`, ...). Each FQN is expanded to an all-English and an all-Russian form before matching, so `Document.SalesOrder.Form.DocumentForm` and `Документ.ПродажаТоваров.Форма.ФормаДокумента` both resolve whatever language the marker location is rendered in. The NAME segments (the odd ones) are copied verbatim: they must be the real programmatic names, not synonyms, and a name that happens to spell a kind token (an object literally called `Форма`) is never translated.
 
 ## Examples
 - All problems in one project: `{projectName: "MyConfig"}`.
 - Errors only: `{projectName: "MyConfig", severity: "ERRORS"}`.
 - One check across all projects: `{checkId: "ql-temp-table-index"}`.
 - Scoped to objects: `{objects: ["Catalog.Products", "Document.SalesOrder"]}`.
+- Scoped to one form: `{objects: ["Catalog.Products.Form.ItemForm"]}`.
 - Russian type name: `{objects: ["Справочник.Номенклатура"]}`.
+- Russian nested FQN: `{objects: ["Справочник.Номенклатура.Форма.ФормаЭлемента"]}`.
 
 ## Gotchas
 - Markers whose location cannot be resolved are NOT dropped: without an `objects` filter they appear with a `<unresolved: project>` placeholder (a trailing warning counts them); with an `objects` filter they are excluded (membership cannot be tested) and a separate warning counts them. Run `clean_project` / `revalidate_objects` to refresh stale markers.
 - `severity` matches exactly; to see everything at or above a level, omit it and read the `Check code` / severity yourself, or call once per band.
 - The `objects` match is a substring of the presentation, so an overly short FQN fragment can over-match; prefer the full `Type.Name`.
+- An `objects` FQN that names nothing no longer produces a silent "No Errors Found": the report ends with `> ⚠️ objectsNotFound: <fqn>, ...`, naming every requested FQN that matches no object. It is emitted next to a results table too, so a partial miss is visible even when the other FQNs did find problems.
+- `objectsNotFound` is deliberately conservative: it is emitted only when the model could actually be consulted and the FQN could be judged. FQNs whose deepest segment the resolver does not navigate (a form member, for example) are checked down to the deepest segment it does, and nothing is claimed when the answer is unknown - an absent warning is therefore NOT a guarantee that every FQN exists.

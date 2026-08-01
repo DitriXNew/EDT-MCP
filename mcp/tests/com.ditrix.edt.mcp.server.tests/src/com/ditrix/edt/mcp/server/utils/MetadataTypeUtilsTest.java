@@ -481,4 +481,158 @@ public class MetadataTypeUtilsTest
             assertEquals("Variant should be lowercase: " + v, v.toLowerCase(), v);
         }
     }
+
+    // ========== getAllFqnVariants: NESTED FQNs (issue #312) ==========
+
+    /** Russian tokens are written as code points so this source stays pure ASCII. */
+    private static final String RU_DOCUMENT_LOWER = "\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442"; // документ
+    private static final String RU_DOCUMENT = "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442"; // Документ
+    private static final String RU_CATALOG_LOWER = "\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A"; // справочник
+    private static final String RU_FORM = "\u0424\u043E\u0440\u043C\u0430"; // Форма
+    private static final String RU_FORMS = "\u0424\u043E\u0440\u043C\u044B"; // Формы
+    private static final String RU_FORM_LOWER = "\u0444\u043E\u0440\u043C\u0430"; // форма
+    private static final String RU_TABULAR_SECTION_LOWER =
+        "\u0442\u0430\u0431\u043B\u0438\u0447\u043D\u0430\u044F\u0447\u0430\u0441\u0442\u044C"; // табличнаячасть
+    private static final String RU_ATTRIBUTE_LOWER = "\u0440\u0435\u043A\u0432\u0438\u0437\u0438\u0442"; // реквизит
+
+    @Test
+    public void testGetAllFqnVariantsNestedEnglishInputProducesFullRussianVariant()
+    {
+        // THE regression (issue #312): an English NESTED FQN must produce a variant whose EVERY
+        // structural segment is Russian. Translating only the leading type token yields
+        // "документ.meeting.form.itemform", which never matches the Russian marker location
+        // "Документ.Meeting.Форма.ItemForm" -> the filter silently drops every finding and the
+        // tool reports a clean project.
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Document.Meeting.Form.ItemForm");
+        assertTrue("Should contain original lowercased",
+            variants.contains("document.meeting.form.itemform"));
+        assertTrue("Should translate BOTH structural segments to Russian",
+            variants.contains(RU_DOCUMENT_LOWER + ".meeting." + RU_FORM_LOWER + ".itemform"));
+        assertFalse("The half-translated form must not be produced",
+            variants.contains(RU_DOCUMENT_LOWER + ".meeting.form.itemform"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNestedRussianInputProducesFullEnglishVariant()
+    {
+        // Документ.Встреча.Форма.ФормаЭлемента
+        String meeting = "\u0412\u0441\u0442\u0440\u0435\u0447\u0430"; // Встреча
+        String itemForm = "\u0424\u043E\u0440\u043C\u0430\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0430"; // ФормаЭлемента
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants(
+            RU_DOCUMENT + "." + meeting + "." + RU_FORM + "." + itemForm);
+        assertTrue("Should translate BOTH structural segments to English",
+            variants.contains("document." + meeting.toLowerCase() + ".form." + itemForm.toLowerCase()));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsProgrammaticNamesAreNeverTranslated()
+    {
+        // An object AND its form both literally named Forma (the Russian word for "Form"): the
+        // NAME segments (odd indexes) must survive untouched while only the structural segments
+        // (even indexes) translate.
+        Set<String> variants =
+            MetadataTypeUtils.getAllFqnVariants("Catalog." + RU_FORM + ".Form." + RU_FORM);
+        assertTrue("Names must stay as typed in the all-English variant",
+            variants.contains("catalog." + RU_FORM_LOWER + ".form." + RU_FORM_LOWER));
+        assertFalse("A NAME that spells a kind token must NOT be translated",
+            variants.contains("catalog.form.form.form"));
+        assertTrue("Structural segments must still translate to Russian",
+            variants.contains(RU_CATALOG_LOWER + "." + RU_FORM_LOWER + "." + RU_FORM_LOWER
+                + "." + RU_FORM_LOWER));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsThreeLevelNestedFqn()
+    {
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants(
+            "Catalog.Products.TabularSection.Goods.Attribute.Price");
+        assertTrue("Should contain original lowercased",
+            variants.contains("catalog.products.tabularsection.goods.attribute.price"));
+        assertTrue("All three structural segments must translate to Russian",
+            variants.contains(RU_CATALOG_LOWER + ".products." + RU_TABULAR_SECTION_LOWER
+                + ".goods." + RU_ATTRIBUTE_LOWER + ".price"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNestedPluralKindToken()
+    {
+        // A plural nested kind token is accepted and canonicalized to the singular.
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Catalog.Products.Forms.ItemForm");
+        assertTrue("Plural kind token must canonicalize to the English singular",
+            variants.contains("catalog.products.form.itemform"));
+        assertTrue("Plural kind token must canonicalize to the Russian singular",
+            variants.contains(RU_CATALOG_LOWER + ".products." + RU_FORM_LOWER + ".itemform"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsUnknownNestedSegmentIsKept()
+    {
+        // An unrecognized structural segment is copied verbatim - it must never break the method
+        // nor swallow the other segments' translation.
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Catalog.Products.Widget.Foo");
+        assertTrue(variants.contains("catalog.products.widget.foo"));
+        assertTrue("The known type token must still translate",
+            variants.contains(RU_CATALOG_LOWER + ".products.widget.foo"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNeverExplodesCombinatorially()
+    {
+        // At most THREE candidates (original + all-English + all-Russian), never the per-segment
+        // cross product, which would grow exponentially with the FQN depth.
+        Set<String> deep = MetadataTypeUtils.getAllFqnVariants(
+            "Catalog.Products.TabularSection.Goods.Attribute.Price");
+        assertTrue("deep FQN produced " + deep.size() + " variants", deep.size() <= 3);
+
+        // A MIXED-language input is the case that really yields all three distinct forms.
+        Set<String> mixed = MetadataTypeUtils.getAllFqnVariants("Document.X." + RU_FORM + ".Y");
+        assertEquals(3, mixed.size());
+        assertTrue(mixed.contains("document.x." + RU_FORM_LOWER + ".y")); // original
+        assertTrue(mixed.contains("document.x.form.y")); // all-English
+        assertTrue(mixed.contains(RU_DOCUMENT_LOWER + ".x." + RU_FORM_LOWER + ".y")); // all-Russian
+    }
+
+    // ========== resolveNestedKind ==========
+
+    @Test
+    public void testResolveNestedKindEnglishAndRussianSingularAndPlural()
+    {
+        for (String token : new String[]{"Form", "forms", "FORM", RU_FORM, RU_FORMS})
+        {
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
+            assertNotNull("token should resolve: " + token, info);
+            assertEquals("Form", info.getEnglish());
+            assertEquals(RU_FORM, info.getRussian());
+        }
+    }
+
+    @Test
+    public void testResolveNestedKindCoversTheStructuralKinds()
+    {
+        // The nested kinds an FQN can address; each must resolve from its English spelling and
+        // round-trip through its Russian canon.
+        String[] kinds = {"Form", "Attribute", "TabularSection", "Dimension", "Resource",
+            "EnumValue", "Command", "Template", "Column", "Recalculation", "AccountingFlag",
+            "AddressingAttribute"};
+        for (String kind : kinds)
+        {
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(kind);
+            assertNotNull("nested kind should be catalogued: " + kind, info);
+            assertEquals(kind, info.getEnglish());
+            MetadataTypeUtils.NestedKindInfo byRussian =
+                MetadataTypeUtils.resolveNestedKind(info.getRussian());
+            assertNotNull("Russian canon should resolve for: " + kind, byRussian);
+            assertEquals(kind, byRussian.getEnglish());
+        }
+    }
+
+    @Test
+    public void testResolveNestedKindUnknownAndNull()
+    {
+        assertNull(MetadataTypeUtils.resolveNestedKind(null));
+        assertNull(MetadataTypeUtils.resolveNestedKind(""));
+        assertNull(MetadataTypeUtils.resolveNestedKind("Widget"));
+        // A TOP-LEVEL type is NOT a nested kind: the two catalogues stay separate.
+        assertNull(MetadataTypeUtils.resolveNestedKind("Catalog"));
+    }
 }

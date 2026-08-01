@@ -16,6 +16,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -507,6 +508,21 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testObjectsFilterTextsAdvertiseObjectsNotFound()
+    {
+        // The same claim lives in the description, the objects schema entry and the guide;
+        // after #312 all three must mention the objectsNotFound report, or the caller is told
+        // the filter behaves differently than it does.
+        GetProjectErrorsTool tool = new GetProjectErrorsTool();
+        assertTrue("description must advertise objectsNotFound", //$NON-NLS-1$
+            tool.getDescription().contains("objectsNotFound")); //$NON-NLS-1$
+        assertTrue("objects schema entry must advertise objectsNotFound", //$NON-NLS-1$
+            tool.getInputSchema().contains("objectsNotFound")); //$NON-NLS-1$
+        assertTrue("guide must document objectsNotFound", //$NON-NLS-1$
+            tool.getGuide().contains("objectsNotFound")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testGuideExplainsResponseFormat()
     {
         // The guide documents concise (default) vs detailed and what concise omits.
@@ -527,6 +543,102 @@ public class GetProjectErrorsToolTest
         // The message now ECHOES the rejected value alongside the valid set.
         assertTrue(result.contains("Invalid severity")); //$NON-NLS-1$
         assertTrue("rejected value must be echoed", result.contains("NOTASEVERITY")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ========== objectsNotFound warning (issue #312) ==========
+
+    @Test
+    public void testObjectsNotFoundWarningNamesEveryMissingFqnAndTheFix()
+    {
+        StringBuilder md = new StringBuilder("# No Errors Found\n"); //$NON-NLS-1$
+        GetProjectErrorsTool.appendObjectsNotFoundWarning(md,
+            Arrays.asList("Catalog.Nope", "Document.AlsoNope")); //$NON-NLS-1$ //$NON-NLS-2$
+        String out = md.toString();
+
+        assertTrue("must carry the objectsNotFound marker", //$NON-NLS-1$
+            out.contains("objectsNotFound:")); //$NON-NLS-1$
+        assertTrue("must name every missing FQN", //$NON-NLS-1$
+            out.contains("Catalog.Nope") && out.contains("Document.AlsoNope")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must say the filter matched nothing", //$NON-NLS-1$
+            out.contains("filtered nothing")); //$NON-NLS-1$
+        assertTrue("must point at the discovery tool", //$NON-NLS-1$
+            out.contains("get_metadata_objects")); //$NON-NLS-1$
+        assertTrue("must be rendered as a blockquote warning", //$NON-NLS-1$
+            out.contains("\n> ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testObjectsNotFoundWarningAbsentWhenNothingIsMissing()
+    {
+        // Every FQN resolved (or nothing could be decided): the report keeps its previous shape.
+        StringBuilder empty = new StringBuilder("# No Errors Found"); //$NON-NLS-1$
+        GetProjectErrorsTool.appendObjectsNotFoundWarning(empty, Collections.emptyList());
+        assertEquals("# No Errors Found", empty.toString()); //$NON-NLS-1$
+
+        StringBuilder nullCase = new StringBuilder("# No Errors Found"); //$NON-NLS-1$
+        GetProjectErrorsTool.appendObjectsNotFoundWarning(nullCase, null);
+        assertEquals("# No Errors Found", nullCase.toString()); //$NON-NLS-1$
+    }
+
+    // ========== decidableFqnPrefix (what may be declared missing at all) ==========
+
+    @Test
+    public void testDecidableFqnPrefixTopLevelFqn()
+    {
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDecidableFqnPrefixNavigableNestedFqnIsDecidableInFull()
+    {
+        // Attribute / TabularSection are kinds the shared resolver navigates.
+        assertEquals("Catalog.Products.Attribute.Weight", //$NON-NLS-1$
+            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products.Attribute.Weight")); //$NON-NLS-1$
+        assertEquals("Catalog.Products.TabularSection.Goods.Attribute.Price", //$NON-NLS-1$
+            GetProjectErrorsTool.decidableFqnPrefix(
+                "Catalog.Products.TabularSection.Goods.Attribute.Price")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDecidableFqnPrefixStopsAtANonNavigableKind()
+    {
+        // A form segment is NOT navigable by the shared resolver, so the answer for it is
+        // "cannot tell", never "does not exist": the decidable part is the owning object, and
+        // because the objects filter is a SUBSTRING test that prefix proves the filter matches.
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDecidableFqnPrefixAcceptsRussianTokens()
+    {
+        // Справочник.Products.Реквизит.Weight - both structural tokens in Russian.
+        String fqn = "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Products." //$NON-NLS-1$
+            + "\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442.Weight"; //$NON-NLS-1$
+        assertEquals(fqn, GetProjectErrorsTool.decidableFqnPrefix(fqn));
+    }
+
+    @Test
+    public void testDecidableFqnPrefixNullForUndecidableInput()
+    {
+        // Not a Type.Name address, or a leading token that is not a top-level metadata type:
+        // such a fragment can still match a presentation by substring, so it must never be
+        // declared missing.
+        assertNull(GetProjectErrorsTool.decidableFqnPrefix(null));
+        assertNull(GetProjectErrorsTool.decidableFqnPrefix("")); //$NON-NLS-1$
+        assertNull(GetProjectErrorsTool.decidableFqnPrefix("Products")); //$NON-NLS-1$
+        assertNull(GetProjectErrorsTool.decidableFqnPrefix("Attribute.Weight")); //$NON-NLS-1$
+        assertNull(GetProjectErrorsTool.decidableFqnPrefix("UnknownType.Name")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDecidableFqnPrefixTrimsATrailingOddSegment()
+    {
+        // "Catalog.Products.Form" is not a complete kind/name pair; only the complete leading
+        // pair may be judged.
+        assertEquals("Catalog.Products", //$NON-NLS-1$
+            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products.Form")); //$NON-NLS-1$
     }
 
     // ========== on-demand guide (detail moved out of description/schema) ==========

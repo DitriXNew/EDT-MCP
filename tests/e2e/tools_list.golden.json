@@ -2630,7 +2630,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
+    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Object FQN filters accept English or Russian tokens at EVERY level, nested FQNs included (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); requested FQNs that match no object are reported back under objectsNotFound. Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
     "inputSchema": {
       "properties": {
         "checkId": {
@@ -2642,7 +2642,7 @@
           "type": "integer"
         },
         "objects": {
-          "description": "Filter by object FQNs, e.g. ['Catalog.Products']; English or Russian type names accepted (optional)",
+          "description": "Filter by object FQNs, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian tokens accepted at every level; FQNs matching no object are listed back under objectsNotFound (optional)",
           "items": {
             "type": "string"
           },
