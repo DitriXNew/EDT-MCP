@@ -2746,4 +2746,74 @@ public class FormElementWriterTest
         org.mockito.Mockito.verify(tx, org.mockito.Mockito.never())
             .attachTopObject(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
+
+    // ---- attribute COLUMNS of a collection-typed form attribute (issue #295) ---------------------
+
+    @Test
+    public void testIsColumnToken()
+    {
+        assertTrue(FormElementWriter.isColumnToken("Column")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isColumnToken("columns")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isColumnToken("COLUMN")); //$NON-NLS-1$
+        // kolonka / kolonki
+        assertTrue(FormElementWriter.isColumnToken(fromCp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430)));
+        assertTrue(FormElementWriter.isColumnToken(fromCp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438)));
+        assertFalse(FormElementWriter.isColumnToken("Attribute")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isColumnToken(null));
+        assertEquals(FormElementWriter.Kind.COLUMN, FormElementWriter.kindForToken("Column")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseAttributeColumn()
+    {
+        FormMemberRef ref =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Catalog.Products.forms.ItemForm", ref.formPath); //$NON-NLS-1$
+        assertEquals("Column", ref.kindToken); //$NON-NLS-1$
+        assertEquals("Price", ref.name); //$NON-NLS-1$
+        assertEquals("Rows", ref.ownerAttributeName); //$NON-NLS-1$
+        assertTrue(ref.isAttributeColumn());
+        // A column is NOT an item-level handler: half a dozen call sites branch on isItemLevel(), and
+        // folding the column into itemName would silently reroute all of them.
+        assertFalse(ref.isItemLevel());
+        assertNull(ref.itemName);
+        assertNull(ref.itemKindToken);
+    }
+
+    @Test
+    public void testParseAttributeColumnRussianTokensAndCommonForm()
+    {
+        // "Реквизит" + "Колонка" on a CommonForm (the 2-segment form path shape).
+        String attribute = fromCp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442);
+        String column = fromCp(0x041a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430);
+        FormMemberRef ref =
+            FormElementWriter.parse("CommonForm.Settings." + attribute + ".Rows." + column + ".Price"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(ref);
+        assertEquals("CommonForm.Settings", ref.formPath); //$NON-NLS-1$
+        assertEquals("Price", ref.name); //$NON-NLS-1$
+        assertEquals("Rows", ref.ownerAttributeName); //$NON-NLS-1$
+        assertTrue(ref.isAttributeColumn());
+    }
+
+    @Test
+    public void testParseColumnOnlyOnAnAttribute()
+    {
+        // Only an ATTRIBUTE owns columns. A Field/Table "column" is part of the ITEM tree and is
+        // addressed as an item, so this shape must NOT be parsed as a form member at all.
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Rows.Column.Price")); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Table.Rows.Column.Price")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParsePlainMemberHasNoOwnerAttribute()
+    {
+        // The new field must stay null for every pre-existing shape (a regression guard for the
+        // ownerAttributeName-based branching).
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.A").ownerAttributeName); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Handler.OnOpen").ownerAttributeName); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse( //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm.Field.Price.Handler.OnChange").ownerAttributeName); //$NON-NLS-1$
+        assertFalse(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.A").isAttributeColumn()); //$NON-NLS-1$
+    }
 }

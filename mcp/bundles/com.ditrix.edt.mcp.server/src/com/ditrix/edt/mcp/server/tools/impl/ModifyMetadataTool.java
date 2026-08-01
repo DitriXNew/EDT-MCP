@@ -2965,7 +2965,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String consentForFormTypeChange(String normFqn, FormElementWriter.FormMemberRef ref,
         List<JsonObject> properties)
     {
-        if (FormElementWriter.kindForToken(ref.kindToken) != FormElementWriter.Kind.ATTRIBUTE)
+        // A COLUMN of a collection attribute is retyped exactly like an attribute, so it is gated the
+        // same way - skipping it would let a column silently change type unprompted (issue #295).
+        FormElementWriter.Kind typedKind = FormElementWriter.kindForToken(ref.kindToken);
+        if (typedKind != FormElementWriter.Kind.ATTRIBUTE && typedKind != FormElementWriter.Kind.COLUMN)
         {
             return null;
         }
@@ -3610,7 +3613,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 config, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form member as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table)."); //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table, " //$NON-NLS-1$
+                    + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
             persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -4085,7 +4089,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
         // so there is no unresolved-reference case here to hint. `project` is null: a form member is
         // never a ScheduledJob / EventSubscription, so validateMethodReference never dereferences it.
-        String pErr = prepare(new PrepareContext(null, config, version), member, holder.classifyExtInfo, normProp,
+        String pErr = prepare(PrepareContext.forFormMember(config, version), member, holder.classifyExtInfo, normProp,
             built, normReport, false);
         if (pErr != null)
         {
@@ -4267,7 +4271,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // A move addresses a form ITEM only - never an attribute / command (which are not in the items
         // tree and have no position / parent).
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
-        if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND)
+        if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND
+            || kind == FormElementWriter.Kind.COLUMN)
         {
             return ToolResult.error("'parent' / 'position' move a form ITEM (field / group / " //$NON-NLS-1$
                 + "decoration / button / table); a form " + ref.kindToken + " is not positioned. " //$NON-NLS-1$ //$NON-NLS-2$
@@ -4595,18 +4600,42 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         /** Codes declared AFTER this batch; {@code null} when it changes no language code. */
         final List<String> declaredAfterBatch;
 
-        PrepareContext(IProject project, Configuration config, Version version)
-        {
-            this(project, config, version, null);
-        }
+        /**
+         * What a {@code TYPE_DESCRIPTION} property prepared in this context will be attached to. It is
+         * the CALL SITE that knows this (the form-member path vs the mdclass path), so the answer is
+         * carried here rather than sniffed off the resolved feature - issue #295.
+         */
+        final MetadataTypeBuilder.TypeTarget typeTarget;
 
         PrepareContext(IProject project, Configuration config, Version version,
             List<String> declaredAfterBatch)
+        {
+            this(project, config, version, declaredAfterBatch, MetadataTypeBuilder.TypeTarget.METADATA);
+        }
+
+        private PrepareContext(IProject project, Configuration config, Version version,
+            List<String> declaredAfterBatch, MetadataTypeBuilder.TypeTarget typeTarget)
         {
             this.project = project;
             this.config = config;
             this.version = version;
             this.declaredAfterBatch = declaredAfterBatch;
+            this.typeTarget = typeTarget;
+        }
+
+        /**
+         * The FORM-member variant. A form attribute is the one place the platform holds an in-memory
+         * collection type (ValueTable / ValueTree), so only this context admits those kinds (#295).
+         * {@code project} is {@code null} here, as the class doc explains.
+         *
+         * @param config the configuration the member belongs to
+         * @param version the platform version
+         * @return a context whose type target is a form attribute
+         */
+        static PrepareContext forFormMember(Configuration config, Version version)
+        {
+            return new PrepareContext(null, config, version, null,
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
         }
     }
 
@@ -4768,7 +4797,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case INTEGER:
                 return prepareInteger(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(ctx.config, ctx.version, name, prop, info, out, isExtensionProject);
+                return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
             case REFERENCE:
                 return prepareReference(ctx.config, target, name, value, info, out);
             case MANY_REFERENCE:
@@ -4943,19 +4972,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * platform version) and, on success, appends the prepared scalar change to {@code out}. Returns a
      * JSON error on failure, or {@code null} on success. Read-only: it only builds and queues the
      * change (no model mutation). {@code isExtensionProject} is forwarded to
-     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean)} so an unresolved
-     * reference target's error can append the extension-adopt hint (issue #262).
+     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean,
+     * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
+     * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
+     * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295).
      */
-    private String prepareTypeDescription(Configuration config, Version version, String name,
+    private String prepareTypeDescription(PrepareContext ctx, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
     {
-        if (version == null)
+        if (ctx.version == null)
         {
             return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        MetadataTypeBuilder.Result tr =
-            MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version, isExtensionProject);
+        MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
+            ctx.version, isExtensionProject, ctx.typeTarget);
         if (tr.error != null)
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$

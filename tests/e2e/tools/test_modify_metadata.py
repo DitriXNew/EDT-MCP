@@ -519,6 +519,98 @@ def test_modify_form_attribute_type():
                        ctx="the form attribute's Number(10,2) type must land in the .form on disk")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# In-memory collection types on a FORM attribute, and their refusal elsewhere (issue #295)
+# ──────────────────────────────────────────────────────────────────────────────
+
+ITEM_FORM_FILE = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_attribute_valuetable_type():
+    # A form attribute CAN hold an in-memory collection - this is the whole point of #295.
+    _seed_form_attribute("MFValueTable")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFValueTable",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}],
+    })
+    assert_ok(r, "set a form attribute's type to ValueTable")
+    poll_disk_contains(ITEM_FORM_FILE, "<types>ValueTable</types>",
+                       ctx="the ValueTable type must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_attribute_valuetree_russian_token():
+    # The kind token is bilingual, like every other type token.
+    _seed_form_attribute("MFValueTree")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFValueTree",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ДеревоЗначений"}]}}],
+    })
+    assert_ok(r, "set a form attribute's type to ValueTree via the Russian token")
+    poll_disk_contains(ITEM_FORM_FILE, "<types>ValueTree</types>",
+                       ctx="the Russian collection token must resolve to the ValueTree platform type")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_collection_type_refused_on_stored_attribute():
+    # EDT does NOT catch this: a ValueTable written into a .mdo attribute survives a full
+    # revalidation and only breaks later, in the platform. So the refusal must come from the tool,
+    # and it must say where the kind IS allowed and what to use instead (issue #295).
+    attr = "E2ECollectionOnStored"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed stored attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}],
+    })
+    e = assert_error(r, "a stored attribute must refuse an in-memory collection")
+    assert_error_quality(e, names=["ValueTable"], suggests=["Form", "ValueStorage"],
+                         ctx="the refusal must name the kind, point at a FORM attribute and offer "
+                             "ValueStorage as the persistable alternative")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_attribute_column_type():
+    # A column is typed exactly like an attribute, addressed one level deeper.
+    _seed_form_attribute("MFColsOwner")
+    tr = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFColsOwner",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(tr, "make the owner a ValueTable")
+    wait_for_project_ready()
+    cr = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFColsOwner.Column.Price"})
+    assert_ok(cr, "seed the column")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFColsOwner.Column.Price",
+        "properties": [{"name": "type",
+                        "value": {"types": [{"kind": "Number", "precision": 15, "scale": 2}]}}],
+    })
+    assert_ok(r, "set an attribute column's type")
+    assert "valueType" in (r.structured.get("applied") or []), \
+        "the type alias must apply to the column's valueType: %r" % (r.structured,)
+    poll_disk_contains(ITEM_FORM_FILE, "<precision>15</precision>",
+                       ctx="the column's Number(15,2) type must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_addressing_error_lists_column():
+    # The addressing help an agent reads when the form cannot be resolved is the kind inventory; it
+    # must advertise Column, or the column FQN shape stays undiscoverable (issue #295).
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.NoSuchForm_zzz.Attribute.X",
+        "properties": [{"name": "title", "value": "x", "language": "en"}],
+    })
+    e = assert_error(r, "an unresolvable form is refused with the addressing help")
+    assert_contains(e, "Column", ctx="the form-addressing inventory must mention Column")
+
+
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_form_command_title():
     cmd = "MFCmd"

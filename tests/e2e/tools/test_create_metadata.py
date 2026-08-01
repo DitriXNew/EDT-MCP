@@ -1131,8 +1131,78 @@ def test_create_form_unknown_kind_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Nonsense.X"})
     e = assert_error(r, "unknown form element kind")
-    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command"],
+    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command", "Column"],
                          ctx="an unknown form kind must list the supported form kinds")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Columns of a collection-typed form attribute (issue #295)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _seed_collection_attribute(attr):
+    """Create a form attribute and make it a ValueTable - the shape that owns columns."""
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed collection attribute " + attr)
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "type " + attr + " as a ValueTable")
+    wait_for_project_ready()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column():
+    attr, col = "E2EColOwner", "E2ECol"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(r, "create a column on a collection form attribute")
+    assert r.structured.get("kind") == "FormAttributeColumn", \
+        "the created element must be a FormAttributeColumn: %r" % (r.structured,)
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
+                       ctx="the new column must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column_russian_token():
+    attr, col = "E2EColOwnerRu", "E2EColRu"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Реквизит." + attr + ".Колонка." + col})
+    assert_ok(r, "create a column via the Russian Колонка token")
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
+                       ctx="the Russian-token column must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_column_on_non_collection_attribute_is_error():
+    # Only a ValueTable / ValueTree attribute owns columns. EDT would not flag a column hung off a
+    # String attribute, so the tool has to - and it must say how to fix it (issue #295).
+    attr = "E2EPlainAttr"
+    cr = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(cr, "seed a plain form attribute")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Nope"})
+    e = assert_error(r, "a column on a non-collection attribute is refused")
+    assert_error_quality(e, names=[attr], suggests=["ValueTable", "modify_metadata"],
+                         ctx="the refusal must name the attribute and say how to make it a collection")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_column_on_missing_attribute_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.NoSuchAttr_zzz.Column.C"})
+    e = assert_error(r, "a column on a missing attribute is refused")
+    assert_error_quality(e, names=["NoSuchAttr_zzz"], suggests=["Create it first"],
+                         ctx="the refusal must name the missing owner attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

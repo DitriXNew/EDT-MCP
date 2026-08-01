@@ -39,6 +39,8 @@ public final class FormStructureReader
     private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
     /** EReference name holding the {@code FormAttribute}s on a {@code Form}. */
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
+    /** The columns of a collection-typed form attribute (issue #295). */
+    private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
     /** EReference name holding the {@code FormCommand}s on a {@code Form}. */
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
     /** EAttribute name carrying the programmatic name on a {@code NamedElement}. */
@@ -216,6 +218,7 @@ public final class FormStructureReader
         sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         renderItems(sb, formModel, language);
         renderAttributes(sb, formModel, language);
+        renderAttributeColumns(sb, formModel, language);
         renderCommands(sb, formModel, language);
         renderEventHandlers(sb, formModel, language);
         return sb.toString();
@@ -277,6 +280,43 @@ public final class FormStructureReader
             sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
                 valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
                 Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
+        }
+        sb.append('\n');
+    }
+
+    /**
+     * Renders the {@code ## Attribute columns} table for every COLLECTION attribute (ValueTable /
+     * ValueTree) that has columns - the only place a column is visible, since the attributes table shows
+     * just the owner's own type. The section is OMITTED entirely when no attribute has columns, so a form
+     * without collections renders exactly as before. Issue #295.
+     *
+     * @param sb the output buffer
+     * @param formModel the form content model
+     * @param language the language code for the title column
+     */
+    private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language)
+    {
+        List<EObject> owners = new ArrayList<>();
+        for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            if (!getReferenceList(attribute, FEATURE_COLUMNS).isEmpty())
+            {
+                owners.add(attribute);
+            }
+        }
+        if (owners.isEmpty())
+        {
+            return;
+        }
+        sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (EObject owner : owners)
+        {
+            for (EObject column : getReferenceList(owner, FEATURE_COLUMNS))
+            {
+                sb.append(MarkdownUtils.tableRow(nameOf(owner), nameOf(column),
+                    titleOf(column, language), valueTypeOf(column)));
+            }
         }
         sb.append('\n');
     }

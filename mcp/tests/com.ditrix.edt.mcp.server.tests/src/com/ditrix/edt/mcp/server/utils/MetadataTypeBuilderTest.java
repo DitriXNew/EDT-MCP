@@ -126,7 +126,8 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"valuestorage\"}").getAsJsonObject(); //$NON-NLS-1$
         String err = MetadataTypeBuilder.addType(td, item, "valuestorage", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false);
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
 
         assertNull(err);
         assertEquals(1, td.getTypes().size());
@@ -143,7 +144,8 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"UUID\"}").getAsJsonObject(); //$NON-NLS-1$
         String err = MetadataTypeBuilder.addType(td, item, "UUID", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false);
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
 
         assertNull(err);
         assertEquals(1, td.getTypes().size());
@@ -166,7 +168,8 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"uuid\"}").getAsJsonObject(); //$NON-NLS-1$
         String err = MetadataTypeBuilder.addType(td, item, "uuid", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false);
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
 
         assertNull(err);
         assertEquals(1, td.getTypes().size());
@@ -185,7 +188,8 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"uuid\"}").getAsJsonObject(); //$NON-NLS-1$
         String err = MetadataTypeBuilder.addType(td, item, "uuid", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false);
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
 
         assertNotNull(err);
         assertTrue("the error must name every tried candidate", //$NON-NLS-1$
@@ -205,7 +209,8 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"ValueStorage\",\"length\":50}").getAsJsonObject(); //$NON-NLS-1$
         String err = MetadataTypeBuilder.addType(td, item, "ValueStorage", provider, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false);
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
 
         assertNull(err);
         assertNull("a stray 'length' must not attach a StringQualifiers to a no-qualifier kind", //$NON-NLS-1$
@@ -220,12 +225,127 @@ public class MetadataTypeBuilderTest
         // the unknown-kind branch never touches `provider` (checked only after both normalizePrimitive
         // returns null and platformSimpleTypeCandidates returns an empty array), so null is safe here.
         String err = MetadataTypeBuilder.addType(td, item, "nonsense", null, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(), false);
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
 
         assertNotNull(err);
         assertTrue(err.contains("nonsense")); //$NON-NLS-1$
         assertTrue(err.contains("ValueStorage")); //$NON-NLS-1$
         assertTrue(err.contains("UUID")); //$NON-NLS-1$
+    }
+
+    // ---- ValueTable / ValueTree in-memory collections (issue #295) --------------------------------
+
+    @Test
+    public void testPlatformCollectionTypeCandidates()
+    {
+        // Same no-qualifier mechanism as ValueStorage/UUID, so the same bilingual/case tolerance.
+        assertArrayEquals(new String[] { "ValueTable" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("ValueTable")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "ValueTable" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("VALUETABLE")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "ValueTable" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("ТаблицаЗначений")); //$NON-NLS-1$
+
+        assertArrayEquals(new String[] { "ValueTree" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("valuetree")); //$NON-NLS-1$
+        assertArrayEquals(new String[] { "ValueTree" }, //$NON-NLS-1$
+            MetadataTypeBuilder.platformSimpleTypeCandidates("ДеревоЗначений")); //$NON-NLS-1$
+
+        // A collection kind is not a legacy primitive - the two mechanisms must not overlap.
+        assertNull(MetadataTypeBuilder.normalizePrimitive("ValueTable")); //$NON-NLS-1$
+        assertNull(MetadataTypeBuilder.normalizePrimitive("ValueTree")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddTypeValueTableResolves()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Type valueTableType = McoreFactory.eINSTANCE.createType();
+        Mockito.doReturn(valueTableType).when(provider).createProxy("ValueTable"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"ТаблицаЗначений\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "ТаблицаЗначений", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(err);
+        assertEquals(1, td.getTypes().size());
+        assertSame(valueTableType, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testAddTypeValueTreeResolves()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Type valueTreeType = McoreFactory.eINSTANCE.createType();
+        Mockito.doReturn(valueTreeType).when(provider).createProxy("ValueTree"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"ValueTree\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "ValueTree", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(err);
+        assertEquals(1, td.getTypes().size());
+        assertSame(valueTreeType, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testIsCollectionKind()
+    {
+        assertTrue(MetadataTypeBuilder.isCollectionKind("ValueTable")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isCollectionKind("ТаблицаЗначений")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isCollectionKind("valuetree")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isCollectionKind("ДеревоЗначений")); //$NON-NLS-1$
+        // the OTHER no-qualifier kinds are persistable, so they are not collections
+        assertFalse(MetadataTypeBuilder.isCollectionKind("ValueStorage")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isCollectionKind("UUID")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isCollectionKind("String")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isCollectionKind(null));
+    }
+
+    @Test
+    public void testAddTypeCollectionRefusedOnStoredMetadata()
+    {
+        // EDT does NOT catch this: a ValueTable written into a .mdo attribute survives a full
+        // revalidation and only breaks later, in the platform (verified live for #295). So the
+        // refusal has to come from here - and it must say where the kind IS allowed.
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"ValueTable\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "ValueTable", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull("a stored metadata feature must refuse an in-memory collection", err); //$NON-NLS-1$
+        assertTrue(err.contains("ValueTable")); //$NON-NLS-1$
+        assertTrue("the error must point at the form attribute FQN shape", //$NON-NLS-1$
+            err.contains("Form.FormName.Attribute")); //$NON-NLS-1$
+        assertTrue("the error must offer the persistable alternative", //$NON-NLS-1$
+            err.contains("ValueStorage")); //$NON-NLS-1$
+        assertTrue("nothing may be added when the kind is refused", td.getTypes().isEmpty()); //$NON-NLS-1$
+        // refused BEFORE any platform call
+        Mockito.verify(provider, Mockito.never()).createProxy(Mockito.anyString());
+    }
+
+    @Test
+    public void testUnknownKindErrorListsCollectionKinds()
+    {
+        // The unknown-kind message is the ONLY inventory an agent has - it must advertise the
+        // collection kinds too, or ValueTable stays undiscoverable (the very complaint in #295).
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        JsonObject item = json("{\"kind\":\"nonsense\"}").getAsJsonObject(); //$NON-NLS-1$
+        String err = MetadataTypeBuilder.addType(td, item, "nonsense", null, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull(err);
+        assertTrue(err.contains("ValueTable")); //$NON-NLS-1$
+        assertTrue(err.contains("ValueTree")); //$NON-NLS-1$
     }
 
     @Test
@@ -314,14 +434,16 @@ public class MetadataTypeBuilderTest
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"Ref\",\"ref\":\"Catalog.NoSuchThing\"}").getAsJsonObject(); //$NON-NLS-1$
 
-        String baseErr = MetadataTypeBuilder.addType(td, item, "Ref", null, config, false); //$NON-NLS-1$
+        String baseErr = MetadataTypeBuilder.addType(td, item, "Ref", null, config, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
         assertNotNull(baseErr);
         assertTrue("the sentinel must be present", //$NON-NLS-1$
             baseErr.contains("Cannot resolve the reference target")); //$NON-NLS-1$
         assertFalse("a base-configuration project must get no adopt hint", //$NON-NLS-1$
             baseErr.contains("adopt_metadata_object")); //$NON-NLS-1$
 
-        String extErr = MetadataTypeBuilder.addType(td, item, "Ref", null, config, true); //$NON-NLS-1$
+        String extErr = MetadataTypeBuilder.addType(td, item, "Ref", null, config, true, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
         assertNotNull(extErr);
         assertTrue("the sentinel must stay a continuous substring when the hint is appended", //$NON-NLS-1$
             extErr.contains("Cannot resolve the reference target")); //$NON-NLS-1$

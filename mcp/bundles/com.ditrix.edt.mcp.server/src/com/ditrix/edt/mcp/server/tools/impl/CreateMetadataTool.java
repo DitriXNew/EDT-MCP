@@ -1274,7 +1274,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
                 + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration, Field, " //$NON-NLS-1$
-                + "Button, Table (and Handler for events).").toJson(); //$NON-NLS-1$
+                + "Button, Table, Column (a collection attribute's column, addressed as " //$NON-NLS-1$
+                + "'...Attribute.AttrName.Column.ColName') and Handler for events.").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(ref.name))
         {
@@ -1298,7 +1299,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Configuration config = ctx.config;
 
         final FormElementWriter.Kind fKind = kind;
-        final String parent = fmProps.parentName;
+        // A COLUMN's owner is named by the FQN itself ('...Attribute.AttrName.Column.ColName'), so it
+        // takes the parent slot; every other kind nests via the optional `parent` property (#295).
+        final String parent = ref.isAttributeColumn() ? ref.ownerAttributeName : fmProps.parentName;
         final String bind = fmProps.bindTarget;
         final String titleText = fmProps.titleVal;
         // The designer's auto-children (extended tooltip / context menu) get script-variant

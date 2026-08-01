@@ -76,6 +76,8 @@ public final class FormElementWriter
     // Form-model feature names (reflective).
     private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
+    /** The COLUMNS of a form attribute whose value type is an in-memory collection (issue #295). */
+    private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
     private static final String FEATURE_TITLE = "title"; //$NON-NLS-1$
     private static final String FEATURE_VALUE_TYPE = "valueType"; //$NON-NLS-1$
@@ -201,7 +203,7 @@ public final class FormElementWriter
     private static final String TYPE_MANAGED_FORM = "ManagedForm"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
-    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON, TABLE }
+    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON, TABLE, COLUMN }
 
     /** A parsed form-member FQN: the form path (for {@code resolveMdForm}) + the leaf kind/name. */
     public static final class FormMemberRef
@@ -218,21 +220,41 @@ public final class FormElementWriter
         public final String itemKindToken;
         /** For an ITEM-LEVEL handler FQN, the owning item's name; {@code null} otherwise. */
         public final String itemName;
+        /**
+         * For an attribute-COLUMN FQN ({@code ...Attribute.Table.Column.Name}), the owning form
+         * attribute's name; {@code null} for every other shape. Deliberately NOT folded into
+         * {@code itemName}: {@link #isItemLevel()} means "an event handler on a form item" to half a
+         * dozen call sites, and a column is not that (issue #295).
+         */
+        public final String ownerAttributeName;
 
         FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
             String itemName)
+        {
+            this(formPath, kindToken, name, itemKindToken, itemName, null);
+        }
+
+        FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
+            String itemName, String ownerAttributeName)
         {
             this.formPath = formPath;
             this.kindToken = kindToken;
             this.name = name;
             this.itemKindToken = itemKindToken;
             this.itemName = itemName;
+            this.ownerAttributeName = ownerAttributeName;
         }
 
         /** Whether the FQN addresses an event handler on a form ITEM (vs the form root). */
         public boolean isItemLevel()
         {
             return itemName != null;
+        }
+
+        /** Whether the FQN addresses a COLUMN of a form attribute (issue #295). */
+        public boolean isAttributeColumn()
+        {
+            return ownerAttributeName != null;
         }
     }
 
@@ -250,6 +272,8 @@ public final class FormElementWriter
      *   <li>{@code CommonForm.FormName.Kind.Name} (a CommonForm IS a form)</li>
      *   <li>{@code Type.Object.Form.FormName.ItemKind.ItemName.Handler.Event} (an event handler on a
      *       form ITEM) and its {@code CommonForm.FormName.ItemKind.ItemName.Handler.Event} variant</li>
+     *   <li>{@code Type.Object.Form.FormName.Attribute.AttrName.Column.ColumnName} (a COLUMN of a
+     *       collection-typed form attribute) and its {@code CommonForm.} variant - issue #295</li>
      * </ul>
      * The form-element kind tokens are NOT confused with the mdclass member tokens because a mdclass
      * member FQN never carries a form token at position 2 nor starts with {@code CommonForm} followed
@@ -288,6 +312,12 @@ public final class FormElementWriter
         {
             // Item-level handler: ItemKind.ItemName.Handler.Event.
             return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1]);
+        }
+        if (tail == 4 && isColumnToken(p[rem + 2]) && kindForToken(p[rem]) == Kind.ATTRIBUTE)
+        {
+            // Attribute column: Attribute.AttrName.Column.ColumnName (issue #295). Only an ATTRIBUTE
+            // owns columns - a Field/Table column is part of the ITEM tree and is addressed as an item.
+            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], null, null, p[rem + 1]);
         }
         return null;
     }
@@ -416,6 +446,8 @@ public final class FormElementWriter
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
+    private static final String RU_COLUMN = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430); // kolonka
+    private static final String RU_COLUMNS = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438); // kolonki
     private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
     // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
     // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
@@ -467,6 +499,24 @@ public final class FormElementWriter
     private static final String RU_CATALOG_DESCRIPTION =
         cp(0x041d, 0x0430, 0x0438, 0x043c, 0x0435, 0x043d, 0x043e, 0x0432, 0x0430, 0x043d, 0x0438, 0x0435); // Naimenovanie
 
+    /**
+     * Whether a kind token addresses an attribute COLUMN (English or Russian, case-insensitive) - the
+     * leaf of a {@code ...Attribute.Table.Column.Name} FQN (issue #295).
+     *
+     * @param token the raw kind token from the FQN
+     * @return {@code true} for Column / Columns / kolonka / kolonki
+     */
+    public static boolean isColumnToken(String token)
+    {
+        if (token == null)
+        {
+            return false;
+        }
+        String t = token.trim().toLowerCase();
+        return "column".equals(t) || FEATURE_COLUMNS.equals(t) //$NON-NLS-1$
+            || RU_COLUMN.equals(t) || RU_COLUMNS.equals(t);
+    }
+
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
     {
@@ -512,6 +562,10 @@ public final class FormElementWriter
         if ("table".equals(t) || RU_TABLE.equals(t)) //$NON-NLS-1$
         {
             return Kind.TABLE;
+        }
+        if (isColumnToken(t))
+        {
+            return Kind.COLUMN;
         }
         return null;
     }
@@ -802,6 +856,9 @@ public final class FormElementWriter
         {
             case ATTRIBUTE:
                 return createAttribute(formModel, name, titleLanguage, title, createdKind);
+            case COLUMN:
+                // The bind/parent slot carries the OWNING form attribute's name (issue #295).
+                return createColumn(formModel, name, parentName, titleLanguage, title, createdKind);
             case COMMAND:
                 return createCommand(formModel, name, titleLanguage, title, createdKind);
             case FIELD:
@@ -1827,6 +1884,87 @@ public final class FormElementWriter
         addToList(formModel, FEATURE_ATTRIBUTES, attr);
         recordKind(attr, createdKind);
         return null;
+    }
+
+    /**
+     * Creates a COLUMN on a collection-typed form attribute ({@code ValueTable} / {@code ValueTree}),
+     * fully reflectively. The column is a {@code FormAttributeColumn}: it has no own features, only the
+     * {@code AbstractFormAttribute} ones (name / id / valueType / title), so this mirrors
+     * {@link #createAttribute} except that it instantiates from the OWNER's {@code columns} feature and
+     * allocates the id from the FORM-WIDE attribute id space attributes and columns share. Its type is
+     * then set with {@code modify_metadata}, like an attribute's. Issue #295.
+     *
+     * @param formModel the tx-bound form model
+     * @param name the new column's programmatic name
+     * @param ownerAttributeName the name of the form attribute the column belongs to
+     * @param titleLanguage the language code for {@code title}, or {@code null}
+     * @param title the optional column title
+     * @param createdKind out-parameter: the created EClass name
+     * @return {@code null} on success, or an actionable error
+     */
+    private static String createColumn(EObject formModel, String name, String ownerAttributeName,
+        String titleLanguage, String title, String[] createdKind)
+    {
+        if (ownerAttributeName == null || ownerAttributeName.isEmpty())
+        {
+            return "A column FQN must name its owning form attribute: " //$NON-NLS-1$
+                + "'...Form.FormName.Attribute.AttrName.Column.ColumnName'."; //$NON-NLS-1$
+        }
+        EObject owner = findFormAttribute(formModel, ownerAttributeName);
+        if (owner == null)
+        {
+            return "Form attribute not found: " + ownerAttributeName //$NON-NLS-1$
+                + ". Create it first, then add its columns."; //$NON-NLS-1$
+        }
+        if (!hasCollectionValueType(owner))
+        {
+            return "Form attribute '" + ownerAttributeName + "' is not a collection, so it cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                + "hold columns. Set its type first: modify_metadata with " //$NON-NLS-1$
+                + "{name:'type', value:{types:[{kind:'ValueTable'}]}} (or ValueTree)."; //$NON-NLS-1$
+        }
+        if (findByName(referenceList(owner, FEATURE_COLUMNS), name) != null)
+        {
+            return "Form attribute column already exists: " + ownerAttributeName + '.' + name; //$NON-NLS-1$
+        }
+        EObject column = createFromFeatureType(owner, FEATURE_COLUMNS);
+        if (column == null)
+        {
+            return "Cannot create an attribute column for this form model."; //$NON-NLS-1$
+        }
+        setStringFeature(column, FEATURE_NAME, name);
+        setIntFeature(column, FEATURE_ID, nextAttributeId(formModel));
+        setDefaultValueType(column);
+        applyTitle(column, titleLanguage, title);
+        addToList(owner, FEATURE_COLUMNS, column);
+        recordKind(column, createdKind);
+        return null;
+    }
+
+    /**
+     * Whether the form attribute's value type is an IN-MEMORY collection - the only shape that owns
+     * columns. Read reflectively off the {@code valueType -> types -> name} chain, so an attribute whose
+     * type is unset (a fresh attribute) or primitive answers {@code false}. Issue #295.
+     *
+     * @param attribute the form attribute to inspect
+     * @return {@code true} when a ValueTable / ValueTree is among its types
+     */
+    private static boolean hasCollectionValueType(EObject attribute)
+    {
+        EStructuralFeature feature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (feature == null || !(attribute.eGet(feature) instanceof EObject))
+        {
+            return false;
+        }
+        for (EObject type : referenceList((EObject)attribute.eGet(feature), "types")) //$NON-NLS-1$
+        {
+            EStructuralFeature nameFeature = type.eClass().getEStructuralFeature(FEATURE_NAME);
+            Object typeName = nameFeature == null ? null : type.eGet(nameFeature);
+            if ("ValueTable".equals(typeName) || "ValueTree".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -4217,6 +4355,11 @@ public final class FormElementWriter
     public static EObject resolveFormMember(EObject formModel, FormMemberRef ref)
     {
         Kind kind = kindForToken(ref.kindToken);
+        if (ref.isAttributeColumn())
+        {
+            EObject owner = findFormAttribute(formModel, ref.ownerAttributeName);
+            return owner == null ? null : findByName(referenceList(owner, FEATURE_COLUMNS), ref.name);
+        }
         if (kind == Kind.ATTRIBUTE)
         {
             return findFormAttribute(formModel, ref.name);
