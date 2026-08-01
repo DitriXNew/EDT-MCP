@@ -651,6 +651,37 @@ def test_retype_is_refused_while_columns_exist():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dynamic_list_conversion_is_refused_while_columns_exist():
+    # The dynamic-list branch retypes the attribute to DynamicList WITHOUT building a TypeDescription,
+    # so it bypassed the ordinary property path's guard and stranded the columns just the same
+    # (issue #295 review). Both doors must be shut.
+    attr = "MFDynOrphan"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Survivor"})
+    assert_ok(c, "add a column")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "queryText", "value": "SELECT Catalog.Catalog.Ref FROM Catalog.Catalog"}]})
+    e = assert_error(r, "dynamic-list conversion must be refused while columns exist")
+    assert_error_quality(e, names=["Survivor"], suggests=["delete_metadata", "ValueTable"],
+                         ctx="the refusal must name the columns the conversion would strand")
+
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_contains(d.text or "", "Survivor",
+                    ctx="the column must still be there after the refused conversion")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_addressing_error_lists_column():
     # The addressing help an agent reads when the form cannot be resolved is the kind inventory; it
     # must advertise Column, or the column FQN shape stays undiscoverable (issue #295).

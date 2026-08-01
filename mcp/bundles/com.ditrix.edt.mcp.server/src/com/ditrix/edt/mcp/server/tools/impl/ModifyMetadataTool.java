@@ -3796,6 +3796,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             + ref.name + " on " + ref.formPath //$NON-NLS-1$
                             + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
                     }
+                    // This branch retypes the attribute to DynamicList without going through the
+                    // property path, so it needs the SAME stranded-columns guard (issue #295 review).
+                    String orphanErr = orphanColumnsError(member);
+                    if (orphanErr != null)
+                    {
+                        throw new FormValidationException(orphanErr);
+                    }
                     applied.addAll(FormElementWriter.configureDynamicListQuery(
                         formModel, member, qt, cq, mt, ctx.config, version));
                 });
@@ -4145,6 +4152,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                 }
             }
+        }
+        return orphanColumnsError(member);
+    }
+
+    /**
+     * The stranded-columns refusal for {@code member}, or {@code null} when it owns no columns. Single
+     * owner of the wording, because TWO paths can retype a form attribute: the ordinary property path
+     * and the dynamic-list branch, which swaps the value type for {@code DynamicList} without ever
+     * building a {@code TypeDescription}. Issue #295.
+     *
+     * @param member the form member about to be retyped
+     * @return a ready JSON error naming the columns, or {@code null}
+     */
+    private static String orphanColumnsError(EObject member)
+    {
+        List<String> columns = FormElementWriter.attributeColumnNames(member);
+        if (columns.isEmpty())
+        {
+            return null;
         }
         return ToolResult.error("This form attribute still has " + columns.size() + " column(s) (" //$NON-NLS-1$ //$NON-NLS-2$
             + String.join(", ", columns) + "), which only a collection type can own. Delete the " //$NON-NLS-1$ //$NON-NLS-2$
