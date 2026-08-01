@@ -1196,6 +1196,21 @@ def test_create_column_on_non_collection_attribute_is_error():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_parent_is_refused_on_a_column():
+    # A column's owner is named by the FQN, so `parent` has nothing to say. Accepting and silently
+    # overwriting it would report success while discarding what was asked for (issue #295 review).
+    attr = "E2EColParentOwner"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.WithParent",
+        "properties": [{"name": "parent", "value": "SomeGroup"}]})
+    e = assert_error(r, "'parent' on a column must be refused, not silently dropped")
+    assert_error_quality(e, names=["parent", attr], suggests=["FQN"],
+                         ctx="the refusal must say where the owner really comes from")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_column_on_missing_attribute_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT,

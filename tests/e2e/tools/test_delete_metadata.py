@@ -648,3 +648,37 @@ def test_delete_xdto_member():
     assert_ok(d, "get_metadata_details read-back on the package")
     assert_not_contains(d.text, "| Gone |", "the deleted property must be GONE from the model read-back")
     assert_contains(d.text, "| Kept |", "the surviving property must remain in the model read-back")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_preview_of_a_collection_attribute_lists_its_columns():
+    """The preview must name the COLUMNS the confirmed delete will take with the attribute.
+
+    Columns are containment children of a collection-typed form attribute, so EcoreUtil.remove
+    removes them - but they are not in the `items` tree the preview used to walk. Listing only the
+    attribute would understate the destruction of a two-phase confirm (issue #295 review).
+    """
+    attr, col = "E2EDelColOwner", "E2EDelCol"
+    a = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(a, "seed the attribute")
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(c, "seed the column")
+    wait_for_project_ready()
+
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "preview the collection attribute delete")
+    assert r.structured.get("action") == "preview", \
+        "confirm absent must take the preview branch: %r" % (r.structured,)
+    names = [str(item.get("name")) for item in (r.structured.get("items") or [])]
+    assert col in names, \
+        "the preview must list the column the delete will remove: %r" % (names,)

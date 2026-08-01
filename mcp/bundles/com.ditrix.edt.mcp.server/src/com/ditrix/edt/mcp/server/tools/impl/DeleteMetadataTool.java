@@ -81,6 +81,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Output key: metadata items the deletion would remove (preview). */
     private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
+    /** The columns of a collection-typed form attribute - containment children, so a delete takes them. */
+    private static final String KEY_COLUMNS = "columns"; //$NON-NLS-1$
 
     /** Output key: whether the listed blocking references block the delete. */
     private static final String KEY_BLOCKING = "blocking"; //$NON-NLS-1$
@@ -1847,6 +1849,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
     {
+        // A collection-typed form ATTRIBUTE owns its columns by containment, so the confirmed
+        // EcoreUtil.remove takes them with it. They are not in the `items` tree, so without this the
+        // preview would promise to remove the attribute alone while silently dropping every column -
+        // a two-phase confirm that understates its own destruction (issue #295 review).
+        for (EObject column : FormStructureReader.getReferenceList(item, KEY_COLUMNS))
+        {
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("name", FormStructureReader.nameOf(column)); //$NON-NLS-1$
+            entry.put("type", column.eClass().getName()); //$NON-NLS-1$
+            out.add(entry);
+        }
         for (EObject child : FormStructureReader.getReferenceList(item, KEY_ITEMS))
         {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();

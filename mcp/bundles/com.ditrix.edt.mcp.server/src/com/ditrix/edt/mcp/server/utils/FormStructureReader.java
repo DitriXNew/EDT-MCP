@@ -16,6 +16,8 @@ import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
+import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
@@ -562,10 +564,38 @@ public final class FormStructureReader
         List<String> names = new ArrayList<>();
         for (EObject type : types)
         {
-            String name = stringValue(getValue(type, FEATURE_NAME));
-            names.add(name.isEmpty() ? type.eClass().getName() : name);
+            names.add(typeItemName(type));
         }
         return String.join(", ", names); //$NON-NLS-1$
+    }
+
+    /**
+     * The displayable platform name of one {@code TypeItem}. A type just assigned through
+     * {@code modify_metadata} is a PROXY created by {@code IEObjectProvider} whose raw EMF
+     * {@code name} feature can still be empty; reading it directly would render a perfectly good
+     * {@code Number} column as the bare EClass name {@code TypeItem} - defeating the point of showing
+     * the type at all. {@code McoreUtil} is the proxy-aware accessor the rest of the code uses for
+     * this, with the EClass name kept only as the last resort (issue #295 review).
+     *
+     * @param type one entry of a {@code TypeDescription}'s {@code types} list
+     * @return the platform type name, never {@code null}
+     */
+    private static String typeItemName(EObject type)
+    {
+        if (type instanceof TypeItem)
+        {
+            String resolved = McoreUtil.getTypeName((TypeItem)type);
+            if (resolved == null || resolved.isEmpty())
+            {
+                resolved = McoreUtil.getTypeNameRu((TypeItem)type);
+            }
+            if (resolved != null && !resolved.isEmpty())
+            {
+                return resolved;
+            }
+        }
+        String name = stringValue(getValue(type, FEATURE_NAME));
+        return name.isEmpty() ? type.eClass().getName() : name;
     }
 
     /**

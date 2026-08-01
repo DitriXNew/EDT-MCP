@@ -38,6 +38,7 @@ from harness import (
     poll_disk_contains,
     read_disk,
     e2e_test,
+    _fail,
     PROJECT,
     PROJECT_DIR,
     TESTS_PROJECT,
@@ -597,6 +598,41 @@ def test_set_attribute_column_type():
         "the type alias must apply to the column's valueType: %r" % (r.structured,)
     poll_disk_contains(ITEM_FORM_FILE, "<precision>15</precision>",
                        ctx="the column's Number(15,2) type must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_column_type_is_rendered_by_its_platform_name():
+    # The types of a just-assigned valueType are platform PROXIES whose raw EMF `name` can be empty;
+    # rendering that raw feature would show the column's type as the bare EClass name `TypeItem`,
+    # defeating the point of the section (issue #295 review).
+    attr = "MFColRender"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Amount"})
+    assert_ok(c, "add the column")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Amount",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Number", "precision": 12}]}}]})
+    assert_ok(r, "type the column")
+    wait_for_project_ready()
+
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    text = d.text or ""
+    assert_contains(text, "## Attribute columns", "the columns section must be rendered")
+    rows = [ln for ln in text.splitlines() if "Amount" in ln and "|" in ln]
+    if not rows:
+        _fail("the column row must be present: %r" % text[:400])
+    if "Number" not in rows[0]:
+        _fail("the column type must render as its platform name, not the EClass: %r" % rows[0])
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
