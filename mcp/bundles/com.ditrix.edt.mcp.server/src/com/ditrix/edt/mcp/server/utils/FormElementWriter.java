@@ -43,6 +43,7 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -448,6 +449,12 @@ public final class FormElementWriter
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
     private static final String RU_COLUMN = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430); // kolonka
     private static final String RU_COLUMNS = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438); // kolonki
+    /** TablicaZnachenij - the Russian platform name of ValueTable. */
+    private static final String RU_TYPE_VALUE_TABLE = cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430,
+        0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439);
+    /** DerevoZnachenij - the Russian platform name of ValueTree. */
+    private static final String RU_TYPE_VALUE_TREE = cp(0x0414, 0x0435, 0x0440, 0x0435, 0x0432, 0x043e,
+        0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439);
     private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
     // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
     // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
@@ -515,6 +522,46 @@ public final class FormElementWriter
         String t = token.trim().toLowerCase();
         return "column".equals(t) || FEATURE_COLUMNS.equals(t) //$NON-NLS-1$
             || RU_COLUMN.equals(t) || RU_COLUMNS.equals(t);
+    }
+
+    /**
+     * The addressing error for a Column FQN that names no owning attribute, or {@code null} when the
+     * ref is well-formed. A bare {@code ...Form.F.Column.Name} resolves to nothing, and the generic
+     * "member not found" wording would not tell the caller what the right shape is (issue #295).
+     *
+     * @param ref the parsed form-member ref
+     * @return the actionable addressing error, or {@code null} when the ref is fine
+     */
+    public static String columnAddressingError(FormMemberRef ref)
+    {
+        if (ref == null || ref.isAttributeColumn() || kindForToken(ref.kindToken) != Kind.COLUMN)
+        {
+            return null;
+        }
+        return "A column belongs to a collection form attribute, so it is addressed on its owner: " //$NON-NLS-1$
+            + "'...Form.FormName.Attribute.<AttributeName>.Column." + ref.name + "'. A bare 'Column." //$NON-NLS-1$ //$NON-NLS-2$
+            + ref.name + "' names no attribute."; //$NON-NLS-1$
+    }
+
+    /**
+     * The names of {@code member}'s attribute COLUMNS, or an empty list when it is not a form
+     * attribute or owns none. Used to refuse a retype that would strand them (issue #295).
+     *
+     * @param member the form member to inspect
+     * @return the column names in model order, never {@code null}
+     */
+    public static List<String> attributeColumnNames(EObject member)
+    {
+        List<String> names = new ArrayList<>();
+        if (member == null || !(member.eClass().getEStructuralFeature(FEATURE_COLUMNS) instanceof EReference))
+        {
+            return names;
+        }
+        for (EObject column : referenceList(member, FEATURE_COLUMNS))
+        {
+            names.add(stringFeature(column, FEATURE_NAME));
+        }
+        return names;
     }
 
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
@@ -1957,14 +2004,38 @@ public final class FormElementWriter
         }
         for (EObject type : referenceList((EObject)attribute.eGet(feature), "types")) //$NON-NLS-1$
         {
-            EStructuralFeature nameFeature = type.eClass().getEStructuralFeature(FEATURE_NAME);
-            Object typeName = nameFeature == null ? null : type.eGet(nameFeature);
-            if ("ValueTable".equals(typeName) || "ValueTree".equals(typeName)) //$NON-NLS-1$ //$NON-NLS-2$
+            if (!(type instanceof TypeItem))
+            {
+                continue;
+            }
+            // The types of an attribute just retyped through MCP are platform PROXIES created by
+            // IEObjectProvider, whose raw EMF `name` feature can still be null - reading it directly
+            // would call a perfectly good ValueTable attribute "not a collection". McoreUtil is the
+            // proxy-aware accessor the rest of the code uses for exactly this.
+            String typeName = McoreUtil.getTypeName((TypeItem)type);
+            if (typeName == null || typeName.isEmpty())
+            {
+                typeName = McoreUtil.getTypeNameRu((TypeItem)type);
+            }
+            if (isCollectionTypeName(typeName))
             {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Whether {@code typeName} is an in-memory collection's platform type name, in either language
+     * (the RU accessor answers with the Russian name when the English one is empty). Issue #295.
+     *
+     * @param typeName the resolved platform type name, possibly {@code null}
+     * @return {@code true} for ValueTable / ValueTree in either language
+     */
+    private static boolean isCollectionTypeName(String typeName)
+    {
+        return "ValueTable".equals(typeName) || "ValueTree".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
+            || RU_TYPE_VALUE_TABLE.equals(typeName) || RU_TYPE_VALUE_TREE.equals(typeName);
     }
 
     /**
@@ -4359,6 +4430,13 @@ public final class FormElementWriter
         {
             EObject owner = findFormAttribute(formModel, ref.ownerAttributeName);
             return owner == null ? null : findByName(referenceList(owner, FEATURE_COLUMNS), ref.name);
+        }
+        if (kind == Kind.COLUMN)
+        {
+            // A bare 'Column.Name' names no owner, so it addresses nothing. Falling through would
+            // reach findFormItem and silently hit a VISUAL ITEM of the same name - the caller would
+            // then edit or delete the wrong element (issue #295).
+            return null;
         }
         if (kind == Kind.ATTRIBUTE)
         {

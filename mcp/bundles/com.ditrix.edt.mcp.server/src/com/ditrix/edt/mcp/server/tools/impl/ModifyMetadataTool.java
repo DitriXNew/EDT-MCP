@@ -444,6 +444,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
+            String columnErr = FormElementWriter.columnAddressingError(formRef);
+            if (columnErr != null)
+            {
+                return ToolResult.error(columnErr).toJson();
+            }
             return dispatchFormMemberFqn(ctx, normFqn, formRef, args);
         }
 
@@ -4082,6 +4087,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
         JsonObject normProp = normalizeFormProperty(member, prop);
+        String orphanErr = refuseRetypeThatOrphansColumns(member, normProp);
+        if (orphanErr != null)
+        {
+            throw new FormValidationException(orphanErr);
+        }
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
         // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
@@ -4097,6 +4107,49 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // prepare() appends exactly one change on success.
         return new HolderChange(holder.onExtInfo, built.get(0));
+    }
+
+    /**
+     * Refuses a form-attribute retype that would strand its COLUMNS. Retyping a collection attribute
+     * to a non-collection leaves its {@code FormAttributeColumn} children hanging off something that
+     * cannot own them - the very shape {@code create_metadata} refuses to build - and EDT does not
+     * flag it. Collection-to-collection (ValueTable to ValueTree) stays allowed. Issue #295.
+     *
+     * @param member the form member being modified
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return a ready JSON error, or {@code null} when the change strands nothing
+     */
+    private static String refuseRetypeThatOrphansColumns(EObject member, JsonObject normProp)
+    {
+        if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name")))) //$NON-NLS-1$
+        {
+            return null;
+        }
+        List<String> columns = FormElementWriter.attributeColumnNames(member);
+        if (columns.isEmpty())
+        {
+            return null;
+        }
+        JsonElement spec = normProp.get(KEY_VALUE);
+        if (spec != null && spec.isJsonObject())
+        {
+            JsonElement types = spec.getAsJsonObject().get("types"); //$NON-NLS-1$
+            if (types != null && types.isJsonArray())
+            {
+                for (JsonElement item : types.getAsJsonArray())
+                {
+                    if (item.isJsonObject()
+                        && MetadataTypeBuilder.isCollectionKind(asString(item.getAsJsonObject().get("kind")))) //$NON-NLS-1$
+                    {
+                        return null;
+                    }
+                }
+            }
+        }
+        return ToolResult.error("This form attribute still has " + columns.size() + " column(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+            + String.join(", ", columns) + "), which only a collection type can own. Delete the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "columns first with delete_metadata, or keep a collection type (ValueTable / " //$NON-NLS-1$
+            + "ValueTree).").toJson(); //$NON-NLS-1$
     }
 
     /**

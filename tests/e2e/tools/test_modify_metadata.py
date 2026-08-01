@@ -600,6 +600,57 @@ def test_set_attribute_column_type():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_bare_column_fqn_does_not_hit_a_visual_item():
+    # 'Column' is an ordinary two-segment kind token, so '...Form.F.Column.Name' parses - but it names
+    # no owning attribute. Left alone it fell through to the ITEM lookup and would have modified a
+    # visual item of the same name (issue #295 review). It must be refused, and the item untouched.
+    fld = "MFBareCol"
+    _seed_form_field("MFBareColAttr", fld)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Column." + fld,
+        "properties": [{"name": "title", "value": "Hijacked", "language": "en"}],
+    })
+    e = assert_error(r, "a bare Column FQN must be refused")
+    assert_contains(e, "Attribute.<AttributeName>.Column",
+                    ctx="the refusal must show the owner-qualified column shape")
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "Hijacked",
+                        ctx="the same-named visual item must NOT have been modified")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_is_refused_while_columns_exist():
+    # Retyping a collection attribute to a non-collection would strand its columns - the very shape
+    # create_metadata refuses to build, and EDT does not flag it either (issue #295 review).
+    attr = "MFOrphanOwner"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Kept"})
+    assert_ok(c, "add a column")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "String", "length": 10}]}}]})
+    e = assert_error(r, "retyping away from a collection while columns exist must be refused")
+    assert_error_quality(e, names=["Kept"], suggests=["delete_metadata", "ValueTable"],
+                         ctx="the refusal must name the stranded columns and the two ways out")
+
+    # ValueTable -> ValueTree is collection-to-collection, so it stays allowed.
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTree"}]}}]})
+    assert_ok(ok, "collection-to-collection retype must still be allowed")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_addressing_error_lists_column():
     # The addressing help an agent reads when the form cannot be resolved is the kind inventory; it
     # must advertise Column, or the column FQN shape stays undiscoverable (issue #295).

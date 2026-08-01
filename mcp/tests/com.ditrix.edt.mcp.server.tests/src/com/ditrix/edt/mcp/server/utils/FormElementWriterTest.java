@@ -2806,6 +2806,28 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testBareColumnFqnIsRefusedWithTheRightShape()
+    {
+        // 'Column' is a normal two-segment kind token, so parse() accepts '...Form.F.Column.Price'.
+        // Without an owner it addresses nothing - and left alone it used to fall through to
+        // findFormItem and hit a VISUAL ITEM named Price, editing/deleting the wrong element.
+        FormMemberRef bare = FormElementWriter.parse("Catalog.Products.Form.ItemForm.Column.Price"); //$NON-NLS-1$
+        assertNotNull(bare);
+        assertFalse(bare.isAttributeColumn());
+        String err = FormElementWriter.columnAddressingError(bare);
+        assertNotNull("a bare Column FQN must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must show the owner-qualified shape", //$NON-NLS-1$
+            err.contains("Attribute.<AttributeName>.Column.Price")); //$NON-NLS-1$
+
+        // A well-formed column ref, and every other kind, pass untouched.
+        assertNull(FormElementWriter.columnAddressingError(
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.columnAddressingError(
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.columnAddressingError(null));
+    }
+
+    @Test
     public void testParsePlainMemberHasNoOwnerAttribute()
     {
         // The new field must stay null for every pre-existing shape (a regression guard for the

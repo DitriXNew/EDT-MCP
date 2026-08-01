@@ -610,7 +610,7 @@ public final class MetadataTypeBuilder
      * @param kind the raw {@code kind} token from the spec
      * @return {@code true} for a collection kind, {@code false} for anything else
      */
-    static boolean isCollectionKind(String kind)
+    public static boolean isCollectionKind(String kind)
     {
         String[] candidates = platformSimpleTypeCandidates(kind);
         return candidates.length > 0

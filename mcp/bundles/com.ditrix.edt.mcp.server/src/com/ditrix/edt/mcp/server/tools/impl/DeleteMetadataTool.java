@@ -202,6 +202,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
+            String columnErr = FormElementWriter.columnAddressingError(formRef);
+            if (columnErr != null)
+            {
+                return ToolResult.error(columnErr).toJson();
+            }
             return deleteFormMember(ctx, normFqn, formRef, confirm);
         }
 

@@ -1269,6 +1269,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
+        String columnErr = FormElementWriter.columnAddressingError(ref);
+        if (columnErr != null)
+        {
+            return ToolResult.error(columnErr).toJson();
+        }
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
         if (kind == null)
         {
