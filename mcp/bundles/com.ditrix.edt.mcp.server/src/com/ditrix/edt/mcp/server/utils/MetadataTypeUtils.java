@@ -328,6 +328,34 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Module", "Modules", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x041c, 0x043e, 0x0434, 0x0443, 0x043b, 0x044c),
             cp(0x041c, 0x043e, 0x0434, 0x0443, 0x043b, 0x0438));
+        // The FORM-CONTENT kinds. A form validation marker's presentation descends into the form
+        // item tree, and this tool advertises bilingual tokens at EVERY level, so the kinds
+        // FormElementWriter already accepts in a form-member FQN must translate here too.
+        // MetadataTypeUtilsTest pins these against FormElementWriter.kindForToken so the two token
+        // tables cannot drift apart.
+        // Field (ru: pole / polya)
+        putNestedKind(m, "Field", "Fields", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x043e, 0x043b, 0x0435), cp(0x041f, 0x043e, 0x043b, 0x044f));
+        // Button (ru: knopka / knopki)
+        putNestedKind(m, "Button", "Buttons", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430),
+            cp(0x041a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0438));
+        // Group (ru: gruppa / gruppy)
+        putNestedKind(m, "Group", "Groups", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0413, 0x0440, 0x0443, 0x043f, 0x043f, 0x0430),
+            cp(0x0413, 0x0440, 0x0443, 0x043f, 0x043f, 0x044b));
+        // Decoration (ru: dekoraciya / dekoracii)
+        putNestedKind(m, "Decoration", "Decorations", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0414, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f),
+            cp(0x0414, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x0438));
+        // Table (ru: tablica / tablicy)
+        putNestedKind(m, "Table", "Tables", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430),
+            cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b));
+        // Handler (ru: obrabotchik / obrabotchiki)
+        putNestedKind(m, "Handler", "Handlers", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a),
+            cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a, 0x0438));
         // TabularSection (ru: tablichnaya chast / tablichnye chasti)
         putNestedKind(m, "TabularSection", "TabularSections", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0447, 0x043d, 0x0430, 0x044f,

@@ -13,6 +13,7 @@ import java.util.Set;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 
 /**
  * Tests for {@link MetadataTypeUtils}.
@@ -634,5 +635,66 @@ public class MetadataTypeUtilsTest
         assertNull(MetadataTypeUtils.resolveNestedKind("Widget"));
         // A TOP-LEVEL type is NOT a nested kind: the two catalogues stay separate.
         assertNull(MetadataTypeUtils.resolveNestedKind("Catalog"));
+    }
+
+    // ---- form-content kinds inside a nested FQN (issue #312 review) ------------------------------
+
+    @Test
+    public void testFormItemKindsTranslateInsideANestedFqn()
+    {
+        // A form validation marker's presentation descends into the ITEM tree, so a Russian
+        // form-member path must reach an English presentation (and back). Before the fix the
+        // `Pole` segment survived untranslated and matched nothing.
+        Set<String> fromRussian = MetadataTypeUtils.getAllFqnVariants(
+            "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Goods." //$NON-NLS-1$
+                + "\u0424\u043E\u0440\u043C\u0430.ItemForm.\u041F\u043E\u043B\u0435.Price"); //$NON-NLS-1$
+        assertTrue("the Russian form-member path must yield a fully English variant", //$NON-NLS-1$
+            fromRussian.contains("catalog.goods.form.itemform.field.price")); //$NON-NLS-1$
+
+        Set<String> fromEnglish =
+            MetadataTypeUtils.getAllFqnVariants("Catalog.Goods.Form.ItemForm.Button.Post"); //$NON-NLS-1$
+        assertTrue("the English form-member path must yield a fully Russian variant", //$NON-NLS-1$
+            fromEnglish.contains("\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.goods." //$NON-NLS-1$
+                + "\u0444\u043E\u0440\u043C\u0430.itemform.\u043A\u043D\u043E\u043F\u043A\u0430.post")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormKindAliasesAgreeWithTheFormParser()
+    {
+        // Two token tables now describe the same form kinds: this one (for FILTER variants) and
+        // FormElementWriter's (for FQN parsing). They are separate on purpose - the parser maps a
+        // token to an EMF feature, this map to a bilingual canon - so pin them against each other,
+        // or a kind added to one will silently drift from the other.
+        String[][] pairs = {
+            {"Attribute", "\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Command", "\u041A\u043E\u043C\u0430\u043D\u0434\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Field", "\u041F\u043E\u043B\u0435"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Button", "\u041A\u043D\u043E\u043F\u043A\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Group", "\u0413\u0440\u0443\u043F\u043F\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Decoration", "\u0414\u0435\u043A\u043E\u0440\u0430\u0446\u0438\u044F"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"Table", "\u0422\u0430\u0431\u043B\u0438\u0446\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        // Column is deliberately absent from this pin: it is a nested kind of the MDCLASS model (a
+        // DocumentJournal column), which this map must translate, but it is not a form-content kind
+        // the form parser knows. Add it here if the parser ever gains it.
+        assertNotNull(MetadataTypeUtils.resolveNestedKind("Column")); //$NON-NLS-1$
+        assertNotNull(MetadataTypeUtils.resolveNestedKind(
+            "\u041A\u043E\u043B\u043E\u043D\u043A\u0430")); //$NON-NLS-1$
+        for (String[] pair : pairs)
+        {
+            assertNotNull("this map must know the form kind " + pair[0], //$NON-NLS-1$
+                MetadataTypeUtils.resolveNestedKind(pair[0]));
+            assertNotNull("this map must know the Russian form kind for " + pair[0], //$NON-NLS-1$
+                MetadataTypeUtils.resolveNestedKind(pair[1]));
+            assertEquals("the form parser must read both spellings of " + pair[0] //$NON-NLS-1$
+                + " as the SAME kind", //$NON-NLS-1$
+                FormElementWriter.kindForToken(pair[0]), FormElementWriter.kindForToken(pair[1]));
+            assertNotNull("the form parser must know " + pair[0], //$NON-NLS-1$
+                FormElementWriter.kindForToken(pair[0]));
+        }
+        // Handler is not a Kind (it routes to its own branch), but it IS a structural segment.
+        assertNotNull(MetadataTypeUtils.resolveNestedKind("Handler")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken(
+            "\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
     }
 }

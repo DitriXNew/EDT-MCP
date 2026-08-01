@@ -282,6 +282,39 @@ def test_nested_russian_kind_token_finds_the_same_markers_as_english():
 
 
 @e2e_test(tool="get_project_errors", kind="read")
+def test_substring_filter_is_not_reported_as_missing():
+    """A deliberate FRAGMENT selects rows but names no object — it must not be called missing.
+
+    `objects` is documented as a case-insensitive PARTIAL match, so `Catalog.Cat` legitimately
+    selects the markers of `Catalog.Catalog`. Reporting it under objectsNotFound next to the very
+    rows it selected would be self-contradictory: the warning is for a filter that matched NOTHING.
+    """
+    r = call("get_project_errors", {"projectName": PROJECT, "objects": ["Catalog.Cat"]})
+    assert_ok(r, "substring objects filter")
+    assert_contains(r.text, "Configuration Problems",
+                    "the fragment must still select the catalog's markers")
+    assert_not_contains(r.text, "objectsNotFound",
+                        "a fragment that selected rows must NOT be reported as missing")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_common_form_member_filter_is_not_reported_as_missing():
+    """A CommonForm MEMBER filter must not be called missing.
+
+    Common-form members live in the form CONTENT model, so asking the mdclass resolver for an
+    `Attribute` child of the CommonForm top object fails and a perfectly valid filter would be
+    reported as objectsNotFound. The containing form is what gets decided instead.
+    """
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objects": ["CommonForm.Form.Attribute.Anything"]})
+    assert_ok(r, "CommonForm member objects filter")
+    assert_not_contains(r.text, "objectsNotFound",
+                        "a member of an EXISTING common form must not be reported as missing")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
 def test_form_name_typo_is_reported_and_a_real_form_is_not():
     """A typo in the FORM NAME must be reported — the exact shape #312 was reported for.
 

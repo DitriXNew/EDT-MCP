@@ -246,8 +246,9 @@ public class GetProjectErrorsTool implements IMcpTool
             // Requested FQNs that resolve to no object at all. Resolved against the MODEL, not
             // derived from the marker stream: an FQN that filtered everything away is
             // indistinguishable from a genuinely clean object in the output otherwise.
-            final List<String> objectsNotFound =
-                resolveMissingObjectFilters(objects, projectName, bmModelManager);
+            final List<String> objectsNotFound = withoutFiltersThatMatched(
+                resolveMissingObjectFilters(objects, projectName, bmModelManager,
+                    markersByProject.keySet()), errors);
 
             // Build Markdown response for better readability and context efficiency
             StringBuilder md = new StringBuilder();
@@ -342,11 +343,13 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param objects the requested object FQN filters, may be {@code null}/empty
      * @param projectName the project filter, may be {@code null}/empty for all projects
      * @param bmModelManager the BM model manager, may be {@code null}
+     * @param markerProjects the projects the marker scan actually covered - any of them that cannot
+     *            be inspected makes the whole answer undecidable
      * @return the requested FQNs that resolve nowhere, in request order (never {@code null};
      *     empty whenever the answer could not be established with certainty)
      */
     private static List<String> resolveMissingObjectFilters(List<String> objects, String projectName,
-        IBmModelManager bmModelManager)
+        IBmModelManager bmModelManager, Set<IProject> markerProjects)
     {
         if (objects == null || objects.isEmpty() || bmModelManager == null)
         {
@@ -371,13 +374,20 @@ public class GetProjectErrorsTool implements IMcpTool
         final Set<String> found = new HashSet<>();
         boolean inspectedAny = false;
         boolean inspectionIncomplete = false;
-        for (IProject project : resolutionScopeProjects(projectName))
+        for (IProject project : resolutionScopeProjects(projectName, markerProjects))
         {
             IBmModel bmModel = bmModelManager.getModel(project);
             if (bmModel == null)
             {
                 // Not an EDT project (the same test collectErrors uses): it cannot host metadata
-                // objects, so skipping it can never hide a match.
+                // objects, so skipping it can never hide a match - UNLESS it produced markers, in
+                // which case it demonstrably hosts metadata and merely cannot be consulted now (a
+                // closed project keeps its persisted markers). Declaring anything missing while a
+                // marker-bearing project stayed uninspected would be a false negative.
+                if (markerProjects.contains(project))
+                {
+                    inspectionIncomplete = true;
+                }
                 continue;
             }
             ProjectContext.ConfigurationResult configResult =
@@ -430,6 +440,66 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
+     * Drops from {@code missing} every filter that actually MATCHED a reported problem. The
+     * {@code objects} filter is documented as a case-insensitive PARTIAL match, so a deliberate
+     * fragment ({@code Catalog.Prod} against {@code Catalog.Products}) legitimately selects rows while
+     * naming no object of its own. Reporting it as {@code objectsNotFound} next to the very rows it
+     * selected would be self-contradictory - and the warning exists to catch a filter that silently
+     * matched NOTHING, which this one demonstrably did not.
+     *
+     * @param missing the FQNs that resolved to no object, in request order
+     * @param errors the problems that were actually reported
+     * @return {@code missing} minus the filters that matched at least one reported problem
+     */
+    private static List<String> withoutFiltersThatMatched(List<String> missing, List<ErrorInfo> errors)
+    {
+        if (missing.isEmpty() || errors == null || errors.isEmpty())
+        {
+            return missing;
+        }
+        List<String> presentations = new ArrayList<>();
+        for (ErrorInfo error : errors)
+        {
+            if (error.objectPresentation != null && !error.objectPresentation.isEmpty())
+            {
+                presentations.add(error.objectPresentation.toLowerCase());
+            }
+        }
+        List<String> stillMissing = new ArrayList<>();
+        for (String fqn : missing)
+        {
+            if (!matchesAnyPresentation(fqn, presentations))
+            {
+                stillMissing.add(fqn);
+            }
+        }
+        return stillMissing;
+    }
+
+    /**
+     * Whether any variant of {@code fqn} occurs in one of {@code presentations} - the same
+     * {@code contains} test {@link #excludedByObjectsFilter} applies when selecting rows.
+     *
+     * @param fqn the requested filter, as the caller wrote it
+     * @param presentations the lower-cased presentations of the reported problems
+     * @return {@code true} when this filter selected at least one of them
+     */
+    private static boolean matchesAnyPresentation(String fqn, List<String> presentations)
+    {
+        for (String variant : MetadataTypeUtils.getAllFqnVariants(fqn))
+        {
+            for (String presentation : presentations)
+            {
+                if (presentation.contains(variant))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether {@code fqn} names something that exists in {@code config}. A FORM FQN is decided by the
      * form reader, every other shape by the shared node resolver applied to {@code decidablePrefix}.
      *
@@ -449,6 +519,15 @@ public class GetProjectErrorsTool implements IMcpTool
     private static boolean resolvesIn(Configuration config, String fqn, String decidablePrefix)
     {
         String formPath = FormElementWriter.parseFormPath(fqn);
+        if (formPath == null)
+        {
+            // A form MEMBER FQN (owned or CommonForm, e.g. `CommonForm.F.Attribute.X`): its members
+            // live in the form CONTENT model, so asking the mdclass resolver for an `Attribute` child
+            // of the form object would falsely report a valid filter as missing. The form itself is
+            // the deepest node decidable cheaply here, which is enough to avoid the false negative.
+            FormElementWriter.FormMemberRef memberRef = FormElementWriter.parse(fqn);
+            formPath = memberRef == null ? null : memberRef.formPath;
+        }
         if (formPath != null)
         {
             return FormStructureReader.resolveMdForm(config, formPath) != null;
@@ -466,9 +545,11 @@ public class GetProjectErrorsTool implements IMcpTool
      * markers, so widening it can only REMOVE false "not found" entries.</p>
      *
      * @param projectName the project filter, may be {@code null}/empty for all projects
+     * @param markerProjects the projects the marker scan covered, folded in so an uninspectable one
+     *            is noticed rather than silently skipped
      * @return the projects to resolve in (never {@code null}; possibly empty)
      */
-    private static List<IProject> resolutionScopeProjects(String projectName)
+    private static List<IProject> resolutionScopeProjects(String projectName, Set<IProject> markerProjects)
     {
         List<IProject> scope = new ArrayList<>();
         if (projectName != null && !projectName.isEmpty())
@@ -483,6 +564,16 @@ public class GetProjectErrorsTool implements IMcpTool
         for (IProject project : ProjectContext.allProjects())
         {
             if (project.isOpen())
+            {
+                scope.add(project);
+            }
+        }
+        // Every project the marker scan covered belongs in scope even when it is not open: the scan
+        // does not require isOpen(), so a closed project can still contribute matching rows. Adding
+        // it here is what lets the loop notice it could not be inspected.
+        for (IProject project : markerProjects)
+        {
+            if (!scope.contains(project))
             {
                 scope.add(project);
             }
