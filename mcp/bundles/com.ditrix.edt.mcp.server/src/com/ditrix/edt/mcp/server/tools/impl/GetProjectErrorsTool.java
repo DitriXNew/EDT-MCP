@@ -382,15 +382,12 @@ public class GetProjectErrorsTool implements IMcpTool
             IBmModel bmModel = bmModelManager.getModel(project);
             if (bmModel == null)
             {
-                // Not an EDT project (the same test collectErrors uses): it cannot host metadata
-                // objects, so skipping it can never hide a match - UNLESS it produced markers, in
-                // which case it demonstrably hosts metadata and merely cannot be consulted now (a
-                // closed project keeps its persisted markers). Declaring anything missing while a
-                // marker-bearing project stayed uninspected would be a false negative.
-                if (markerProjects.contains(project))
-                {
-                    inspectionIncomplete = true;
-                }
+                // A null BM model means "the model is not available", NOT "this project cannot host
+                // metadata": an EDT project whose model is still loading answers the same way, and a
+                // closed project keeps its persisted markers. Either way the project could hold the
+                // requested object, so skipping it makes the answer undecidable rather than negative
+                // (issue #312 review).
+                inspectionIncomplete = true;
                 continue;
             }
             ProjectContext.ConfigurationResult configResult =
@@ -503,6 +500,32 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
+     * Whether {@code fqn} carries a STRUCTURAL segment that no kind vocabulary here recognizes - a
+     * misspelt kind token such as {@code Catalog.Products.Fom.ItemForm}. Both vocabularies are
+     * consulted: the resolver's (which navigates mdclass children) and the filter's bilingual alias
+     * map (which additionally covers form content and {@code Module}).
+     *
+     * <p>Form FQNs never reach this test - {@link #resolvesIn} decides them first - so a recognized
+     * shape is not mistaken for a typo. Issue #312 review.</p>
+     *
+     * @param fqn the requested filter, as the caller wrote it
+     * @return {@code true} when a structural segment is unrecognized
+     */
+    private static boolean hasUnrecognizedNestedKind(String fqn)
+    {
+        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+        for (int i = 2; i < parts.length; i += 2)
+        {
+            if (MetadataNodeResolver.featureNameForKind(parts[i]) == null
+                && MetadataTypeUtils.resolveNestedKind(parts[i]) == null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether {@code fqn} is a legitimate PARTIAL address of a real object - the model-side twin of
      * the substring test the filter performs on marker presentations. Only the type token and the
      * object-name fragment are considered: the type resolves to exactly ONE configuration collection,
@@ -580,6 +603,15 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     private static boolean resolvesIn(Configuration config, String fqn, String decidablePrefix)
     {
+        if (hasUnrecognizedNestedKind(fqn))
+        {
+            // The head resolves but a STRUCTURAL segment is not a kind anything here knows
+            // ('Catalog.Products.Fom.ItemForm'). Judging such an FQN by its parent would call it
+            // found, while the marker filter still carries the bad token and matches nothing - the
+            // caller would get a bare "No Errors Found", which is the very failure this tool now
+            // exists to prevent (issue #312 review).
+            return false;
+        }
         if (namesAnExistingObjectByFragment(config, fqn))
         {
             // The filter is documented as a PARTIAL match, so a deliberate fragment ('Catalog.Prod')

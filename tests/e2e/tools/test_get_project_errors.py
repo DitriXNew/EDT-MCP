@@ -404,3 +404,26 @@ def test_nonexistent_project_is_rejected():
         err.lower(), "project", "non-existent project error must mention the project"
     )
     assert_no_diff("a rejected read must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_misspelled_nested_kind_is_reported_not_silently_empty():
+    """A typo in the KIND token must be reported, not absolved by its parent.
+
+    `Catalog.Catalog.Fom.ItemForm` has a real head, so judging it by that head would call it found
+    while the marker filter still carries the bad token and matches nothing — leaving the caller with
+    a bare "No Errors Found", which is precisely the failure this tool exists to prevent.
+    """
+    bad = "Catalog.%s.Fom.ItemForm" % FIXTURE_CATALOG
+    r = call("get_project_errors", {"projectName": PROJECT, "objects": [bad]})
+    assert_ok(r, "objects filter with a misspelled kind token")
+    assert_contains(r.text, "objectsNotFound", "a misspelled kind token must be reported")
+    assert_contains(r.text, "Fom", "the report must name the offending FQN")
+
+    # The correctly spelled sibling must stay silent.
+    good = call("get_project_errors",
+                {"projectName": PROJECT, "objects": ["Catalog.%s.Form.ItemForm" % FIXTURE_CATALOG]})
+    assert_ok(good, "correctly spelled form FQN")
+    assert_not_contains(good.text, "objectsNotFound",
+                        "a correctly spelled form FQN must not be reported")
+    assert_no_diff("reading project errors must not touch the project on disk")
