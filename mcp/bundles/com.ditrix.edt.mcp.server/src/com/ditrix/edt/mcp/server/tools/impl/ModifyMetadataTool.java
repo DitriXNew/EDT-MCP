@@ -4148,18 +4148,31 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String consentForDynamicListRetype(FormElementWriter.FormEditContext fctx,
         String normFqn, FormElementWriter.FormMemberRef ref)
     {
-        Boolean alreadyList = FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
+        // ONE preflight read decides whether a prompt is warranted at all. Three cases must NOT
+        // prompt, because the conversion cannot happen in any of them and a denial would be returned
+        // INSTEAD of the actionable validation error: the attribute is absent, it is ALREADY a list
+        // (nothing is retyped), or it still owns columns the conversion would strand. Issue #295
+        // review. The probe answers "" for "no prompt needed", a ready JSON error, or null to prompt.
+        String verdict = FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
             (formModel, tx) ->
             {
                 EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                // A missing attribute is reported by the write pass with its own actionable error;
-                // nothing is destroyed here, so do not prompt for it.
-                return member == null || FormElementWriter.isDynamicListAttribute(member);
+                if (member == null || FormElementWriter.isDynamicListAttribute(member))
+                {
+                    return ""; //$NON-NLS-1$
+                }
+                String orphan = orphanColumnsError(member);
+                return orphan != null ? orphan : null;
             });
-        if (Boolean.TRUE.equals(alreadyList))
+        if ("".equals(verdict)) //$NON-NLS-1$
         {
             return null;
         }
+        if (verdict != null)
+        {
+            return verdict;
+        }
+
         ConsentPreview preview = new ConsentPreview(
             "Convert a form attribute into a dynamic list", //$NON-NLS-1$
             "This replaces the attribute's data type with DynamicList. Any value the form held " //$NON-NLS-1$
