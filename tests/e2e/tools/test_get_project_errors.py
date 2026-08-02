@@ -11,57 +11,163 @@ the documented "# No Errors Found" branch, which still echoes the project / seve
 objects filter banner. That branch text is produced ONLY when the tool actually ran
 the marker stream and applied the filters, so a broken/no-op tool would fail it.
 
-The `objects` filter accepts NESTED FQNs and normalizes EVERY structural segment (the
-leading TYPE token and each nested KIND token) to both languages, so the English and the
-Russian spelling of one address must produce the same report. A requested FQN that matches
-no object is named back in an `objectsNotFound` warning - without it a typo is served as a
-bare "# No Errors Found", which reads exactly like a clean object.
+There are TWO object filters and they behave differently on purpose:
+  * `objects`    - a loose case-insensitive SUBSTRING match over the reported location, with
+                   every structural segment normalized to both languages. It makes NO
+                   existence claim: a fragment and a typo are indistinguishable there, so it
+                   never emits objectsNotFound.
+  * `objectFqns` - EXACT model addresses, resolved with the same resolvers the write tools
+                   use. This is the only input that reports back: the response is JSON with
+                   `report` (the Markdown for a human) plus `objectsResolved` /
+                   `objectsNotFound` / `objectsUnsupported`.
 
-Read tool => every test also asserts assert_no_diff(): reading problems must never
-mutate the project on disk.
+Anything that must observe a REAL marker seeds it first (a syntax error written into a
+fixture module with write_module_source, then a forced revalidation): the live marker set
+is outside this file's control, so a test that merely hopes for one is a coin flip.
+Such tests are kind="write-metadata", so the runner reverts the module on disk AND resyncs
+the in-memory model afterwards.
+
+Read tool => every non-seeding test also asserts assert_no_diff(): reading problems must
+never mutate the project on disk. (The seeding tests dirty the module on purpose and are
+cleaned up by the runner instead.)
 
 Real error paths exercised by the negative matrix (read from GetProjectErrorsTool /
 ProjectStateChecker):
   - non-existent projectName -> ProjectStateChecker.buildingErrorOrNull guards only the
     transient BUILDING state, so it falls through to "Project not found: <name>" (names the value)
   - out-of-set severity     -> "severity must be one of: ERRORS, BLOCKER, ..."
+  - objects + objectFqns    -> refused (the two filters have different semantics)
 """
+
+import time
 
 from harness import (
     call, assert_ok, assert_contains, assert_not_contains, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, PROJECT, _fail,
+    wait_for_project_ready,
 )
 
 # A checkId that cannot match any real check id or short UID, so EVERY marker is
 # filtered out and the tool is forced into the documented "# No Errors Found" branch.
 NO_MATCH_CHECK = "zzz_no_such_check_xyz_e2e"
 
-# The Russian structural tokens an FQN may use at any level.
-RU_CATALOG = "Справочник"
-RU_FORM = "Форма"
-RU_ATTRIBUTE = "Реквизит"
-
-# A catalog that exists in the fixture, and a form it owns.
+# A catalog that exists in the fixture, a form it owns, and the fixture's common form.
 FIXTURE_CATALOG = "Catalog"
 FIXTURE_FORM = "ItemForm"
+FIXTURE_COMMON_FORM = "Form"
 
-# Names that cannot exist in the fixture, so the objectsNotFound report is deterministic.
+# Names that cannot exist in the fixture, so the not-found verdicts are deterministic.
 NO_SUCH_OBJECT = "NoSuchObject_e2e_xyz"
 NO_SUCH_ATTRIBUTE = "NoSuchAttribute_e2e_xyz"
 
+# The fixture common module the marker is seeded into. Its NAME is Cyrillic on purpose: the
+# programmatic name must survive the bilingual normalization untouched (only the STRUCTURAL
+# segments are translated), which is exactly what the language-symmetry test relies on.
+SEEDED_MODULE_NAME = "Вычисление"
+SEEDED_MODULE_PATH = "CommonModules/%s/Module.bsl" % SEEDED_MODULE_NAME
+# A bare identifier at module level is not a statement in BSL -> a hard syntax error, the
+# same shape the fixture's own CommonModules/Error/Module.bsl uses.
+SEEDED_BAD_SOURCE = "\nE2eSyntaxProbeXyz\n"
 
-def _outcome(text):
-    """Reduces a report to the part that must NOT depend on the filter's LANGUAGE.
+# The address of the seeded module and the nested MODULE segment EDT appends to a BSL
+# problem's location, in both spellings.
+EN_MODULE_OWNER = "CommonModule.%s" % SEEDED_MODULE_NAME
+RU_MODULE_OWNER = "ОбщийМодуль.%s" % SEEDED_MODULE_NAME
+EN_MODULE_KIND = "Module"
+RU_MODULE_KIND = "Модуль"
 
-    The banner echoes the requested FQNs verbatim, so two language spellings can never
-    produce byte-identical output; everything else (which branch was rendered, how many
-    problems matched, which rows) must be identical.
+# How long to wait for EDT to publish the seeded marker after the write + revalidation.
+MARKER_POLL_TIMEOUT = 120
+
+
+def _report(result):
+    """The Markdown report of a call, whichever channel carried it.
+
+    A plain call returns Markdown in the text channel; an `objectFqns` call returns the
+    machine payload, which carries the same Markdown in its `report` field.
     """
-    if "# Configuration Problems" in text:
-        rows = [ln for ln in text.splitlines() if ln.startswith("|")]
-        found = [ln for ln in text.splitlines() if ln.startswith("**Found:**")]
-        return ("problems", found, rows)
-    return ("empty", [], [])
+    structured = result.structured
+    if isinstance(structured, dict) and isinstance(structured.get("report"), str):
+        return structured["report"]
+    return result.text or ""
+
+
+def _rows(text):
+    """The problem-table rows of a report - the part that must NOT depend on the filter's
+    LANGUAGE (the banner echoes the requested address verbatim, so two spellings can never
+    produce byte-identical output)."""
+    return [ln for ln in text.splitlines() if ln.startswith("|")]
+
+
+def _rows_for(fqn):
+    """Run the loose `objects` filter for one address and return its problem rows."""
+    r = call("get_project_errors", {"projectName": PROJECT, "objects": [fqn]})
+    assert_ok(r, "objects filter %r" % fqn)
+    return _rows(_report(r))
+
+
+def _assert_verdicts(result, resolved, not_found, unsupported):
+    """Assert the MACHINE-readable address verdicts of an `objectFqns` call.
+
+    `unsupported` is given as a list of FQNs; the payload carries {fqn, reason} entries, and
+    the reason must be non-empty (an unsupported verdict without a reason is unactionable).
+    """
+    structured = result.structured
+    if not isinstance(structured, dict):
+        _fail("an objectFqns call must return structuredContent, got %r" % (structured,))
+    for key, expected in (("objectsResolved", resolved), ("objectsNotFound", not_found)):
+        actual = structured.get(key)
+        if actual != expected:
+            _fail("%s mismatch: expected %r, got %r (payload=%r)"
+                  % (key, expected, actual, structured))
+    actual_unsupported = structured.get("objectsUnsupported")
+    if not isinstance(actual_unsupported, list):
+        _fail("objectsUnsupported must always be emitted as a list, got %r"
+              % (actual_unsupported,))
+    if [e.get("fqn") for e in actual_unsupported] != unsupported:
+        _fail("objectsUnsupported mismatch: expected %r, got %r"
+              % (unsupported, actual_unsupported))
+    for entry in actual_unsupported:
+        if not entry.get("reason"):
+            _fail("an unsupported verdict must carry a reason: %r" % (entry,))
+
+
+def _seed_bsl_error_and_wait():
+    """Write a syntax error into the fixture common module and wait for EDT's marker.
+
+    Returns the marker's reported LOCATION (the `Location` cell), so a test can build the
+    address spellings from what EDT really renders instead of assuming a script variant.
+
+    Fails (rather than skipping) if no marker appears: without one the assertions that
+    follow would be vacuously true, which is the false-green this file exists to avoid.
+    """
+    w = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": SEEDED_MODULE_PATH,
+        "mode": "append", "source": SEEDED_BAD_SOURCE,
+    })
+    assert_ok(w, "seeding a BSL syntax error into %s" % SEEDED_MODULE_PATH)
+    wait_for_project_ready()
+    # The tool reads EXISTING markers rather than forcing a compile; force one so the poll
+    # below converges instead of racing EDT's background validation.
+    call("revalidate_objects", {"projectName": PROJECT, "objects": [EN_MODULE_OWNER]})
+
+    deadline = time.time() + MARKER_POLL_TIMEOUT
+    last = ""
+    while time.time() < deadline:
+        r = call("get_project_errors", {"projectName": PROJECT, "objects": [EN_MODULE_OWNER]})
+        assert_ok(r, "polling for the seeded marker")
+        last = _report(r)
+        rows = _rows(last)
+        # rows[0] is the header, rows[1] the separator; the first data row is rows[2].
+        if "# Configuration Problems" in last and len(rows) > 2:
+            cells = [c.strip() for c in rows[2].strip("|").split("|")]
+            # Description | Location | Module path | Line | Check code
+            if len(cells) > 1 and cells[1]:
+                return cells[1]
+        time.sleep(2)
+    _fail("no marker appeared for %s within %ds; last report:\n%s"
+          % (EN_MODULE_OWNER, MARKER_POLL_TIMEOUT, last[:600]))
+    return ""  # unreachable; _fail raises
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -142,217 +248,206 @@ def test_concise_is_default_and_leaner_than_detailed():
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
-@e2e_test(tool="get_project_errors", kind="read")
-def test_nested_fqn_objects_filter_is_language_symmetric():
-    """A NESTED objects FQN must behave identically in English and in Russian.
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_seeded_marker_is_found_by_both_language_spellings_of_the_filter():
+    """EN and RU spellings of the SAME address must select the SAME rows.
 
-    Regression for the bug where only the leading type token was translated: filtering by
-    `Catalog.<c>.Form.<f>` expanded to `справочник.<c>.form.<f>`, which can never match the
-    Russian marker location `Справочник.<c>.Форма.<f>` — every finding was dropped and the
-    tool answered "# No Errors Found", indistinguishable from a genuinely clean object.
+    The live marker set is outside this file's control (see the module docstring), so the
+    marker is CREATED here: a syntax error is written into a fixture common module with the
+    regular write tool and validation is forced. Only then is the filter exercised.
 
-    The banner echoes the requested FQN verbatim, so the two calls can never be byte-equal;
-    everything that must NOT depend on the spelling (which branch was rendered, the found
-    count, the rows) is compared via _outcome(). Also asserts that NEITHER call claims the
-    valid FQN is unknown — a false objectsNotFound would be just as misleading as the false
-    clean report. The strength of the row comparison depends on the live marker set; the
-    hard, cannot-false-green assertion for the bug lives in the next test and in the
-    MetadataTypeUtilsTest unit test for getAllFqnVariants.
+    Regression for the bug where only the leading type token was translated: the Russian
+    nested token was left untouched, matched nothing, and the tool answered "# No Errors
+    Found" - indistinguishable from a genuinely clean object.
     """
-    en_fqn = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
-    ru_fqn = "%s.%s.%s.%s" % (RU_CATALOG, FIXTURE_CATALOG, RU_FORM, FIXTURE_FORM)
+    location = _seed_bsl_error_and_wait()
 
-    en = call("get_project_errors", {"projectName": PROJECT, "objects": [en_fqn]})
-    ru = call("get_project_errors", {"projectName": PROJECT, "objects": [ru_fqn]})
-    assert_ok(en, "nested English FQN filter")
-    assert_ok(ru, "nested Russian FQN filter")
+    # 1) The OBJECT-level address, in both languages: same rows, and non-empty (the seeded
+    #    marker is in there).
+    en_rows = _rows_for(EN_MODULE_OWNER)
+    ru_rows = _rows_for(RU_MODULE_OWNER)
+    if not en_rows:
+        _fail("the seeded marker must be selectable by %r, got no rows" % EN_MODULE_OWNER)
+    if en_rows != ru_rows:
+        _fail("English and Russian spellings of %r selected different rows:\nEN=%r\nRU=%r"
+              % (EN_MODULE_OWNER, en_rows, ru_rows))
 
-    # Both spellings address the SAME form, so they must report the same thing.
-    if _outcome(en.text) != _outcome(ru.text):
-        _fail("English and Russian spellings of the same nested FQN gave different reports:\n"
-              "EN=%r\nRU=%r" % (en.text, ru.text))
-
-    # Both FQNs are real; neither may be reported as matching no object.
-    for label, r in (("English", en), ("Russian", ru)):
-        assert_not_contains(
-            r.text, "objectsNotFound",
-            "a valid %s nested FQN must not be reported as unknown" % label,
-        )
-
-    # The empty-result branch echoes the filter banner; when it is the branch taken, each call
-    # must echo ITS OWN spelling back, proving the filter was parsed and not silently dropped.
-    # (The problems-table branch renders no banner, so the echo is only asserted where it exists.)
-    if "# No Errors Found" in en.text:
-        assert_contains(en.text, en_fqn, "English FQN must be echoed in the banner")
-        assert_contains(ru.text, ru_fqn, "Russian FQN must be echoed in the banner")
-    assert_no_diff("reading project errors must not touch the project on disk")
+    # 2) The NESTED address, in both languages. The head is taken from the marker's OWN
+    #    reported location, so the pair is built from what EDT really renders rather than
+    #    from an assumption about the configuration's script variant.
+    head = ".".join(location.split(".")[:2])
+    nested_en = "%s.%s" % (head, EN_MODULE_KIND)
+    nested_ru = "%s.%s" % (head, RU_MODULE_KIND)
+    nested_en_rows = _rows_for(nested_en)
+    nested_ru_rows = _rows_for(nested_ru)
+    if not nested_en_rows:
+        _fail("the nested address %r must select the seeded marker at %r, got no rows"
+              % (nested_en, location))
+    if nested_en_rows != nested_ru_rows:
+        _fail("English and Russian spellings of the nested module segment selected different "
+              "rows:\nEN(%s)=%r\nRU(%s)=%r"
+              % (nested_en, nested_en_rows, nested_ru, nested_ru_rows))
 
 
-@e2e_test(tool="get_project_errors", kind="read")
-def test_unknown_objects_fqn_is_reported_not_silently_empty():
-    """A typo in an `objects` FQN must be NAMED, never answered with a bare
-    "# No Errors Found".
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_loose_objects_filter_never_reports_a_fragment_as_missing():
+    """`objects` is a SUBSTRING filter, so it must never claim an entry matched no object.
 
-    This is the anti-false-green assertion of the pair: the report must carry the
-    `objectsNotFound` marker together with the bogus FQN. The old build has no such text at
-    all — it filtered every marker away and reported a clean project, so a caller could not
-    tell a typo from a genuinely problem-free object. Both the English and the Russian
-    spelling of the same non-existent object must be reported the same way.
+    A fragment and a typo are indistinguishable there, so the report carries no
+    objectsNotFound at all - not for the fragment that DID select rows, and not for a bogus
+    entry either (that question belongs to `objectFqns`). The seeded marker makes the
+    "selected rows" half deterministic.
     """
-    bogus_en = "Catalog.%s" % NO_SUCH_OBJECT
-    r = call("get_project_errors", {"projectName": PROJECT, "objects": [bogus_en]})
-    assert_ok(r, "objects filter naming a non-existent object")
-    assert_contains(r.text, "objectsNotFound", "an unmatched FQN must be reported")
-    assert_contains(r.text, bogus_en, "the report must name the offending FQN")
-    assert_contains(r.text, "get_metadata_objects", "the report must point at the discovery tool")
+    _seed_bsl_error_and_wait()
 
-    # Same object, Russian type token: the honest answer must not depend on the spelling.
-    bogus_ru = "%s.%s" % (RU_CATALOG, NO_SUCH_OBJECT)
-    ru = call("get_project_errors", {"projectName": PROJECT, "objects": [bogus_ru]})
-    assert_ok(ru, "objects filter naming a non-existent object (Russian token)")
-    assert_contains(ru.text, "objectsNotFound", "an unmatched Russian FQN must be reported too")
-    assert_contains(ru.text, bogus_ru, "the report must name the offending Russian FQN")
+    # A deliberate fragment of the seeded module's address still selects its rows.
+    fragment = EN_MODULE_OWNER[:-2]
+    r = call("get_project_errors", {"projectName": PROJECT, "objects": [fragment]})
+    assert_ok(r, "substring objects filter")
+    assert_contains(_report(r), "Configuration Problems",
+                    "the fragment %r must still select the module's markers" % fragment)
+    assert_not_contains(_report(r), "objectsNotFound",
+                        "a fragment that selected rows must NOT be reported as missing")
 
-    # A NESTED miss under a real object is reported too, in both languages.
-    nested_en = "Catalog.%s.Attribute.%s" % (FIXTURE_CATALOG, NO_SUCH_ATTRIBUTE)
-    nested_ru = "%s.%s.%s.%s" % (RU_CATALOG, FIXTURE_CATALOG, RU_ATTRIBUTE, NO_SUCH_ATTRIBUTE)
-    for label, fqn in (("English", nested_en), ("Russian", nested_ru)):
-        nested = call("get_project_errors", {"projectName": PROJECT, "objects": [fqn]})
-        assert_ok(nested, "nested objects filter naming a non-existent attribute")
-        assert_contains(
-            nested.text, "objectsNotFound",
-            "a nested %s FQN whose leaf does not exist must be reported" % label,
-        )
-        assert_contains(nested.text, fqn, "the report must name the offending nested FQN")
-    assert_no_diff("reading project errors must not touch the project on disk")
+    # A bogus entry is equally silent: the loose filter makes no existence claim at all.
+    bogus = call("get_project_errors",
+                 {"projectName": PROJECT, "objects": ["Catalog.%s" % NO_SUCH_OBJECT]})
+    assert_ok(bogus, "objects filter naming a non-existent object")
+    assert_not_contains(_report(bogus), "objectsNotFound",
+                        "the loose filter must make no existence claim, even for a typo")
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# objectFqns - the EXACT address filter
+# ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="get_project_errors", kind="read")
-def test_partial_objects_miss_is_reported_alongside_the_valid_fqn():
-    """A PARTIAL miss must be surfaced: one real FQN plus one typo lists only the typo.
+def test_exact_address_that_exists_is_not_reported_missing_and_a_typo_is():
+    """The core of the exact filter: a real address resolves silently, a typo is NAMED.
 
-    Guards the half-fix where the warning is emitted on the empty report only — the miss is
-    just as invisible when the other FQNs did find problems.
+    Both verdicts are asserted on the MACHINE-readable payload, not only on the prose, and
+    the existing object is queried with a severity that guarantees an empty result set - so
+    "resolved" cannot be inferred from rows that merely happen to exist.
     """
     good = "Catalog.%s" % FIXTURE_CATALOG
-    bogus = "Catalog.%s" % NO_SUCH_OBJECT
-    r = call("get_project_errors", {"projectName": PROJECT, "objects": [good, bogus]})
-    assert_ok(r, "objects filter mixing a real and a non-existent FQN")
-
-    assert_contains(r.text, "objectsNotFound", "the miss must be reported")
-    # The warning line names the bogus FQN only; the real one must not be listed as missing.
-    warning = [ln for ln in r.text.splitlines() if "objectsNotFound" in ln]
-    if not warning:
-        _fail("expected an objectsNotFound warning line")
-    if NO_SUCH_OBJECT not in warning[0]:
-        _fail("the objectsNotFound line must name the bogus FQN: %r" % warning[0])
-    if good in warning[0]:
-        _fail("a resolvable FQN must NOT be listed as missing: %r" % warning[0])
-    assert_no_diff("reading project errors must not touch the project on disk")
-
-
-@e2e_test(tool="get_project_errors", kind="read")
-def test_nested_russian_kind_token_finds_the_same_markers_as_english():
-    """The REGRESSION the issue is about, reproducible on this (English-script) fixture.
-
-    The fixture has BSL markers whose presentation ends in the nested `Module` segment, e.g.
-    `CommonModule.Вычисление.Module`. Filtering with the Russian nested token `.Модуль` used to
-    translate only the FIRST segment, leaving `Модуль` untouched, so nothing matched and the tool
-    answered `# No Errors Found` — a false green indistinguishable from a clean object. Both
-    spellings must now return the same markers.
-    """
-    en_fqn = "CommonModule.Вычисление.Module"
-    ru_fqn = "CommonModule.Вычисление." \
-             "Модуль"
-
-    en = call("get_project_errors", {"projectName": PROJECT, "objects": [en_fqn]})
-    ru = call("get_project_errors", {"projectName": PROJECT, "objects": [ru_fqn]})
-    assert_ok(en, "English nested module FQN filter")
-    assert_ok(ru, "Russian nested module FQN filter")
-
-    # The English spelling matched before the fix and must keep matching.
-    assert_contains(en.text, "Configuration Problems",
-                    "the English nested FQN must match the module's markers")
-    # The Russian spelling is the one that used to come back falsely clean.
-    assert_contains(ru.text, "Configuration Problems",
-                    "the Russian nested token must match the SAME markers, not answer 'No Errors'")
-    assert_not_contains(ru.text, "No Errors Found",
-                        "a translated nested token must never produce a false green")
-    assert_no_diff("reading project errors must not touch the project on disk")
-
-
-@e2e_test(tool="get_project_errors", kind="read")
-def test_substring_filter_is_not_reported_as_missing():
-    """A deliberate FRAGMENT selects rows but names no object — it must not be called missing.
-
-    `objects` is documented as a case-insensitive PARTIAL match, so `Catalog.Cat` legitimately
-    selects the markers of `Catalog.Catalog`. Reporting it under objectsNotFound next to the very
-    rows it selected would be self-contradictory: the warning is for a filter that matched NOTHING.
-    """
-    r = call("get_project_errors", {"projectName": PROJECT, "objects": ["Catalog.Cat"]})
-    assert_ok(r, "substring objects filter")
-    assert_contains(r.text, "Configuration Problems",
-                    "the fragment must still select the catalog's markers")
-    assert_not_contains(r.text, "objectsNotFound",
-                        "a fragment that selected rows must NOT be reported as missing")
-    assert_no_diff("reading project errors must not touch the project on disk")
-
-
-@e2e_test(tool="get_project_errors", kind="read")
-def test_clean_object_addressed_by_fragment_is_not_reported_as_missing():
-    """A fragment naming a REAL but CLEAN object must not be called missing either.
-
-    The reported-row check cannot see this case: a clean object produces no row to match against
-    (and rows dropped by `limit` are invisible there too). The object's existence is therefore
-    decided against the MODEL, by looking inside the one collection its type token names.
-    """
-    # Severity NONE keeps the filter valid while guaranteeing an empty result set.
     r = call("get_project_errors",
-             {"projectName": PROJECT, "objects": ["Catalog.Cat"], "severity": "NONE"})
-    assert_ok(r, "fragment filter over a result set forced empty by severity")
-    assert_not_contains(r.text, "objectsNotFound",
-                        "a fragment naming a real object must not be reported as missing when the "
-                        "result set happens to be empty")
+             {"projectName": PROJECT, "objectFqns": [good], "severity": "NONE"})
+    assert_ok(r, "exact address that exists")
+    _assert_verdicts(r, resolved=[good], not_found=[], unsupported=[])
+    assert_not_contains(_report(r), "objectsNotFound",
+                        "an existing address must never be reported as missing")
+
+    typo = "Catalog.%s" % NO_SUCH_OBJECT
+    bad = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [typo]})
+    assert_ok(bad, "exact address that does not exist")
+    _assert_verdicts(bad, resolved=[], not_found=[typo], unsupported=[])
+    assert_contains(_report(bad), "objectsNotFound",
+                    "the human report must mirror the machine verdict")
+    assert_contains(_report(bad), "get_metadata_objects",
+                    "the report must point at the discovery tool")
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
 @e2e_test(tool="get_project_errors", kind="read")
-def test_common_form_member_filter_is_not_reported_as_missing():
-    """A CommonForm MEMBER filter must not be called missing.
+def test_exact_address_partial_success_reports_only_the_miss():
+    """One good address plus one typo: the good one scopes the scan, only the typo is named."""
+    good = "Catalog.%s" % FIXTURE_CATALOG
+    typo = "Catalog.%s" % NO_SUCH_OBJECT
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [good, typo]})
+    assert_ok(r, "exact addresses mixing a real and a non-existent one")
+    _assert_verdicts(r, resolved=[good], not_found=[typo], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
 
-    Common-form members live in the form CONTENT model, so asking the mdclass resolver for an
-    `Attribute` child of the CommonForm top object fails and a perfectly valid filter would be
-    reported as objectsNotFound. The containing form is what gets decided instead.
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_form_member_leaf_is_really_checked():
+    """A form MEMBER address is decided on its LEAF, not absolved by the form containing it.
+
+    The form itself resolves, so a build that judged a member address by its form would call
+    the ghost member found too. Only the real form may resolve.
     """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(r, "the containing form itself")
+    _assert_verdicts(r, resolved=[form], not_found=[], unsupported=[])
+
+    ghost = "%s.Attribute.%s" % (form, NO_SUCH_ATTRIBUTE)
+    m = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost]})
+    assert_ok(m, "a form member that does not exist")
+    _assert_verdicts(m, resolved=[], not_found=[ghost], unsupported=[])
+
+    # A CommonForm member leaf is checked the same way (its members live in the content
+    # model too, while the CommonForm top object resolves on its own).
+    common_ghost = "CommonForm.%s.Attribute.%s" % (FIXTURE_COMMON_FORM, NO_SUCH_ATTRIBUTE)
+    c = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [common_ghost]})
+    assert_ok(c, "a common-form member that does not exist")
+    _assert_verdicts(c, resolved=[], not_found=[common_ghost], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_address_with_unknown_head_or_kind_is_reported_missing():
+    """An unknown TYPE token and a misspelt KIND token are both plain misses.
+
+    `Catalog.<real>.Fom.ItemForm` has a real head, so a build that judged the address by its
+    head would call it found while the filter matched nothing - the exact failure mode the
+    exact input exists to prevent.
+    """
+    bad_kind = "Catalog.%s.Fom.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    bad_head = "NoSuchType_e2e_xyz.Whatever"
     r = call("get_project_errors",
-             {"projectName": PROJECT, "objects": ["CommonForm.Form.Attribute.Anything"]})
-    assert_ok(r, "CommonForm member objects filter")
-    assert_not_contains(r.text, "objectsNotFound",
-                        "a member of an EXISTING common form must not be reported as missing")
+             {"projectName": PROJECT, "objectFqns": [bad_kind, bad_head]})
+    assert_ok(r, "exact addresses with an unknown kind / head")
+    _assert_verdicts(r, resolved=[], not_found=[bad_kind, bad_head], unsupported=[])
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
 @e2e_test(tool="get_project_errors", kind="read")
-def test_form_name_typo_is_reported_and_a_real_form_is_not():
-    """A typo in the FORM NAME must be reported — the exact shape #312 was reported for.
+def test_xdto_member_address_is_unsupported_not_missing():
+    """An XDTO MEMBER address must be UNSUPPORTED, never "not found".
 
-    The shared node resolver does not navigate the `Form` kind, so judging a form FQN on its
-    `Type.Name` head alone would silently accept ANY form name: the safety net would have a hole
-    precisely where the reporter was burned. A form FQN is therefore decided by the form reader.
+    EDT reports every problem of an XDTO package on the package itself, so a member address
+    cannot match a marker by construction. Calling it "not found" would be a claim about the
+    model that this tool never verified. The package level stays supported: it is an ordinary
+    resolution, so a non-existent package is an ordinary miss.
     """
-    real = "Catalog.%s.Form.ItemForm" % FIXTURE_CATALOG
-    typo = "Catalog.%s.Form.NoSuchForm_e2e_xyz" % FIXTURE_CATALOG
+    for member in ("XDTOPackage.P.ObjectType.T",
+                   "XDTOPackage.P.Property.N",
+                   "XDTOPackage.P.ObjectType.T.Property.N"):
+        r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [member]})
+        assert_ok(r, "XDTO member address %s" % member)
+        _assert_verdicts(r, resolved=[], not_found=[], unsupported=[member])
+        assert_contains(_report(r), "objectsUnsupported",
+                        "the human report must mirror the unsupported verdict")
+        assert_not_contains(_report(r), "objectsNotFound",
+                            "an unsupported address must never be called missing")
 
-    r = call("get_project_errors", {"projectName": PROJECT, "objects": [typo]})
-    assert_ok(r, "objects filter naming a non-existent FORM")
-    assert_contains(r.text, "objectsNotFound", "a form-name typo must be reported")
-    assert_contains(r.text, "NoSuchForm_e2e_xyz", "the report must name the offending form FQN")
-
-    ok = call("get_project_errors", {"projectName": PROJECT, "objects": [real]})
-    assert_ok(ok, "objects filter naming a REAL form")
-    assert_not_contains(ok.text, "objectsNotFound",
-                        "an existing form must never be reported as missing")
+    # The PACKAGE level is supported: this fixture has no XDTO package, so the honest verdict
+    # for a package address is an ordinary miss - NOT "unsupported".
+    pkg = "XDTOPackage.NoSuchPackage_e2e_xyz"
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [pkg]})
+    assert_ok(r, "XDTO package-level address")
+    _assert_verdicts(r, resolved=[], not_found=[pkg], unsupported=[])
     assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_address_scopes_to_problems_inside_the_node():
+    """Selection is "inside the resolved node", not equality with the whole location.
+
+    EDT reports a BSL problem on `CommonModule.X` at location `CommonModule.X.Module`, so an
+    exact filter demanding string equality would report ZERO problems for a module that
+    demonstrably has one. The seeded marker makes this deterministic.
+    """
+    _seed_bsl_error_and_wait()
+
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [EN_MODULE_OWNER]})
+    assert_ok(r, "exact address of the seeded module")
+    _assert_verdicts(r, resolved=[EN_MODULE_OWNER], not_found=[], unsupported=[])
+    assert_contains(_report(r), "Configuration Problems",
+                    "a problem INSIDE the resolved node must be reported")
+    if (r.structured or {}).get("problemsFound", 0) < 1:
+        _fail("problemsFound must count the seeded marker: %r" % (r.structured,))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -407,23 +502,18 @@ def test_nonexistent_project_is_rejected():
 
 
 @e2e_test(tool="get_project_errors", kind="read")
-def test_misspelled_nested_kind_is_reported_not_silently_empty():
-    """A typo in the KIND token must be reported, not absolved by its parent.
-
-    `Catalog.Catalog.Fom.ItemForm` has a real head, so judging it by that head would call it found
-    while the marker filter still carries the bad token and matches nothing — leaving the caller with
-    a bare "No Errors Found", which is precisely the failure this tool exists to prevent.
-    """
-    bad = "Catalog.%s.Fom.ItemForm" % FIXTURE_CATALOG
-    r = call("get_project_errors", {"projectName": PROJECT, "objects": [bad]})
-    assert_ok(r, "objects filter with a misspelled kind token")
-    assert_contains(r.text, "objectsNotFound", "a misspelled kind token must be reported")
-    assert_contains(r.text, "Fom", "the report must name the offending FQN")
-
-    # The correctly spelled sibling must stay silent.
-    good = call("get_project_errors",
-                {"projectName": PROJECT, "objects": ["Catalog.%s.Form.ItemForm" % FIXTURE_CATALOG]})
-    assert_ok(good, "correctly spelled form FQN")
-    assert_not_contains(good.text, "objectsNotFound",
-                        "a correctly spelled form FQN must not be reported")
-    assert_no_diff("reading project errors must not touch the project on disk")
+def test_objects_and_object_fqns_together_are_rejected():
+    """The two object filters answer different questions; combining them is refused rather
+    than silently reinterpreted into one of the two semantics."""
+    r = call("get_project_errors", {
+        "projectName": PROJECT,
+        "objects": ["Catalog.Cat"],
+        "objectFqns": ["Catalog.%s" % FIXTURE_CATALOG],
+    })
+    err = assert_error(r, "both object filters at once")
+    assert_error_quality(
+        err,
+        names=["objects", "objectFqns"],
+        ctx="the refusal names both parameters",
+    )
+    assert_no_diff("a rejected read must not touch the project on disk")

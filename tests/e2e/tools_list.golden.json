@@ -2630,7 +2630,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Object FQN filters accept English or Russian tokens at EVERY level, nested FQNs included (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); requested FQNs that match no object are reported back under objectsNotFound. Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
+    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. Both accept English or Russian tokens at EVERY level, nested addresses included (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'). Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
     "inputSchema": {
       "properties": {
         "checkId": {
@@ -2641,8 +2641,15 @@
           "description": "Max results; default 100, max 1000 (optional)",
           "type": "integer"
         },
+        "objectFqns": {
+          "description": "EXACT filter: each entry must be the full address of one model node (top object, member, Subsystem chain, Predefined item, form, form member) and is resolved against the model; problems INSIDE the resolved node are reported. Entries that resolve to nothing come back in objectsNotFound and entries this filter cannot scope (XDTO members) in objectsUnsupported, both in structuredContent. Mutually exclusive with objects (optional)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "objects": {
-          "description": "Filter by object FQNs, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian tokens accepted at every level; FQNs matching no object are listed back under objectsNotFound (optional)",
+          "description": "LOOSE filter: case-insensitive SUBSTRING match of each entry against the reported object location, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian tokens accepted at every level. Deliberate fragments are supported, so an entry that matches nothing is NOT reported back - use objectFqns when you need that. Mutually exclusive with objectFqns (optional)",
           "items": {
             "type": "string"
           },

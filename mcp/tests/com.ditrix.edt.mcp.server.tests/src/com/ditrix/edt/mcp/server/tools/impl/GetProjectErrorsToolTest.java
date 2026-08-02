@@ -20,6 +20,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -31,6 +32,7 @@ import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
+import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 
 /**
@@ -508,18 +510,74 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
-    public void testObjectsFilterTextsAdvertiseObjectsNotFound()
+    public void testTextsDeclareBothObjectFiltersAndWhichOneReportsMisses()
     {
-        // The same claim lives in the description, the objects schema entry and the guide;
-        // after #312 all three must mention the objectsNotFound report, or the caller is told
-        // the filter behaves differently than it does.
+        // The same claim lives in the description, the two schema entries and the guide. Only the
+        // EXACT filter reports misses; saying so for `objects` would promise a report the loose
+        // substring filter cannot honestly produce (issue #312 review).
         GetProjectErrorsTool tool = new GetProjectErrorsTool();
-        assertTrue("description must advertise objectsNotFound", //$NON-NLS-1$
-            tool.getDescription().contains("objectsNotFound")); //$NON-NLS-1$
-        assertTrue("objects schema entry must advertise objectsNotFound", //$NON-NLS-1$
-            tool.getInputSchema().contains("objectsNotFound")); //$NON-NLS-1$
-        assertTrue("guide must document objectsNotFound", //$NON-NLS-1$
-            tool.getGuide().contains("objectsNotFound")); //$NON-NLS-1$
+        String description = tool.getDescription();
+        String schema = tool.getInputSchema();
+        String guide = tool.getGuide();
+
+        for (String text : new String[] {description, schema, guide})
+        {
+            assertTrue("every text must name the exact filter: " + text, //$NON-NLS-1$
+                text.contains(GetProjectErrorsTool.PARAM_OBJECT_FQNS));
+            assertTrue("every text must name the objectsNotFound report: " + text, //$NON-NLS-1$
+                text.contains(GetProjectErrorsTool.KEY_OBJECTS_NOT_FOUND));
+            assertTrue("every text must name the objectsUnsupported report: " + text, //$NON-NLS-1$
+                text.contains(GetProjectErrorsTool.KEY_OBJECTS_UNSUPPORTED));
+            assertTrue("every text must say the two filters are mutually exclusive: " + text, //$NON-NLS-1$
+                text.toLowerCase().contains("mutually exclusive")); //$NON-NLS-1$
+        }
+        // The loose entry must describe itself as a substring test, not as a resolver.
+        assertTrue("the objects schema entry must still say SUBSTRING", //$NON-NLS-1$
+            schema.contains("SUBSTRING")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testObjectsAndObjectFqnsAreMutuallyExclusive()
+    {
+        // Both filters at once has no single meaning (a fragment vs an asserted address), so the
+        // call is refused rather than silently reinterpreted. Validation runs before any
+        // project/BM access, so this is headless-safe.
+        Map<String, String> params = new HashMap<>();
+        params.put(GetProjectErrorsTool.PARAM_OBJECTS, "[\"Catalog.Prod\"]"); //$NON-NLS-1$
+        params.put(GetProjectErrorsTool.PARAM_OBJECT_FQNS, "[\"Catalog.Products\"]"); //$NON-NLS-1$
+        String result = new GetProjectErrorsTool().execute(params);
+
+        assertTrue("the refusal must be a ToolResult error", //$NON-NLS-1$
+            result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the refusal must name both parameters", //$NON-NLS-1$
+            result.contains(GetProjectErrorsTool.PARAM_OBJECTS)
+                && result.contains(GetProjectErrorsTool.PARAM_OBJECT_FQNS));
+        assertTrue("the refusal must echo the received values", //$NON-NLS-1$
+            result.contains("Catalog.Prod") && result.contains("Catalog.Products")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testOnlyTheExactFilterSwitchesTheResponseToJson()
+    {
+        // structuredContent is emitted for the exact filter alone; every other call keeps the
+        // historical Markdown response, so no existing consumer changes shape.
+        GetProjectErrorsTool tool = new GetProjectErrorsTool();
+
+        Map<String, String> none = new HashMap<>();
+        assertEquals(IMcpTool.ResponseType.MARKDOWN, tool.getResponseType(none));
+
+        Map<String, String> loose = new HashMap<>();
+        loose.put(GetProjectErrorsTool.PARAM_OBJECTS, "[\"Catalog.Products\"]"); //$NON-NLS-1$
+        assertEquals(IMcpTool.ResponseType.MARKDOWN, tool.getResponseType(loose));
+
+        Map<String, String> exact = new HashMap<>();
+        exact.put(GetProjectErrorsTool.PARAM_OBJECT_FQNS, "[\"Catalog.Products\"]"); //$NON-NLS-1$
+        assertEquals(IMcpTool.ResponseType.JSON, tool.getResponseType(exact));
+
+        // A blank/empty array is not a filter: it must not flip the response format either.
+        Map<String, String> blank = new HashMap<>();
+        blank.put(GetProjectErrorsTool.PARAM_OBJECT_FQNS, "[\"  \"]"); //$NON-NLS-1$
+        assertEquals(IMcpTool.ResponseType.MARKDOWN, tool.getResponseType(blank));
     }
 
     @Test
@@ -545,7 +603,7 @@ public class GetProjectErrorsToolTest
         assertTrue("rejected value must be echoed", result.contains("NOTASEVERITY")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    // ========== objectsNotFound warning (issue #312) ==========
+    // ========== objectsNotFound / objectsUnsupported (issue #312) ==========
 
     @Test
     public void testObjectsNotFoundWarningNamesEveryMissingFqnAndTheFix()
@@ -557,7 +615,7 @@ public class GetProjectErrorsToolTest
 
         assertTrue("must carry the objectsNotFound marker", //$NON-NLS-1$
             out.contains("objectsNotFound:")); //$NON-NLS-1$
-        assertTrue("must name every missing FQN", //$NON-NLS-1$
+        assertTrue("must name every missing address", //$NON-NLS-1$
             out.contains("Catalog.Nope") && out.contains("Document.AlsoNope")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("must say the filter matched nothing", //$NON-NLS-1$
             out.contains("filtered nothing")); //$NON-NLS-1$
@@ -570,7 +628,7 @@ public class GetProjectErrorsToolTest
     @Test
     public void testObjectsNotFoundWarningAbsentWhenNothingIsMissing()
     {
-        // Every FQN resolved (or nothing could be decided): the report keeps its previous shape.
+        // Every address resolved: the report keeps its previous shape.
         StringBuilder empty = new StringBuilder("# No Errors Found"); //$NON-NLS-1$
         GetProjectErrorsTool.appendObjectsNotFoundWarning(empty, Collections.emptyList());
         assertEquals("# No Errors Found", empty.toString()); //$NON-NLS-1$
@@ -580,65 +638,179 @@ public class GetProjectErrorsToolTest
         assertEquals("# No Errors Found", nullCase.toString()); //$NON-NLS-1$
     }
 
-    // ========== decidableFqnPrefix (what may be declared missing at all) ==========
-
     @Test
-    public void testDecidableFqnPrefixTopLevelFqn()
+    public void testObjectsUnsupportedWarningIsSeparateFromNotFoundAndCarriesTheReason()
     {
-        assertEquals("Catalog.Products", //$NON-NLS-1$
-            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products")); //$NON-NLS-1$
+        StringBuilder md = new StringBuilder("# No Errors Found\n"); //$NON-NLS-1$
+        GetProjectErrorsTool.appendObjectsUnsupportedWarning(md,
+            Collections.singletonList(unsupportedEntry("XDTOPackage.P.ObjectType.T", "because"))); //$NON-NLS-1$ //$NON-NLS-2$
+        String out = md.toString();
+
+        assertTrue("must carry its OWN marker, not the objectsNotFound one", //$NON-NLS-1$
+            out.contains("objectsUnsupported:")); //$NON-NLS-1$
+        assertFalse("an unsupported address must not be reported as missing", //$NON-NLS-1$
+            out.contains("objectsNotFound")); //$NON-NLS-1$
+        assertTrue("must name the address", out.contains("XDTOPackage.P.ObjectType.T")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must carry the reason", out.contains("because")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
-    public void testDecidableFqnPrefixNavigableNestedFqnIsDecidableInFull()
+    public void testObjectsUnsupportedWarningAbsentWhenThereIsNone()
     {
-        // Attribute / TabularSection are kinds the shared resolver navigates.
-        assertEquals("Catalog.Products.Attribute.Weight", //$NON-NLS-1$
-            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products.Attribute.Weight")); //$NON-NLS-1$
-        assertEquals("Catalog.Products.TabularSection.Goods.Attribute.Price", //$NON-NLS-1$
-            GetProjectErrorsTool.decidableFqnPrefix(
-                "Catalog.Products.TabularSection.Goods.Attribute.Price")); //$NON-NLS-1$
+        StringBuilder empty = new StringBuilder("# No Errors Found"); //$NON-NLS-1$
+        GetProjectErrorsTool.appendObjectsUnsupportedWarning(empty, Collections.emptyList());
+        assertEquals("# No Errors Found", empty.toString()); //$NON-NLS-1$
+        GetProjectErrorsTool.appendObjectsUnsupportedWarning(empty, null);
+        assertEquals("# No Errors Found", empty.toString()); //$NON-NLS-1$
     }
 
     @Test
-    public void testDecidableFqnPrefixStopsAtANonNavigableKind()
+    public void testNoErrorsBannerNamesTheFilterThatWasActuallyUsed()
     {
-        // A form segment is NOT navigable by the shared resolver, so the answer for it is
-        // "cannot tell", never "does not exist": the decidable part is the owning object, and
-        // because the objects filter is a SUBSTRING test that prefix proves the filter matches.
-        assertEquals("Catalog.Products", //$NON-NLS-1$
-            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+        // The two filters produce different reports; the banner must not let a caller mistake
+        // one for the other.
+        StringBuilder loose = new StringBuilder();
+        GetProjectErrorsTool.appendNoErrorsSection(loose, "P", null, //$NON-NLS-1$
+            Collections.singletonList("Catalog.Prod"), GetProjectErrorsTool.PARAM_OBJECTS); //$NON-NLS-1$
+        assertTrue("the loose banner keeps its historical wording: " + loose, //$NON-NLS-1$
+            loose.toString().contains("Objects filter: Catalog.Prod")); //$NON-NLS-1$
+
+        StringBuilder exact = new StringBuilder();
+        GetProjectErrorsTool.appendNoErrorsSection(exact, "P", null, //$NON-NLS-1$
+            Collections.singletonList("Catalog.Products"), GetProjectErrorsTool.PARAM_OBJECT_FQNS); //$NON-NLS-1$
+        assertTrue("the exact banner names objectFqns: " + exact, //$NON-NLS-1$
+            exact.toString().contains("objectFqns filter: Catalog.Products")); //$NON-NLS-1$
+    }
+
+    // ========== objectFqns: address classification ==========
+
+    @Test
+    public void testXdtoMemberShapesAreUnsupportedNotMissing()
+    {
+        // The filter can only compare against the marker's object presentation, and EDT reports an
+        // XDTO problem on 'XDTOPackage.<P>.Package'. A member address can therefore never match,
+        // which is NOT the same statement as "this member does not exist".
+        for (String member : new String[] {
+            "XDTOPackage.P.ObjectType.T", //$NON-NLS-1$
+            "XDTOPackage.P.Property.N", //$NON-NLS-1$
+            "XDTOPackage.P.ObjectType.T.Property.N"}) //$NON-NLS-1$
+        {
+            String reason = GetProjectErrorsTool.unsupportedAddressReason(member);
+            assertNotNull("an XDTO member address must be classified unsupported: " + member, //$NON-NLS-1$
+                reason);
+            assertTrue("the reason must point at the package-level address instead: " + reason, //$NON-NLS-1$
+                reason.contains("XDTOPackage.<Package>")); //$NON-NLS-1$
+        }
     }
 
     @Test
-    public void testDecidableFqnPrefixAcceptsRussianTokens()
+    public void testSupportedAddressFamiliesAreNotClassifiedUnsupported()
     {
-        // Справочник.Products.Реквизит.Weight - both structural tokens in Russian.
-        String fqn = "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Products." //$NON-NLS-1$
-            + "\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442.Weight"; //$NON-NLS-1$
-        assertEquals(fqn, GetProjectErrorsTool.decidableFqnPrefix(fqn));
+        // The package itself IS addressable (its presentation starts with 'XDTOPackage.<P>.'), and
+        // so is every non-XDTO family - none of them may be diverted into objectsUnsupported.
+        for (String supported : new String[] {
+            "XDTOPackage.P", //$NON-NLS-1$
+            "Catalog.Products", //$NON-NLS-1$
+            "Catalog.Products.Attribute.Weight", //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm", //$NON-NLS-1$
+            "CommonForm.Main.Attribute.Object", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
+            "Catalog.Products.Predefined.Sample"}) //$NON-NLS-1$
+        {
+            assertNull("must stay a supported address: " + supported, //$NON-NLS-1$
+                GetProjectErrorsTool.unsupportedAddressReason(supported));
+        }
+        // Russian type token, same verdict: the classification must not be language-sensitive.
+        // XDTOPackage has no Russian alias, so the bilingual probe uses Catalog (Spravochnik).
+        assertNull(GetProjectErrorsTool.unsupportedAddressReason(
+            "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Products")); //$NON-NLS-1$
     }
 
     @Test
-    public void testDecidableFqnPrefixNullForUndecidableInput()
+    public void testUnsupportedAddressesAreClassifiedWithoutTouchingTheModel()
     {
-        // Not a Type.Name address, or a leading token that is not a top-level metadata type:
-        // such a fragment can still match a presentation by substring, so it must never be
-        // declared missing.
-        assertNull(GetProjectErrorsTool.decidableFqnPrefix(null));
-        assertNull(GetProjectErrorsTool.decidableFqnPrefix("")); //$NON-NLS-1$
-        assertNull(GetProjectErrorsTool.decidableFqnPrefix("Products")); //$NON-NLS-1$
-        assertNull(GetProjectErrorsTool.decidableFqnPrefix("Attribute.Weight")); //$NON-NLS-1$
-        assertNull(GetProjectErrorsTool.decidableFqnPrefix("UnknownType.Name")); //$NON-NLS-1$
+        // An unsupported address needs no model at all, so an empty project scope must still
+        // produce the verdict - and must NOT trigger the "nothing could be inspected" refusal,
+        // which exists only for addresses that genuinely need resolution.
+        GetProjectErrorsTool.AddressResolution resolution = GetProjectErrorsTool.resolveAddresses(
+            Collections.singletonList("XDTOPackage.P.ObjectType.T"), //$NON-NLS-1$
+            Collections.<IProject> emptyList(), null);
+
+        assertNull("a shape-only verdict must not fail the call", resolution.error); //$NON-NLS-1$
+        assertEquals(1, resolution.unsupported.size());
+        assertEquals("XDTOPackage.P.ObjectType.T", resolution.unsupported.get(0).get("fqn")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the entry must carry a reason", //$NON-NLS-1$
+            resolution.unsupported.get(0).get("reason").isEmpty()); //$NON-NLS-1$
+        assertTrue("an unsupported address is NOT missing", resolution.notFound.isEmpty()); //$NON-NLS-1$
+        assertTrue("an unsupported address does NOT scope the scan", resolution.resolved.isEmpty()); //$NON-NLS-1$
     }
 
     @Test
-    public void testDecidableFqnPrefixTrimsATrailingOddSegment()
+    public void testNoInspectableProjectRefusesInsteadOfDeclaringEverythingMissing()
     {
-        // "Catalog.Products.Form" is not a complete kind/name pair; only the complete leading
-        // pair may be judged.
-        assertEquals("Catalog.Products", //$NON-NLS-1$
-            GetProjectErrorsTool.decidableFqnPrefix("Catalog.Products.Form")); //$NON-NLS-1$
+        // Without a readable model every address would be "not found", which is exactly the false
+        // verdict this input exists to prevent - so the call is refused with an actionable error.
+        GetProjectErrorsTool.AddressResolution resolution = GetProjectErrorsTool.resolveAddresses(
+            Arrays.asList("Catalog.Products", "Catalog.Nope"), //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.<IProject> emptyList(), null);
+
+        assertNotNull("an undecidable scope must be an error, not a verdict", resolution.error); //$NON-NLS-1$
+        assertTrue("the error must be a ToolResult error payload", //$NON-NLS-1$
+            resolution.error.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the error must name the parameter it could not resolve", //$NON-NLS-1$
+            resolution.error.contains(GetProjectErrorsTool.PARAM_OBJECT_FQNS));
+        assertTrue("the error must be actionable", //$NON-NLS-1$
+            resolution.error.contains("projectName") && resolution.error.contains("list_projects")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("nothing may be declared missing", resolution.notFound.isEmpty()); //$NON-NLS-1$
+    }
+
+    // ========== objectFqns: the structuredContent payload ==========
+
+    @Test
+    public void testAddressPayloadCarriesEveryVerdictListAndTheReport()
+    {
+        GetProjectErrorsTool.AddressResolution resolution =
+            new GetProjectErrorsTool.AddressResolution();
+        resolution.resolved.add("Catalog.Products"); //$NON-NLS-1$
+        resolution.notFound.add("Catalog.Nope"); //$NON-NLS-1$
+        resolution.unsupported.add(unsupportedEntry("XDTOPackage.P.Property.N", "why")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String json = GetProjectErrorsTool.addressPayload("# Configuration Problems", 2, resolution); //$NON-NLS-1$
+
+        assertTrue("must be a success envelope", json.contains("\"success\":true")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must carry the human report", //$NON-NLS-1$
+            json.contains("\"report\":") && json.contains("Configuration Problems")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must carry the row count", json.contains("\"problemsFound\":2")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must carry the resolved addresses", //$NON-NLS-1$
+            json.contains("\"objectsResolved\":[\"Catalog.Products\"]")); //$NON-NLS-1$
+        assertTrue("must carry the missing addresses", //$NON-NLS-1$
+            json.contains("\"objectsNotFound\":[\"Catalog.Nope\"]")); //$NON-NLS-1$
+        assertTrue("must carry the unsupported addresses with their reason", //$NON-NLS-1$
+            json.contains("\"objectsUnsupported\"") && json.contains("XDTOPackage.P.Property.N") //$NON-NLS-1$ //$NON-NLS-2$
+                && json.contains("why")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAddressPayloadEmitsEveryVerdictListEvenWhenEmpty()
+    {
+        // Consistent emission across branches: a consumer must never have to tell "absent" from
+        // "none" (the response-contract rule the project pins for every output field).
+        String json = GetProjectErrorsTool.addressPayload("# No Errors Found", 0, //$NON-NLS-1$
+            new GetProjectErrorsTool.AddressResolution());
+
+        assertTrue(json.contains("\"objectsResolved\":[]")); //$NON-NLS-1$
+        assertTrue(json.contains("\"objectsNotFound\":[]")); //$NON-NLS-1$
+        assertTrue(json.contains("\"objectsUnsupported\":[]")); //$NON-NLS-1$
+        assertTrue(json.contains("\"problemsFound\":0")); //$NON-NLS-1$
+    }
+
+    /** A single {@code objectsUnsupported} entry in the wire shape the tool emits. */
+    private static Map<String, String> unsupportedEntry(String fqn, String reason)
+    {
+        Map<String, String> entry = new LinkedHashMap<>();
+        entry.put("fqn", fqn); //$NON-NLS-1$
+        entry.put("reason", reason); //$NON-NLS-1$
+        return entry;
     }
 
     // ========== on-demand guide (detail moved out of description/schema) ==========
