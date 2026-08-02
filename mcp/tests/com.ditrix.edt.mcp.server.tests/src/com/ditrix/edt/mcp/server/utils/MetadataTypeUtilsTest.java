@@ -9,11 +9,16 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import java.util.function.Predicate;
 import org.junit.Test;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -639,6 +644,87 @@ public class MetadataTypeUtilsTest
         assertTrue(mixed.contains("document.x." + RU_FORM_LOWER + ".y")); // original
         assertTrue(mixed.contains("document.x.form.y")); // all-English
         assertTrue(mixed.contains(RU_DOCUMENT_LOWER + ".x." + RU_FORM_LOWER + ".y")); // all-Russian
+    }
+
+
+    /**
+     * Every nested kind this catalogue publishes must have an OWNER predicate on the exact path, and
+     * that owner must accept EVERY spelling the catalogue advertises for it.
+     *
+     * <p>This is the invariant behind three separate review findings, each one a fresh copy of the
+     * same mistake: the catalogue advertised a spelling, the exact resolver's own list of literals
+     * did not have it, so an address we document resolved by NAME and was then refused on its KIND -
+     * a node that plainly exists reported as objectsNotFound. Enumerating the fixes is what let the
+     * next copy through, so the property is checked over the WHOLE catalogue instead.</p>
+     *
+     * <p>A kind added to the catalogue later has no owner here and FAILS this test until one is
+     * declared. That is deliberate: declaring the owner is exactly the step that was being missed.</p>
+     */
+    @Test
+    public void testEveryPublishedNestedKindTokenIsAcceptedByItsExactResolver()
+    {
+        Map<String, Predicate<String>> owners = new LinkedHashMap<>();
+        // Form-content kinds: the form parser resolves the element and then checks the KIND token.
+        for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
+        {
+            List<String> tokens = FormElementWriter.tokensForKind(kind);
+            if (tokens.isEmpty())
+            {
+                continue;
+            }
+            MetadataTypeUtils.NestedKindInfo info =
+                MetadataTypeUtils.resolveNestedKind(tokens.get(0));
+            assertNotNull("the form parser accepts '" + tokens.get(0) + "' but this map does not",
+                info);
+            owners.put(info.getEnglish(), t -> FormElementWriter.kindForToken(t) == kind);
+        }
+        // The structural tokens that route an address to a branch rather than to an element kind.
+        owners.put("Form", FormElementWriter::isFormToken);
+        owners.put("Handler", FormElementWriter::isHandlerToken);
+        owners.put("Subsystem", SubsystemUtils::isSubsystemTypeToken);
+        owners.put("Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+
+        // Every OTHER kind is an mdclass member, and its exact resolver is MetadataNodeResolver:
+        // it maps the kind token to the EMF child feature. That is a real owner, not an excuse -
+        // listing these by hand is exactly the "enumerate the fixes" habit that let the same drift
+        // through twice, so they are checked through their resolver like everything else.
+        Map<String, String> notAddressed = new LinkedHashMap<>();
+        // The only genuine exceptions: CONTENT segments of a marker location. They are translated so
+        // the filter can match a location, but no address is ever parsed with them as a segment.
+        notAddressed.put("Module", "a CONTENT segment of a marker location (CommonModule.X.Module), "
+            + "never an address segment - it is translated for matching only");
+        notAddressed.put("Package", "the CONTENT of an XDTO package (XDTOPackage.P.Package) - a "
+            + "marker location segment; XDTO members are answered as objectsUnsupported");
+
+        for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
+        {
+            Predicate<String> owner = owners.get(canonical);
+            if (owner == null && !notAddressed.containsKey(canonical))
+            {
+                // An mdclass member kind: its exact resolver is the child-feature mapping.
+                owner = t -> MetadataNodeResolver.featureNameForKind(t) != null;
+            }
+            if (owner == null)
+            {
+                continue; // a documented content-only segment
+            }
+            Set<String> aliases = MetadataTypeUtils.nestedKindAliases(canonical);
+            assertFalse("a published kind must have spellings: " + canonical, aliases.isEmpty());
+            for (String alias : aliases)
+            {
+                assertTrue("the catalogue advertises '" + alias + "' for " + canonical
+                    + ", so the exact resolver must accept it", owner.test(alias));
+                // ...and case must not matter: a marker location renders these capitalized.
+                assertTrue("case must not matter for '" + alias + "'",
+                    owner.test(alias.substring(0, 1).toUpperCase() + alias.substring(1)));
+            }
+        }
+    }
+
+    /** The predefined-item token predicate, which is private to its writer - probed through parseRef. */
+    private static boolean predefinedTokenAccepted(String token)
+    {
+        return PredefinedWriter.parseRef("Catalog.Products." + token + ".Sample") != null;
     }
 
     // ========== resolveNestedKind ==========

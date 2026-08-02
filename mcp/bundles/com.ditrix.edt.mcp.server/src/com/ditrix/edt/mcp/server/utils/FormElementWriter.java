@@ -322,13 +322,34 @@ public final class FormElementWriter
      */
     public static boolean isFormToken(String token)
     {
+        return isNestedKind(token, "Form"); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether {@code token} is any spelling the shared alias catalogue publishes for the nested kind
+     * whose canonical English name is {@code canonicalEnglish}.
+     *
+     * <p>THE anti-drift seam for the structural tokens an exact address is parsed with. Each of
+     * these predicates used to carry its own list of literals, and the object filter advertises the
+     * catalogue - so every spelling the catalogue gained and a predicate did not became an address
+     * we document and then refuse: the element resolves by name, the KIND check rejects it, and a
+     * node that plainly exists is reported missing. That happened for the visual kinds (plural
+     * tokens) and then again for {@code Handler}, which is the same bug in the neighbouring token.
+     * Reading the catalogue makes the two impossible to disagree.</p>
+     *
+     * @param token the FQN segment to test (may be {@code null})
+     * @param canonicalEnglish the kind's canonical English spelling
+     * @return {@code true} when the catalogue maps {@code token} to that kind
+     */
+    private static boolean isNestedKind(String token, String canonicalEnglish)
+    {
         if (token == null)
         {
             return false;
         }
-        String s = token.toLowerCase();
-        return "form".equals(s) || KEY_FORMS.equals(s) //$NON-NLS-1$
-            || RU_FORM.equals(s) || RU_FORMS.equals(s);
+        MetadataTypeUtils.NestedKindInfo info =
+            MetadataTypeUtils.resolveNestedKind(token.trim());
+        return info != null && canonicalEnglish.equals(info.getEnglish());
     }
 
     /**
@@ -481,12 +502,7 @@ public final class FormElementWriter
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
     {
-        if (token == null)
-        {
-            return false;
-        }
-        String t = token.trim().toLowerCase();
-        return FEATURE_HANDLER.equals(t) || RU_HANDLER.equals(t);
+        return isNestedKind(token, "Handler"); //$NON-NLS-1$
     }
 
     /**

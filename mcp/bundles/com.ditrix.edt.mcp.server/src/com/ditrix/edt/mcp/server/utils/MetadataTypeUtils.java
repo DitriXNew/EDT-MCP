@@ -783,6 +783,27 @@ public final class MetadataTypeUtils
      * @param segment any accepted spelling of a nested kind
      * @return its sibling spellings (including itself), or an empty set when the token is unknown
      */
+    /**
+     * The canonical English spelling of every nested kind this catalogue publishes, once each.
+     *
+     * <p>Exists so a consistency test can walk the WHOLE catalogue instead of a hand-written list:
+     * what this map advertises is what the object filters promise, and every promised token must be
+     * accepted by the exact resolver of its family. Enumerating the kinds here means a kind added
+     * later is covered automatically - a hand-written list keeps passing and lets the next copy of
+     * the same drift through (it already did twice: the visual kinds' plurals, then Handler's).</p>
+     *
+     * @return the canonical English kind names (never {@code null})
+     */
+    public static Set<String> nestedKindCanonicalTokens()
+    {
+        Set<String> canonical = new LinkedHashSet<>();
+        for (NestedKindInfo info : NESTED_KIND_LOOKUP.values())
+        {
+            canonical.add(info.getEnglish());
+        }
+        return canonical;
+    }
+
     public static Set<String> nestedKindAliases(String segment)
     {
         NestedKindInfo info = resolveNestedKind(segment);

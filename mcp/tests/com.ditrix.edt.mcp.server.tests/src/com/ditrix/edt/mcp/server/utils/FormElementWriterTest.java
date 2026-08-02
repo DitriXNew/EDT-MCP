@@ -2870,4 +2870,41 @@ public class FormElementWriterTest
         assertEquals(Kind.FIELD, FormElementWriter.kindForToken("Fields")); //$NON-NLS-1$
         assertEquals(Kind.FIELD, FormElementWriter.kindForToken("\u041F\u043E\u043B\u044F")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testHandlerAndFormTokensAcceptBothNumbersAndBothLanguages()
+    {
+        // Same defect as the visual kinds' plurals, one token over: the alias catalogue publishes
+        // Handler/Handlers and both Russian numbers, but this predicate carried its own two
+        // literals. So '...Form.F.Handlers.OnCreateAtServer' was not parsed as a handler at all -
+        // it fell through to an ordinary member, and a real handler was reported missing.
+        assertTrue(FormElementWriter.isHandlerToken("Handler")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken("handlers")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken("\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken("\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A\u0438")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isHandlerToken("Handlerz")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isHandlerToken(null));
+
+        // The FORM token has the same shape and the same failure mode, so it is pinned here too.
+        assertTrue(FormElementWriter.isFormToken("Form")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("Forms")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("\u0444\u043E\u0440\u043C\u0430")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("\u0444\u043E\u0440\u043C\u044B")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isFormToken("Formz")); //$NON-NLS-1$
+
+        // And the parse path really uses them: a handler addressed with the PLURAL token must come
+        // back as a handler reference, at form level and at item level alike.
+        FormElementWriter.FormMemberRef formLevel =
+            FormElementWriter.parse("Catalog.C.Forms.ItemForm.Handlers.OnCreateAtServer"); //$NON-NLS-1$
+        assertNotNull("a plural handler token must still parse", formLevel); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken(formLevel.kindToken));
+        assertEquals("OnCreateAtServer", formLevel.name); //$NON-NLS-1$
+
+        FormElementWriter.FormMemberRef itemLevel =
+            FormElementWriter.parse("Catalog.C.Forms.ItemForm.Fields.Code.Handlers.OnChange"); //$NON-NLS-1$
+        assertNotNull("an item-level plural handler token must parse as item-level", itemLevel); //$NON-NLS-1$
+        assertTrue(itemLevel.isItemLevel());
+        assertEquals("Code", itemLevel.itemName); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken(itemLevel.itemKindToken));
+    }
 }
