@@ -21,16 +21,26 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EPackage;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EcoreFactory;
+import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
@@ -40,6 +50,7 @@ import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 
 /**
  * Unit tests for the marker filtering / building helpers of {@link GetProjectErrorsTool}.
@@ -778,7 +789,7 @@ public class GetProjectErrorsToolTest
         // addresses are declared missing on the strength of an inspection that never happened.
         IBmModel model = mock(IBmModel.class);
         when(model.executeReadonlyTask(any())).thenThrow(new IllegalStateException("model busy")); //$NON-NLS-1$
-        Map<String, String> found = new LinkedHashMap<>();
+        Map<String, Set<String>> found = new LinkedHashMap<>();
 
         boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), model, //$NON-NLS-1$
             MdClassFactory.eINSTANCE.createConfiguration(),
@@ -794,7 +805,7 @@ public class GetProjectErrorsToolTest
         // The counterpart: a pass that ran to the end IS an inspection, even when it resolved
         // nothing - only then may an address be reported as missing.
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
-        Map<String, String> found = new LinkedHashMap<>();
+        Map<String, Set<String>> found = new LinkedHashMap<>();
 
         boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), readModel(), //$NON-NLS-1$
             config, Collections.singletonList("Catalog.Nope"), found); //$NON-NLS-1$
@@ -820,19 +831,19 @@ public class GetProjectErrorsToolTest
         catalog.setName(stored);
         config.getCatalogs().add(catalog);
 
-        Map<String, String> found = new LinkedHashMap<>();
+        Map<String, Set<String>> found = new LinkedHashMap<>();
         assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
             Collections.singletonList(requested), found));
 
         assertEquals("the yo spelling must resolve against the stored ye name", //$NON-NLS-1$
-            "Catalog." + stored, found.get(requested)); //$NON-NLS-1$
+            singleton("Catalog." + stored), found.get(requested)); //$NON-NLS-1$
         // A Russian TYPE token takes the same route (Spravochnik.M[yo]d).
         String ruRequested = fromCp(0x0421, 0x043f, 0x0440, 0x0430, 0x0432, 0x043e, 0x0447, 0x043d,
             0x0438, 0x043a) + "." + fromCp(0x041c, 0x0451, 0x0434); //$NON-NLS-1$
-        Map<String, String> ruFound = new LinkedHashMap<>();
+        Map<String, Set<String>> ruFound = new LinkedHashMap<>();
         assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
             Collections.singletonList(ruRequested), ruFound));
-        assertEquals("Catalog." + stored, ruFound.get(ruRequested)); //$NON-NLS-1$
+        assertEquals(singleton("Catalog." + stored), ruFound.get(ruRequested)); //$NON-NLS-1$
     }
 
     @Test
@@ -846,11 +857,11 @@ public class GetProjectErrorsToolTest
         catalog.setName(stored);
         config.getCatalogs().add(catalog);
 
-        Map<String, String> found = new LinkedHashMap<>();
+        Map<String, Set<String>> found = new LinkedHashMap<>();
         assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
             Arrays.asList("Catalog." + stored, "Catalog." + fromCp(0x041b, 0x0451, 0x0434)), found)); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertEquals("Catalog." + stored, found.get("Catalog." + stored)); //$NON-NLS-1$
+        assertEquals(singleton("Catalog." + stored), found.get("Catalog." + stored)); //$NON-NLS-1$
         assertNull("a name that exists in neither spelling must stay undecided", //$NON-NLS-1$
             found.get("Catalog." + fromCp(0x041b, 0x0451, 0x0434))); //$NON-NLS-1$
     }
@@ -928,7 +939,267 @@ public class GetProjectErrorsToolTest
             guide.contains("unresolved")); //$NON-NLS-1$
     }
 
+    // ========== objectFqns: form-member addressing ==========
+
+    @Test
+    public void testAnItemLevelHandlerAddressMustNameTheOwnersKind()
+    {
+        // The owner of an item-level handler is looked up by NAME alone, exactly like a leaf member
+        // is, so the OWNER's kind token has to be checked too. Otherwise `...Button.Price.Handler.X`
+        // (where Price is a FIELD) is called resolved and then scopes the marker scan by a kind
+        // segment no location ever carries - a clean report for an address that does not exist.
+        FormModel form = newFormModel();
+
+        assertFalse("the owner's OWN kind must resolve", //$NON-NLS-1$
+            scopeSpellings(form, HANDLER_ON_FIELD).isEmpty());
+        assertTrue("a FOREIGN owner kind must not resolve", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Button.Price.Handler.OnChange").isEmpty()); //$NON-NLS-1$
+        assertTrue("a MISSPELT owner kind must not resolve", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Fielld.Price.Handler.OnChange").isEmpty()); //$NON-NLS-1$
+        // A form COMMAND is a legal handler owner and is routed BY kind, so it keeps resolving.
+        assertFalse("Command is a legal handler owner", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Command.Save.Handler.Action").isEmpty()); //$NON-NLS-1$
+        // ...and a command addressed as an item is not an item, so it stays a miss.
+        assertTrue("a command addressed with an item kind must not resolve", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Button.Save.Handler.Action").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResolvedHandlerIsScopedByTheEventSpellingsTheModelCarries()
+    {
+        // findFormHandler matches the English `name` AND the Russian `nameRu` of the event, while a
+        // marker location renders exactly ONE of them. Scoping by the spelling the CALLER typed
+        // would therefore filter out every problem on the handler just proven to exist.
+        FormModel form = newFormModel();
+        String ruEvent = fromCp(0x041f, 0x0440, 0x0438, 0x0418, 0x0437, 0x043c, 0x0435, 0x043d,
+            0x0435, 0x043d, 0x0438, 0x0438); // PriIzmenenii
+        String ruAddress = FORM_FQN + ".Field.Price.Handler." + ruEvent; //$NON-NLS-1$
+
+        List<String> fromRu = scopeSpellings(form, ruAddress);
+        assertTrue("the address as written must still scope the scan", //$NON-NLS-1$
+            fromRu.contains(ruAddress));
+        assertTrue("the event's OTHER spelling must scope it too", //$NON-NLS-1$
+            fromRu.contains(HANDLER_ON_FIELD));
+
+        // Symmetrical: an English address must scope by the Russian spelling as well, so the same
+        // request works against a Russian-language project.
+        List<String> fromEn = scopeSpellings(form, HANDLER_ON_FIELD);
+        assertTrue(fromEn.contains(HANDLER_ON_FIELD));
+        assertTrue("an English address must scope by the Russian spelling too", //$NON-NLS-1$
+            fromEn.contains(ruAddress));
+    }
+
+    @Test
+    public void testAFormMemberWhoseContentModelCannotBeReadStaysUndecided()
+    {
+        // The form EXISTS in the configuration, but its CONTENT model cannot be read (here: no BM
+        // services outside a workbench; live: EDT still indexing, or the transaction threw). That is
+        // a failure to DECIDE, not an absence: the address must stay undecided and the project must
+        // NOT count as inspected, or the single failed attempt is reported as objectsNotFound.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("C"); //$NON-NLS-1$
+        CatalogForm form = MdClassFactory.eINSTANCE.createCatalogForm();
+        form.setName("ItemForm"); //$NON-NLS-1$
+        catalog.getForms().add(form);
+        config.getCatalogs().add(catalog);
+
+        Map<String, Set<String>> found = new LinkedHashMap<>();
+        boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
+            Collections.singletonList("Catalog.C.Form.ItemForm.Field.Code"), found); //$NON-NLS-1$
+
+        assertFalse("a form whose content model could not be read decided nothing", inspected); //$NON-NLS-1$
+        assertTrue("and it must not decide the address either", found.isEmpty()); //$NON-NLS-1$
+
+        // The counterpart: a form that is simply ABSENT is a decided miss, so the pass still counts
+        // as an inspection - the undecided verdict must not swallow the ordinary not-found one.
+        Map<String, Set<String>> absent = new LinkedHashMap<>();
+        assertTrue("an absent form is a decided miss", //$NON-NLS-1$
+            GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
+                Collections.singletonList("Catalog.C.Form.NoSuchForm.Field.Code"), absent)); //$NON-NLS-1$
+        assertTrue(absent.isEmpty());
+    }
+
+    @Test
+    public void testTheSameAddressKeepsEveryProjectsOwnStoredSpelling()
+    {
+        // With no projectName the SAME address is offered to every project, and two projects may
+        // legitimately store it differently: create_metadata's yo->ye normalization is a DEFAULT,
+        // not a rule, so one project holds "M[ye]d" while another holds the verbatim "M[yo]d".
+        // Keeping only the first spelling would scope BOTH projects by one variant, losing every
+        // problem under the other object.
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // Med
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // M[yo]d
+        String requested = "Catalog." + yo; //$NON-NLS-1$
+
+        Map<String, Set<String>> found = new LinkedHashMap<>();
+        assertTrue(GetProjectErrorsTool.resolveInProject(project("A"), readModel(), //$NON-NLS-1$
+            configWithCatalog(ye), Collections.singletonList(requested), found));
+        assertTrue(GetProjectErrorsTool.resolveInProject(project("B"), readModel(), //$NON-NLS-1$
+            configWithCatalog(yo), Collections.singletonList(requested), found));
+
+        assertEquals("every project's own stored spelling must scope the scan", //$NON-NLS-1$
+            new HashSet<>(Arrays.asList("Catalog." + ye, "Catalog." + yo)), found.get(requested)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ========== helpers ==========
+
+    /** A configuration holding one catalog under the given stored Name. */
+    private static Configuration configWithCatalog(String storedName)
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName(storedName);
+        config.getCatalogs().add(catalog);
+        return config;
+    }
+
+    /** The owning form of the synthetic form model, as an FQN prefix. */
+    private static final String FORM_FQN = "Catalog.C.Form.ItemForm"; //$NON-NLS-1$
+
+    /** The English address of the handler bound on the synthetic model's FIELD. */
+    private static final String HANDLER_ON_FIELD = FORM_FQN + ".Field.Price.Handler.OnChange"; //$NON-NLS-1$
+
+    /**
+     * Decides one form-member address against the synthetic form model, exactly as the deferred
+     * member pass does (the probe spelling IS the requested one here - the yo fallback is covered
+     * separately).
+     */
+    private static List<String> scopeSpellings(FormModel form, String fqn)
+    {
+        FormElementWriter.FormMemberRef ref = FormElementWriter.parse(fqn);
+        assertNotNull("the address must parse as a form member: " + fqn, ref); //$NON-NLS-1$
+        return GetProjectErrorsTool.memberScopeSpellings(form.root,
+            new GetProjectErrorsTool.DeferredMember(fqn, fqn, ref));
+    }
+
+    /** The synthetic form content model: its root plus the elements addressed by the tests. */
+    private static final class FormModel
+    {
+        EObject root;
+    }
+
+    /**
+     * A self-contained dynamic EMF model shaped like the form CONTENT metamodel - enough for the
+     * member / handler resolution under test: a form root with an {@code items} tree of
+     * {@code FormField} / {@code Button} items and a {@code formCommands} list, where every item
+     * carries {@code handlers} typed to an {@code EventHandler} whose {@code event} exposes the
+     * bilingual {@code name} / {@code nameRu}. The real form package lives in an EDT runtime bundle
+     * this plugin must not bind to at compile time (which is why the production code is reflective),
+     * so the test supplies its own shape.
+     *
+     * <p>Contents: a {@code FormField} named {@code Price} with a handler bound to the
+     * {@code OnChange} / {@code [PriIzmenenii]} event, and a {@code FormCommand} named {@code Save}
+     * with an action.</p>
+     */
+    private static FormModel newFormModel()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("form"); //$NON-NLS-1$
+        pkg.setNsURI("http://g5.1c.ru/v8/dt/form/geterrorstest"); //$NON-NLS-1$
+        pkg.setNsPrefix("form"); //$NON-NLS-1$
+
+        EClass event = f.createEClass();
+        event.setName("Event"); //$NON-NLS-1$
+        event.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        event.getEStructuralFeatures().add(stringAttribute("nameRu")); //$NON-NLS-1$
+        pkg.getEClassifiers().add(event);
+
+        EClass eventHandler = f.createEClass();
+        eventHandler.setName("EventHandler"); //$NON-NLS-1$
+        eventHandler.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        eventHandler.getEStructuralFeatures().add(containment("event", event, false)); //$NON-NLS-1$
+        pkg.getEClassifiers().add(eventHandler);
+
+        EClass formItem = f.createEClass();
+        formItem.setName("FormItem"); //$NON-NLS-1$
+        formItem.setAbstract(true);
+        formItem.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        formItem.getEStructuralFeatures().add(containment("handlers", eventHandler, true)); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formItem);
+
+        EClass formField = subclass("FormField", formItem); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formField);
+        pkg.getEClassifiers().add(subclass("Button", formItem)); //$NON-NLS-1$
+
+        EClass action = f.createEClass();
+        action.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(action);
+
+        EClass formCommand = f.createEClass();
+        formCommand.setName("FormCommand"); //$NON-NLS-1$
+        formCommand.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        formCommand.getEStructuralFeatures().add(containment("action", action, false)); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formCommand);
+
+        EClass form = f.createEClass();
+        form.setName("Form"); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(containment("items", formItem, true)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(containment("formCommands", formCommand, true)); //$NON-NLS-1$
+        pkg.getEClassifiers().add(form);
+
+        FormModel model = new FormModel();
+        model.root = pkg.getEFactoryInstance().create(form);
+
+        EObject field = pkg.getEFactoryInstance().create(formField);
+        setString(field, "name", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        list(model.root, "items").add(field); //$NON-NLS-1$
+
+        EObject boundEvent = pkg.getEFactoryInstance().create(event);
+        setString(boundEvent, "name", "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        setString(boundEvent, "nameRu", fromCp(0x041f, 0x0440, 0x0438, 0x0418, 0x0437, 0x043c, //$NON-NLS-1$
+            0x0435, 0x043d, 0x0435, 0x043d, 0x0438, 0x0438)); // PriIzmenenii
+        EObject handler = pkg.getEFactoryInstance().create(eventHandler);
+        setString(handler, "name", "PriceOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        handler.eSet(handler.eClass().getEStructuralFeature("event"), boundEvent); //$NON-NLS-1$
+        list(field, "handlers").add(handler); //$NON-NLS-1$
+
+        EObject command = pkg.getEFactoryInstance().create(formCommand);
+        setString(command, "name", "Save"); //$NON-NLS-1$ //$NON-NLS-2$
+        command.eSet(command.eClass().getEStructuralFeature("action"), //$NON-NLS-1$
+            pkg.getEFactoryInstance().create(action));
+        list(model.root, "formCommands").add(command); //$NON-NLS-1$
+
+        return model;
+    }
+
+    private static EAttribute stringAttribute(String name)
+    {
+        EAttribute attribute = EcoreFactory.eINSTANCE.createEAttribute();
+        attribute.setName(name);
+        attribute.setEType(EcorePackage.Literals.ESTRING);
+        return attribute;
+    }
+
+    private static EReference containment(String name, EClass type, boolean many)
+    {
+        EReference reference = EcoreFactory.eINSTANCE.createEReference();
+        reference.setName(name);
+        reference.setEType(type);
+        reference.setContainment(true);
+        reference.setUpperBound(many ? -1 : 1);
+        return reference;
+    }
+
+    private static EClass subclass(String name, EClass superType)
+    {
+        EClass eClass = EcoreFactory.eINSTANCE.createEClass();
+        eClass.setName(name);
+        eClass.getESuperTypes().add(superType);
+        return eClass;
+    }
+
+    private static void setString(EObject object, String featureName, String value)
+    {
+        object.eSet(object.eClass().getEStructuralFeature(featureName), value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static EList<EObject> list(EObject object, String featureName)
+    {
+        return (EList<EObject>)object.eGet(object.eClass().getEStructuralFeature(featureName));
+    }
 
     private static Marker marker(MarkerSeverity severity, String checkId, String message, String projectName)
     {

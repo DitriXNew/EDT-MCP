@@ -8,9 +8,11 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -45,6 +47,7 @@ import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -384,7 +387,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param objects the requested object FQN filters, may be {@code null}
      * @return the deduplicated, lowercased FQN variants (never {@code null})
      */
-    private static Set<String> buildObjectFilterVariants(List<String> objects)
+    private static Set<String> buildObjectFilterVariants(Collection<String> objects)
     {
         final Set<String> finalObjects = new HashSet<>();
         if (objects != null)
@@ -413,12 +416,18 @@ public class GetProjectErrorsTool implements IMcpTool
         final List<String> notFound = new ArrayList<>();
         final List<Map<String, String>> unsupported = new ArrayList<>();
         /**
-         * The spellings that actually resolved, parallel to {@link #resolved}: the same address
-         * unless a yo-fallback hit, in which case it is the STORED (yo-normalized) form. This is
-         * what scopes the marker scan - filtering on the caller's yo spelling would match no marker
-         * even though the object exists. Internal only: the wire keeps the caller's spelling.
+         * EVERY spelling that actually resolved, across every inspected project: the requested
+         * address unless a yo-fallback or a handler's other event spelling hit, in which case the
+         * STORED one is here too. This is what scopes the marker scan - filtering on the caller's
+         * spelling alone would match no marker even though the object exists.
+         *
+         * <p>A SET, deliberately not a list parallel to {@link #resolved}: with no
+         * {@code projectName} the same requested address can legitimately resolve to DIFFERENT
+         * stored spellings in different projects ({@code Catalog.M[yo]d} stored yo-normalized in one
+         * project and verbatim in another), and keeping only the first would silently scope every
+         * project by one variant. Internal only: the wire keeps the caller's spelling.</p>
          */
-        final List<String> scopeFqns = new ArrayList<>();
+        final Set<String> scopeFqns = new LinkedHashSet<>();
         /** A ready JSON error payload when no verdict could be reached at all; {@code null} otherwise. */
         String error;
     }
@@ -599,7 +608,7 @@ public class GetProjectErrorsTool implements IMcpTool
             return resolution;
         }
 
-        Map<String, String> found = new LinkedHashMap<>();
+        Map<String, Set<String>> found = new LinkedHashMap<>();
         boolean inspectedAny = false;
         for (IProject project : scope)
         {
@@ -622,8 +631,9 @@ public class GetProjectErrorsTool implements IMcpTool
         if (!inspectedAny)
         {
             resolution.error = ToolResult.error("Cannot resolve " + PARAM_OBJECT_FQNS //$NON-NLS-1$
-                + ": no project in scope exposes a readable metadata model" //$NON-NLS-1$
-                + " (still indexing, closed, or not a 1C:EDT project)." //$NON-NLS-1$
+                + ": no project in scope could answer - its metadata model is not readable" //$NON-NLS-1$
+                + " (still indexing, closed, or not a 1C:EDT project), or a form's content" //$NON-NLS-1$
+                + " model could not be read." //$NON-NLS-1$
                 + " Wait for indexing to finish, name an indexed project with projectName," //$NON-NLS-1$
                 + " check the state with list_projects, or use the loose '" + PARAM_OBJECTS //$NON-NLS-1$
                 + "' filter, which needs no resolution.").toJson(); //$NON-NLS-1$
@@ -632,12 +642,12 @@ public class GetProjectErrorsTool implements IMcpTool
 
         for (String fqn : candidates)
         {
-            String resolvedAs = found.get(fqn);
-            if (resolvedAs != null)
+            Set<String> resolvedAs = found.get(fqn);
+            if (resolvedAs != null && !resolvedAs.isEmpty())
             {
-                // The wire keeps the caller's spelling; the scan uses the one that resolved.
+                // The wire keeps the caller's spelling; the scan uses EVERY one that resolved.
                 resolution.resolved.add(fqn);
-                resolution.scopeFqns.add(resolvedAs);
+                resolution.scopeFqns.addAll(resolvedAs);
             }
             else
             {
@@ -648,8 +658,14 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Maps in {@code found} every candidate address that resolves in this project to the spelling
-     * that actually resolved (see {@link #addressProbes}).
+     * Adds to {@code found} every candidate address that resolves in this project, mapped to the
+     * spelling(s) that actually resolved HERE (see {@link #addressProbes} and
+     * {@link #formMemberScopeSpellings}).
+     *
+     * <p>The accumulator is a MULTI-map on purpose: with no {@code projectName} the same requested
+     * address is offered to every project in scope, and two projects may legitimately store it under
+     * different spellings, each of which must scope the scan in its own project. Resolution
+     * therefore runs in every project, and only the per-project decision short-circuits.</p>
      *
      * <p>Two boundaries are used, because a form MEMBER does not live in the mdclass model: every
      * other family is decided inside ONE BM read transaction on this project's model, while a form
@@ -660,23 +676,26 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param project the project being inspected
      * @param bmModel its BM model
      * @param config its configuration
-     * @param candidates the addresses still awaiting a verdict
-     * @param found the accumulator: requested address -&gt; the spelling that resolved
-     * @return {@code true} when the project was really INSPECTED (the resolve pass completed);
-     *     {@code false} when it threw, in which case the addresses stay undecided and this project
-     *     must not count as an inspection - a project that could not answer must never turn an
-     *     address into "not found"
+     * @param candidates the addresses to decide
+     * @param found the accumulator: requested address -&gt; the spellings that resolved
+     * @return {@code true} when the project was really INSPECTED (every address reached a verdict);
+     *     {@code false} when the pass threw or a form's content model could not be read, in which
+     *     case the affected addresses stay undecided and this project must not count as an
+     *     inspection - a project that could not answer must never turn an address into "not found"
      */
     static boolean resolveInProject(IProject project, IBmModel bmModel, Configuration config,
-        List<String> candidates, Map<String, String> found)
+        List<String> candidates, Map<String, Set<String>> found)
     {
         List<DeferredMember> deferred = new ArrayList<>();
+        // This project's own decisions: the cross-project accumulator must not short-circuit the
+        // probe order here, or the second project's stored spelling would never be discovered.
+        Map<String, Set<String>> local = new LinkedHashMap<>();
         try
         {
             BmTransactions.<Void>read(bmModel, "ResolveErrorObjectAddresses", (tx, pm) -> { //$NON-NLS-1$
                 for (String fqn : candidates)
                 {
-                    resolveCandidate(config, fqn, found, deferred);
+                    resolveCandidate(config, fqn, local, deferred);
                 }
                 return null;
             });
@@ -691,15 +710,32 @@ public class GetProjectErrorsTool implements IMcpTool
             return false;
         }
 
+        // Addresses whose ONLY attempt failed to read the form content model. They are undecided,
+        // exactly like the addresses of a pass that threw - never "not found".
+        Set<String> undecided = new HashSet<>();
         for (DeferredMember member : deferred)
         {
-            if (!found.containsKey(member.requestFqn)
-                && formMemberExists(project, config, member.ref))
+            if (local.containsKey(member.requestFqn))
             {
-                found.put(member.requestFqn, member.probeFqn);
+                continue;
+            }
+            List<String> spellings = formMemberScopeSpellings(project, config, member);
+            if (spellings == null)
+            {
+                undecided.add(member.requestFqn);
+            }
+            else if (!spellings.isEmpty())
+            {
+                // A later probe of the same address did decide it after all.
+                undecided.remove(member.requestFqn);
+                local.put(member.requestFqn, new LinkedHashSet<>(spellings));
             }
         }
-        return true;
+        for (Map.Entry<String, Set<String>> entry : local.entrySet())
+        {
+            found.computeIfAbsent(entry.getKey(), k -> new LinkedHashSet<>()).addAll(entry.getValue());
+        }
+        return undecided.isEmpty();
     }
 
     /**
@@ -709,11 +745,11 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * @param config the configuration to resolve against
      * @param fqn the requested address, as the caller wrote it
-     * @param found the accumulator: requested address -&gt; the spelling that resolved
+     * @param found this project's accumulator: requested address -&gt; the spellings that resolved
      * @param deferred the accumulator of form-member probes to decide after the transaction
      */
     private static void resolveCandidate(Configuration config, String fqn,
-        Map<String, String> found, List<DeferredMember> deferred)
+        Map<String, Set<String>> found, List<DeferredMember> deferred)
     {
         if (found.containsKey(fqn))
         {
@@ -728,7 +764,7 @@ public class GetProjectErrorsTool implements IMcpTool
             }
             else if (resolvesInConfiguration(config, probe))
             {
-                found.put(fqn, probe);
+                found.put(fqn, new LinkedHashSet<>(Collections.singletonList(probe)));
                 return;
             }
         }
@@ -756,8 +792,12 @@ public class GetProjectErrorsTool implements IMcpTool
             : Arrays.asList(normFqn, retry);
     }
 
-    /** One form-MEMBER probe deferred out of the read transaction (see {@link #resolveInProject}). */
-    private static final class DeferredMember
+    /**
+     * One form-MEMBER probe deferred out of the read transaction (see {@link #resolveInProject}).
+     * Package-private so the per-probe decision ({@link #memberScopeSpellings}) can be unit-tested
+     * against a synthetic form model.
+     */
+    static final class DeferredMember
     {
         /** The requested address, as the caller wrote it - the key of the verdict. */
         final String requestFqn;
@@ -855,56 +895,146 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Whether the form MEMBER {@code ref} addresses really exists - the LEAF is checked, not just
-     * the form containing it. The member lives in the form CONTENT model, so the form is resolved
-     * first and the leaf is then looked up inside a read transaction on that content model.
+     * The spellings that scope the marker scan for one form-MEMBER probe - the LEAF is checked, not
+     * just the form containing it. The member lives in the form CONTENT model, so the form is
+     * resolved first and the leaf is then looked up inside a read transaction on that content model.
      *
-     * <p>The KIND is checked too ({@link FormElementWriter#matchesRequestedKind}): the member lookup
-     * finds an ITEM by NAME alone, so {@code ...Form.F.Button.Price} would otherwise resolve to the
-     * FIELD named {@code Price} - and then filter the markers by a kind segment no location carries,
-     * handing the caller a clean report instead of naming the typo.</p>
+     * <p>The KIND is checked too ({@link FormElementWriter#matchesRequestedKind} for the leaf,
+     * {@link FormElementWriter#matchesKindToken} for the OWNER of an item-level handler): both
+     * lookups find an ITEM by NAME alone, so {@code ...Form.F.Button.Price} (a FIELD named
+     * {@code Price}) and {@code ...Form.F.Button.Price.Handler.OnChange} would otherwise resolve -
+     * and then filter the markers by a kind segment no location carries, handing the caller a clean
+     * report instead of naming the typo.</p>
+     *
+     * <p>A HANDLER address additionally scopes by the event's OWN spellings: the lookup accepts the
+     * English {@code name} and the Russian {@code nameRu} alike, so an address written
+     * {@code ...Handler.[PriIzmenenii]} must not scope a scan whose locations end in
+     * {@code Handler.OnChange}.</p>
      *
      * <p>Call OUTSIDE a BM transaction: {@link FormElementWriter#readEditableForm} opens its own.</p>
      *
      * @param project the project owning the form
      * @param config the project configuration
-     * @param ref the parsed member reference
-     * @return {@code true} when the form AND the addressed leaf exist
+     * @param member the deferred member probe (its ref and the spelling being probed)
+     * @return the scan-scoping spellings (never empty) when the form AND the addressed leaf exist;
+     *     an EMPTY list when the address is PROVEN absent; and {@code null} when the form content
+     *     model could not be read at all - an infrastructure failure decides nothing and must never
+     *     be reported as "this address does not exist"
      */
-    private static boolean formMemberExists(IProject project, Configuration config,
-        FormElementWriter.FormMemberRef ref)
+    private static List<String> formMemberScopeSpellings(IProject project, Configuration config,
+        DeferredMember member)
     {
+        FormElementWriter.FormMemberRef ref = member.ref;
+        FormElementWriter.FormEditContext ctx;
         try
         {
             MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
             if (mdForm == null)
             {
-                return false;
+                // The form itself is absent from this configuration: a decided "not here".
+                return Collections.emptyList();
             }
-            FormElementWriter.FormEditContext ctx =
-                FormElementWriter.editContextFor(project, mdForm);
-            Boolean exists = FormElementWriter.readEditableForm(ctx, "ResolveErrorFormMember", //$NON-NLS-1$
-                (formModel, tx) -> {
-                    if (FormElementWriter.isHandlerToken(ref.kindToken))
-                    {
-                        EObject container =
-                            FormElementWriter.resolveHandlerContainer(formModel, ref);
-                        return Boolean.valueOf(container != null
-                            && FormElementWriter.findFormHandler(container, ref.name) != null);
-                    }
-                    return Boolean.valueOf(FormElementWriter.matchesRequestedKind(
-                        FormElementWriter.resolveFormMember(formModel, ref), ref));
-                });
-            return Boolean.TRUE.equals(exists);
+            ctx = FormElementWriter.editContextFor(project, mdForm);
         }
         catch (Exception e)
         {
-            // A form whose content model cannot be read holds no reachable member, so the honest
-            // answer is "not here". Logged so a genuine infrastructure failure is still visible.
-            Activator.logError("Failed to resolve the form member " + ref.formPath + "." //$NON-NLS-1$ //$NON-NLS-2$
-                + ref.kindToken + "." + ref.name, e); //$NON-NLS-1$
-            return false;
+            // The BM services behind the form are unavailable: nothing was decided.
+            Activator.logError(memberResolveFailure(ref), e);
+            return null;
         }
+        try
+        {
+            List<String> spellings = FormElementWriter.readEditableForm(ctx,
+                "ResolveErrorFormMember", (formModel, tx) -> memberScopeSpellings(formModel, member)); //$NON-NLS-1$
+            return spellings != null ? spellings : Collections.<String> emptyList();
+        }
+        catch (Exception e)
+        {
+            if (FormValidationException.jsonOf(e) != null)
+            {
+                // The form carries no editable content model (empty / legacy / not yet built), so it
+                // holds no member at all - a decided absence, not an infrastructure failure.
+                return Collections.emptyList();
+            }
+            Activator.logError(memberResolveFailure(ref), e);
+            return null;
+        }
+    }
+
+    /** The log line for a form-member address that could not be decided. */
+    private static String memberResolveFailure(FormElementWriter.FormMemberRef ref)
+    {
+        return "Failed to resolve the form member " + ref.formPath + "." + ref.kindToken + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ref.name;
+    }
+
+    /**
+     * Decides ONE form-member probe on the open form content model: the scoping spellings when it
+     * exists, an empty list when it does not.
+     *
+     * @param formModel the editable form content model (transaction-bound)
+     * @param member the deferred member probe
+     * @return the scoping spellings, or an empty list when the address addresses nothing
+     */
+    static List<String> memberScopeSpellings(EObject formModel, DeferredMember member)
+    {
+        FormElementWriter.FormMemberRef ref = member.ref;
+        if (!FormElementWriter.isHandlerToken(ref.kindToken))
+        {
+            return FormElementWriter.matchesRequestedKind(
+                FormElementWriter.resolveFormMember(formModel, ref), ref)
+                    ? Collections.singletonList(member.probeFqn) : Collections.<String> emptyList();
+        }
+        EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
+        if (container == null)
+        {
+            return Collections.emptyList();
+        }
+        // The OWNER's kind token is part of an item-level handler address. Command is a legal owner
+        // and is routed by kind already (resolveHandlerContainer), so it passes this check too.
+        if (ref.isItemLevel()
+            && !FormElementWriter.matchesKindToken(container, ref.itemKindToken))
+        {
+            return Collections.emptyList();
+        }
+        EObject handler = FormElementWriter.findFormHandler(container, ref.name);
+        if (handler == null)
+        {
+            return Collections.emptyList();
+        }
+        return handlerScopeSpellings(member.probeFqn, handler);
+    }
+
+    /**
+     * The scan-scoping spellings of a resolved handler address: the probe as written PLUS the same
+     * address with the leaf replaced by each spelling the matched event really carries.
+     *
+     * <p>{@link FormElementWriter#findFormHandler} accepts the English and the Russian event name
+     * alike, while a marker location renders ONE of them; scoping by the caller's spelling alone
+     * would filter out every problem on the very handler that was just proven to exist.</p>
+     *
+     * @param probeFqn the probed address (its last segment is the event as the caller wrote it)
+     * @param handler the matched event handler
+     * @return the spellings, in order, without duplicates
+     */
+    private static List<String> handlerScopeSpellings(String probeFqn, EObject handler)
+    {
+        List<String> spellings = new ArrayList<>();
+        spellings.add(probeFqn);
+        int lastDot = probeFqn.lastIndexOf('.');
+        if (lastDot > 0)
+        {
+            String prefix = probeFqn.substring(0, lastDot + 1);
+            for (String eventName : FormElementWriter.eventNameSpellings(handler))
+            {
+                String spelling = prefix + eventName;
+                if (!spellings.contains(spelling))
+                {
+                    spellings.add(spelling);
+                }
+            }
+        }
+        return spellings;
     }
 
     /**

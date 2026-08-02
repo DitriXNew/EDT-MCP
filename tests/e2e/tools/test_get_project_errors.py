@@ -20,7 +20,8 @@ There are TWO object filters and they behave differently on purpose:
                    use. This is the only input that reports back: the response is JSON with
                    `report` (the Markdown for a human) plus `objectsResolved` /
                    `objectsNotFound` / `objectsUnsupported`. "Exact" includes the KIND token
-                   of a form member (a FIELD does not answer to a `Button.` address) and the
+                   of a form member (a FIELD does not answer to a `Button.` address) - the
+                   OWNER's kind in an item-level handler address included - and the
                    ё/е retry the write tools use (a name typed with ё resolves against the
                    stored е form).
 
@@ -427,6 +428,48 @@ def test_exact_form_member_kind_must_match_the_element():
     assert_contains(_report(w), "objectsNotFound",
                     "the human report must name the wrong-kind addresses")
     assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_handler_address_must_name_the_owning_items_kind():
+    """An ITEM-LEVEL handler is addressed by the OWNER's kind too, not only by its name.
+
+    The owner lookup finds a form item by NAME alone, exactly like a leaf member lookup does, so
+    `...Form.ItemForm.Button.Code.Handler.OnChange` (where `Code` is a FIELD) and a misspelt
+    `...Fielld.Code...` would otherwise be called "resolved" and then scope the marker scan by a
+    kind segment no location ever carries - a clean problem report for an address that does not
+    exist. The handler is CREATED here (the baseline fixture binds none), so the positive half is
+    a real resolution and not an accident.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    right = "%s.Field.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)
+    bound = call("create_metadata", {
+        "projectName": PROJECT, "fqn": right,
+        "properties": [{"name": "procedure", "value": "E2eGpeCodeOnChange"}],
+    })
+    assert_ok(bound, "binding an OnChange handler on the fixture field")
+    wait_for_project_ready()
+
+    # The owner's OWN kind: the address resolves.
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [right], "severity": "NONE"})
+    assert_ok(r, "handler addressed through its owner's own kind")
+    _assert_verdicts(r, resolved=[right], not_found=[], unsupported=[])
+
+    # A FOREIGN owner kind (Code is a FormField, not a Button) and a misspelt one: both misses.
+    wrong = ["%s.Button.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD),
+             "%s.Fielld.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)]
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": wrong})
+    assert_ok(w, "handler addressed through a foreign / misspelt owner kind")
+    _assert_verdicts(w, resolved=[], not_found=wrong, unsupported=[])
+    assert_contains(_report(w), "objectsNotFound",
+                    "the human report must name the wrong-owner-kind addresses")
+
+    # The EVENT leaf keeps its own say: a real owner with a bogus event is still a miss.
+    ghost_event = "%s.Field.%s.Handler.NoSuchEvent_e2e_xyz" % (form, FIXTURE_FORM_FIELD)
+    g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost_event]})
+    assert_ok(g, "a handler address whose event is bound to nothing")
+    _assert_verdicts(g, resolved=[], not_found=[ghost_event], unsupported=[])
 
 
 @e2e_test(tool="get_project_errors", kind="write-metadata")

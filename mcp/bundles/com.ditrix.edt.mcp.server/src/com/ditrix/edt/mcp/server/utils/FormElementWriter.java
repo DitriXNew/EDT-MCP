@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -83,6 +84,10 @@ public final class FormElementWriter
     private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
     private static final String FEATURE_ID = "id"; //$NON-NLS-1$
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
+    /** The RUSSIAN name of a platform member (an event, in particular) - the twin of {@code name}. */
+    private static final String FEATURE_NAME_RU = "nameRu"; //$NON-NLS-1$
+    /** The event an EventHandler is bound to (its {@code name} / {@code nameRu} is the event name). */
+    private static final String FEATURE_EVENT = "event"; //$NON-NLS-1$
     /** The command-bar / menu "auto-fill from the form commands" flag. */
     private static final String FEATURE_AUTO_FILL = "autoFill"; //$NON-NLS-1$
     /** The default field ext-info EClass (a plain input field, before the value type is known). */
@@ -400,10 +405,6 @@ public final class FormElementWriter
         return null;
     }
 
-    /**
-     * Resolves a form-member FQN kind token (English or Russian, case-insensitive) to a {@link Kind},
-     * or {@code null} if it is not a supported form-element kind.
-     */
     // Russian kind / form tokens, built from code points so this source stays pure ASCII (the same
     // non-UTF-8 Tycho-build guard the rest of the project uses; no raw Cyrillic literals).
     private static final String RU_ATTRIBUTE = cp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442); // rekvizit
@@ -478,42 +479,75 @@ public final class FormElementWriter
         return FEATURE_HANDLER.equals(t) || RU_HANDLER.equals(t);
     }
 
+    /**
+     * The FQN kind tokens accepted for each {@link Kind}: the English spelling(s) and the Russian
+     * one, all lowercase (the form {@link #kindForToken} normalizes its input to). THE single source
+     * of both the lookup and {@link #tokensForKind}, so what is accepted and what is exported cannot
+     * drift apart.
+     */
+    private static final Map<Kind, List<String>> KIND_TOKENS;
+
+    /** Reverse index of {@link #KIND_TOKENS}: lowercase token -&gt; the kind it addresses. */
+    private static final Map<String, Kind> KIND_BY_TOKEN;
+
+    static
+    {
+        Map<Kind, List<String>> tokens = new EnumMap<>(Kind.class);
+        tokens.put(Kind.ATTRIBUTE, tokenList("attribute", FEATURE_ATTRIBUTES, RU_ATTRIBUTE)); //$NON-NLS-1$
+        tokens.put(Kind.COMMAND, tokenList("command", "commands", RU_COMMAND)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.GROUP, tokenList(FEATURE_GROUP, RU_GROUP));
+        tokens.put(Kind.DECORATION, tokenList("decoration", RU_DECORATION)); //$NON-NLS-1$
+        tokens.put(Kind.FIELD, tokenList("field", RU_FIELD)); //$NON-NLS-1$
+        tokens.put(Kind.BUTTON, tokenList("button", RU_BUTTON)); //$NON-NLS-1$
+        tokens.put(Kind.TABLE, tokenList("table", RU_TABLE)); //$NON-NLS-1$
+        Map<String, Kind> byToken = new HashMap<>();
+        for (Map.Entry<Kind, List<String>> entry : tokens.entrySet())
+        {
+            for (String token : entry.getValue())
+            {
+                byToken.put(token, entry.getKey());
+            }
+        }
+        KIND_TOKENS = Collections.unmodifiableMap(tokens);
+        KIND_BY_TOKEN = Collections.unmodifiableMap(byToken);
+    }
+
+    /** One kind's accepted tokens, lowercased and made immutable. */
+    private static List<String> tokenList(String... tokens)
+    {
+        List<String> lower = new ArrayList<>(tokens.length);
+        for (String token : tokens)
+        {
+            lower.add(token.toLowerCase());
+        }
+        return Collections.unmodifiableList(lower);
+    }
+
+    /**
+     * Resolves a form-member FQN kind token (English or Russian, case-insensitive) to a {@link Kind},
+     * or {@code null} if it is not a supported form-element kind.
+     */
     public static Kind kindForToken(String token)
     {
-        if (token == null)
-        {
-            return null;
-        }
-        String t = token.trim().toLowerCase();
-        if ("attribute".equals(t) || FEATURE_ATTRIBUTES.equals(t) || RU_ATTRIBUTE.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.ATTRIBUTE;
-        }
-        if ("command".equals(t) || "commands".equals(t) || RU_COMMAND.equals(t)) //$NON-NLS-1$ //$NON-NLS-2$
-        {
-            return Kind.COMMAND;
-        }
-        if (FEATURE_GROUP.equals(t) || RU_GROUP.equals(t))
-        {
-            return Kind.GROUP;
-        }
-        if ("decoration".equals(t) || RU_DECORATION.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.DECORATION;
-        }
-        if ("field".equals(t) || RU_FIELD.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.FIELD;
-        }
-        if ("button".equals(t) || RU_BUTTON.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.BUTTON;
-        }
-        if ("table".equals(t) || RU_TABLE.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.TABLE;
-        }
-        return null;
+        return token == null ? null : KIND_BY_TOKEN.get(token.trim().toLowerCase());
+    }
+
+    /**
+     * The FQN kind tokens this writer accepts for {@code kind} - every spelling
+     * {@link #kindForToken} resolves to it, English and Russian, lowercase.
+     *
+     * <p>Exported so a consistency test can walk {@link Kind#values()} and assert the bilingual
+     * coverage of EVERY kind against {@code MetadataTypeUtils}' nested-kind alias catalogue (the one
+     * the marker-location filter translates a form address with). A hand-written list of kinds
+     * cannot notice a kind added later; walking the enum can.</p>
+     *
+     * @param kind the kind, may be {@code null}
+     * @return the accepted tokens (never {@code null}; empty for an unknown kind)
+     */
+    public static List<String> tokensForKind(Kind kind)
+    {
+        List<String> tokens = kind == null ? null : KIND_TOKENS.get(kind);
+        return tokens == null ? Collections.<String> emptyList() : tokens;
     }
 
     /** Builds a string from BMP code points (keeps this source pure ASCII). Delegates to the shared
@@ -3537,12 +3571,12 @@ public final class FormElementWriter
     private static EStructuralFeature handlerEventFeature(EStructuralFeature handlersFeat)
     {
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
-        return ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
+        return ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
     }
 
     private static String eventNameOf(EObject event, boolean russian)
     {
-        return stringFeature(event, russian ? "nameRu" : "name"); //$NON-NLS-1$ //$NON-NLS-2$
+        return stringFeature(event, russian ? FEATURE_NAME_RU : FEATURE_NAME);
     }
 
     /**
@@ -4249,17 +4283,39 @@ public final class FormElementWriter
      */
     public static boolean matchesRequestedKind(EObject member, FormMemberRef ref)
     {
-        if (member == null || ref == null)
+        return ref != null && matchesKindToken(member, ref.kindToken);
+    }
+
+    /**
+     * Whether {@code element} really is of the KIND that {@code kindToken} names - the element-level
+     * form of {@link #matchesRequestedKind}, for a caller holding a kind token that is not the ref's
+     * leaf one (the OWNER token of an item-level handler FQN,
+     * {@code ...Form.F.Button.Price.Handler.OnChange}).
+     *
+     * <p>The owner lookup behind such an address finds an item by NAME alone, exactly like the leaf
+     * lookup does, so a foreign owner kind ({@code Button.} for a FIELD) or a misspelt one
+     * ({@code Fielld.}) would otherwise pass as resolved.</p>
+     *
+     * @param element the resolved form element, may be {@code null}
+     * @param kindToken the kind token the address named, may be {@code null}
+     * @return {@code true} when the element exists and its concrete EClass denotes exactly the named
+     *     kind, or denotes no addressable kind at all (an auto command bar / context menu / extended
+     *     tooltip, and the attribute / command containments, are reached by name or by containment,
+     *     so their token contradicts nothing); {@code false} for a wrong or unrecognized token
+     */
+    public static boolean matchesKindToken(EObject element, String kindToken)
+    {
+        if (element == null)
         {
             return false;
         }
-        Kind requested = kindForToken(ref.kindToken);
+        Kind requested = kindForToken(kindToken);
         if (requested == null)
         {
             // An unrecognized kind token addresses nothing: it cannot be the kind of anything.
             return false;
         }
-        Kind actual = addressableKindOf(member.eClass().getName());
+        Kind actual = addressableKindOf(element.eClass().getName());
         return actual == null || actual == requested;
     }
 
@@ -4318,18 +4374,58 @@ public final class FormElementWriter
             return null;
         }
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
-        EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
+        EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
         for (EObject handler : referenceList(container, KEY_HANDLERS))
         {
             Object ev = evFeat != null ? handler.eGet(evFeat) : null;
             if (ev instanceof EObject
-                && (eventName.equalsIgnoreCase(stringFeature((EObject)ev, "name")) //$NON-NLS-1$
-                    || eventName.equalsIgnoreCase(stringFeature((EObject)ev, "nameRu")))) //$NON-NLS-1$
+                && (eventName.equalsIgnoreCase(stringFeature((EObject)ev, FEATURE_NAME))
+                    || eventName.equalsIgnoreCase(stringFeature((EObject)ev, FEATURE_NAME_RU))))
             {
                 return handler;
             }
         }
         return null;
+    }
+
+    /**
+     * The event-name spellings of an event handler: the English {@code name} and the Russian
+     * {@code nameRu} of the {@code event} it is bound to, blanks and duplicates dropped, English
+     * first.
+     *
+     * <p>{@link #findFormHandler} matches EITHER spelling, so the token a caller searched with says
+     * nothing about the one the model (and anything rendered from it) actually carries. A caller that
+     * must name the matched event afterwards - e.g. to scope a marker query by the address EDT really
+     * renders - has to ask the handler instead of reusing its own input. A handler slot with no
+     * {@code event} reference (a form COMMAND's Action) yields an empty list.</p>
+     *
+     * <p>Reflective, so no compile-time form-model dependency. Call on the tx-bound form model.</p>
+     *
+     * @param handler the event handler, may be {@code null}
+     * @return the event's spellings (never {@code null}; possibly empty)
+     */
+    public static List<String> eventNameSpellings(EObject handler)
+    {
+        List<String> names = new ArrayList<>(2);
+        if (handler == null)
+        {
+            return names;
+        }
+        EStructuralFeature eventFeat = handler.eClass().getEStructuralFeature(FEATURE_EVENT);
+        Object event = eventFeat instanceof EReference ? handler.eGet(eventFeat) : null;
+        if (!(event instanceof EObject))
+        {
+            return names;
+        }
+        for (String feature : new String[] {FEATURE_NAME, FEATURE_NAME_RU})
+        {
+            String name = stringFeature((EObject)event, feature);
+            if (name != null && !name.isEmpty() && !names.contains(name))
+            {
+                names.add(name);
+            }
+        }
+        return names;
     }
 
     // ---- rebind: change an EXISTING handler's procedure / a button's command --------------------

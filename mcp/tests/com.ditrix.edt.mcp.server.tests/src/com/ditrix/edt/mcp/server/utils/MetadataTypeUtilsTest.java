@@ -8,6 +8,9 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.Test;
@@ -680,43 +683,91 @@ public class MetadataTypeUtilsTest
                 + "\u0444\u043E\u0440\u043C\u0430.itemform.\u043A\u043D\u043E\u043F\u043A\u0430.post")); //$NON-NLS-1$
     }
 
+    /**
+     * The form kinds deliberately NOT required to be addressable as a nested FQN segment, each with
+     * the reason it is exempt. EMPTY today: every kind the form parser accepts is also a nested-kind
+     * alias here. An entry must carry its reason, so an omission is a recorded decision and never an
+     * oversight - which is exactly what a hand-written list of the INCLUDED kinds could not give.
+     */
+    private static final Map<FormElementWriter.Kind, String> KINDS_NOT_ADDRESSED_AS_FQN_SEGMENT =
+        Collections.emptyMap();
+
     @Test
-    public void testFormKindAliasesAgreeWithTheFormParser()
+    public void testEveryFormKindAliasAgreesWithTheFormParser()
     {
-        // Two token tables now describe the same form kinds: this one (for FILTER variants) and
+        // Two token tables describe the same form kinds: this one (for FILTER variants) and
         // FormElementWriter's (for FQN parsing). They are separate on purpose - the parser maps a
-        // token to an EMF feature, this map to a bilingual canon - so pin them against each other,
-        // or a kind added to one will silently drift from the other.
-        String[][] pairs = {
-            {"Attribute", "\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"Command", "\u041A\u043E\u043C\u0430\u043D\u0434\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"Field", "\u041F\u043E\u043B\u0435"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"Button", "\u041A\u043D\u043E\u043F\u043A\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"Group", "\u0413\u0440\u0443\u043F\u043F\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"Decoration", "\u0414\u0435\u043A\u043E\u0440\u0430\u0446\u0438\u044F"}, //$NON-NLS-1$ //$NON-NLS-2$
-            {"Table", "\u0422\u0430\u0431\u043B\u0438\u0446\u0430"}, //$NON-NLS-1$ //$NON-NLS-2$
-        };
-        // Column is deliberately absent from this pin: it is a nested kind of the MDCLASS model (a
-        // DocumentJournal column), which this map must translate, but it is not a form-content kind
-        // the form parser knows. Add it here if the parser ever gains it.
+        // token to an EMF feature, this map to a bilingual canon - so pin them against each other.
+        //
+        // The pin walks Kind.values() and every token the parser ACCEPTS for each kind (exported by
+        // tokensForKind) instead of a hand-written list of pairs: a hand-written list keeps passing
+        // when a kind is added to one table only, which is the very drift this test claims to
+        // prevent. Adding a Kind now REQUIRES its bilingual alias here, or this test fails.
+        for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
+        {
+            if (KINDS_NOT_ADDRESSED_AS_FQN_SEGMENT.containsKey(kind))
+            {
+                continue;
+            }
+            List<String> tokens = FormElementWriter.tokensForKind(kind);
+            assertFalse("the form parser must publish the tokens it accepts for " + kind, //$NON-NLS-1$
+                tokens.isEmpty());
+            MetadataTypeUtils.NestedKindInfo canon = null;
+            boolean sawLatin = false;
+            boolean sawCyrillic = false;
+            for (String token : tokens)
+            {
+                assertEquals("the form parser must read '" + token + "' as " + kind, //$NON-NLS-1$ //$NON-NLS-2$
+                    kind, FormElementWriter.kindForToken(token));
+                MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
+                assertNotNull("this map must know the form-kind token '" + token + "' (" + kind //$NON-NLS-1$ //$NON-NLS-2$
+                    + ")", info); //$NON-NLS-1$
+                if (canon == null)
+                {
+                    canon = info;
+                }
+                assertEquals("every accepted spelling of " + kind //$NON-NLS-1$
+                    + " must resolve to the SAME canonical pair", //$NON-NLS-1$
+                    canon.getEnglish(), info.getEnglish());
+                assertEquals(canon.getRussian(), info.getRussian());
+                if (isCyrillic(token))
+                {
+                    sawCyrillic = true;
+                }
+                else
+                {
+                    sawLatin = true;
+                }
+            }
+            assertTrue("the form parser must accept an English spelling of " + kind, sawLatin); //$NON-NLS-1$
+            assertTrue("the form parser must accept a Russian spelling of " + kind, sawCyrillic); //$NON-NLS-1$
+            // Both canonical spellings must be readable back by the parser as the same kind, so an
+            // address translated through this map stays addressable.
+            assertEquals(kind, FormElementWriter.kindForToken(canon.getEnglish()));
+            assertEquals(kind, FormElementWriter.kindForToken(canon.getRussian()));
+        }
+        // Column is a nested kind of the MDCLASS model (a DocumentJournal column), which this map
+        // must translate; whether the form parser knows it is decided by the loop above, so this
+        // only pins that the alias itself never disappears.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Column")); //$NON-NLS-1$
         assertNotNull(MetadataTypeUtils.resolveNestedKind(
             "\u041A\u043E\u043B\u043E\u043D\u043A\u0430")); //$NON-NLS-1$
-        for (String[] pair : pairs)
-        {
-            assertNotNull("this map must know the form kind " + pair[0], //$NON-NLS-1$
-                MetadataTypeUtils.resolveNestedKind(pair[0]));
-            assertNotNull("this map must know the Russian form kind for " + pair[0], //$NON-NLS-1$
-                MetadataTypeUtils.resolveNestedKind(pair[1]));
-            assertEquals("the form parser must read both spellings of " + pair[0] //$NON-NLS-1$
-                + " as the SAME kind", //$NON-NLS-1$
-                FormElementWriter.kindForToken(pair[0]), FormElementWriter.kindForToken(pair[1]));
-            assertNotNull("the form parser must know " + pair[0], //$NON-NLS-1$
-                FormElementWriter.kindForToken(pair[0]));
-        }
         // Handler is not a Kind (it routes to its own branch), but it IS a structural segment.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Handler")); //$NON-NLS-1$
         assertTrue(FormElementWriter.isHandlerToken(
             "\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
+    }
+
+    /** Whether {@code token} is written in Cyrillic (its first letter decides). */
+    private static boolean isCyrillic(String token)
+    {
+        for (int i = 0; i < token.length(); i++)
+        {
+            if (Character.isLetter(token.charAt(i)))
+            {
+                return Character.UnicodeBlock.of(token.charAt(i)) == Character.UnicodeBlock.CYRILLIC;
+            }
+        }
+        return false;
     }
 }
