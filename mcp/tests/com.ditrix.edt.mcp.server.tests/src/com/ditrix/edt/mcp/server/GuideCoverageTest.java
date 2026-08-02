@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server;
 
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -74,6 +75,31 @@ public class GuideCoverageTest
         }
         assertTrue("tool guide coverage violations:\n  " + String.join("\n  ", problems), //$NON-NLS-1$ //$NON-NLS-2$
             problems.isEmpty());
+    }
+
+    /**
+     * The form-structure sections the READER renders must all be named by the READ guide. A section
+     * added to the output without a matching guide entry leaves an agent unable to discover it -
+     * exactly the read/write documentation drift issue #295's review flagged.
+     */
+    @Test
+    public void testFormStructureSectionsAreDocumentedInTheGuide()
+    {
+        String guide = null;
+        for (IMcpTool tool : registry.getAllTools())
+        {
+            if ("get_metadata_details".equals(tool.getName()))
+            {
+                guide = tool.getGuide();
+            }
+        }
+        assertNotNull("get_metadata_details must be registered with a guide", guide);
+        for (String section : new String[] {"Attributes", "Attribute columns", "Commands",
+            "Event handlers"})
+        {
+            assertTrue("the get_metadata_details guide must name the form section '" + section
+                + "' the reader renders", guide.contains(section));
+        }
     }
 
     /** The loader resolves a bundled guide by tool name (validates the resource path itself). */

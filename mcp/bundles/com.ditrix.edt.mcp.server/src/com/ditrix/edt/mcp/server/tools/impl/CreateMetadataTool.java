@@ -1303,16 +1303,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IProject project = ctx.project;
         Configuration config = ctx.config;
 
-        // A COLUMN's owner is named by the FQN itself, so a `parent` property has nothing to say -
-        // and silently overwriting it would report success while discarding what was asked for. The
-        // modify path refuses parent/position on a column for the same reason (issue #295 review).
-        if (ref.isAttributeColumn() && fmProps.parentName != null && !fmProps.parentName.isEmpty())
-        {
-            return ToolResult.error("'parent' does not apply to an attribute column: its owner is " //$NON-NLS-1$
-                + "the attribute named in the FQN ('" + ref.ownerAttributeName + "'). A column is " //$NON-NLS-1$ //$NON-NLS-2$
-                + "not a visual item, so it is never nested under one.").toJson(); //$NON-NLS-1$
-        }
-
         final FormElementWriter.Kind fKind = kind;
         // A COLUMN's owner is named by the FQN itself ('...Attribute.AttrName.Column.ColName'), so it
         // takes the parent slot; every other kind nests via the optional `parent` property (#295).
@@ -1501,6 +1491,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             if (pName == null || pName.isEmpty())
             {
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
+            }
+            // A COLUMN accepts only a title. Its owner comes from the FQN, it is not a visual item so
+            // it nests under nothing, and it binds to nothing - every other property would be parsed,
+            // stored and then never applied by createColumn, reporting success for a discarded
+            // request. Refused HERE so there is one place to keep right (issue #295 review).
+            if (kind == FormElementWriter.Kind.COLUMN && !"title".equalsIgnoreCase(pName)) //$NON-NLS-1$
+            {
+                return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' does not apply to an " //$NON-NLS-1$
+                    + "attribute column. A column takes only 'title': its owner is the attribute " //$NON-NLS-1$
+                    + "named in the FQN, and its data type is set afterwards with modify_metadata.") //$NON-NLS-1$
+                    .toJson();
             }
             switch (pName.toLowerCase())
             {

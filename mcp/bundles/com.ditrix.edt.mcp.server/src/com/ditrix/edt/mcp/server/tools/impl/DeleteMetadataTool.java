@@ -570,6 +570,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
                     + "Column on a collection attribute / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
+            if (confirm)
+            {
+                // The form paths used to reach the destructive branch WITHOUT asking (issue #331),
+                // so with consent=ask an agent removed a form member with no human dialog while
+                // every mdclass branch prompted. Gated here - outside the transaction, because the
+                // gate may block on a UI dialog and a tx must not be held open across it.
+                String consentError = requireFormDeleteConsent(normFqn,
+                    handler ? "Delete form event handler" : "Delete form member"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (consentError != null)
+                {
+                    return consentError;
+                }
+            }
             return confirm
                 ? performFormDelete(fctx, normFqn, ref, handler)
                 : buildFormDeletePreview(fctx, normFqn, ref, handler);
@@ -695,6 +708,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
+    /**
+     * Asks the {@link DestructiveConsentGate} before a CONFIRMED form delete, or returns a ready JSON
+     * error when the user declined or nobody answered. Both form paths (the owned form OBJECT and any
+     * form MEMBER, columns included) route through this single point, which is what issue #331 was
+     * about: every mdclass branch already prompted, while the form branches removed content with no
+     * dialog at all under {@code consent=ask}.
+     *
+     * <p>Call OUTSIDE a transaction - the gate may block on a UI dialog, and a BM transaction must not
+     * be held open across it.</p>
+     *
+     * @param normFqn the normalized FQN being deleted, shown to the user
+     * @param title the consent dialog title naming what is about to be removed
+     * @return a ready JSON error when consent was not granted, or {@code null} to proceed
+     */
+    private static String requireFormDeleteConsent(String normFqn, String title)
+    {
+        ConsentPreview preview = new ConsentPreview(title,
+            "The element and everything it contains (nested items, attribute columns) are removed " //$NON-NLS-1$
+                + "from the form. Call with confirm=false first to see the full list.", //$NON-NLS-1$
+            1, Collections.singletonList(normFqn));
+        DestructiveConsentGate.ConsentDecision decision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+        }
+        return null;
+    }
+
     // ==================== FORM object (owned BasicForm, symmetric with create) ====================
 
     /**
@@ -746,6 +788,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + "checked for owned forms — verify with find_references if unsure. " //$NON-NLS-1$
                     + "Call confirm=true to apply.") //$NON-NLS-1$
                 .toJson();
+        }
+
+        // Same gate as the form-member path: an owned FORM is a destructive delete that used to skip
+        // the consent dialog entirely (issue #331). Asked before any mutation, outside a transaction.
+        String consentError = requireFormDeleteConsent(normFqn, "Delete form"); //$NON-NLS-1$
+        if (consentError != null)
+        {
+            return consentError;
         }
 
         // The owner is a top object whose .mdo registers the form; force-export it after the removal so

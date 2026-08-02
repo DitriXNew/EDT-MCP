@@ -1196,18 +1196,26 @@ def test_create_column_on_non_collection_attribute_is_error():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
-def test_parent_is_refused_on_a_column():
-    # A column's owner is named by the FQN, so `parent` has nothing to say. Accepting and silently
-    # overwriting it would report success while discarding what was asked for (issue #295 review).
-    attr = "E2EColParentOwner"
+def test_inapplicable_properties_are_refused_on_a_column():
+    # A column takes only `title`. Every other property was parsed, stored and then never applied by
+    # createColumn - the call reported success for a discarded request (issue #295 review).
+    attr = "E2EColPropsOwner"
     _seed_collection_attribute(attr)
-    r = call("create_metadata", {
-        "projectName": PROJECT,
-        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.WithParent",
-        "properties": [{"name": "parent", "value": "SomeGroup"}]})
-    e = assert_error(r, "'parent' on a column must be refused, not silently dropped")
-    assert_error_quality(e, names=["parent", attr], suggests=["FQN"],
-                         ctx="the refusal must say where the owner really comes from")
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.WithProps"
+    for prop, value in (("parent", "SomeGroup"), ("dataPath", "Price"),
+                        ("attribute", "Price"), ("command", "Post"), ("type", "InputField")):
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": prop, "value": value}]})
+        e = assert_error(r, "'%s' on a column must be refused, not silently dropped" % prop)
+        assert_error_quality(e, names=[prop], suggests=["title", "modify_metadata"],
+                             ctx="the refusal must name the property and what a column does accept")
+
+    # None of the refused calls may have created anything.
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "WithProps",
+                        "a refused create must not have written the column")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
