@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -1429,6 +1429,48 @@ public class GetProjectErrorsToolTest
             scope.contains(requested));
         // The owner is in the scope as well - that is where EDT reports a predefined item's problem.
         assertTrue(scope.contains("Catalog.C")); //$NON-NLS-1$
+    }
+
+
+    @Test
+    public void testTheYoRetryIsPerSegmentSoAMixedAddressStillResolves()
+    {
+        // create_metadata's yo->ye normalization is a per-NAME default, not a rule for the whole
+        // configuration, so the spellings genuinely mix: a catalog created with normalizeYo=false
+        // keeps its yo while an attribute created afterwards is stored normalized. Retrying the
+        // WHOLE address rewrote both segments at once, so neither the address as typed nor its fully
+        // normalized twin resolved - and an attribute that plainly exists came back missing.
+        String yoCatalog = fromCp(0x041c, 0x0451, 0x0434);          // M[yo]d - stored WITH yo
+        String yeAttr = fromCp(0x0412, 0x0435, 0x0441);             // V[ye]s - stored normalized
+        String yoAttr = fromCp(0x0412, 0x0451, 0x0441);             // V[yo]s - as the caller types it
+
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName(yoCatalog);
+        catalog.getAttributes().add(attribute(yeAttr));
+        config.getCatalogs().add(catalog);
+
+        String requested = "Catalog." + yoCatalog + ".Attribute." + yoAttr; //$NON-NLS-1$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertNotNull("a mixed-spelling address must still resolve", scope); //$NON-NLS-1$
+        assertTrue("the scan must be scoped by the STORED spellings", //$NON-NLS-1$
+            scope.contains("Catalog." + yoCatalog + ".Attribute." + yeAttr)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The probe list itself: as typed FIRST, and never rewriting a structural token.
+        List<String> probes = GetProjectErrorsTool.addressProbes(requested);
+        assertEquals("the address as typed must be probed first", requested, probes.get(0)); //$NON-NLS-1$
+        assertTrue("the per-segment combination must be among the probes", //$NON-NLS-1$
+            probes.contains("Catalog." + yoCatalog + ".Attribute." + yeAttr)); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String probe : probes)
+        {
+            assertTrue("a structural token must never be rewritten: " + probe, //$NON-NLS-1$
+                probe.startsWith("Catalog.") && probe.contains(".Attribute.")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // A yo-less address still costs exactly one probe.
+        assertEquals(Collections.singletonList("Catalog.Products"), //$NON-NLS-1$
+            GetProjectErrorsTool.addressProbes("Catalog.Products")); //$NON-NLS-1$
     }
 
     // ========== helpers ==========

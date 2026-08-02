@@ -1192,15 +1192,72 @@ public class GetProjectErrorsTool implements IMcpTool
      * families that resolver does not reach (forms, form members, Subsystem chains, Predefined
      * items) get the fallback too.</p>
      *
+     * <p>The retry is applied PER NAME SEGMENT, not to the whole address: that normalization is a
+     * per-name default of {@code create_metadata}, not a configuration-wide rule, so an ancestor may
+     * legitimately keep its yo while a descendant was stored normalized. Rewriting every segment at
+     * once resolves neither spelling in that case and reports an existing node as missing. Structural
+     * tokens (the even indexes) are never touched - they are canon, not stored values.</p>
+     *
      * @param normFqn the type-normalized address
-     * @return the probe spellings in resolution order (never {@code null})
+     * @return the probe spellings in resolution order, the address as typed first (never {@code null})
      */
-    private static List<String> addressProbes(String normFqn)
+    static List<String> addressProbes(String normFqn)
     {
-        String retry = MetadataNodeResolver.yoRetryFqn(normFqn);
-        return retry == null ? Collections.singletonList(normFqn)
-            : Arrays.asList(normFqn, retry);
+        String[] segments = normFqn.split("\\.", -1); //$NON-NLS-1$
+        List<Integer> yoSegments = new ArrayList<>();
+        for (int i = 0; i < segments.length; i++)
+        {
+            // Only NAME segments (odd indexes) are stored values; a structural token is already
+            // canonical and must not be rewritten by a name-normalization rule.
+            if (i % 2 == 1 && MetadataNodeResolver.yoRetryFqn(segments[i]) != null)
+            {
+                yoSegments.add(i);
+            }
+        }
+        if (yoSegments.isEmpty())
+        {
+            return Collections.singletonList(normFqn);
+        }
+        if (yoSegments.size() > MAX_YO_SEGMENTS)
+        {
+            // Pathological depth: fall back to the two whole-address spellings rather than build
+            // 2^n probes. Both are still tried, so nothing that used to resolve stops resolving.
+            return Arrays.asList(normFqn, MetadataNodeResolver.yoRetryFqn(normFqn));
+        }
+
+        // One probe per SUBSET of the yo-bearing name segments, "as typed" first. Normalizing the
+        // WHOLE address instead is wrong whenever the spellings differ per segment: with a catalog
+        // stored yo-verbatim and an attribute stored yo-normalized, neither the address as typed nor
+        // its fully normalized twin resolves, and an attribute that plainly exists is reported
+        // missing. create_metadata's normalization is a per-name DEFAULT, not a configuration-wide
+        // rule, so the spellings genuinely mix.
+        List<String> probes = new ArrayList<>();
+        for (int mask = 0; mask < (1 << yoSegments.size()); mask++)
+        {
+            String[] probe = segments.clone();
+            for (int bit = 0; bit < yoSegments.size(); bit++)
+            {
+                if ((mask & (1 << bit)) != 0)
+                {
+                    int index = yoSegments.get(bit);
+                    probe[index] = MetadataNodeResolver.yoRetryFqn(segments[index]);
+                }
+            }
+            String candidate = String.join(".", probe); //$NON-NLS-1$
+            if (!probes.contains(candidate))
+            {
+                probes.add(candidate);
+            }
+        }
+        return probes;
     }
+
+    /**
+     * How many yo-bearing name segments still get the exhaustive per-segment retry. Four segments
+     * are 16 probes; beyond that the address is deep enough that the two whole-address spellings are
+     * the sane trade.
+     */
+    private static final int MAX_YO_SEGMENTS = 4;
 
     /**
      * One form-MEMBER probe deferred out of the read transaction (see {@link #resolveInProject}).
