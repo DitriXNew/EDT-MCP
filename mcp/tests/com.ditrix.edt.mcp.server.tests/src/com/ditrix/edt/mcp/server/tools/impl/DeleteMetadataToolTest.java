@@ -929,14 +929,85 @@ public class DeleteMetadataToolTest
         assertEquals("{\"written\":true}", result); //$NON-NLS-1$
     }
 
-    @Test
-    public void testEveryGatedFormBranchGoesThroughTheAuthorizationPoint()
+    private static DeleteMetadataTool toolAnswering(DestructiveConsentGate.ConsentDecision decision)
     {
-        // Both dispatched form branches (member/Column and the owned form OBJECT) call
-        // deleteWithConsent, so proving the point itself is proving both. This test pins that the
-        // production tool still wires the real gate - a constructor that forgot it would answer null.
-        assertNotNull(new DeleteMetadataTool());
-        assertTrue("the delete tool must be a gated tool", //$NON-NLS-1$
-            DestructiveConsentGate.GATED_TOOLS.contains(DeleteMetadataTool.NAME));
+        return new DeleteMetadataTool((name, preview) -> decision);
+    }
+
+    private static DeleteMetadataTool.FormDeletePreview previewWithDescendants(int count)
+    {
+        DeleteMetadataTool.FormDeletePreview data = new DeleteMetadataTool.FormDeletePreview();
+        data.found = true;
+        data.type = "FormAttribute"; //$NON-NLS-1$
+        for (int i = 0; i < count; i++)
+        {
+            data.descendants.add(java.util.Collections.singletonMap("name", "Col" + i)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return data;
+    }
+
+    private static FormElementWriter.FormMemberRef columnRef()
+    {
+        return FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormMemberBranchRunsItsWriteOnlyWhenConsentIsGranted()
+    {
+        // Drives the MEMBER branch's own dispatch (the Column shape), not just the shared helper: a
+        // branch re-routed straight to its write would fail here.
+        for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
+            DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
+        {
+            RecordingWrite write = new RecordingWrite();
+            String result = toolAnswering(refused).gateFormMemberDelete(
+                "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price", //$NON-NLS-1$
+                columnRef(), false, previewWithDescendants(0), write);
+            assertEquals("a refused member delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
+                0, write.calls);
+            assertTrue(result.contains("error")); //$NON-NLS-1$
+        }
+
+        RecordingWrite allowed = new RecordingWrite();
+        String ok = toolAnswering(DestructiveConsentGate.ConsentDecision.ALLOW).gateFormMemberDelete(
+            "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price", //$NON-NLS-1$
+            columnRef(), false, previewWithDescendants(2), allowed);
+        assertEquals("an allowed member delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormObjectBranchRunsItsWriteOnlyWhenConsentIsGranted()
+    {
+        for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
+            DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
+        {
+            RecordingWrite write = new RecordingWrite();
+            String result = toolAnswering(refused).gateFormObjectDelete(
+                "Catalog.Products.Form.ItemForm", write); //$NON-NLS-1$
+            assertEquals("a refused form-object delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
+                0, write.calls);
+            assertTrue(result.contains("error")); //$NON-NLS-1$
+        }
+
+        RecordingWrite allowed = new RecordingWrite();
+        String ok = toolAnswering(DestructiveConsentGate.ConsentDecision.ALLOW).gateFormObjectDelete(
+            "Catalog.Products.Form.ItemForm", allowed); //$NON-NLS-1$
+        assertEquals("an allowed form-object delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheConsentPromptCountsTheContainedElements()
+    {
+        // The prompt must describe the real blast radius, so a column-bearing attribute is not
+        // presented as a single-element delete.
+        int[] seen = {0};
+        new DeleteMetadataTool((name, preview) -> {
+            seen[0] = preview.getTotalCount();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
+            columnRef(), false, previewWithDescendants(3), new RecordingWrite());
+        assertEquals("the prompt counts the member plus its contained elements", 4, seen[0]); //$NON-NLS-1$
     }
 }

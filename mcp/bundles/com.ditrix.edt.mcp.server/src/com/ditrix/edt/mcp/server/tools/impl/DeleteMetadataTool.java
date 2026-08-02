@@ -637,15 +637,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 return formMemberNotFound(ref, handler);
             }
-            ConsentPreview consentPreview = new ConsentPreview(
-                handler ? "Delete form event handler" : "Delete form member", //$NON-NLS-1$ //$NON-NLS-2$
-                data.descendants.isEmpty()
-                    ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
-                    : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
-                        + " contained element(s) (nested items, attribute columns) from " //$NON-NLS-1$
-                        + ref.formPath + '.',
-                1 + data.descendants.size(), Collections.singletonList(normFqn));
-            return deleteWithConsent(consentPreview,
+            return gateFormMemberDelete(normFqn, ref, handler, data,
                 () -> performFormDelete(fctx, normFqn, ref, handler));
         }
         catch (Exception e)
@@ -687,6 +679,48 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
+    /**
+     * The FORM-MEMBER branch's authorization step: builds the prompt from what the preview actually
+     * found and hands the branch's write to {@link #deleteWithConsent}. Package-private and taking the
+     * write as a parameter so a unit test can drive THIS branch's dispatch without an EDT context -
+     * proving the branch is wired to the gate, not merely that the gate works (issue #331 review).
+     *
+     * @param normFqn the normalized FQN being deleted
+     * @param ref the parsed form-member ref
+     * @param handler whether the FQN addresses an event handler
+     * @param data what the read preview found
+     * @param write this branch's mutation
+     * @return the mutation's result, or the refusal error
+     */
+    String gateFormMemberDelete(String normFqn, FormElementWriter.FormMemberRef ref, boolean handler,
+        FormDeletePreview data, java.util.function.Supplier<String> write)
+    {
+        ConsentPreview preview = new ConsentPreview(
+            handler ? "Delete form event handler" : "Delete form member", //$NON-NLS-1$ //$NON-NLS-2$
+            data.descendants.isEmpty()
+                ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
+                : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
+                    + " contained element(s) (nested items, attribute columns) from " //$NON-NLS-1$
+                    + ref.formPath + '.',
+            1 + data.descendants.size(), Collections.singletonList(normFqn));
+        return deleteWithConsent(preview, write);
+    }
+
+    /**
+     * The owned-FORM branch's authorization step, the twin of {@link #gateFormMemberDelete}.
+     *
+     * @param normFqn the normalized form FQN being deleted
+     * @param write this branch's mutation
+     * @return the mutation's result, or the refusal error
+     */
+    String gateFormObjectDelete(String normFqn, java.util.function.Supplier<String> write)
+    {
+        return deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
+            "Removes the form and its content from the owner, clearing any default-form setting " //$NON-NLS-1$
+                + "that pointed at it. Call confirm=false first to see the details.", //$NON-NLS-1$
+            1, Collections.singletonList(normFqn)), write);
+    }
+
     /**
      * Reads what a form delete would remove, inside a READ transaction: the target's type and, for a
      * non-handler, every contained descendant (items subtree AND attribute columns). Shared by the
@@ -840,19 +874,33 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
-        // Same authorization point as the form-member path: an owned FORM is a destructive delete
-        // that used to skip the consent dialog entirely (issue #331). The form is already resolved
-        // and the preview branch has returned, so this is the LAST check before the write, outside
-        // any transaction.
-        String consentError = deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
-            "Removes the form and its content from the owner, clearing any default-form setting " //$NON-NLS-1$
-                + "that pointed at it. Call confirm=false first to see the details.", //$NON-NLS-1$
-            1, Collections.singletonList(normFqn)), () -> null);
-        if (consentError != null)
-        {
-            return consentError;
-        }
+        // The authorization point: the whole mutation below is the callback, so nothing this branch
+        // writes can run without ALLOW - the guarantee is structural, not a matter of statement order
+        // (issue #331 review). The form is resolved and the preview branch has returned, so this is
+        // the LAST check before the write, and it runs outside any transaction.
+        return gateFormObjectDelete(normFqn,
+            () -> performFormObjectDelete(project, normFqn, ref, mdForm));
+    }
 
+
+    /**
+     * Applies the owned-form delete: the BM write transaction, the owner force-export and the physical
+     * removal of the form's resource folder, ending in the success payload. Extracted so the WHOLE
+     * mutation is the callback {@link #deleteWithConsent} invokes - previously the gate was consulted
+     * with an empty callback and the real work sat below it, which left the "nothing is written
+     * without ALLOW" guarantee true only by the order of statements (issue #331 review).
+     *
+     * <p>Call only after consent was granted.</p>
+     *
+     * @param project the owning EDT project
+     * @param normFqn the normalized form FQN being deleted
+     * @param ref the parsed form-object ref
+     * @param mdForm the resolved MD form
+     * @return the tool's JSON result
+     */
+    private String performFormObjectDelete(IProject project, String normFqn,
+        FormElementWriter.FormObjectRef ref, MdObject mdForm)
+    {
         // The owner is a top object whose .mdo registers the form; force-export it after the removal so
         // the <forms> entry (and any cleared default-form ref) lands on disk. eContainer() is the owner.
         EObject ownerObj = mdForm.eContainer();
@@ -1976,7 +2024,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** Mutable carrier for the form-delete preview read task so tx-bound EObjects never escape. */
-    private static final class FormDeletePreview
+    static final class FormDeletePreview
     {
         boolean found;
         String type;
