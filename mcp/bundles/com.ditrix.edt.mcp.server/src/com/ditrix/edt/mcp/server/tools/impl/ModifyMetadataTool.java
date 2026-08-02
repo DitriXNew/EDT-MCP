@@ -3790,7 +3790,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // valueType, exactly like the `type` property does - and that path asks the consent gate.
             // Read first whether this is a retype at all, then ask, then write; the gate may block on
             // a dialog, so it must not be held inside the transaction (issue #295 review).
-            String retypeConsent = consentForDynamicListRetype(fctx, normFqn, ref);
+            // ...but only when the request could actually convert: creating a dynamic list needs a
+            // queryText or a mainTable, so a customQuery-only request is rejected downstream. Asking
+            // first would raise a destructive dialog for a write that cannot happen, and a denial or
+            // timeout would MASK that actionable validation error (issue #295 review).
+            boolean couldConvert = (qt != null && !qt.isEmpty()) || (mt != null && !mt.isEmpty());
+            String retypeConsent = couldConvert ? consentForDynamicListRetype(fctx, normFqn, ref) : null;
             if (retypeConsent != null)
             {
                 return retypeConsent;
