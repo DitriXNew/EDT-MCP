@@ -341,6 +341,17 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Module", "Modules", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x041c, 0x043e, 0x0434, 0x0443, 0x043b, 0x044c),
             cp(0x041c, 0x043e, 0x0434, 0x0443, 0x043b, 0x0438));
+        // Package (ru: paket) - the CONTENT of an XDTO package. Not an mdclass child kind either,
+        // but EDT reports every problem of a package on that content, so a marker location ends with
+        // this segment (e.g. "XDTOPackage.Exchange.Package"), which is exactly what get_project_errors
+        // documents and what validate_xdto_package scopes by. EDT's own localizer translates the
+        // trailing segment through MdLocalizerUtil/MdTypesTranslationIntoRussian, whose
+        // externalObjectsTranslation maps "Package" to the Cyrillic token below - so a Russian-script
+        // project really does render it translated, and this filter must translate it BOTH ways.
+        // Singular only: a package holds exactly one content object, so no plural segment exists.
+        putNestedKind(m, "Package", "Package", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0430, 0x043a, 0x0435, 0x0442),
+            cp(0x041f, 0x0430, 0x043a, 0x0435, 0x0442));
         // The FORM-CONTENT kinds. A form validation marker's presentation descends into the form
         // item tree, and this tool advertises bilingual tokens at EVERY level, so the kinds
         // FormElementWriter already accepts in a form-member FQN must translate here too.

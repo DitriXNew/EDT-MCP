@@ -617,7 +617,7 @@ public class MetadataTypeUtilsTest
         // round-trip through its Russian canon.
         String[] kinds = {"Form", "Attribute", "TabularSection", "Dimension", "Resource",
             "EnumValue", "Command", "Template", "Column", "Recalculation", "AccountingFlag",
-            "AddressingAttribute"};
+            "AddressingAttribute", "Package"};
         for (String kind : kinds)
         {
             MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(kind);
@@ -660,6 +660,27 @@ public class MetadataTypeUtilsTest
 
         // The natural yo spelling is accepted too, exactly as PredefinedWriter accepts it.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("\u041F\u0440\u0435\u0434\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D\u043D\u044B\u0435")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheXdtoPackageContentSegmentTranslatesBothWays()
+    {
+        // EDT reports every problem of an XDTO package on the package CONTENT, so a marker location
+        // ends in the structural segment Package (ru Paket) - which is exactly what this tool
+        // documents. Without that alias the trailing segment survived untranslated: a fully Russian
+        // address expanded to "xdtopackage.p.<cyrillic>", which never matches the location an
+        // English-language workspace renders, so the filter silently reported a clean package.
+        String ruPackage = "\u041F\u0430\u043A\u0435\u0442"; // Paket
+        String ruXdtoPackage = "\u041F\u0430\u043A\u0435\u0442XDTO"; // PaketXDTO
+
+        Set<String> fromRussian =
+            MetadataTypeUtils.getAllFqnVariants(ruXdtoPackage + ".P." + ruPackage); //$NON-NLS-1$
+        assertTrue("a Russian XDTO address must produce a fully ENGLISH variant", //$NON-NLS-1$
+            fromRussian.contains("xdtopackage.p.package")); //$NON-NLS-1$
+
+        Set<String> fromEnglish = MetadataTypeUtils.getAllFqnVariants("XDTOPackage.P.Package"); //$NON-NLS-1$
+        assertTrue("an English XDTO address must produce a fully RUSSIAN variant", //$NON-NLS-1$
+            fromEnglish.contains(ruXdtoPackage.toLowerCase() + ".p." + ruPackage.toLowerCase())); //$NON-NLS-1$
     }
 
     // ---- form-content kinds inside a nested FQN (issue #312 review) ------------------------------

@@ -990,6 +990,32 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testAResolvedCommandActionIsScopedByBothActionSpellings()
+    {
+        // A form COMMAND carries no platform event: its single handler slot IS the `action`
+        // containment, so there is no `event` reference to read the other spelling from. Scoping by
+        // the caller's own leaf alone therefore filtered out every problem of a handler that had
+        // just been PROVEN to exist - a Russian address never matched the `Handler.Action` an
+        // English-language project renders, and the address was still echoed in objectsResolved.
+        FormModel form = newFormModel();
+        String ruAction = fromCp(0x0414, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // Dejstvie
+        String enAddress = FORM_FQN + ".Command.Save.Handler.Action"; //$NON-NLS-1$
+        String ruAddress = FORM_FQN + ".Command.Save.Handler." + ruAction; //$NON-NLS-1$
+
+        List<String> fromRu = scopeSpellings(form, ruAddress);
+        assertTrue("the address as written must still scope the scan", //$NON-NLS-1$
+            fromRu.contains(ruAddress));
+        assertTrue("the canonical Action spelling must scope the scan too", //$NON-NLS-1$
+            fromRu.contains(enAddress));
+
+        // Symmetrical: an English address must scope by the localized spelling as well.
+        List<String> fromEn = scopeSpellings(form, enAddress);
+        assertTrue(fromEn.contains(enAddress));
+        assertTrue("an English command address must scope by the Russian Action spelling too", //$NON-NLS-1$
+            fromEn.contains(ruAddress));
+    }
+
+    @Test
     public void testAFormMemberWhoseContentModelCannotBeReadStaysUndecided()
     {
         // The form EXISTS in the configuration, but its CONTENT model cannot be read (here: no BM

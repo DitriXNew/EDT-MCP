@@ -1002,7 +1002,8 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return Collections.emptyList();
         }
-        return handlerScopeSpellings(member.probeFqn, handler);
+        return handlerScopeSpellings(member.probeFqn,
+            FormElementWriter.handlerEventSpellings(container, handler));
     }
 
     /**
@@ -1011,13 +1012,15 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * <p>{@link FormElementWriter#findFormHandler} accepts the English and the Russian event name
      * alike, while a marker location renders ONE of them; scoping by the caller's spelling alone
-     * would filter out every problem on the very handler that was just proven to exist.</p>
+     * would filter out every problem on the very handler that was just proven to exist. The leaf
+     * spellings come from {@link FormElementWriter#handlerEventSpellings}, which covers a form
+     * COMMAND's fixed {@code Action} leaf as well as an ordinary element's bound event.</p>
      *
      * @param probeFqn the probed address (its last segment is the event as the caller wrote it)
-     * @param handler the matched event handler
+     * @param eventNames the leaf spellings the matched handler is addressable by
      * @return the spellings, in order, without duplicates
      */
-    private static List<String> handlerScopeSpellings(String probeFqn, EObject handler)
+    private static List<String> handlerScopeSpellings(String probeFqn, List<String> eventNames)
     {
         List<String> spellings = new ArrayList<>();
         spellings.add(probeFqn);
@@ -1025,7 +1028,7 @@ public class GetProjectErrorsTool implements IMcpTool
         if (lastDot > 0)
         {
             String prefix = probeFqn.substring(0, lastDot + 1);
-            for (String eventName : FormElementWriter.eventNameSpellings(handler))
+            for (String eventName : eventNames)
             {
                 String spelling = prefix + eventName;
                 if (!spellings.contains(spelling))

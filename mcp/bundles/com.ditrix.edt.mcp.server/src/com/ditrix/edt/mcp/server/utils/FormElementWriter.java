@@ -417,7 +417,10 @@ public final class FormElementWriter
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
-    private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
+    // Unlike the kind tokens above (matched through the lowercasing kindForToken), this one is an
+    // event LEAF: it is both matched case-insensitively and EMITTED as a scoping address segment,
+    // so it is held in the capitalized spelling EDT renders.
+    private static final String RU_ACTION = cp(0x0414, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // Dejstvie
     // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
     // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
     private static final String RU_SUFFIX_EXTENDED_TOOLTIP = cp(0x0420, 0x0430, 0x0441, 0x0448,
@@ -3545,7 +3548,7 @@ public final class FormElementWriter
     private static boolean isActionToken(String eventName)
     {
         return COMMAND_ACTION_EVENT.equalsIgnoreCase(eventName)
-            || (eventName != null && RU_ACTION.equals(eventName.trim().toLowerCase()));
+            || (eventName != null && RU_ACTION.equalsIgnoreCase(eventName.trim()));
     }
 
     /**
@@ -4426,6 +4429,38 @@ public final class FormElementWriter
             }
         }
         return names;
+    }
+
+    /**
+     * The event-leaf spellings the ADDRESS of a resolved handler can be written with - i.e. the
+     * spellings a marker location for that handler may end in.
+     *
+     * <p>For the form root or a form ITEM this is the bound event's own
+     * {@link #eventNameSpellings}. A form COMMAND, however, carries no platform event at all - its
+     * single handler slot IS the {@code action} containment - so that list would be empty and a
+     * caller scoping by it would be left with nothing but the spelling it happened to type. The
+     * command's leaf is a FIXED token instead: {@link #findFormHandler} accepts the English
+     * {@code Action} and its Russian equivalent alike, so BOTH are returned and an address written
+     * in either language still scopes a project rendered in the other.</p>
+     *
+     * <p>The command is recognized by the resolved container's own EClass - the same criterion
+     * {@link #findFormHandler} branches on, and the one a {@code Command} kind token is routed to by
+     * {@link #resolveHandlerContainer}.</p>
+     *
+     * <p>Reflective, so no compile-time form-model dependency. Call on the tx-bound form model.</p>
+     *
+     * @param container the resolved handler container (the form root, a form item or a form command),
+     *     may be {@code null}
+     * @param handler the matched handler slot, may be {@code null}
+     * @return the spellings, English first, without duplicates (never {@code null})
+     */
+    public static List<String> handlerEventSpellings(EObject container, EObject handler)
+    {
+        if (container != null && ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
+        {
+            return Arrays.asList(COMMAND_ACTION_EVENT, RU_ACTION);
+        }
+        return eventNameSpellings(handler);
     }
 
     // ---- rebind: change an EXISTING handler's procedure / a button's command --------------------
