@@ -12,7 +12,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
@@ -1473,7 +1474,155 @@ public class GetProjectErrorsToolTest
             GetProjectErrorsTool.addressProbes("Catalog.Products")); //$NON-NLS-1$
     }
 
+
+    // ========== objectFqns: a malformed address addresses NOTHING ==========
+
+    @Test
+    public void testAMalformedAddressResolvesToNothingInsteadOfANeighbouringNode()
+    {
+        // 'Catalog.C.' looks like a typo and is one - but MetadataNodeResolver drops the trailing
+        // empty segment when it splits, so it resolved the NEIGHBOURING object 'Catalog.C' while the
+        // scan stayed scoped by 'catalog.c.', which matches neither 'Catalog.C' nor its content
+        // segments. objectsResolved next to "# No Errors Found": the false all-clear this input
+        // exists to prevent, produced by a stray keystroke.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("C"); //$NON-NLS-1$
+        config.getCatalogs().add(catalog);
+
+        // The control: the well-formed address DOES resolve, so a miss below is about the shape.
+        assertNotNull("the well-formed address must resolve", //$NON-NLS-1$
+            resolvedIn(config, "Catalog.C").get("Catalog.C")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // EVERY shape of empty segment is refused - one example of each, not just the trailing dot.
+        for (String malformed : new String[] {
+            "Catalog.C.",      // trailing dot //$NON-NLS-1$
+            ".Catalog.C",      // leading dot //$NON-NLS-1$
+            "Catalog..C",      // doubled dot //$NON-NLS-1$
+            "Catalog.C..",     // doubled trailing //$NON-NLS-1$
+            ".",               // only a dot //$NON-NLS-1$
+            "..",              // only dots //$NON-NLS-1$
+            "Catalog. ",       // a blank segment //$NON-NLS-1$
+            " .C"})            // a blank leading segment //$NON-NLS-1$
+        {
+            assertNull("a malformed address must not be canonical: " + malformed, //$NON-NLS-1$
+                GetProjectErrorsTool.canonicalAddress(malformed));
+            assertTrue("a malformed address must yield no probe at all: " + malformed, //$NON-NLS-1$
+                GetProjectErrorsTool.addressProbes(malformed).isEmpty());
+            assertNull("and must resolve to NOTHING, never to the neighbouring node: " + malformed, //$NON-NLS-1$
+                resolvedIn(config, malformed).get(malformed));
+        }
+    }
+
+    @Test
+    public void testWhitespaceAroundASegmentIsNormalizedRatherThanRefused()
+    {
+        // The other half of the same rule, and the reason it is not "refuse anything unusual":
+        // whitespace has exactly ONE reading, so normalizing it guesses nothing - and the whole
+        // entry is already trimmed by cleanedEntries, so trimming the outside but not the inside
+        // would be arbitrary. It also matters for correctness: SubsystemUtils / PredefinedWriter
+        // trim internally, so an untrimmed address could RESOLVE while the scan stayed scoped by the
+        // spaced spelling, which matches no marker.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("C"); //$NON-NLS-1$
+        config.getCatalogs().add(catalog);
+
+        assertEquals("Catalog.C", GetProjectErrorsTool.canonicalAddress("Catalog. C")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog.C", GetProjectErrorsTool.canonicalAddress(" Catalog . C ")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Set<String> scope = resolvedIn(config, "Catalog. C").get("Catalog. C"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a spaced address must still resolve", scope); //$NON-NLS-1$
+        assertTrue("and the scan must be scoped by the TRIMMED spelling, or it matches no marker", //$NON-NLS-1$
+            scope.contains("Catalog.C")); //$NON-NLS-1$
+        for (String spelling : scope)
+        {
+            assertEquals("no scoping spelling may carry the stray whitespace: " + spelling, //$NON-NLS-1$
+                spelling.trim(), spelling);
+            assertFalse(spelling.contains(". ")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAnExternalObjectsProjectIsAbsentNotUndecided()
+    {
+        // A project of external objects (reports / data processors) carries a V8 nature but has NO
+        // Configuration BY DESIGN - not "not yet". Classifying it as an unreadable EDT project (its
+        // nature IS a V8 one) turned every ordinary miss into a refusal on a workspace-wide scan,
+        // and made a projectName pointing at one unable to resolve anything ever. Its lack of a
+        // configuration is KNOWLEDGE: it cannot own an mdclass address, so it answers ABSENT.
+        List<String> candidates = Collections.singletonList("Catalog.Nope"); //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution external = GetProjectErrorsTool.projectDecision(
+            natureProject("ext", "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"), //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, candidates);
+        assertNotNull("an external-objects project stays in the universe", external); //$NON-NLS-1$
+        assertTrue("its pass is COMPLETE - the absence is decided, not a failure to look", //$NON-NLS-1$
+            external.passCompleted);
+        assertTrue("nothing may be undecided there", external.undecided.isEmpty()); //$NON-NLS-1$
+        assertTrue(external.resolved.isEmpty());
+
+        // So a workspace-wide scan next to a readable project reports an ordinary MISS...
+        GetProjectErrorsTool.ProjectResolution readable = GetProjectErrorsTool.resolveInProject(
+            project("cfg"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            candidates);
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(r, candidates, Arrays.asList(readable, external));
+        assertNull("an external-objects project must not refuse the call", r.error); //$NON-NLS-1$
+        assertEquals(candidates, r.notFound);
+        assertTrue("nor make the answer partial", r.incompleteFor.isEmpty()); //$NON-NLS-1$
+
+        // ...and it is ALONE enough to answer: no readable configuration project is required.
+        GetProjectErrorsTool.AddressResolution alone = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(alone, candidates,
+            Collections.singletonList(external));
+        assertNull("an external-objects project is an inspection in its own right", alone.error); //$NON-NLS-1$
+        assertEquals(candidates, alone.notFound);
+
+        // The contrast: a CONFIGURATION project with no readable configuration is still UNDECIDED.
+        GetProjectErrorsTool.ProjectResolution loading = GetProjectErrorsTool.projectDecision(
+            natureProject("cfg-loading", "com._1c.g5.v8.dt.core.V8ConfigurationNature"), //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, candidates);
+        assertEquals(singleton("Catalog.Nope"), loading.undecided); //$NON-NLS-1$
+        assertFalse(loading.passCompleted);
+
+        // An EXTENSION project is a configuration holder too, so it behaves like the one above.
+        GetProjectErrorsTool.ProjectResolution extension = GetProjectErrorsTool.projectDecision(
+            natureProject("ext-loading", "com._1c.g5.v8.dt.core.V8ExtensionNature"), //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, candidates);
+        assertEquals(singleton("Catalog.Nope"), extension.undecided); //$NON-NLS-1$
+
+        // A plain Eclipse project leaves the universe entirely; unknowable natures stay UNDECIDED.
+        assertNull("a non-EDT project must contribute nothing", //$NON-NLS-1$
+            GetProjectErrorsTool.projectDecision(natureProject("plain"), null, null, candidates)); //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution unknowable = GetProjectErrorsTool.projectDecision(
+            closedProject("gone"), null, null, candidates); //$NON-NLS-1$
+        assertEquals("unknowable natures are never proof that a project holds nothing", //$NON-NLS-1$
+            singleton("Catalog.Nope"), unknowable.undecided); //$NON-NLS-1$
+    }
+
     // ========== helpers ==========
+    /**
+     * An OPEN project whose description carries exactly {@code natureIds} - the shape
+     * ProjectContext.naturesOf reads for an open project.
+     */
+    private static IProject natureProject(String name, String... natureIds)
+    {
+        IProject project = project(name);
+        when(project.isOpen()).thenReturn(true);
+        IProjectDescription description = mock(IProjectDescription.class);
+        when(description.getNatureIds()).thenReturn(natureIds);
+        try
+        {
+            when(project.getDescription()).thenReturn(description);
+        }
+        catch (CoreException e)
+        {
+            throw new IllegalStateException(e); // stubbing only; never thrown
+        }
+        return project;
+    }
+
 
     /**
      * Resolves the given addresses against {@code config} in a single synthetic project and returns
@@ -1700,22 +1849,8 @@ public class GetProjectErrorsToolTest
      */
     private static IProject project(String name, boolean edt)
     {
-        IProject project = project(name);
-        when(project.isOpen()).thenReturn(true);
-        try
-        {
-            when(project.hasNature(anyString())).thenReturn(false);
-            if (edt)
-            {
-                when(project.hasNature("com._1c.g5.v8.dt.core.V8ConfigurationNature")) //$NON-NLS-1$
-                    .thenReturn(true);
-            }
-        }
-        catch (CoreException e)
-        {
-            throw new IllegalStateException(e); // stubbing only; never thrown
-        }
-        return project;
+        return edt ? natureProject(name, "com._1c.g5.v8.dt.core.V8ConfigurationNature") //$NON-NLS-1$
+            : natureProject(name);
     }
 
     /**

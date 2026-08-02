@@ -6,7 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectDescription;
@@ -108,43 +111,67 @@ public final class ProjectContext
      */
     public static Boolean hasAnyNature(IProject project, Collection<String> natureIds)
     {
-        if (project == null || natureIds == null || natureIds.isEmpty())
+        if (natureIds == null || natureIds.isEmpty())
+        {
+            return null;
+        }
+        Set<String> natures = naturesOf(project);
+        if (natures == null)
+        {
+            return null;
+        }
+        for (String natureId : natureIds)
+        {
+            if (natures.contains(natureId))
+            {
+                return Boolean.TRUE;
+            }
+        }
+        return Boolean.FALSE;
+    }
+
+    /**
+     * Every nature id {@code project} carries - answered for a CLOSED project too.
+     *
+     * <p>One read, so a caller that has to ask about several nature FAMILIES (does this project hold
+     * a configuration at all? is it an external-objects project?) classifies from a single,
+     * self-consistent answer instead of re-reading the descriptor per question.</p>
+     *
+     * @param project the project to inspect (may be {@code null})
+     * @return its nature ids, or {@code null} when they could NOT be determined at all - which is
+     *     never the same statement as "it has none"
+     */
+    public static Set<String> naturesOf(IProject project)
+    {
+        if (project == null)
         {
             return null;
         }
         try
         {
+            IProjectDescription description;
             if (project.isOpen())
             {
-                for (String natureId : natureIds)
-                {
-                    if (project.hasNature(natureId))
-                    {
-                        return Boolean.TRUE;
-                    }
-                }
-                return Boolean.FALSE;
+                description = project.getDescription();
             }
-            IPath location = project.getLocation();
-            if (location == null)
+            else
             {
-                return null;
-            }
-            IProjectDescription description = ResourcesPlugin.getWorkspace()
-                .loadProjectDescription(location.append(IProjectDescription.DESCRIPTION_FILE_NAME));
-            for (String natureId : description.getNatureIds())
-            {
-                if (natureIds.contains(natureId))
+                // A CLOSED project cannot answer getDescription()/hasNature(), but its .project
+                // descriptor is on disk and loadProjectDescription reads it without opening anything.
+                IPath location = project.getLocation();
+                if (location == null)
                 {
-                    return Boolean.TRUE;
+                    return null;
                 }
+                description = ResourcesPlugin.getWorkspace().loadProjectDescription(
+                    location.append(IProjectDescription.DESCRIPTION_FILE_NAME));
             }
-            return Boolean.FALSE;
+            return new LinkedHashSet<>(Arrays.asList(description.getNatureIds()));
         }
         catch (CoreException | RuntimeException e)
         {
-            // Removed mid-flight, descriptor unreadable, ...: unknowable, and saying "no" here would
-            // turn a project we could not classify into proof that it holds nothing.
+            // Removed mid-flight, descriptor unreadable, ...: unknowable, and saying "none" here
+            // would turn a project we could not classify into proof that it holds nothing.
             return null;
         }
     }

@@ -669,7 +669,10 @@ public class GetProjectErrorsTool implements IMcpTool
         List<String> candidates = new ArrayList<>();
         for (String fqn : objectFqns)
         {
-            String unsupportedReason = unsupportedAddressReason(fqn);
+            // A MALFORMED address is never "unsupported" - it addresses nothing at all, so it must
+            // reach the ordinary not-found verdict rather than a family-level explanation.
+            String canonical = canonicalAddress(fqn);
+            String unsupportedReason = canonical == null ? null : unsupportedAddressReason(canonical);
             if (unsupportedReason != null)
             {
                 Map<String, String> entry = new LinkedHashMap<>();
@@ -721,9 +724,20 @@ public class GetProjectErrorsTool implements IMcpTool
      * carries its nature, which is exactly the case that must be told apart from a non-EDT
      * project.</p>
      */
-    private static final List<String> V8_PROJECT_NATURES = Arrays.asList(
+    private static final List<String> V8_CONFIGURATION_NATURES = Arrays.asList(
         "com._1c.g5.v8.dt.core.V8ConfigurationNature", //$NON-NLS-1$
-        "com._1c.g5.v8.dt.core.V8ExtensionNature", //$NON-NLS-1$
+        "com._1c.g5.v8.dt.core.V8ExtensionNature"); //$NON-NLS-1$
+
+    /**
+     * The EDT nature of a project that holds EXTERNAL objects (external reports / data processors).
+     *
+     * <p>It is a 1C:EDT project, but it has no {@link Configuration} BY DESIGN - not "not yet". So a
+     * missing configuration here is knowledge, not a failure to look: such a project can never own an
+     * mdclass / form / Subsystem / Predefined address, which is exactly what {@code objectFqns}
+     * addresses. Classifying it as unreadable (its nature IS a V8 one) turned ordinary misses into
+     * {@code Cannot decide} across a workspace-wide scan.</p>
+     */
+    private static final List<String> V8_EXTERNAL_OBJECTS_NATURE = Collections.singletonList(
         "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"); //$NON-NLS-1$
 
     /**
@@ -752,56 +766,68 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * What a project whose model could NOT be read contributes to the request, or {@code null} when
-     * it is legitimately skipped.
+     * What a project whose configuration could NOT be read contributes to the request.
      *
-     * <p>"Could not be read" has two very different causes and they must not share an answer:</p>
+     * <p>"No configuration" has THREE causes and they are three different facts. Collapsing any two
+     * of them is what produced this defect twice:</p>
      * <ul>
-     *   <li>an ordinary Eclipse/Java/Maven project has no BM model BY DEFINITION. It cannot hold 1C
-     *       metadata, so skipping it costs nothing - and treating it as undecidable would let one
-     *       such project mute the missing-address report for the whole workspace;</li>
-     *   <li>a 1C:EDT project whose model is not loaded YET (still indexing) is a project that could
-     *       perfectly well hold the address. Skipping it silently lets another project's completed
-     *       pass stand in as the inspection, and the address is then reported in
-     *       {@code objectsNotFound} - absence "proved" by a project nobody looked at.</li>
+     *   <li><b>Not a 1C:EDT project</b> (ordinary Eclipse/Java/Maven): it has no BM model BY
+     *       DEFINITION and cannot hold 1C metadata. It leaves the universe ({@code null}) - treating
+     *       it as undecidable would let ONE such project mute the missing-address report for the
+     *       whole workspace.</li>
+     *   <li><b>An EDT project that holds NO configuration by design</b> - an EXTERNAL OBJECTS
+     *       project. Its nature is a V8 one, but it structurally cannot own an mdclass / form /
+     *       Subsystem / Predefined address, and that is KNOWLEDGE, not a failure to look. It answers
+     *       ABSENT: a completed pass that resolves nothing. Calling it unreadable (its nature is
+     *       V8!) turned ordinary misses into {@code Cannot decide} on every workspace-wide scan.</li>
+     *   <li><b>An EDT project that DOES hold a configuration but is not readable now</b> - still
+     *       indexing, or closed. It could perfectly well hold the address, so it answers UNDECIDED:
+     *       skipping it lets another project's completed pass stand in as the inspection, and the
+     *       address is then reported in {@code objectsNotFound} - absence "proved" by a project
+     *       nobody looked at.</li>
      * </ul>
      *
-     * <p>So the second case returns a resolution with every candidate UNDECIDED and
-     * {@code passCompleted} false: it decides nothing, and it stops an unresolved address from being
-     * called missing (see {@link #foldProjectDecisions}).</p>
+     * <p>Natures that cannot be determined at all fall into the LAST bucket: unknowable is never
+     * evidence that a project holds nothing.</p>
      *
-     * @param project the in-scope project whose model could not be read
+     * @param project the in-scope project whose configuration could not be read
      * @param candidates the addresses this request is asking about
-     * @return the undecided resolution for an EDT project, or {@code null} for a non-EDT one
+     * @return an UNDECIDED resolution, an ABSENT (completed, empty) one, or {@code null} to leave
+     *     the universe entirely
      */
     static ProjectResolution unreadableProjectDecision(IProject project, List<String> candidates)
     {
-        if (!canHoldMetadata(project))
+        Set<String> natures = ProjectContext.naturesOf(project);
+        if (natures != null && !containsAny(natures, V8_CONFIGURATION_NATURES))
         {
-            return null;
+            if (!containsAny(natures, V8_EXTERNAL_OBJECTS_NATURE))
+            {
+                // Not a 1C:EDT project at all.
+                return null;
+            }
+            // An external-objects project: KNOWN to hold no addressable metadata, so this is a
+            // decided ABSENCE - a completed pass that resolves nothing - not an inability to look.
+            ProjectResolution absent = new ProjectResolution(project.getName());
+            absent.passCompleted = true;
+            return absent;
         }
+        // Holds a configuration but could not be read now, or its natures are unknowable.
         ProjectResolution unreadable = new ProjectResolution(project.getName());
         unreadable.undecided.addAll(candidates);
         return unreadable;
     }
 
-    /**
-     * Whether {@code project} is a 1C:EDT project, i.e. one that could hold metadata at all.
-     *
-     * <p>Decided by project NATURE rather than by {@code IV8ProjectManager}: while EDT is still
-     * indexing, the project manager can itself answer {@code null}, which would misclassify the very
-     * project this distinction exists for. The nature lives in the project description and is
-     * readable throughout.</p>
-     *
-     * @param project the project to classify
-     * @return {@code true} when the project carries a V8 nature, or when its description could not
-     *     be read at all (unknowable is never evidence of "not an EDT project")
-     */
-    static boolean canHoldMetadata(IProject project)
+    /** Whether {@code natures} carries any of {@code wanted}. */
+    private static boolean containsAny(Set<String> natures, List<String> wanted)
     {
-        // null = the natures could not be determined at all (removed mid-flight, unreadable
-        // descriptor). That is not the same statement as "no", so it must not exclude the project.
-        return !Boolean.FALSE.equals(ProjectContext.hasAnyNature(project, V8_PROJECT_NATURES));
+        for (String nature : wanted)
+        {
+            if (natures.contains(nature))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1098,7 +1124,17 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return;
         }
-        for (String probe : addressProbes(MetadataTypeUtils.normalizeFqn(fqn)))
+        // Canonicalize BEFORE the type normalization, not after: normalizeFqn only rewrites the
+        // leading TYPE token and copies the rest verbatim, so a segment with stray whitespace would
+        // otherwise reach the resolvers untrimmed - and some of them trim internally, which is how a
+        // spaced address could resolve while the scan stayed scoped by the spaced spelling.
+        String canonical = canonicalAddress(fqn);
+        if (canonical == null)
+        {
+            // Malformed: it addresses nothing, and must not be repaired into a neighbouring node.
+            return;
+        }
+        for (String probe : addressProbes(MetadataTypeUtils.normalizeFqn(canonical)))
         {
             FormElementWriter.FormMemberRef memberRef = formMemberRefOf(probe);
             if (memberRef != null)
@@ -1203,6 +1239,15 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static List<String> addressProbes(String normFqn)
     {
+        String canonical = canonicalAddress(normFqn);
+        if (canonical == null)
+        {
+            // A malformed address resolves to NOTHING: see canonicalAddress for why it must not be
+            // repaired into a neighbouring node.
+            return Collections.emptyList();
+        }
+        normFqn = canonical;
+
         String[] segments = normFqn.split("\\.", -1); //$NON-NLS-1$
         List<Integer> yoSegments = new ArrayList<>();
         for (int i = 0; i < segments.length; i++)
@@ -1258,6 +1303,62 @@ public class GetProjectErrorsTool implements IMcpTool
      * the sane trade.
      */
     private static final int MAX_YO_SEGMENTS = 4;
+
+    /**
+     * {@code fqn} with each segment trimmed, or {@code null} when it is not a well-formed address.
+     *
+     * <p>Two different kinds of sloppiness, answered differently on purpose - {@code objectFqns} is
+     * the EXACT input, so it may normalize a SPELLING but must never guess an INTENT:</p>
+     * <ul>
+     *   <li><b>Whitespace around a segment</b> ({@code "Catalog. Products"}) is normalized. There is
+     *       exactly ONE reading, nothing is being guessed, and the whole entry is already trimmed by
+     *       {@link #cleanedEntries} - trimming the outside but not the inside would be arbitrary.
+     *       It also matters for correctness: {@code SubsystemUtils} and {@code PredefinedWriter}
+     *       trim internally, so an untrimmed address could RESOLVE while the scan was scoped by the
+     *       spaced spelling, which matches no marker - a clean report for a node that has
+     *       problems.</li>
+     *   <li><b>An EMPTY segment</b> ({@code "Catalog.Products."}, {@code ".Catalog.Products"},
+     *       {@code "Catalog..Products"}, {@code "."}) is REFUSED. It has no single reading:
+     *       {@code Catalog.Products.} could be the object, or a member whose name the caller failed
+     *       to type. {@code MetadataNodeResolver} drops a trailing empty segment when it splits, so
+     *       the address resolved to the NEIGHBOURING node {@code Catalog.Products} while the scan
+     *       stayed scoped by {@code catalog.products.} - which matches neither
+     *       {@code Catalog.Products} nor {@code Catalog.Products.Module}. The caller got
+     *       {@code objectsResolved} next to "# No Errors Found": the false all-clear this input
+     *       exists to prevent, produced by a typo.</li>
+     * </ul>
+     *
+     * <p>Refused means it resolves to nothing and is reported in {@code objectsNotFound} - the same
+     * verdict a misspelt token gets. It is deliberately NOT a call-level error: the array supports
+     * partial success (one good address plus one typo returns the good one's problems AND names the
+     * typo), and failing the whole call over one bad entry would throw that away.</p>
+     *
+     * @param fqn the requested address (already trimmed as a whole)
+     * @return the segment-trimmed address, or {@code null} when any segment is empty
+     */
+    static String canonicalAddress(String fqn)
+    {
+        if (fqn == null || fqn.isEmpty())
+        {
+            return null;
+        }
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        StringBuilder canonical = new StringBuilder(fqn.length());
+        for (int i = 0; i < segments.length; i++)
+        {
+            String segment = segments[i].trim();
+            if (segment.isEmpty())
+            {
+                return null;
+            }
+            if (i > 0)
+            {
+                canonical.append('.');
+            }
+            canonical.append(segment);
+        }
+        return canonical.toString();
+    }
 
     /**
      * One form-MEMBER probe deferred out of the read transaction (see {@link #resolveInProject}).
