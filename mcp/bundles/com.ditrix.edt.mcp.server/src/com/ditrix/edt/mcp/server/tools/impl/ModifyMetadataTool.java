@@ -114,6 +114,78 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "modify_metadata"; //$NON-NLS-1$
 
+    /**
+     * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
+     * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
+     * a unit test substitutes a requester answering REJECT / TIMEOUT (or recording that it was never
+     * asked at all) to prove the branch's dispatch. Mirrors the seam {@code DeleteMetadataTool} uses
+     * (issue #295 review).
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
+    private final ConsentRequester consentRequester;
+
+    /** Production instance: consent goes to the real gate. */
+    public ModifyMetadataTool()
+    {
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+    }
+
+    /**
+     * Test seam constructor.
+     *
+     * @param consentRequester the consent source to use instead of the singleton gate
+     */
+    ModifyMetadataTool(ConsentRequester consentRequester)
+    {
+        this.consentRequester = consentRequester;
+    }
+
+    /**
+     * THE single point where a destructive FORM RETYPE is authorized, and the only place that decides
+     * the ORDER of the three steps: the deterministic pre-check runs FIRST, the gate is asked only when
+     * the write could actually be applied, and the write runs only on ALLOW. A retype the tool is going
+     * to refuse anyway (columns that would be stranded, a main table that does not resolve) must never
+     * raise a destructive dialog, because a denial or a timeout would come back INSTEAD of the
+     * actionable validation error (issue #295 review).
+     *
+     * @param preview what the user is being asked to authorize
+     * @param preflight the deterministic pre-check, run BEFORE any prompt: a ready JSON error refuses
+     *            the write with no prompt at all, {@code ""} means nothing destructive happens (write
+     *            without asking), {@code null} means a real retype - ask
+     * @param write the mutation, invoked only when the pre-check passed and consent was granted
+     * @return the mutation's result, the pre-check's refusal, or the consent refusal
+     */
+    String gateFormRetype(ConsentPreview preview, java.util.function.Supplier<String> preflight,
+        java.util.function.Supplier<String> write)
+    {
+        String verdict = preflight.get();
+        if (verdict != null && !verdict.isEmpty())
+        {
+            // A deterministic refusal: the write can never be applied, so nothing is asked.
+            return verdict;
+        }
+        if (verdict == null)
+        {
+            ConsentDecision decision = consentRequester.request(NAME, preview);
+            if (decision != ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(
+                    DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+            }
+        }
+        return write.get();
+    }
+
     /** Output result key: names of the properties that were set. */
     private static final String KEY_APPLIED = "applied"; //$NON-NLS-1$
 
@@ -2272,7 +2344,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return DcsWriter.TypeResolution.failed(
                     "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
             }
-            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version);
+            // DCS_PARAMETER, not the METADATA default: a parameter's type is not a stored feature, so
+            // an in-memory collection must be refused with wording that is true HERE (issue #295 review).
+            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version,
+                false, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
             return tr.error != null
                 ? DcsWriter.TypeResolution.failed(tr.error)
                 : DcsWriter.TypeResolution.of(tr.typeDescription);
@@ -2959,46 +3034,93 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Runs the destructive-consent gate for a FORM member modify BEFORE the write transaction, but ONLY
-     * when it retypes a form ATTRIBUTE (a {@code type} / {@code valueType} property on an Attribute ref).
-     * Scoped to the ATTRIBUTE kind (like the dynamic-list-query branch) so a decoration's benign enum
-     * {@code type} never prompts, and run here - not inside the tx callback - because the gate may block
-     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error on
-     * REJECT or TIMEOUT (see {@link DestructiveConsentGate#consentDeniedMessage}), or {@code null} to
-     * proceed.
+     * Whether this form-member modify RETYPES it: a {@code type} / {@code valueType} property on an
+     * Attribute (or on one of its Columns, which is retyped exactly like an attribute - skipping it
+     * would let a column silently change type unprompted, issue #295). Scoped to those two kinds so a
+     * decoration's benign enum {@code type} never prompts, mirroring the ATTRIBUTE guard the
+     * dynamic-list-query branch uses. Reads only the request (no model access).
+     *
+     * @param ref the parsed form-member ref
+     * @param properties the requested property changes
+     * @return {@code true} when the request changes the member's data type
      */
-    private static String consentForFormTypeChange(String normFqn, FormElementWriter.FormMemberRef ref,
+    private static boolean isFormRetypeRequest(FormElementWriter.FormMemberRef ref,
         List<JsonObject> properties)
     {
-        // A COLUMN of a collection attribute is retyped exactly like an attribute, so it is gated the
-        // same way - skipping it would let a column silently change type unprompted (issue #295).
         FormElementWriter.Kind typedKind = FormElementWriter.kindForToken(ref.kindToken);
         if (typedKind != FormElementWriter.Kind.ATTRIBUTE && typedKind != FormElementWriter.Kind.COLUMN)
         {
-            return null;
+            return false;
         }
-        boolean retype = false;
         for (JsonObject prop : properties)
         {
             String name = asString(prop.get("name")); //$NON-NLS-1$
             if ("type".equalsIgnoreCase(name) || PROP_VALUE_TYPE.equalsIgnoreCase(name)) //$NON-NLS-1$
             {
-                retype = true;
-                break;
+                return true;
             }
         }
-        if (!retype)
-        {
-            return null;
-        }
-        ConsentPreview preview = new ConsentPreview(
+        return false;
+    }
+
+    /** What the user authorizes when a form attribute (or column) changes its data type. */
+    private static ConsentPreview formRetypePreview(String normFqn)
+    {
+        return new ConsentPreview(
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
             1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
-        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (consentDecision != ConsentDecision.ALLOW)
+    }
+
+    /**
+     * The form-member property branch's PRE-CHECK, run before the consent gate (see
+     * {@link #gateFormRetype}): ONE read transaction decides whether a prompt is warranted at all.
+     * Three cases must NOT prompt, because the write is refused or unchanged in each and a denial
+     * would be returned INSTEAD of the actionable error: the request retypes nothing, the member does
+     * not exist (the write path answers "not found"), or the retype would strand the attribute's
+     * columns. Issue #295 review.
+     *
+     * @param fctx the resolved form edit context
+     * @param ref the parsed form-member ref
+     * @param properties the requested property changes
+     * @return a ready JSON error to return as-is, {@code ""} to write without prompting, or
+     *         {@code null} to ask
+     */
+    private String formRetypePreflight(FormElementWriter.FormEditContext fctx,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    {
+        if (!isFormRetypeRequest(ref, properties))
         {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+            return ""; //$NON-NLS-1$
+        }
+        return FormElementWriter.readEditableForm(fctx, "FormRetypePreflight", //$NON-NLS-1$
+            (formModel, tx) -> formRetypeVerdict(
+                FormElementWriter.resolveFormMember(formModel, ref), properties));
+    }
+
+    /**
+     * The property branch's pre-check verdict for an ALREADY-RESOLVED member - the body of
+     * {@link #formRetypePreflight}'s read, package-private so a unit test can drive the decision
+     * itself (that the stranded-columns refusal is reached BEFORE any prompt) without an EDT context.
+     *
+     * @param member the resolved form member, or {@code null} when it does not exist
+     * @param properties the requested property changes
+     * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
+     */
+    static String formRetypeVerdict(EObject member, List<JsonObject> properties)
+    {
+        if (member == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        for (JsonObject prop : properties)
+        {
+            String orphanErr =
+                refuseRetypeThatOrphansColumns(member, normalizeFormProperty(member, prop));
+            if (orphanErr != null)
+            {
+                return orphanErr;
+            }
         }
         return null;
     }
@@ -3584,17 +3706,57 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
-        // Retyping a form ATTRIBUTE ('type' / 'valueType') is the destructive case for a form member -
-        // ask the human BEFORE opening the write transaction (never block while a tx is held). A benign
-        // property edit, and any 'type' feature on a non-attribute member (a decoration's enum 'type'),
-        // do NOT prompt: the gate is scoped to a form attribute's data type, mirroring the ATTRIBUTE
-        // guard the dynamic-list-query branch uses.
-        String formConsentErr = consentForFormTypeChange(normFqn, ref, properties);
-        if (formConsentErr != null)
+        try
         {
-            return formConsentErr;
+            // Retyping a form ATTRIBUTE ('type' / 'valueType') is the destructive case for a form
+            // member, so the order is resolve -> read/validate -> ask -> write: the form is resolved
+            // first (a typo answers "form not found" without a dialog), the retype is validated against
+            // the CURRENT model, and only a retype that can really be applied reaches the gate - which
+            // runs outside any transaction, because it may block on a UI dialog (issue #295 review).
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.config, ref.formPath,
+                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form member as " //$NON-NLS-1$
+                    + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
+                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table, " //$NON-NLS-1$
+                    + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
+            return gateFormRetype(formRetypePreview(normFqn),
+                () -> formRetypePreflight(fctx, ref, properties),
+                () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx));
         }
+        catch (Exception e)
+        {
+            // A property-validation failure carries a ready JSON error (possibly wrapped by the tx
+            // runner) - surface it directly; anything else is a genuine failure.
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error modifying form member", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to modify form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+    }
 
+    /**
+     * Applies the validated form-member property changes: ONE BM write transaction (resolve the member,
+     * validate every property, apply) plus the force-export and the success payload. Split out of
+     * {@link #modifyFormMemberProperties} so the WHOLE mutation is the callback
+     * {@link #gateFormRetype} invokes - a destructive retype cannot be written by statement order
+     * alone (issue #295 review). Throws like the code it was extracted from; the caller maps the
+     * exception.
+     *
+     * @param ctx the resolved project context
+     * @param normFqn the normalized member FQN
+     * @param ref the parsed form-member ref
+     * @param properties the requested property changes
+     * @param normReport the name-normalization report
+     * @param fctx the already-resolved form edit context
+     * @return the tool's JSON result
+     */
+    private String applyFormMemberProperties(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx)
+    {
         Configuration config = ctx.config;
         IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
         IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
@@ -3611,71 +3773,49 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // so the tx rolls back with no partial mutation), then apply. The member is re-navigated by
         // name inside the tx (only the form top object is re-fetchable by bmId). Building the change
         // values and setting them in the SAME tx avoids any cross-transaction detached-object concern.
-        final boolean persisted;
-        try
-        {
-            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                config, ref.formPath,
-                ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form member as " //$NON-NLS-1$
-                    + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table, " //$NON-NLS-1$
-                    + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
-            persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
-                (formModel, tx) ->
-                {
-                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                    if (member == null)
-                    {
-                        throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
-                            + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                            + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
-                    }
-                    List<HolderChange> changes =
-                        prepareFormMemberChanges(config, version, member, properties, normReport);
-                    // (receiver, change) of every localized write, reported only AFTER the whole
-                    // batch is applied: reading a map mid-batch would report a locale as missing that
-                    // a LATER change in the same call fills in.
-                    List<EObject> localizedHolders = new ArrayList<>();
-                    List<PreparedChange> localizedChanges = new ArrayList<>();
-                    for (HolderChange hc : changes)
-                    {
-                        // A direct feature lands on the member; a property on the nested <extInfo> lands
-                        // on the extInfo holder, created (or reused) here now that every property has
-                        // validated. Mixing both in one call routes each change to its correct receiver.
-                        EObject holder = hc.onExtInfo
-                            ? FormElementWriter.ensureExtInfo(formModel, member) : member;
-                        // BEFORE the write: whether this locale already held text decides if the
-                        // OTHER locales go stale (see LocalizedWriteReport.rememberPreState).
-                        localizedReport.rememberPreState(holder, List.of(hc.change));
-                        hc.change.applyTo(holder, tx);
-                        applied.add(hc.change.featureName());
-                        if (hc.change.isLocalized())
-                        {
-                            // Remember the receiver the change actually landed on: a title on the
-                            // member and one on its <extInfo> live in different objects.
-                            localizedHolders.add(holder);
-                            localizedChanges.add(hc.change);
-                        }
-                    }
-                    for (int i = 0; i < localizedChanges.size(); i++)
-                    {
-                        localizedReport.collect(localizedHolders.get(i),
-                            List.of(localizedChanges.get(i)), declaredCodes, config);
-                    }
-                });
-        }
-        catch (Exception e)
-        {
-            // A property-validation failure carries a ready JSON error (possibly wrapped by the tx
-            // runner) - surface it directly; anything else is a genuine failure.
-            String validationJson = FormValidationException.jsonOf(e);
-            if (validationJson != null)
+        final boolean persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
+            (formModel, tx) ->
             {
-                return validationJson;
-            }
-            Activator.logError("Error modifying form member", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to modify form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
-        }
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
+                        + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                        + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
+                }
+                List<HolderChange> changes =
+                    prepareFormMemberChanges(config, version, member, properties, normReport);
+                // (receiver, change) of every localized write, reported only AFTER the whole
+                // batch is applied: reading a map mid-batch would report a locale as missing that
+                // a LATER change in the same call fills in.
+                List<EObject> localizedHolders = new ArrayList<>();
+                List<PreparedChange> localizedChanges = new ArrayList<>();
+                for (HolderChange hc : changes)
+                {
+                    // A direct feature lands on the member; a property on the nested <extInfo> lands
+                    // on the extInfo holder, created (or reused) here now that every property has
+                    // validated. Mixing both in one call routes each change to its correct receiver.
+                    EObject holder = hc.onExtInfo
+                        ? FormElementWriter.ensureExtInfo(formModel, member) : member;
+                    // BEFORE the write: whether this locale already held text decides if the
+                    // OTHER locales go stale (see LocalizedWriteReport.rememberPreState).
+                    localizedReport.rememberPreState(holder, List.of(hc.change));
+                    hc.change.applyTo(holder, tx);
+                    applied.add(hc.change.featureName());
+                    if (hc.change.isLocalized())
+                    {
+                        // Remember the receiver the change actually landed on: a title on the
+                        // member and one on its <extInfo> live in different objects.
+                        localizedHolders.add(holder);
+                        localizedChanges.add(hc.change);
+                    }
+                }
+                for (int i = 0; i < localizedChanges.size(); i++)
+                {
+                    localizedReport.collect(localizedHolders.get(i),
+                        List.of(localizedChanges.get(i)), declaredCodes, config);
+                }
+            });
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
@@ -3767,19 +3907,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return req.error;
         }
-        final String queryText = req.queryText;
-        final Boolean customQuery = req.customQuery;
-        final String mainTable = req.mainTable;
+        final String qt = req.queryText;
+        final Boolean cq = req.customQuery;
+        final String mt = req.mainTable;
 
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
-        final Version version = v8Project != null ? v8Project.getVersion() : null;
-
-        final List<String> applied = new ArrayList<>();
-        final String qt = queryText;
-        final Boolean cq = customQuery;
-        final String mt = mainTable;
-        final boolean persisted;
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
@@ -3788,38 +3919,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.Attribute.Name'."); //$NON-NLS-1$
             // Converting a plain (or collection-typed) attribute into a dynamic list REPLACES its
             // valueType, exactly like the `type` property does - and that path asks the consent gate.
-            // Read first whether this is a retype at all, then ask, then write; the gate may block on
-            // a dialog, so it must not be held inside the transaction (issue #295 review).
-            // ...but only when the request could actually convert: creating a dynamic list needs a
-            // queryText or a mainTable, so a customQuery-only request is rejected downstream. Asking
-            // first would raise a destructive dialog for a write that cannot happen, and a denial or
-            // timeout would MASK that actionable validation error (issue #295 review).
-            boolean couldConvert = (qt != null && !qt.isEmpty()) || (mt != null && !mt.isEmpty());
-            String retypeConsent = couldConvert ? consentForDynamicListRetype(fctx, normFqn, ref) : null;
-            if (retypeConsent != null)
-            {
-                return retypeConsent;
-            }
-            persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
-                (formModel, tx) ->
-                {
-                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                    if (member == null)
-                    {
-                        throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
-                            + ref.name + " on " + ref.formPath //$NON-NLS-1$
-                            + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
-                    }
-                    // This branch retypes the attribute to DynamicList without going through the
-                    // property path, so it needs the SAME stranded-columns guard (issue #295 review).
-                    String orphanErr = orphanColumnsError(member);
-                    if (orphanErr != null)
-                    {
-                        throw new FormValidationException(orphanErr);
-                    }
-                    applied.addAll(FormElementWriter.configureDynamicListQuery(
-                        formModel, member, qt, cq, mt, ctx.config, version));
-                });
+            // The order is resolve -> read/validate -> ask -> write (see gateFormRetype); the gate may
+            // block on a dialog, so it never runs inside a transaction (issue #295 review).
+            return gateFormRetype(dynamicListRetypePreview(normFqn),
+                () -> dynamicListRetypePreflight(fctx, ctx.config, ref, qt, mt),
+                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx));
         }
         catch (Exception e)
         {
@@ -3832,6 +3936,53 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to set the dynamic-list query: " //$NON-NLS-1$
                 + unwrapCauseMessage(e)).toJson();
         }
+    }
+
+    /**
+     * Applies the dynamic-list query change: ONE BM write transaction plus the success payload. Split
+     * out of {@link #configureDynamicListQuery} so the WHOLE mutation is the callback
+     * {@link #gateFormRetype} invokes (issue #295 review). Throws like the code it was extracted from;
+     * the caller maps the exception.
+     *
+     * @param ctx the resolved project context
+     * @param normFqn the normalized attribute FQN
+     * @param ref the parsed form-member ref
+     * @param qt the custom query text, or {@code null}
+     * @param cq the {@code customQuery} toggle, or {@code null}
+     * @param mt the main-table FQN, or {@code null}
+     * @param normReport the name-normalization report
+     * @param fctx the already-resolved form edit context
+     * @return the tool's JSON result
+     */
+    private String applyDynamicListQuery(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        FormElementWriter.FormMemberRef ref, String qt, Boolean cq, String mt,
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx)
+    {
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        final Version version = v8Project != null ? v8Project.getVersion() : null;
+
+        final List<String> applied = new ArrayList<>();
+        boolean persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
+                        + ref.name + " on " + ref.formPath //$NON-NLS-1$
+                        + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
+                }
+                // This branch retypes the attribute to DynamicList without going through the
+                // property path, so it needs the SAME stranded-columns guard (issue #295 review).
+                String orphanErr = orphanColumnsError(member);
+                if (orphanErr != null)
+                {
+                    throw new FormValidationException(orphanErr);
+                }
+                applied.addAll(FormElementWriter.configureDynamicListQuery(
+                    formModel, member, qt, cq, mt, ctx.config, version));
+            });
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
@@ -4130,61 +4281,85 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return new HolderChange(holder.onExtInfo, built.get(0));
     }
 
-    /**
-     * Asks the destructive-consent gate before a dynamic-list CONVERSION, or returns {@code null}
-     * when nothing destructive happens. A query update on an attribute that is already a dynamic
-     * list changes no type and is not gated; turning a plain or collection-typed attribute INTO one
-     * replaces its {@code valueType}, which the ordinary {@code type} path has always gated
-     * (issue #295 review).
-     *
-     * <p>Reads the current shape in its own READ transaction and asks OUTSIDE any transaction,
-     * because the gate may block on a UI dialog.</p>
-     *
-     * @param fctx the resolved form edit context
-     * @param normFqn the normalized attribute FQN
-     * @param ref the parsed form-member ref
-     * @return a ready JSON error when consent was refused, or {@code null} to proceed
-     */
-    private static String consentForDynamicListRetype(FormElementWriter.FormEditContext fctx,
-        String normFqn, FormElementWriter.FormMemberRef ref)
+    /** What the user authorizes when a plain attribute is converted into a dynamic list. */
+    private static ConsentPreview dynamicListRetypePreview(String normFqn)
     {
-        // ONE preflight read decides whether a prompt is warranted at all. Three cases must NOT
-        // prompt, because the conversion cannot happen in any of them and a denial would be returned
-        // INSTEAD of the actionable validation error: the attribute is absent, it is ALREADY a list
-        // (nothing is retyped), or it still owns columns the conversion would strand. Issue #295
-        // review. The probe answers "" for "no prompt needed", a ready JSON error, or null to prompt.
-        String verdict = FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
-            (formModel, tx) ->
-            {
-                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                if (member == null || FormElementWriter.isDynamicListAttribute(member))
-                {
-                    return ""; //$NON-NLS-1$
-                }
-                String orphan = orphanColumnsError(member);
-                return orphan != null ? orphan : null;
-            });
-        if ("".equals(verdict)) //$NON-NLS-1$
-        {
-            return null;
-        }
-        if (verdict != null)
-        {
-            return verdict;
-        }
-
-        ConsentPreview preview = new ConsentPreview(
+        return new ConsentPreview(
             "Convert a form attribute into a dynamic list", //$NON-NLS-1$
             "This replaces the attribute's data type with DynamicList. Any value the form held " //$NON-NLS-1$
                 + "through it is dropped on the next database update.", //$NON-NLS-1$
             1, List.of(normFqn));
-        DestructiveConsentGate.ConsentDecision decision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+    }
+
+    /**
+     * The dynamic-list branch's PRE-CHECK, run before the consent gate (see {@link #gateFormRetype}).
+     * ONE read transaction decides whether a prompt is warranted at all, because every case below
+     * either cannot convert or is refused outright - and a denial would come back INSTEAD of the
+     * actionable validation error (issue #295 review):
+     *
+     * <ul>
+     * <li>the request carries neither {@code queryText} nor {@code mainTable}, so no list can be
+     * created (a {@code customQuery}-only request is rejected downstream);</li>
+     * <li>the attribute is absent (the write answers "attribute not found");</li>
+     * <li>the {@code mainTable} FQN does not resolve - the same refusal the write would raise, only
+     * without a dialog in front of it;</li>
+     * <li>the attribute is ALREADY a dynamic list, so nothing is retyped;</li>
+     * <li>it still owns columns the conversion would strand.</li>
+     * </ul>
+     *
+     * @param fctx the resolved form edit context
+     * @param config the configuration the main table is resolved against
+     * @param ref the parsed form-member ref
+     * @param queryText the requested custom query text, or {@code null}
+     * @param mainTable the requested main-table FQN, or {@code null}
+     * @return a ready JSON error to return as-is, {@code ""} to write without prompting, or
+     *         {@code null} to ask
+     */
+    private static String dynamicListRetypePreflight(FormElementWriter.FormEditContext fctx,
+        Configuration config, FormElementWriter.FormMemberRef ref, String queryText, String mainTable)
+    {
+        boolean couldConvert = (queryText != null && !queryText.isEmpty())
+            || (mainTable != null && !mainTable.isEmpty());
+        if (!couldConvert)
         {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+            return ""; //$NON-NLS-1$
         }
-        return null;
+        return FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
+            (formModel, tx) -> dynamicListRetypeVerdict(config,
+                FormElementWriter.resolveFormMember(formModel, ref), mainTable));
+    }
+
+    /**
+     * The dynamic-list branch's pre-check verdict for an ALREADY-RESOLVED attribute - the body of
+     * {@link #dynamicListRetypePreflight}'s read, package-private so a unit test can drive the
+     * decision itself without an EDT context. Must run inside the read transaction: it resolves the
+     * main table against the model.
+     *
+     * @param config the configuration the main table is resolved against
+     * @param member the resolved form attribute, or {@code null} when it does not exist
+     * @param mainTable the requested main-table FQN, or {@code null}
+     * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
+     */
+    static String dynamicListRetypeVerdict(Configuration config, EObject member, String mainTable)
+    {
+        if (member == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        // The main table is resolved HERE, in the same read, because the write callback resolves it
+        // too late: an FQN that names nothing would raise the destructive prompt first and answer the
+        // resolution failure only after ALLOW (issue #295 review).
+        String mainTableErr = FormElementWriter.mainTableResolutionError(config, mainTable);
+        if (mainTableErr != null)
+        {
+            return mainTableErr;
+        }
+        if (FormElementWriter.isDynamicListAttribute(member))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String orphan = orphanColumnsError(member);
+        return orphan != null ? orphan : null;
     }
 
     /**

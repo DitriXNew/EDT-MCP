@@ -137,6 +137,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
     /** The columns of a collection-typed form attribute - containment children, so a delete takes them. */
     private static final String KEY_COLUMNS = "columns"; //$NON-NLS-1$
+    /** The form content's attributes - counted so a form delete prompt cannot understate its scope. */
+    private static final String KEY_ATTRIBUTES = "attributes"; //$NON-NLS-1$
+    /** The form content's commands - counted with the attributes for the same reason. */
+    private static final String KEY_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
 
     /** Output key: whether the listed blocking references block the delete. */
     private static final String KEY_BLOCKING = "blocking"; //$NON-NLS-1$
@@ -707,18 +711,70 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The owned-FORM branch's authorization step, the twin of {@link #gateFormMemberDelete}.
+     * The owned-FORM branch's authorization step, the twin of {@link #gateFormMemberDelete}: the
+     * prompt is built from what the form's content ACTUALLY holds, read before this is called. A
+     * constant "1" understated every form delete - the user authorized one element while the whole
+     * {@code Form.form} (its items, attributes, columns and commands) went with it, which is exactly
+     * what issue #331's acceptance criteria ask the prompt to say.
      *
      * @param normFqn the normalized form FQN being deleted
+     * @param content what the form's content model holds
      * @param write this branch's mutation
      * @return the mutation's result, or the refusal error
      */
-    String gateFormObjectDelete(String normFqn, java.util.function.Supplier<String> write)
+    String gateFormObjectDelete(String normFqn, FormContentSummary content,
+        java.util.function.Supplier<String> write)
     {
         return deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
-            "Removes the form and its content from the owner, clearing any default-form setting " //$NON-NLS-1$
+            "Removes the form and its content" //$NON-NLS-1$
+                + (content.isEmpty() ? "" : " (" + content.describe() + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + " from the owner, clearing any default-form setting " //$NON-NLS-1$
                 + "that pointed at it. Call confirm=false first to see the details.", //$NON-NLS-1$
-            1, Collections.singletonList(normFqn)), write);
+            1 + content.total(), Collections.singletonList(normFqn)), write);
+    }
+
+    /**
+     * Reads what the form's content model holds, inside a READ transaction, so the consent prompt can
+     * name the real blast radius instead of a constant. Best-effort: a form whose editable content
+     * cannot be read (no content model at all) answers an EMPTY summary, so the delete still proceeds
+     * with a prompt that names the form alone - degrading the wording, never the operation.
+     *
+     * @param project the owning EDT project
+     * @param mdForm the resolved MD form
+     * @return what the content holds; empty when it could not be read
+     */
+    private static FormContentSummary readFormObjectContent(IProject project, MdObject mdForm)
+    {
+        try
+        {
+            FormElementWriter.FormEditContext fctx =
+                FormElementWriter.editContextFor(project, mdForm);
+            return FormElementWriter.readEditableForm(fctx, "DeleteFormContentPreview", //$NON-NLS-1$
+                (formModel, tx) ->
+                {
+                    FormContentSummary summary = new FormContentSummary();
+                    // The same recursive items walk the member preview uses, run from the form ROOT.
+                    List<Map<String, Object>> items = new ArrayList<>();
+                    collectItemDescendants(formModel, items);
+                    summary.items = items.size();
+                    for (EObject attribute : FormStructureReader.getReferenceList(formModel,
+                        KEY_ATTRIBUTES))
+                    {
+                        summary.attributes++;
+                        summary.columns +=
+                            FormStructureReader.getReferenceList(attribute, KEY_COLUMNS).size();
+                    }
+                    summary.commands =
+                        FormStructureReader.getReferenceList(formModel, KEY_FORM_COMMANDS).size();
+                    return summary;
+                });
+        }
+        catch (Exception e) // NOSONAR the prompt must degrade, never fail the delete
+        {
+            Activator.logWarning("Could not read the form content for the delete prompt: " //$NON-NLS-1$
+                + unwrapCauseMessage(e));
+            return new FormContentSummary();
+        }
     }
 
     /**
@@ -876,9 +932,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         // The authorization point: the whole mutation below is the callback, so nothing this branch
         // writes can run without ALLOW - the guarantee is structural, not a matter of statement order
-        // (issue #331 review). The form is resolved and the preview branch has returned, so this is
-        // the LAST check before the write, and it runs outside any transaction.
-        return gateFormObjectDelete(normFqn,
+        // (issue #331 review). The form is resolved and its content is READ first, so the prompt names
+        // what is really removed; this is the LAST check before the write, outside any transaction.
+        return gateFormObjectDelete(normFqn, readFormObjectContent(project, mdForm),
             () -> performFormObjectDelete(project, normFqn, ref, mdForm));
     }
 
@@ -2029,5 +2085,48 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean found;
         String type;
         final List<Map<String, Object>> descendants = new ArrayList<>();
+    }
+
+    /**
+     * What a form's content model holds, counted for the delete prompt so it cannot understate the
+     * blast radius (issue #331). A plain counter carrier - no tx-bound EObject escapes the read.
+     */
+    static final class FormContentSummary
+    {
+        int items;
+        int attributes;
+        int columns;
+        int commands;
+
+        /** @return every element the content form carries */
+        int total()
+        {
+            return items + attributes + columns + commands;
+        }
+
+        /** @return whether the form's content holds nothing (or could not be read) */
+        boolean isEmpty()
+        {
+            return total() == 0;
+        }
+
+        /** @return the non-zero counts, e.g. {@code "4 item(s), 2 attribute(s), 3 column(s)"} */
+        String describe()
+        {
+            List<String> parts = new ArrayList<>();
+            appendCount(parts, items, "item(s)"); //$NON-NLS-1$
+            appendCount(parts, attributes, "attribute(s)"); //$NON-NLS-1$
+            appendCount(parts, columns, "column(s)"); //$NON-NLS-1$
+            appendCount(parts, commands, "command(s)"); //$NON-NLS-1$
+            return String.join(", ", parts); //$NON-NLS-1$
+        }
+
+        private static void appendCount(List<String> parts, int count, String word)
+        {
+            if (count > 0)
+            {
+                parts.add(count + " " + word); //$NON-NLS-1$
+            }
+        }
     }
 }

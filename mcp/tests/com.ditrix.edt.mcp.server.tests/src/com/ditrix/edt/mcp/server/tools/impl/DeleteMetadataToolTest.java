@@ -984,7 +984,7 @@ public class DeleteMetadataToolTest
         {
             RecordingWrite write = new RecordingWrite();
             String result = toolAnswering(refused).gateFormObjectDelete(
-                "Catalog.Products.Form.ItemForm", write); //$NON-NLS-1$
+                "Catalog.Products.Form.ItemForm", new DeleteMetadataTool.FormContentSummary(), write); //$NON-NLS-1$
             assertEquals("a refused form-object delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
                 0, write.calls);
             assertTrue(result.contains("error")); //$NON-NLS-1$
@@ -992,9 +992,53 @@ public class DeleteMetadataToolTest
 
         RecordingWrite allowed = new RecordingWrite();
         String ok = toolAnswering(DestructiveConsentGate.ConsentDecision.ALLOW).gateFormObjectDelete(
-            "Catalog.Products.Form.ItemForm", allowed); //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm", new DeleteMetadataTool.FormContentSummary(), allowed); //$NON-NLS-1$
         assertEquals("an allowed form-object delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
         assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheFormPromptCountsTheContentItRemoves()
+    {
+        // A form delete takes the whole content Form.form with it, so a constant "1" asked the user to
+        // authorize a single element while items, attributes, columns and commands went too - the
+        // understatement issue #331's acceptance criteria call out. The MEMBER branch has counted
+        // honestly since the review; this is its twin.
+        DeleteMetadataTool.FormContentSummary content = new DeleteMetadataTool.FormContentSummary();
+        content.items = 4;
+        content.attributes = 2;
+        content.columns = 3;
+        content.commands = 1;
+
+        int[] seenCount = {0};
+        String[] seenSubtitle = {null};
+        new DeleteMetadataTool((name, preview) -> {
+            seenCount[0] = preview.getTotalCount();
+            seenSubtitle[0] = preview.getSubtitle();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormObjectDelete("Catalog.Products.Form.ItemForm", content, new RecordingWrite()); //$NON-NLS-1$
+
+        assertEquals("the prompt counts the form plus everything its content holds", 11, seenCount[0]); //$NON-NLS-1$
+        assertTrue("the prompt must say what is inside: " + seenSubtitle[0], //$NON-NLS-1$
+            seenSubtitle[0].contains("4 item(s)") && seenSubtitle[0].contains("2 attribute(s)") //$NON-NLS-1$ //$NON-NLS-2$
+                && seenSubtitle[0].contains("3 column(s)") && seenSubtitle[0].contains("1 command(s)")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnEmptyFormPromptStaysReadable()
+    {
+        // A form whose content is empty (or could not be read) must not grow an empty parenthesis.
+        String[] seenSubtitle = {null};
+        int[] seenCount = {0};
+        new DeleteMetadataTool((name, preview) -> {
+            seenSubtitle[0] = preview.getSubtitle();
+            seenCount[0] = preview.getTotalCount();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormObjectDelete("Catalog.Products.Form.ItemForm", //$NON-NLS-1$
+            new DeleteMetadataTool.FormContentSummary(), new RecordingWrite());
+
+        assertEquals(1, seenCount[0]);
+        assertFalse("an empty content must not render an empty '()'", seenSubtitle[0].contains("()")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

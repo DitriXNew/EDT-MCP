@@ -28,6 +28,7 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
+import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
@@ -43,11 +44,14 @@ import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
@@ -1364,5 +1368,211 @@ public class ModifyMetadataToolTest
             PredefinedWriter.parseProperties(java.util.List.of(parentProp), true, out);
         assertNotNull("moving to a different parent must be refused on modify", parentErr); //$NON-NLS-1$
         assertTrue(parentErr.contains("not yet supported")); //$NON-NLS-1$
+    }
+
+    // ==================== The form-retype authorization point (issue #295 review) ==================
+
+    /** A write callback that counts its invocations, so "was it run?" is an assertion, not a hope. */
+    private static final class RecordingWrite implements java.util.function.Supplier<String>
+    {
+        int calls;
+
+        @Override
+        public String get()
+        {
+            calls++;
+            return WRITTEN;
+        }
+    }
+
+    private static final String WRITTEN = "{\"written\":true}"; //$NON-NLS-1$
+
+    /** A consent source that records whether it was ever asked. */
+    private static final class RecordingConsent implements ModifyMetadataTool.ConsentRequester
+    {
+        private final ConsentDecision answer;
+        int asked;
+
+        RecordingConsent(ConsentDecision answer)
+        {
+            this.answer = answer;
+        }
+
+        @Override
+        public ConsentDecision request(String toolName, ConsentPreview preview)
+        {
+            asked++;
+            return answer;
+        }
+    }
+
+    private static ConsentPreview retypePreview()
+    {
+        return new ConsentPreview("Change the data type of X", "subtitle", 1, //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonList("valueType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARetypeThatCannotBeAppliedIsRefusedWithoutEverPrompting()
+    {
+        // The deterministic refusal (stranded columns, an unresolvable main table) must reach the
+        // caller AS IS. Asking first would answer a denial / timeout instead of the actionable error -
+        // for a write that could never have been applied.
+        RecordingConsent consent = new RecordingConsent(ConsentDecision.REJECT);
+        RecordingWrite write = new RecordingWrite();
+
+        String result = new ModifyMetadataTool(consent).gateFormRetype(retypePreview(),
+            () -> REFUSAL, write);
+
+        assertEquals("a refused retype must never raise the destructive prompt", 0, consent.asked); //$NON-NLS-1$
+        assertEquals("a refused retype must not write", 0, write.calls); //$NON-NLS-1$
+        assertEquals("the caller must get the validation error verbatim", REFUSAL, result); //$NON-NLS-1$
+    }
+
+    private static final String REFUSAL = "{\"error\":\"delete the columns first\"}"; //$NON-NLS-1$
+
+    @Test
+    public void testANonDestructiveChangeIsWrittenWithoutPrompting()
+    {
+        // "" = nothing destructive happens (not a retype at all, the member is absent, the attribute
+        // is already a dynamic list): write, but never ask.
+        RecordingConsent consent = new RecordingConsent(ConsentDecision.REJECT);
+        RecordingWrite write = new RecordingWrite();
+
+        String result = new ModifyMetadataTool(consent).gateFormRetype(retypePreview(), () -> "", write); //$NON-NLS-1$
+
+        assertEquals("a benign change must not prompt", 0, consent.asked); //$NON-NLS-1$
+        assertEquals("a benign change is written exactly once", 1, write.calls); //$NON-NLS-1$
+        assertEquals(WRITTEN, result);
+    }
+
+    @Test
+    public void testARealRetypeIsWrittenOnlyWhenConsentIsGranted()
+    {
+        for (ConsentDecision refused : new ConsentDecision[] {ConsentDecision.REJECT,
+            ConsentDecision.TIMEOUT})
+        {
+            RecordingConsent consent = new RecordingConsent(refused);
+            RecordingWrite write = new RecordingWrite();
+            String result =
+                new ModifyMetadataTool(consent).gateFormRetype(retypePreview(), () -> null, write);
+            assertEquals("a real retype must be authorized (" + refused + ")", 1, consent.asked); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals("a refused retype must not write (" + refused + ")", 0, write.calls); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(result.contains("error")); //$NON-NLS-1$
+        }
+
+        RecordingConsent allowed = new RecordingConsent(ConsentDecision.ALLOW);
+        RecordingWrite write = new RecordingWrite();
+        String ok = new ModifyMetadataTool(allowed).gateFormRetype(retypePreview(), () -> null, write);
+        assertEquals("an allowed retype is written exactly once", 1, write.calls); //$NON-NLS-1$
+        assertEquals(WRITTEN, ok);
+    }
+
+    @Test
+    public void testTheRetypePreflightRefusesARetypeThatStrandsColumns()
+    {
+        // The DECISION itself, not just the order: a retype of a column-bearing attribute answers the
+        // stranded-columns error, so the gate is never reached.
+        String verdict = ModifyMetadataTool.formRetypeVerdict(collectionAttribute("Price"), //$NON-NLS-1$
+            Collections.singletonList(retypeToStringProperty()));
+
+        assertNotNull("a retype that strands columns must be refused in the preflight", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must name the column so the caller can delete it", //$NON-NLS-1$
+            verdict.contains("Price")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRetypePreflightPromptsForARetypeThatStrandsNothing()
+    {
+        assertNull("a retype with no columns to strand must reach the gate", //$NON-NLS-1$
+            ModifyMetadataTool.formRetypeVerdict(collectionAttribute(),
+                Collections.singletonList(retypeToStringProperty())));
+        assertEquals("an absent member must not prompt - the write answers 'not found'", "", //$NON-NLS-1$ //$NON-NLS-2$
+            ModifyMetadataTool.formRetypeVerdict(null,
+                Collections.singletonList(retypeToStringProperty())));
+    }
+
+    @Test
+    public void testTheDynamicListPreflightRefusesAnUnresolvableMainTable()
+    {
+        // The main table used to be resolved only inside the write callback, so a nonexistent one
+        // raised the conversion prompt FIRST and answered the resolution failure only after ALLOW.
+        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, collectionAttribute(),
+            "Catalog.NoSuchObject"); //$NON-NLS-1$
+
+        assertNotNull("an unresolvable main table must be refused before the prompt", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must be the main-table one, not a consent denial", //$NON-NLS-1$
+            verdict.contains("Cannot resolve the main table")); //$NON-NLS-1$
+        assertTrue("it must echo the offending FQN", verdict.contains("Catalog.NoSuchObject")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheDynamicListPreflightAsksForAConversionThatCanHappen()
+    {
+        assertNull("a real conversion must reach the gate", //$NON-NLS-1$
+            ModifyMetadataTool.dynamicListRetypeVerdict(null, collectionAttribute(), null));
+        assertEquals("an absent attribute must not prompt", "", //$NON-NLS-1$ //$NON-NLS-2$
+            ModifyMetadataTool.dynamicListRetypeVerdict(null, null, null));
+    }
+
+    /** {name:'type', value:{types:[{kind:'String'}]}} - the retype that strands a column. */
+    private static JsonObject retypeToStringProperty()
+    {
+        JsonObject kind = new JsonObject();
+        kind.addProperty("kind", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonArray types = new JsonArray();
+        types.add(kind);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.add("value", spec); //$NON-NLS-1$
+        return prop;
+    }
+
+    /**
+     * A dynamic-EMF form attribute carrying {@code valueType} + the named {@code columns} - the shape
+     * both preflights read reflectively.
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject collectionAttribute(String... columnNames)
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/formretype"); //$NON-NLS-1$
+
+        EClass columnClass = factory.createEClass();
+        columnClass.setName("FormAttributeColumn"); //$NON-NLS-1$
+        EAttribute columnName = factory.createEAttribute();
+        columnName.setName("name"); //$NON-NLS-1$
+        columnName.setEType(EcorePackage.Literals.ESTRING);
+        columnClass.getEStructuralFeatures().add(columnName);
+
+        EClass attributeClass = factory.createEClass();
+        attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+        EReference columns = factory.createEReference();
+        columns.setName("columns"); //$NON-NLS-1$
+        columns.setEType(columnClass);
+        columns.setContainment(true);
+        columns.setUpperBound(-1);
+        attributeClass.getEStructuralFeatures().add(columns);
+        EReference valueType = factory.createEReference();
+        valueType.setName("valueType"); //$NON-NLS-1$
+        valueType.setEType(EcorePackage.Literals.EOBJECT);
+        valueType.setContainment(true);
+        attributeClass.getEStructuralFeatures().add(valueType);
+        pkg.getEClassifiers().add(columnClass);
+        pkg.getEClassifiers().add(attributeClass);
+
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        for (String name : columnNames)
+        {
+            EObject column = new DynamicEObjectImpl(columnClass);
+            column.eSet(columnName, name);
+            ((java.util.List<EObject>)attribute.eGet(columns)).add(column);
+        }
+        return attribute;
     }
 }

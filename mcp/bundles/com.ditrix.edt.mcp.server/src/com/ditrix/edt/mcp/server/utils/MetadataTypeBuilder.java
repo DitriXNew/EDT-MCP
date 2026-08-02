@@ -127,7 +127,15 @@ public final class MetadataTypeBuilder
         /** A persisted metadata feature (an attribute, a resource, a predefined item's value, ...). */
         METADATA,
         /** A form attribute (or one of its columns) - the only place an in-memory collection lives. */
-        FORM_ATTRIBUTE
+        FORM_ATTRIBUTE,
+        /**
+         * A data-composition (DCS) parameter's {@code valueType}. Not a stored metadata feature: the
+         * refusal the METADATA target gives ("never in a stored metadata feature", "use ValueStorage")
+         * would be untrue here, so this target owns its own wording, which claims only what this tool
+         * actually does - it does not build the collection kinds for a DCS parameter (issue #295
+         * review).
+         */
+        DCS_PARAMETER
     }
 
     /**
@@ -404,10 +412,7 @@ public final class MetadataTypeBuilder
         {
             if (isCollectionKind(kind) && typeTarget != TypeTarget.FORM_ATTRIBUTE)
             {
-                return "Type kind '" + kind + "' is an IN-MEMORY collection: the platform holds it " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "only in a FORM attribute (fqn 'Type.Object.Form.FormName.Attribute.Name'), " //$NON-NLS-1$
-                    + "never in a stored metadata feature. Set it on a form attribute, or use " //$NON-NLS-1$
-                    + "{kind:'ValueStorage'} to persist arbitrary data here."; //$NON-NLS-1$
+                return collectionKindRefusal(kind, typeTarget);
             }
             return addSimplePlatformType(td, provider, simpleTypeCandidates);
         }
@@ -415,6 +420,32 @@ public final class MetadataTypeBuilder
         return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$ //$NON-NLS-2$
             + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), or a " //$NON-NLS-1$
             + "reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of an in-memory collection kind, worded for the TARGET that refused it. The stored
+     * metadata wording ("never in a stored metadata feature", "use {@code ValueStorage}") is TRUE only
+     * for a persisted feature; a DCS parameter is neither stored nor served by {@code ValueStorage}, so
+     * repeating it there would state a platform fact that does not hold and give advice that does not
+     * apply (issue #295 review). Each target claims only what is true of it.
+     *
+     * @param kind the requested collection kind
+     * @param typeTarget what the type description was being built for
+     * @return the actionable refusal
+     */
+    private static String collectionKindRefusal(String kind, TypeTarget typeTarget)
+    {
+        if (typeTarget == TypeTarget.DCS_PARAMETER)
+        {
+            return "Type kind '" + kind + "' is an IN-MEMORY collection, and this tool does not build " //$NON-NLS-1$ //$NON-NLS-2$
+                + "one for a data-composition parameter: a FORM attribute (fqn " //$NON-NLS-1$
+                + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts the " //$NON-NLS-1$
+                + "collection kinds. Give the parameter a primitive or a reference type instead."; //$NON-NLS-1$
+        }
+        return "Type kind '" + kind + "' is an IN-MEMORY collection: the platform holds it " //$NON-NLS-1$ //$NON-NLS-2$
+            + "only in a FORM attribute (fqn 'Type.Object.Form.FormName.Attribute.Name'), " //$NON-NLS-1$
+            + "never in a stored metadata feature. Set it on a form attribute, or use " //$NON-NLS-1$
+            + "{kind:'ValueStorage'} to persist arbitrary data here."; //$NON-NLS-1$
     }
 
     /**

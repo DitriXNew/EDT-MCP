@@ -2006,6 +2006,26 @@ public final class FormElementWriter
     }
 
     /**
+     * The form COLLECTION attribute a table's {@code dataPath} addresses, or {@code null} when the
+     * path is not the bare name of a ValueTable / ValueTree form attribute. A table over such an
+     * attribute is bound by the attribute name alone ({@code Rows}), unlike a tabular-section table
+     * ({@code Object.Goods}). Issue #295.
+     *
+     * @param formModel the tx-bound form model
+     * @param dataPath the table's data path
+     * @return the collection attribute, or {@code null}
+     */
+    private static EObject collectionAttributeFor(EObject formModel, String dataPath)
+    {
+        if (dataPath.indexOf('.') >= 0)
+        {
+            return null;
+        }
+        EObject attribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), dataPath);
+        return attribute != null && hasCollectionValueType(attribute) ? attribute : null;
+    }
+
+    /**
      * Whether the form attribute's value type is an IN-MEMORY collection - the only shape that owns
      * columns. Read reflectively off the {@code valueType -> types -> name} chain, so an attribute whose
      * type is unset (a fresh attribute) or primitive answers {@code false}. Issue #295.
@@ -2172,9 +2192,7 @@ public final class FormElementWriter
         EObject mainTable = resolveMainTableDbView(config, mainTableFqn);
         if (mainTable == null)
         {
-            throw new FormValidationException(ToolResult.error(
-                "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
-                + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson()); //$NON-NLS-1$
+            throw new FormValidationException(mainTableNotResolvedJson(mainTableFqn));
         }
         EStructuralFeature mainTableFeature = extInfo.eClass().getEStructuralFeature(FEATURE_MAIN_TABLE);
         if (mainTableFeature instanceof EReference)
@@ -2184,7 +2202,36 @@ public final class FormElementWriter
         }
     }
 
-    /** Whether a form attribute carries a {@code DynamicListExtInfo} (i.e. it is a dynamic list). */
+    /**
+     * The main-table refusal for {@code mainTableFqn}, or {@code null} when it resolves (or when no
+     * main table was requested). Lets a caller answer an unresolvable FQN BEFORE it asks the consent
+     * gate: {@link #applyMainTable} raises the very same wording from inside the write callback, which
+     * is too late - a destructive prompt would be shown for a write that can never be applied, and a
+     * denial would come back instead of this error (issue #295 review). Single owner of the wording;
+     * must run inside a BM transaction, like the resolution it wraps.
+     *
+     * @param config the configuration to resolve against
+     * @param mainTableFqn the requested main-table FQN, or {@code null} / empty when none was asked for
+     * @return a ready JSON error, or {@code null} when nothing is wrong
+     */
+    public static String mainTableResolutionError(Configuration config, String mainTableFqn)
+    {
+        if (mainTableFqn == null || mainTableFqn.isEmpty()
+            || resolveMainTableDbView(config, mainTableFqn) != null)
+        {
+            return null;
+        }
+        return mainTableNotResolvedJson(mainTableFqn);
+    }
+
+    /** The single wording of an unresolvable dynamic-list main table, as a ready JSON error. */
+    private static String mainTableNotResolvedJson(String mainTableFqn)
+    {
+        return ToolResult.error(
+            "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson(); //$NON-NLS-1$
+    }
+
     /**
      * Whether the form attribute is ALREADY a dynamic list. Public so a caller can tell a query
      * update on an existing list from a RETYPE of a plain (or collection-typed) attribute, which is
@@ -2732,10 +2779,25 @@ public final class FormElementWriter
         }
         if (dot > 0 && !isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
         {
-            return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a dynamic " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "list nor the form's main object attribute. A field binds to a form attribute by name " //$NON-NLS-1$
-                + "(e.g. 'Price'); a dotted path is for a dynamic-list column (e.g. 'List.Number', where " //$NON-NLS-1$
-                + "the list has a custom query) or for an object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
+            //   - a COLLECTION attribute (ValueTable / ValueTree) that OWNS a column of that name: the // NOSONAR explanatory prose, not commented-out code
+            //     visual counterpart of the FormAttributeColumn, without which a collection attribute // NOSONAR explanatory prose, not commented-out code
+            //     could hold data no form element could ever show (issue #295). // NOSONAR explanatory prose, not commented-out code
+            String columnName = attrName.substring(dot + 1);
+            if (!hasCollectionValueType(boundAttribute))
+            {
+                return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "dynamic list, nor a collection attribute, nor the form's main object attribute. " //$NON-NLS-1$
+                    + "A field binds to a form attribute by name (e.g. 'Price'); a dotted path is for a " //$NON-NLS-1$
+                    + "dynamic-list column (e.g. 'List.Number', where the list has a custom query), for " //$NON-NLS-1$
+                    + "a ValueTable / ValueTree attribute's column (e.g. 'Rows.Price'), or for an " //$NON-NLS-1$
+                    + "object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
+            }
+            if (findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName) == null)
+            {
+                return "Form attribute '" + headAttr + "' has no column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "'. Create it first with create_metadata on '...Attribute." + headAttr //$NON-NLS-1$
+                    + ".Column." + columnName + "', then bind the field to it."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
         }
         if (findItem(formModel, name) != null)
         {
@@ -2855,15 +2917,38 @@ public final class FormElementWriter
         addTableAddition(formModel, table, FEATURE_SEARCH_CONTROL_ADDITION,
             russianAutoNames ? RU_SUFFIX_SEARCH_CONTROL : SUFFIX_SEARCH_CONTROL,
             "SearchControlAddition", "SearchControlAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
-        // Auto-columns: the standard LineNumber column, then one column per TS attribute (all input
-        // fields, like the designer's table output).
-        String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
-        buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, russianAutoNames); //$NON-NLS-1$
-        if (columnAttributeNames != null)
+        // Auto-columns. A table over a COLLECTION form attribute (ValueTable / ValueTree) takes its
+        // columns from the ATTRIBUTE's own columns - the form model knows them, and the metadata-aware
+        // caller cannot: there is no tabular section behind such a table. It also gets NO LineNumber
+        // column, because an in-memory collection has no such field and the path would resolve to
+        // nothing (issue #295).
+        EObject collectionAttribute = collectionAttributeFor(formModel, dataPath);
+        if (collectionAttribute != null)
         {
-            for (String attr : columnAttributeNames)
+            for (EObject column : referenceList(collectionAttribute, FEATURE_COLUMNS))
             {
-                buildColumnField(formModel, table, name + attr, dataPath + "." + attr, russianAutoNames); //$NON-NLS-1$
+                String columnName = stringFeature(column, FEATURE_NAME);
+                if (columnName != null && !columnName.isEmpty())
+                {
+                    buildColumnField(formModel, table, name + columnName,
+                        dataPath + "." + columnName, russianAutoNames); //$NON-NLS-1$
+                }
+            }
+        }
+        else
+        {
+            // A tabular-section table: the standard LineNumber column, then one column per TS
+            // attribute (all input fields, like the designer's table output).
+            String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
+            buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, //$NON-NLS-1$
+                russianAutoNames);
+            if (columnAttributeNames != null)
+            {
+                for (String attr : columnAttributeNames)
+                {
+                    buildColumnField(formModel, table, name + attr, dataPath + "." + attr, //$NON-NLS-1$
+                        russianAutoNames);
+                }
             }
         }
         recordKind(table, createdKind);

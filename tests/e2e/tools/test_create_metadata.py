@@ -1249,6 +1249,59 @@ def test_column_handler_fqn_does_not_bind_to_a_same_named_item():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_collection_attribute_can_be_shown_on_the_form():
+    # The point of the whole feature: a ValueTable attribute the user can SEE. The data column was
+    # creatable, but nothing could display it - a Table over the attribute auto-generated a bogus
+    # `<Attr>.LineNumber` column (a collection has no such field) and an explicit field with
+    # dataPath 'Rows.Price' was refused, because a dotted path was accepted only for a dynamic list
+    # or the main object attribute (issue #295 review).
+    attr, col, tbl = "E2EShownRows", "E2EShownPrice", "E2EShownTable"
+    _seed_collection_attribute(attr)
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(c, "create the data column")
+    wait_for_project_ready()
+
+    t = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Table." + tbl,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(t, "create a table bound to the collection attribute")
+    form_file = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    # The table's auto-columns come from the ATTRIBUTE's columns, addressed <Attr>.<Column> (a dotted
+    # path serializes as ONE dot-joined <segments> element).
+    poll_disk_contains(form_file, "<segments>%s.%s</segments>" % (attr, col),
+                       ctx="the table column must be bound to the attribute's own column")
+    form_xml = read_disk(form_file)
+    assert "<name>%sLineNumber</name>" % tbl not in form_xml, \
+        "an in-memory collection has no LineNumber field, so the table must not generate that " \
+        "column: %s" % form_xml
+
+    # ...and an EXPLICIT field bound to the same column is accepted too.
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.E2EShownField",
+        "properties": [{"name": "dataPath", "value": attr + "." + col},
+                       {"name": "parent", "value": tbl}]})
+    assert_ok(f, "an explicit field may bind to a collection attribute's column")
+    poll_disk_contains(form_file, "E2EShownField",
+                       ctx="the explicit column field must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_on_an_unknown_collection_column_is_error():
+    # Widening the dotted path must not accept ANY tail: an unknown column is named, with the
+    # address that would create it.
+    attr = "E2EGhostRows"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.E2EGhostField",
+        "properties": [{"name": "dataPath", "value": attr + ".NoSuchColumn"}]})
+    e = assert_error(r, "a field bound to a nonexistent column is refused")
+    assert_error_quality(e, names=["NoSuchColumn", attr], suggests=["create_metadata", "Column"],
+                         ctx="the refusal must name the missing column and how to create it")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_column_on_missing_attribute_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT,

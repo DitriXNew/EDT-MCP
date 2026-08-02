@@ -2519,6 +2519,28 @@ public class FormElementWriterTest
                 containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
             formAttribute.getEStructuralFeatures().add(
                 containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
+            // A collection attribute's value type + its COLUMNS (issue #295): the writer reads both
+            // reflectively, so a headless test can exercise the collection paths (a table bound to a
+            // ValueTable attribute, a field bound to one of its columns). 'types' is NON-containment,
+            // so a real mcore Type can be dropped in without re-parenting it.
+            EClass typeDescription = f.createEClass();
+            typeDescription.setName("TypeDescription"); //$NON-NLS-1$
+            EReference types = f.createEReference();
+            types.setName("types"); //$NON-NLS-1$
+            types.setEType(EcorePackage.Literals.EOBJECT);
+            types.setUpperBound(-1);
+            typeDescription.getEStructuralFeatures().add(types);
+            EClass formAttributeColumn = f.createEClass();
+            formAttributeColumn.setName("FormAttributeColumn"); //$NON-NLS-1$
+            formAttributeColumn.getESuperTypes().add(abstractFormAttribute);
+            formAttributeColumn.getEStructuralFeatures().add(
+                containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "columns", formAttributeColumn, true)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(typeDescription);
+            pkg.getEClassifiers().add(formAttributeColumn);
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
@@ -2865,5 +2887,122 @@ public class FormElementWriterTest
         assertNull(FormElementWriter.parse( //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Field.Price.Handler.OnChange").ownerAttributeName); //$NON-NLS-1$
         assertFalse(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.A").isAttributeColumn()); //$NON-NLS-1$
+    }
+
+    // ============ Showing a collection attribute's columns on the form (issue #295 review) ==========
+
+    @Test
+    public void testCreateFieldBindsToACollectionAttributeColumn()
+    {
+        // A ValueTable attribute could hold columns that NO form element could ever display: a dotted
+        // dataPath was accepted only for a dynamic list or the main object attribute, so 'Rows.Price'
+        // was refused and the data column stayed invisible.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "PriceField"); //$NON-NLS-1$
+        assertNotNull("the field bound to the column must exist", field); //$NON-NLS-1$
+        EObject dataPath = (EObject)field.eGet(feature(field, "dataPath")); //$NON-NLS-1$
+        assertEquals("Rows.Price must split into 2 segments", Arrays.asList("Rows", "Price"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            dataPath.eGet(feature(dataPath, "segments"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateFieldRejectsAnUnknownColumnOnACollectionAttribute()
+    {
+        // Widening the dotted path must not widen it to ANY tail: a column that does not exist is
+        // named, with the create_metadata address that would create it.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "GhostField", null, //$NON-NLS-1$
+            "Rows.NoSuchColumn", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a nonexistent column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing column", err.contains("NoSuchColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and point at the tool that creates it", err.contains("create_metadata")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "GhostField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateTableOverACollectionAttributeTakesItsOwnColumns()
+    {
+        // A table bound to a ValueTable attribute has no tabular section behind it, so the metadata-
+        // aware caller can supply no column names: they come from the ATTRIBUTE's own columns. And it
+        // gets NO LineNumber column - an in-memory collection has no such field.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price", "Qty"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNull(FormElementWriter.createTable(form, "RowsTable", null, "Rows", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+
+        assertEquals("the column field must be bound to the attribute's column", //$NON-NLS-1$
+            Arrays.asList("Rows", "Price"), segmentsOf(form, "RowsTablePrice")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(Arrays.asList("Rows", "Qty"), segmentsOf(form, "RowsTableQty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull("a collection has no LineNumber field, so no column may address one", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form, "RowsTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTabularSectionTableKeepsItsLineNumberColumn()
+    {
+        // The other side of the same branch: a tabular-section table is unchanged.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createTable(form, "Goods", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonList("Product"), null, null, false, new String[1])); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsLineNumber")); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsProduct")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMainTableResolutionErrorAnswersBeforeTheWrite()
+    {
+        // The wording used to live only inside the write callback, so an unresolvable main table was
+        // answered AFTER the destructive prompt. Exposed as a pre-check the caller runs first.
+        String err = FormElementWriter.mainTableResolutionError(null, "Catalog.NoSuchObject"); //$NON-NLS-1$
+        assertNotNull("an unresolvable main table must be refusable before the write", err); //$NON-NLS-1$
+        assertTrue(err.contains("Cannot resolve the main table")); //$NON-NLS-1$
+        assertTrue(err.contains("Catalog.NoSuchObject")); //$NON-NLS-1$
+        // Nothing requested - nothing to refuse.
+        assertNull(FormElementWriter.mainTableResolutionError(null, null));
+        assertNull(FormElementWriter.mainTableResolutionError(null, "")); //$NON-NLS-1$
+    }
+
+    /** The dot-split segments of the item named {@code itemName}, or {@code null} when it is absent. */
+    private static List<?> segmentsOf(EObject form, String itemName)
+    {
+        EObject item = FormElementWriter.findFormItem(form, itemName);
+        if (item == null)
+        {
+            return null;
+        }
+        EObject dataPath = (EObject)item.eGet(feature(item, "dataPath")); //$NON-NLS-1$
+        return (List<?>)dataPath.eGet(feature(dataPath, "segments")); //$NON-NLS-1$
+    }
+
+    /**
+     * Adds a ValueTable form attribute named {@code name} carrying {@code columnNames}. The value type
+     * is a REAL mcore {@code Type} named ValueTable, because the collection check reads it through
+     * {@code McoreUtil}, not through the raw EMF feature.
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject newCollectionAttribute(EObject form, String name, String... columnNames)
+    {
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), name); //$NON-NLS-1$
+        EObject typeDescription = newObject(modelClass("TypeDescription")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.Type valueTable = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
+        valueTable.setName("ValueTable"); //$NON-NLS-1$
+        ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(valueTable); //$NON-NLS-1$
+        attribute.eSet(feature(attribute, "valueType"), typeDescription); //$NON-NLS-1$
+        for (String columnName : columnNames)
+        {
+            EObject column = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+            column.eSet(feature(column, "name"), columnName); //$NON-NLS-1$
+            ((List<EObject>)attribute.eGet(feature(attribute, "columns"))).add(column); //$NON-NLS-1$
+        }
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return attribute;
     }
 }
