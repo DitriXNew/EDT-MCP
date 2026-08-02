@@ -2160,8 +2160,9 @@ public final class FormElementWriter
         EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
         if (extInfo == null)
         {
-            throw new IllegalStateException(
-                "The form model does not expose a DynamicListExtInfo classifier."); //$NON-NLS-1$
+            // Defence in depth: the caller answers this from dynamicListUnsupportedError BEFORE the
+            // consent gate, so reaching it here means the metamodel changed under the transaction.
+            throw new IllegalStateException(ERR_NO_DYNAMIC_LIST_CLASSIFIER);
         }
         EObject dynamicListType = MetadataTypeBuilder.dynamicListType(version);
         EStructuralFeature valueTypeFeature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
@@ -2223,6 +2224,26 @@ public final class FormElementWriter
         }
         return mainTableNotResolvedJson(mainTableFqn);
     }
+
+    /**
+     * The refusal for a form model whose metamodel has no {@code DynamicListExtInfo} classifier, or
+     * {@code null} when it has one. A pure metamodel lookup (nothing is created), so a caller can
+     * answer it BEFORE the consent gate: {@link #convertPlainAttributeToDynamicList} otherwise raises
+     * the same condition from inside the write, which is too late - it is decided by the form model,
+     * never by the user's answer to a destructive prompt (issue #295 review).
+     *
+     * @param formModel the tx-bound form model
+     * @return a ready JSON error, or {@code null} when a dynamic list can be built here
+     */
+    public static String dynamicListUnsupportedError(EObject formModel)
+    {
+        return formEClass(formModel, ECLASS_DYNAMIC_LIST_EXT_INFO) != null ? null
+            : ToolResult.error(ERR_NO_DYNAMIC_LIST_CLASSIFIER).toJson();
+    }
+
+    /** Single wording: the form metamodel cannot represent a dynamic list at all. */
+    private static final String ERR_NO_DYNAMIC_LIST_CLASSIFIER =
+        "The form model does not expose a DynamicListExtInfo classifier."; //$NON-NLS-1$
 
     /** The single wording of an unresolvable dynamic-list main table, as a ready JSON error. */
     private static String mainTableNotResolvedJson(String mainTableFqn)

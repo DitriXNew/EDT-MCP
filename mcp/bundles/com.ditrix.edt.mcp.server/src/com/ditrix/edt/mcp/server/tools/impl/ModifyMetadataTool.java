@@ -3063,6 +3063,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return false;
     }
 
+    /** The project's platform version (the type payload is built for it), or {@code null}. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project =
+            v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        return v8Project != null ? v8Project.getVersion() : null;
+    }
+
     /** What the user authorizes when a form attribute (or column) changes its data type. */
     private static ConsentPreview formRetypePreview(String normFqn)
     {
@@ -3075,52 +3084,70 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * The form-member property branch's PRE-CHECK, run before the consent gate (see
      * {@link #gateFormRetype}): ONE read transaction decides whether a prompt is warranted at all.
-     * Three cases must NOT prompt, because the write is refused or unchanged in each and a denial
+     * These cases must NOT prompt, because the write is refused or unchanged in each and a denial
      * would be returned INSTEAD of the actionable error: the request retypes nothing, the member does
-     * not exist (the write path answers "not found"), or the retype would strand the attribute's
-     * columns. Issue #295 review.
+     * not exist (the write path answers "not found"), or ANY of the requested property changes fails
+     * to validate - a retype that would strand the attribute's columns, an unbuildable {@code type}
+     * payload, an unknown property, an out-of-range value. Issue #295 review.
      *
+     * @param ctx the resolved project context (the configuration references resolve against)
+     * @param version the platform version the type payload is built for
      * @param fctx the resolved form edit context
      * @param ref the parsed form-member ref
      * @param properties the requested property changes
      * @return a ready JSON error to return as-is, {@code ""} to write without prompting, or
      *         {@code null} to ask
      */
-    private String formRetypePreflight(FormElementWriter.FormEditContext fctx,
-        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+    private String formRetypePreflight(ProjectContext ctx, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        FormElementWriter.FormEditContext fctx, FormElementWriter.FormMemberRef ref,
+        List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
         if (!isFormRetypeRequest(ref, properties))
         {
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "FormRetypePreflight", //$NON-NLS-1$
-            (formModel, tx) -> formRetypeVerdict(
-                FormElementWriter.resolveFormMember(formModel, ref), properties));
+            (formModel, tx) -> formRetypeVerdict(ctx.config, version,
+                FormElementWriter.resolveFormMember(formModel, ref), properties, normReport));
     }
 
     /**
      * The property branch's pre-check verdict for an ALREADY-RESOLVED member - the body of
      * {@link #formRetypePreflight}'s read, package-private so a unit test can drive the decision
-     * itself (that the stranded-columns refusal is reached BEFORE any prompt) without an EDT context.
+     * itself without an EDT context.
      *
+     * <p>It runs the SAME preparation the write runs ({@link #prepareFormMemberChanges}) and throws
+     * the result away: every refusal that pass can produce is decided by the request and the current
+     * model, never by the user's answer, so ALL of it belongs above the consent gate. Doing only part
+     * of it here is exactly the defect the review found twice - the stranded-columns guard was lifted
+     * while the {@code type} payload stayed below the gate, so an unbuildable type still raised a
+     * destructive prompt and answered a consent denial instead of "Unknown type kind".</p>
+     *
+     * <p>The normalization report is a THROWAWAY: the write repeats the preparation with the real
+     * one, and sharing it would report every renamed name twice.</p>
+     *
+     * @param config the configuration reference targets resolve against
+     * @param version the platform version the type payload is built for
      * @param member the resolved form member, or {@code null} when it does not exist
      * @param properties the requested property changes
+     * @param normReport the caller's report - only its SETTING is used, via
+     *            {@link MdNameNormalizer.Report#emptyCopy()}, so this pass reports nothing twice
      * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
      */
-    static String formRetypeVerdict(EObject member, List<JsonObject> properties)
+    String formRetypeVerdict(Configuration config, Version version, EObject member,
+        List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
         if (member == null)
         {
             return ""; //$NON-NLS-1$
         }
-        for (JsonObject prop : properties)
+        try
         {
-            String orphanErr =
-                refuseRetypeThatOrphansColumns(member, normalizeFormProperty(member, prop));
-            if (orphanErr != null)
-            {
-                return orphanErr;
-            }
+            prepareFormMemberChanges(config, version, member, properties, normReport.emptyCopy());
+        }
+        catch (FormValidationException e)
+        {
+            return FormValidationException.jsonOf(e);
         }
         return null;
     }
@@ -3719,9 +3746,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table, " //$NON-NLS-1$
                     + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
+            // The version the type payload is built for: resolved BEFORE the gate, because the
+            // pre-check validates that payload (it is the same one the write then uses).
+            final Version version = platformVersionOf(ctx);
             return gateFormRetype(formRetypePreview(normFqn),
-                () -> formRetypePreflight(fctx, ref, properties),
-                () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx));
+                () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport),
+                () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx,
+                    version));
         }
         catch (Exception e)
         {
@@ -3751,17 +3782,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param properties the requested property changes
      * @param normReport the name-normalization report
      * @param fctx the already-resolved form edit context
+     * @param version the platform version the pre-check already validated the type payload against
      * @return the tool's JSON result
      */
     private String applyFormMemberProperties(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
-        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx)
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
     {
         Configuration config = ctx.config;
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
-        final Version version = v8Project != null ? v8Project.getVersion() : null;
-
         final List<String> applied = new ArrayList<>();
         // A form member's title is a localized property too, so it gets the same report the mdclass
         // path gives (issue #298). The declared codes are read OUTSIDE the write transaction.
@@ -3958,10 +3986,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, String qt, Boolean cq, String mt,
         MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx)
     {
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
-        final Version version = v8Project != null ? v8Project.getVersion() : null;
-
+        final Version version = platformVersionOf(ctx);
         final List<String> applied = new ArrayList<>();
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
             (formModel, tx) ->
@@ -4325,7 +4350,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
-            (formModel, tx) -> dynamicListRetypeVerdict(config,
+            (formModel, tx) -> dynamicListRetypeVerdict(config, formModel,
                 FormElementWriter.resolveFormMember(formModel, ref), mainTable));
     }
 
@@ -4336,15 +4361,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * main table against the model.
      *
      * @param config the configuration the main table is resolved against
+     * @param formModel the tx-bound form model (its metamodel decides whether a list is possible)
      * @param member the resolved form attribute, or {@code null} when it does not exist
      * @param mainTable the requested main-table FQN, or {@code null}
      * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
      */
-    static String dynamicListRetypeVerdict(Configuration config, EObject member, String mainTable)
+    static String dynamicListRetypeVerdict(Configuration config, EObject formModel, EObject member,
+        String mainTable)
     {
         if (member == null)
         {
             return ""; //$NON-NLS-1$
+        }
+        // A form model that cannot represent a dynamic list at all refuses the conversion no matter
+        // what the user answers - the write raised it from inside the transaction (issue #295 review).
+        String unsupported = FormElementWriter.dynamicListUnsupportedError(formModel);
+        if (unsupported != null)
+        {
+            return unsupported;
         }
         // The main table is resolved HERE, in the same read, because the write callback resolves it
         // too late: an FQN that names nothing would raise the destructive prompt first and answer the

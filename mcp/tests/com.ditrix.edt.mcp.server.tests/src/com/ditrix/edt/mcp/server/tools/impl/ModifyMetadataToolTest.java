@@ -42,6 +42,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -1468,13 +1469,26 @@ public class ModifyMetadataToolTest
         assertEquals(WRITTEN, ok);
     }
 
+    /** The caller's normalization report: the pre-check only copies its SETTING, never its findings. */
+    private static MdNameNormalizer.Report report()
+    {
+        return new MdNameNormalizer.Report(true);
+    }
+
+    private static ModifyMetadataTool neverAsking()
+    {
+        return new ModifyMetadataTool((name, preview) -> {
+            throw new AssertionError("the preflight must decide without ever asking the gate"); //$NON-NLS-1$
+        });
+    }
+
     @Test
     public void testTheRetypePreflightRefusesARetypeThatStrandsColumns()
     {
         // The DECISION itself, not just the order: a retype of a column-bearing attribute answers the
         // stranded-columns error, so the gate is never reached.
-        String verdict = ModifyMetadataTool.formRetypeVerdict(collectionAttribute("Price"), //$NON-NLS-1$
-            Collections.singletonList(retypeToStringProperty()));
+        String verdict = neverAsking().formRetypeVerdict(null, null, collectionAttribute("Price"), //$NON-NLS-1$
+            Collections.singletonList(retypeToStringProperty()), report());
 
         assertNotNull("a retype that strands columns must be refused in the preflight", verdict); //$NON-NLS-1$
         assertTrue("the refusal must name the column so the caller can delete it", //$NON-NLS-1$
@@ -1482,14 +1496,41 @@ public class ModifyMetadataToolTest
     }
 
     @Test
-    public void testTheRetypePreflightPromptsForARetypeThatStrandsNothing()
+    public void testAnAbsentMemberIsNotPrompted()
     {
-        assertNull("a retype with no columns to strand must reach the gate", //$NON-NLS-1$
-            ModifyMetadataTool.formRetypeVerdict(collectionAttribute(),
-                Collections.singletonList(retypeToStringProperty())));
         assertEquals("an absent member must not prompt - the write answers 'not found'", "", //$NON-NLS-1$ //$NON-NLS-2$
-            ModifyMetadataTool.formRetypeVerdict(null,
-                Collections.singletonList(retypeToStringProperty())));
+            neverAsking().formRetypeVerdict(null, null, null,
+                Collections.singletonList(retypeToStringProperty()), report()));
+    }
+
+    @Test
+    public void testAnUnbuildableTypePayloadOnAColumnIsRefusedBeforeThePrompt()
+    {
+        // The gate was scoped to include Kind.COLUMN, but the type PAYLOAD was still parsed below it:
+        // '...Attribute.Rows.Column.Price' with a type spec that cannot be built raised the
+        // destructive prompt and answered a consent denial instead of the type error - for a write no
+        // answer could have applied (issue #295 review). The preflight now runs the SAME preparation
+        // the write runs, so every payload refusal lands above the gate.
+        String verdict = neverAsking().formRetypeVerdict(null, Version.LATEST, plainColumn(),
+            Collections.singletonList(malformedTypeProperty()), report());
+
+        assertNotNull("an unbuildable type payload must be refused in the preflight", verdict); //$NON-NLS-1$
+        assertTrue("the caller must get the TYPE error, not a consent denial: " + verdict, //$NON-NLS-1$
+            verdict.contains("kind")); //$NON-NLS-1$
+        assertFalse("a payload refusal must not read as a consent refusal", //$NON-NLS-1$
+            verdict.contains("consent")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnbuildableTypePayloadOnACollectionAttributeIsRefusedBeforeThePrompt()
+    {
+        // The twin branch: the same request on the collection ATTRIBUTE itself.
+        String verdict = neverAsking().formRetypeVerdict(null, Version.LATEST, collectionAttribute(),
+            Collections.singletonList(malformedTypeProperty()), report());
+
+        assertNotNull("an unbuildable type payload must be refused in the preflight", verdict); //$NON-NLS-1$
+        assertTrue("the caller must get the TYPE error, not a consent denial: " + verdict, //$NON-NLS-1$
+            verdict.contains("kind")); //$NON-NLS-1$
     }
 
     @Test
@@ -1497,8 +1538,8 @@ public class ModifyMetadataToolTest
     {
         // The main table used to be resolved only inside the write callback, so a nonexistent one
         // raised the conversion prompt FIRST and answered the resolution failure only after ALLOW.
-        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, collectionAttribute(),
-            "Catalog.NoSuchObject"); //$NON-NLS-1$
+        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, formSupportingLists(),
+            collectionAttribute(), "Catalog.NoSuchObject"); //$NON-NLS-1$
 
         assertNotNull("an unresolvable main table must be refused before the prompt", verdict); //$NON-NLS-1$
         assertTrue("the refusal must be the main-table one, not a consent denial", //$NON-NLS-1$
@@ -1507,12 +1548,75 @@ public class ModifyMetadataToolTest
     }
 
     @Test
+    public void testAFormThatCannotHoldADynamicListIsRefusedBeforeThePrompt()
+    {
+        // The last deterministic refusal that still lived below the gate: a form metamodel with no
+        // DynamicListExtInfo classifier cannot be converted whatever the user answers.
+        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, formWithoutLists(),
+            collectionAttribute(), null);
+
+        assertNotNull("a form that cannot hold a list must be refused before the prompt", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing classifier: " + verdict, //$NON-NLS-1$
+            verdict.contains("DynamicListExtInfo")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheDynamicListPreflightAsksForAConversionThatCanHappen()
     {
         assertNull("a real conversion must reach the gate", //$NON-NLS-1$
-            ModifyMetadataTool.dynamicListRetypeVerdict(null, collectionAttribute(), null));
+            ModifyMetadataTool.dynamicListRetypeVerdict(null, formSupportingLists(),
+                collectionAttribute(), null));
         assertEquals("an absent attribute must not prompt", "", //$NON-NLS-1$ //$NON-NLS-2$
-            ModifyMetadataTool.dynamicListRetypeVerdict(null, null, null));
+            ModifyMetadataTool.dynamicListRetypeVerdict(null, formSupportingLists(), null, null));
+    }
+
+    /** A form model whose metamodel CAN represent a dynamic list. */
+    private static EObject formSupportingLists()
+    {
+        return formModel(true);
+    }
+
+    /** A form model whose metamodel cannot - the conversion is impossible in it. */
+    private static EObject formWithoutLists()
+    {
+        return formModel(false);
+    }
+
+    private static EObject formModel(boolean withDynamicListExtInfo)
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/formmodel"); //$NON-NLS-1$
+        EClass formClass = factory.createEClass();
+        formClass.setName("Form"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formClass);
+        if (withDynamicListExtInfo)
+        {
+            EClass extInfo = factory.createEClass();
+            extInfo.setName("DynamicListExtInfo"); //$NON-NLS-1$
+            pkg.getEClassifiers().add(extInfo);
+        }
+        return new DynamicEObjectImpl(formClass);
+    }
+
+    /**
+     * {name:'type', value:{types:[{}]}} - a type payload the builder REFUSES on its own shape, so the
+     * refusal is decidable without a platform type provider (the headless test has none, exactly as
+     * {@code MetadataTypeBuilderTest} documents). In production the same pass answers the reviewer's
+     * case, an unknown {@code kind}; both are refusals no consent answer can turn into a write.
+     */
+    private static JsonObject malformedTypeProperty()
+    {
+        JsonArray types = new JsonArray();
+        types.add(new JsonObject());
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.add("value", spec); //$NON-NLS-1$
+        return prop;
     }
 
     /** {name:'type', value:{types:[{kind:'String'}]}} - the retype that strands a column. */
@@ -1532,10 +1636,37 @@ public class ModifyMetadataToolTest
 
     /**
      * A dynamic-EMF form attribute carrying {@code valueType} + the named {@code columns} - the shape
-     * both preflights read reflectively.
+     * both preflights read reflectively. The {@code valueType} reference targets a classifier NAMED
+     * {@code TypeDescription}, because that is exactly how {@code MetadataPropertyIntrospector}
+     * recognises a data-type property; without it the preparation would refuse the property as
+     * unknown and the test would assert the wrong refusal.
      */
     @SuppressWarnings("unchecked")
     private static EObject collectionAttribute(String... columnNames)
+    {
+        EClass attributeClass = formLikePackage().getEClassifier("FormAttribute") instanceof EClass //$NON-NLS-1$
+            ? (EClass)formLikePackage().getEClassifier("FormAttribute") : null; //$NON-NLS-1$
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        EStructuralFeature columns = attributeClass.getEStructuralFeature("columns"); //$NON-NLS-1$
+        EClass columnClass = (EClass)formLikePackage().getEClassifier("FormAttributeColumn"); //$NON-NLS-1$
+        for (String name : columnNames)
+        {
+            EObject column = new DynamicEObjectImpl(columnClass);
+            column.eSet(columnClass.getEStructuralFeature("name"), name); //$NON-NLS-1$
+            ((java.util.List<EObject>)attribute.eGet(columns)).add(column);
+        }
+        return attribute;
+    }
+
+    /** A COLUMN of a collection attribute: it owns no columns of its own, but is retyped like one. */
+    private static EObject plainColumn()
+    {
+        return new DynamicEObjectImpl(
+            (EClass)formLikePackage().getEClassifier("FormAttributeColumn")); //$NON-NLS-1$
+    }
+
+    /** The form-like metamodel both fixtures instantiate (attribute + column + its data type). */
+    private static EPackage formLikePackage()
     {
         EcoreFactory factory = EcoreFactory.eINSTANCE;
         EPackage pkg = factory.createEPackage();
@@ -1543,12 +1674,16 @@ public class ModifyMetadataToolTest
         pkg.setNsPrefix("formlike"); //$NON-NLS-1$
         pkg.setNsURI("http://ditrix.com/test/formretype"); //$NON-NLS-1$
 
+        EClass typeDescription = factory.createEClass();
+        typeDescription.setName("TypeDescription"); //$NON-NLS-1$
+
         EClass columnClass = factory.createEClass();
         columnClass.setName("FormAttributeColumn"); //$NON-NLS-1$
         EAttribute columnName = factory.createEAttribute();
         columnName.setName("name"); //$NON-NLS-1$
         columnName.setEType(EcorePackage.Literals.ESTRING);
         columnClass.getEStructuralFeatures().add(columnName);
+        columnClass.getEStructuralFeatures().add(typeReference(factory, typeDescription));
 
         EClass attributeClass = factory.createEClass();
         attributeClass.setName("FormAttribute"); //$NON-NLS-1$
@@ -1558,21 +1693,21 @@ public class ModifyMetadataToolTest
         columns.setContainment(true);
         columns.setUpperBound(-1);
         attributeClass.getEStructuralFeatures().add(columns);
-        EReference valueType = factory.createEReference();
-        valueType.setName("valueType"); //$NON-NLS-1$
-        valueType.setEType(EcorePackage.Literals.EOBJECT);
-        valueType.setContainment(true);
-        attributeClass.getEStructuralFeatures().add(valueType);
+        attributeClass.getEStructuralFeatures().add(typeReference(factory, typeDescription));
+
+        pkg.getEClassifiers().add(typeDescription);
         pkg.getEClassifiers().add(columnClass);
         pkg.getEClassifiers().add(attributeClass);
+        return pkg;
+    }
 
-        EObject attribute = new DynamicEObjectImpl(attributeClass);
-        for (String name : columnNames)
-        {
-            EObject column = new DynamicEObjectImpl(columnClass);
-            column.eSet(columnName, name);
-            ((java.util.List<EObject>)attribute.eGet(columns)).add(column);
-        }
-        return attribute;
+    /** The {@code valueType} containment reference the type preparation writes into. */
+    private static EReference typeReference(EcoreFactory factory, EClass typeDescription)
+    {
+        EReference valueType = factory.createEReference();
+        valueType.setName("valueType"); //$NON-NLS-1$
+        valueType.setEType(typeDescription);
+        valueType.setContainment(true);
+        return valueType;
     }
 }
