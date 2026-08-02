@@ -412,6 +412,13 @@ public class GetProjectErrorsTool implements IMcpTool
         final List<String> resolved = new ArrayList<>();
         final List<String> notFound = new ArrayList<>();
         final List<Map<String, String>> unsupported = new ArrayList<>();
+        /**
+         * The spellings that actually resolved, parallel to {@link #resolved}: the same address
+         * unless a yo-fallback hit, in which case it is the STORED (yo-normalized) form. This is
+         * what scopes the marker scan - filtering on the caller's yo spelling would match no marker
+         * even though the object exists. Internal only: the wire keeps the caller's spelling.
+         */
+        final List<String> scopeFqns = new ArrayList<>();
         /** A ready JSON error payload when no verdict could be reached at all; {@code null} otherwise. */
         String error;
     }
@@ -464,8 +471,11 @@ public class GetProjectErrorsTool implements IMcpTool
             List<ErrorInfo> errors = Collections.emptyList();
             if (!resolution.resolved.isEmpty())
             {
+                // The SCAN is scoped by the spellings that really resolved (see
+                // AddressResolution.scopeFqns), not by the caller's - a yo spelling that resolved
+                // through the fallback would otherwise match no marker at all.
                 CollectContext collectContext = new CollectContext(parseSeverityFilter(severity),
-                    checkId, buildObjectFilterVariants(resolution.resolved),
+                    checkId, buildObjectFilterVariants(resolution.scopeFqns),
                     Activator.getDefault().getCheckRepository(), limit, unresolvedShown,
                     unresolvedFilteredOut, true);
                 errors = collectErrors(groupMarkersByProject(markerManager, projectName),
@@ -589,7 +599,7 @@ public class GetProjectErrorsTool implements IMcpTool
             return resolution;
         }
 
-        Set<String> found = new HashSet<>();
+        Map<String, String> found = new LinkedHashMap<>();
         boolean inspectedAny = false;
         for (IProject project : scope)
         {
@@ -603,8 +613,10 @@ public class GetProjectErrorsTool implements IMcpTool
                 // it must not be counted as an inspection either.
                 continue;
             }
-            inspectedAny = true;
-            resolveInProject(project, bmModel, config, candidates, found);
+            // Counted as inspected only when the pass really COMPLETED: a pass that threw decided
+            // nothing, so treating it as an inspection would turn its undecided addresses into
+            // "not found" (see resolveInProject).
+            inspectedAny |= resolveInProject(project, bmModel, config, candidates, found);
         }
 
         if (!inspectedAny)
@@ -620,9 +632,12 @@ public class GetProjectErrorsTool implements IMcpTool
 
         for (String fqn : candidates)
         {
-            if (found.contains(fqn))
+            String resolvedAs = found.get(fqn);
+            if (resolvedAs != null)
             {
+                // The wire keeps the caller's spelling; the scan uses the one that resolved.
                 resolution.resolved.add(fqn);
+                resolution.scopeFqns.add(resolvedAs);
             }
             else
             {
@@ -633,7 +648,8 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Adds to {@code found} every candidate address that resolves in this project.
+     * Maps in {@code found} every candidate address that resolves in this project to the spelling
+     * that actually resolved (see {@link #addressProbes}).
      *
      * <p>Two boundaries are used, because a form MEMBER does not live in the mdclass model: every
      * other family is decided inside ONE BM read transaction on this project's model, while a form
@@ -645,33 +661,22 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param bmModel its BM model
      * @param config its configuration
      * @param candidates the addresses still awaiting a verdict
-     * @param found the accumulator of addresses that resolved
+     * @param found the accumulator: requested address -&gt; the spelling that resolved
+     * @return {@code true} when the project was really INSPECTED (the resolve pass completed);
+     *     {@code false} when it threw, in which case the addresses stay undecided and this project
+     *     must not count as an inspection - a project that could not answer must never turn an
+     *     address into "not found"
      */
-    private static void resolveInProject(IProject project, IBmModel bmModel, Configuration config,
-        List<String> candidates, Set<String> found)
+    static boolean resolveInProject(IProject project, IBmModel bmModel, Configuration config,
+        List<String> candidates, Map<String, String> found)
     {
-        List<FormElementWriter.FormMemberRef> deferredRefs = new ArrayList<>();
-        List<String> deferredFqns = new ArrayList<>();
+        List<DeferredMember> deferred = new ArrayList<>();
         try
         {
             BmTransactions.<Void>read(bmModel, "ResolveErrorObjectAddresses", (tx, pm) -> { //$NON-NLS-1$
                 for (String fqn : candidates)
                 {
-                    if (found.contains(fqn))
-                    {
-                        continue;
-                    }
-                    String norm = MetadataTypeUtils.normalizeFqn(fqn);
-                    FormElementWriter.FormMemberRef memberRef = formMemberRefOf(norm);
-                    if (memberRef != null)
-                    {
-                        deferredRefs.add(memberRef);
-                        deferredFqns.add(fqn);
-                    }
-                    else if (resolvesInConfiguration(config, norm))
-                    {
-                        found.add(fqn);
-                    }
+                    resolveCandidate(config, fqn, found, deferred);
                 }
                 return null;
             });
@@ -679,18 +684,93 @@ public class GetProjectErrorsTool implements IMcpTool
         catch (Exception e)
         {
             // A failure here is a failure to DECIDE, never a "does not exist": leave the addresses
-            // undecided so another project in scope can still answer for them.
+            // undecided so another project in scope can still answer for them, and report the
+            // project as NOT inspected so a lone failure refuses the call instead of answering it.
             Activator.logError("Failed to resolve " + PARAM_OBJECT_FQNS + " in project " //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName(), e);
-            return;
+            return false;
         }
 
-        for (int i = 0; i < deferredFqns.size(); i++)
+        for (DeferredMember member : deferred)
         {
-            if (formMemberExists(project, config, deferredRefs.get(i)))
+            if (!found.containsKey(member.requestFqn)
+                && formMemberExists(project, config, member.ref))
             {
-                found.add(deferredFqns.get(i));
+                found.put(member.requestFqn, member.probeFqn);
             }
+        }
+        return true;
+    }
+
+    /**
+     * Decides ONE candidate address inside the open read transaction: the first probe spelling that
+     * resolves wins, and a form-MEMBER probe is deferred out of the transaction instead (see
+     * {@link #resolveInProject}).
+     *
+     * @param config the configuration to resolve against
+     * @param fqn the requested address, as the caller wrote it
+     * @param found the accumulator: requested address -&gt; the spelling that resolved
+     * @param deferred the accumulator of form-member probes to decide after the transaction
+     */
+    private static void resolveCandidate(Configuration config, String fqn,
+        Map<String, String> found, List<DeferredMember> deferred)
+    {
+        if (found.containsKey(fqn))
+        {
+            return;
+        }
+        for (String probe : addressProbes(MetadataTypeUtils.normalizeFqn(fqn)))
+        {
+            FormElementWriter.FormMemberRef memberRef = formMemberRefOf(probe);
+            if (memberRef != null)
+            {
+                deferred.add(new DeferredMember(fqn, probe, memberRef));
+            }
+            else if (resolvesInConfiguration(config, probe))
+            {
+                found.put(fqn, probe);
+                return;
+            }
+        }
+    }
+
+    /**
+     * The spellings to try for one address, in order: the address itself and - only when it carries
+     * the Russian letter yo - its yo-normalized twin.
+     *
+     * <p>Addressing is EXACT, but {@code create_metadata} normalizes yo (U+0451/U+0401) to ye
+     * (U+0435/U+0415) in names by default, so a caller who re-types the original yo spelling would
+     * miss the stored name. The write/delete paths get this from
+     * {@link MetadataNodeResolver#resolveExistingWithYoFallback}; this filter applies the same
+     * {@link MetadataNodeResolver#yoRetryFqn} retry around the WHOLE family dispatch, so the
+     * families that resolver does not reach (forms, form members, Subsystem chains, Predefined
+     * items) get the fallback too.</p>
+     *
+     * @param normFqn the type-normalized address
+     * @return the probe spellings in resolution order (never {@code null})
+     */
+    private static List<String> addressProbes(String normFqn)
+    {
+        String retry = MetadataNodeResolver.yoRetryFqn(normFqn);
+        return retry == null ? Collections.singletonList(normFqn)
+            : Arrays.asList(normFqn, retry);
+    }
+
+    /** One form-MEMBER probe deferred out of the read transaction (see {@link #resolveInProject}). */
+    private static final class DeferredMember
+    {
+        /** The requested address, as the caller wrote it - the key of the verdict. */
+        final String requestFqn;
+        /** The spelling being probed (the request, or its yo-normalized twin). */
+        final String probeFqn;
+        /** The member reference parsed from {@link #probeFqn}. */
+        final FormElementWriter.FormMemberRef ref;
+
+        DeferredMember(String requestFqn, String probeFqn, FormElementWriter.FormMemberRef ref)
+        {
+            this.requestFqn = requestFqn;
+            this.probeFqn = probeFqn;
+            this.ref = ref;
         }
     }
 
@@ -779,6 +859,11 @@ public class GetProjectErrorsTool implements IMcpTool
      * the form containing it. The member lives in the form CONTENT model, so the form is resolved
      * first and the leaf is then looked up inside a read transaction on that content model.
      *
+     * <p>The KIND is checked too ({@link FormElementWriter#matchesRequestedKind}): the member lookup
+     * finds an ITEM by NAME alone, so {@code ...Form.F.Button.Price} would otherwise resolve to the
+     * FIELD named {@code Price} - and then filter the markers by a kind segment no location carries,
+     * handing the caller a clean report instead of naming the typo.</p>
+     *
      * <p>Call OUTSIDE a BM transaction: {@link FormElementWriter#readEditableForm} opens its own.</p>
      *
      * @param project the project owning the form
@@ -807,8 +892,8 @@ public class GetProjectErrorsTool implements IMcpTool
                         return Boolean.valueOf(container != null
                             && FormElementWriter.findFormHandler(container, ref.name) != null);
                     }
-                    return Boolean.valueOf(
-                        FormElementWriter.resolveFormMember(formModel, ref) != null);
+                    return Boolean.valueOf(FormElementWriter.matchesRequestedKind(
+                        FormElementWriter.resolveFormMember(formModel, ref), ref));
                 });
             return Boolean.TRUE.equals(exists);
         }

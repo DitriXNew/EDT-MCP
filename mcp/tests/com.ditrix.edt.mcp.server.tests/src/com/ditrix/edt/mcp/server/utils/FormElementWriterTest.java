@@ -101,6 +101,103 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testMatchesRequestedKindRejectsAWrongKindTokenOnAnExistingName()
+    {
+        // resolveFormMember finds an ITEM by NAME alone, so every kind token resolves to the same
+        // element. A consumer that only asks "is it non-null" therefore accepts 'Button.Price' for
+        // the FIELD Price - and then filters markers by a kind segment no location carries.
+        EObject form = newFormWithPriceAttribute();
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "Price", null, //$NON-NLS-1$
+            "PriceAttr", null, null, false, new String[1])); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "Price"); //$NON-NLS-1$
+        assertNotNull(field);
+        assertEquals("FormField", field.eClass().getName()); //$NON-NLS-1$
+
+        assertTrue("the requested kind IS the element's kind", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Field", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a FIELD must not answer to a Button address", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Button", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor to a Group / Decoration / Table address", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Group", "Price")) //$NON-NLS-1$
+                || FormElementWriter.matchesRequestedKind(field, ref("Decoration", "Price")) //$NON-NLS-1$ //$NON-NLS-2$
+                || FormElementWriter.matchesRequestedKind(field, ref("Table", "Price"))); //$NON-NLS-1$
+        // pole / knopka - the same verdicts through the Russian tokens.
+        assertTrue(FormElementWriter.matchesRequestedKind(field,
+            ref(fromCp(0x043f, 0x043e, 0x043b, 0x0435), "Price"))); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesRequestedKind(field,
+            ref(fromCp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430), "Price"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMatchesRequestedKindRejectsAnUnrecognizedKindToken()
+    {
+        // 'Fielld' denotes no kind at all, and resolveFormMember falls back to the by-name search
+        // for ANY token - so without this check a misspelt token resolves to the real element.
+        EObject form = newFormWithPriceAttribute();
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "Price", null, //$NON-NLS-1$
+            "PriceAttr", null, null, false, new String[1])); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "Price"); //$NON-NLS-1$
+        assertFalse("an unrecognized kind token can be the kind of nothing", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Fielld", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a missing element never matches", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(null, ref("Field", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMatchesRequestedKindAcceptsEveryOwnKindAndTheTokenlessElements()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", null, //$NON-NLS-1$
+            "Print", null, null, false, new String[1])); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Main", null, null, //$NON-NLS-1$
+            null, null, false, new String[1]));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "Hint", null, null, //$NON-NLS-1$
+            null, null, false, new String[1]));
+        assertNull(FormElementWriter.createMember(form, Kind.TABLE, "Lines", null, //$NON-NLS-1$
+            "Object.Lines", null, null, false, new String[1])); //$NON-NLS-1$
+
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "PrintButton"), ref("Button", "PrintButton"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "Main"), ref("Group", "Main"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "Hint"), ref("Decoration", "Hint"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "Lines"), ref("Table", "Lines"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // An ATTRIBUTE / COMMAND is resolved from its OWN containment, so its kind is already
+        // guaranteed by the lookup and must not be second-guessed here.
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormCommand(form, "Print"), ref("Command", "Print"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // The auto command bar is an element NO kind token denotes: it stays addressable by name,
+        // exactly as before, so the check must not narrow the supported addresses.
+        EObject bar = FormElementWriter.findFormItem(form, "FormCommandBar"); //$NON-NLS-1$
+        assertNotNull(bar);
+        assertTrue("an element no kind token denotes must stay addressable", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(bar, ref("Group", "FormCommandBar"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A form carrying one form attribute, so a bound FIELD can be created on it. */
+    private static EObject newFormWithPriceAttribute()
+    {
+        EObject form = newForm();
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "PriceAttr"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return form;
+    }
+
+    /** A form-member ref for the fixture form, addressed with the given kind token / leaf name. */
+    private static FormMemberRef ref(String kindToken, String name)
+    {
+        FormMemberRef parsed =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm." + kindToken + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("the probe FQN must parse as a form member", parsed); //$NON-NLS-1$
+        return parsed;
+    }
+
+    @Test
     public void testCreateTableWithColumns()
     {
         EObject form = newForm();

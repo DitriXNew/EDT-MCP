@@ -27,6 +27,12 @@ import java.util.Set;
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
@@ -764,6 +770,91 @@ public class GetProjectErrorsToolTest
         assertTrue("nothing may be declared missing", resolution.notFound.isEmpty()); //$NON-NLS-1$
     }
 
+    @Test
+    public void testAFailedResolvePassDoesNotCountAsAnInspection()
+    {
+        // The project HAS a readable model and configuration, but the resolve pass throws. Nothing
+        // was decided, so the project must NOT count as inspected: otherwise its undecided
+        // addresses are declared missing on the strength of an inspection that never happened.
+        IBmModel model = mock(IBmModel.class);
+        when(model.executeReadonlyTask(any())).thenThrow(new IllegalStateException("model busy")); //$NON-NLS-1$
+        Map<String, String> found = new LinkedHashMap<>();
+
+        boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), model, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(),
+            Collections.singletonList("Catalog.Products"), found); //$NON-NLS-1$
+
+        assertFalse("a pass that threw decided nothing and is not an inspection", inspected); //$NON-NLS-1$
+        assertTrue("and it must not decide any address either", found.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACompletedResolvePassCountsAsAnInspection()
+    {
+        // The counterpart: a pass that ran to the end IS an inspection, even when it resolved
+        // nothing - only then may an address be reported as missing.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Map<String, String> found = new LinkedHashMap<>();
+
+        boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), readModel(), //$NON-NLS-1$
+            config, Collections.singletonList("Catalog.Nope"), found); //$NON-NLS-1$
+
+        assertTrue("a completed pass is an inspection", inspected); //$NON-NLS-1$
+        assertTrue("nothing resolved in an empty configuration", found.isEmpty()); //$NON-NLS-1$
+    }
+
+    // ========== objectFqns: yo (U+0451) addressing ==========
+
+    @Test
+    public void testYoSpellingResolvesToTheStoredNameAndScopesTheScanWithIt()
+    {
+        // create_metadata normalizes yo (U+0451) to ye (U+0435) in names by default, so an object
+        // the user knows as "M[yo]d" is STORED as "Med". The exact filter must resolve the yo
+        // spelling (the write/delete paths already do) AND remember the stored spelling: the
+        // markers carry the stored name, so scoping the scan by the caller's spelling would
+        // silently match nothing. All Cyrillic here is built from code points (pure-ASCII source).
+        String stored = fromCp(0x041c, 0x0435, 0x0434); // Med
+        String requested = "Catalog." + fromCp(0x041c, 0x0451, 0x0434); // Catalog.M[yo]d //$NON-NLS-1$
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName(stored);
+        config.getCatalogs().add(catalog);
+
+        Map<String, String> found = new LinkedHashMap<>();
+        assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
+            Collections.singletonList(requested), found));
+
+        assertEquals("the yo spelling must resolve against the stored ye name", //$NON-NLS-1$
+            "Catalog." + stored, found.get(requested)); //$NON-NLS-1$
+        // A Russian TYPE token takes the same route (Spravochnik.M[yo]d).
+        String ruRequested = fromCp(0x0421, 0x043f, 0x0440, 0x0430, 0x0432, 0x043e, 0x0447, 0x043d,
+            0x0438, 0x043a) + "." + fromCp(0x041c, 0x0451, 0x0434); //$NON-NLS-1$
+        Map<String, String> ruFound = new LinkedHashMap<>();
+        assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
+            Collections.singletonList(ruRequested), ruFound));
+        assertEquals("Catalog." + stored, ruFound.get(ruRequested)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAYolessAddressResolvesToItselfAndAGenuineMissStaysMissing()
+    {
+        // The fallback must not blur the verdicts: an address that resolves as written keeps its own
+        // spelling, and a name that exists in NEITHER spelling is still undecided (-> not found).
+        String stored = fromCp(0x041c, 0x0435, 0x0434); // Med
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName(stored);
+        config.getCatalogs().add(catalog);
+
+        Map<String, String> found = new LinkedHashMap<>();
+        assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
+            Arrays.asList("Catalog." + stored, "Catalog." + fromCp(0x041b, 0x0451, 0x0434)), found)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("Catalog." + stored, found.get("Catalog." + stored)); //$NON-NLS-1$
+        assertNull("a name that exists in neither spelling must stay undecided", //$NON-NLS-1$
+            found.get("Catalog." + fromCp(0x041b, 0x0451, 0x0434))); //$NON-NLS-1$
+    }
+
     // ========== objectFqns: the structuredContent payload ==========
 
     @Test
@@ -865,6 +956,26 @@ public class GetProjectErrorsToolTest
         IProject project = mock(IProject.class);
         when(project.getName()).thenReturn(name);
         return project;
+    }
+
+    /**
+     * An {@link IBmModel} whose read task really RUNS (with a stand-in transaction), so the address
+     * resolution under test executes instead of being stubbed away.
+     */
+    private static IBmModel readModel()
+    {
+        IBmModel model = mock(IBmModel.class);
+        when(model.executeReadonlyTask(any())).thenAnswer(inv -> {
+            IBmTask<?> task = inv.getArgument(0);
+            return task.execute(mock(IBmTransaction.class), null);
+        });
+        return model;
+    }
+
+    /** Builds a string from BMP code points (keeps this test source pure ASCII). */
+    private static String fromCp(int... cps)
+    {
+        return new String(cps, 0, cps.length);
     }
 
     private static CheckUid checkUid(String symbolicCheckId)

@@ -19,7 +19,10 @@ There are TWO object filters and they behave differently on purpose:
   * `objectFqns` - EXACT model addresses, resolved with the same resolvers the write tools
                    use. This is the only input that reports back: the response is JSON with
                    `report` (the Markdown for a human) plus `objectsResolved` /
-                   `objectsNotFound` / `objectsUnsupported`.
+                   `objectsNotFound` / `objectsUnsupported`. "Exact" includes the KIND token
+                   of a form member (a FIELD does not answer to a `Button.` address) and the
+                   ё/е retry the write tools use (a name typed with ё resolves against the
+                   stored е form).
 
 Anything that must observe a REAL marker seeds it first (a syntax error written into a
 fixture module with write_module_source, then a forced revalidation): the live marker set
@@ -55,6 +58,16 @@ NO_MATCH_CHECK = "zzz_no_such_check_xyz_e2e"
 FIXTURE_CATALOG = "Catalog"
 FIXTURE_FORM = "ItemForm"
 FIXTURE_COMMON_FORM = "Form"
+
+# Two items of that form, with the KIND each one really is. The kind token is part of the
+# address, so an item addressed with the other one's kind must be a miss.
+FIXTURE_FORM_FIELD = "Code"          # xsi:type form:FormField
+FIXTURE_FORM_DECORATION = "Decoration1"  # xsi:type form:Decoration
+
+# A catalog created by the ё-addressing test. create_metadata normalizes 'ё'->'е' in the Name
+# by default, so the object is STORED under the 'е' spelling while the caller may keep typing 'ё'.
+YO_CATALOG_YO = "Полёт"
+YO_CATALOG_YE = "Полет"
 
 # Names that cannot exist in the fixture, so the not-found verdicts are deterministic.
 NO_SUCH_OBJECT = "NoSuchObject_e2e_xyz"
@@ -383,6 +396,70 @@ def test_exact_form_member_leaf_is_really_checked():
     assert_ok(c, "a common-form member that does not exist")
     _assert_verdicts(c, resolved=[], not_found=[common_ghost], unsupported=[])
     assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_form_member_kind_must_match_the_element():
+    """A form member is addressed by KIND *and* name: the wrong kind is a MISS, not a clean report.
+
+    The member lookup finds a form item by NAME alone, so `...Form.ItemForm.Button.Code` (where
+    `Code` is a FIELD) would otherwise be called "resolved" and then filter the markers by a kind
+    segment no location ever carries - the caller gets an empty problem report for an address that
+    does not exist, which is exactly the false-clean this input exists to prevent.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+
+    # Each item with its OWN kind: these must resolve.
+    right = ["%s.Field.%s" % (form, FIXTURE_FORM_FIELD),
+             "%s.Decoration.%s" % (form, FIXTURE_FORM_DECORATION)]
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": right, "severity": "NONE"})
+    assert_ok(r, "form members addressed with their own kind")
+    _assert_verdicts(r, resolved=right, not_found=[], unsupported=[])
+
+    # The SAME names with the other item's kind, plus a misspelt kind token: all misses.
+    wrong = ["%s.Button.%s" % (form, FIXTURE_FORM_FIELD),
+             "%s.Field.%s" % (form, FIXTURE_FORM_DECORATION),
+             "%s.Fielld.%s" % (form, FIXTURE_FORM_FIELD)]
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": wrong})
+    assert_ok(w, "form members addressed with a foreign / misspelt kind")
+    _assert_verdicts(w, resolved=[], not_found=wrong, unsupported=[])
+    assert_contains(_report(w), "objectsNotFound",
+                    "the human report must name the wrong-kind addresses")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_address_written_with_yo_resolves_against_the_stored_ye_name():
+    """An address whose name carries 'ё' resolves against the name stored with 'е'.
+
+    create_metadata normalizes 'ё'->'е' in Names by default, so the object the caller knows as
+    "Полёт" is stored as "Полет". The write/delete tools already retry the normalized spelling;
+    without the same retry here the exact filter declares an existing object missing. The object is
+    CREATED by the test (the baseline fixture has no ё-name), and the runner reverts it afterwards.
+    """
+    created = call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "Catalog." + YO_CATALOG_YO})
+    assert_ok(created, "creating a catalog whose Name carries ё")
+    if (created.structured or {}).get("name") != YO_CATALOG_YE:
+        _fail("the fixture for this test requires the ё->е normalized Name, got %r"
+              % (created.structured,))
+    wait_for_project_ready()
+
+    # BOTH spellings must resolve: the stored one directly, the ё one through the fallback.
+    for requested in ("Catalog." + YO_CATALOG_YE, "Catalog." + YO_CATALOG_YO):
+        r = call("get_project_errors",
+                 {"projectName": PROJECT, "objectFqns": [requested], "severity": "NONE"})
+        assert_ok(r, "exact address %r" % requested)
+        # The verdict keeps the caller's own spelling, whichever one resolved.
+        _assert_verdicts(r, resolved=[requested], not_found=[], unsupported=[])
+
+    # A ё name that exists in NEITHER spelling is still an ordinary miss: the fallback must not
+    # blur the verdict into "everything resolves".
+    ghost = "Catalog.Полёт" + NO_SUCH_OBJECT
+    g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost]})
+    assert_ok(g, "a ё address that exists in neither spelling")
+    _assert_verdicts(g, resolved=[], not_found=[ghost], unsupported=[])
 
 
 @e2e_test(tool="get_project_errors", kind="read")

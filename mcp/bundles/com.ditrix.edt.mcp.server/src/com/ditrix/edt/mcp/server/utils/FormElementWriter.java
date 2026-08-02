@@ -4229,6 +4229,74 @@ public final class FormElementWriter
     }
 
     /**
+     * Whether {@code member} - the element {@link #resolveFormMember} returned for {@code ref} -
+     * really is of the KIND the FQN asked for.
+     *
+     * <p>{@link #resolveFormMember} routes only ATTRIBUTE and COMMAND into their own containment;
+     * EVERY other kind token falls through to the by-NAME item search. So
+     * {@code ...Form.F.Button.Price} "resolves" to the FIELD named {@code Price}, and an
+     * unrecognized token ({@code Fielld.Price}) resolves to whatever bears the name. Both are a
+     * caller's typo, so a consumer whose whole answer IS "does this address exist" - it has no
+     * later kind-specific step that would trip over the mismatch - must ask this too.</p>
+     *
+     * @param member the resolved member, may be {@code null}
+     * @param ref the parsed member reference {@code member} was resolved from, may be {@code null}
+     * @return {@code true} when the member exists and its concrete EClass denotes exactly the
+     *     requested kind, or denotes no addressable kind at all (an auto command bar / context menu
+     *     / extended tooltip and the attribute-and-command containments are reached by name or by
+     *     containment, so their token contradicts nothing); {@code false} for a wrong or
+     *     unrecognized kind token
+     */
+    public static boolean matchesRequestedKind(EObject member, FormMemberRef ref)
+    {
+        if (member == null || ref == null)
+        {
+            return false;
+        }
+        Kind requested = kindForToken(ref.kindToken);
+        if (requested == null)
+        {
+            // An unrecognized kind token addresses nothing: it cannot be the kind of anything.
+            return false;
+        }
+        Kind actual = addressableKindOf(member.eClass().getName());
+        return actual == null || actual == requested;
+    }
+
+    /**
+     * The {@link Kind} whose token addresses an element of this concrete form-model EClass, or
+     * {@code null} for an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which
+     * is deliberately limited to the kinds that carry PLACEMENT rules.
+     *
+     * @param eClassName the concrete EClass simple name of a resolved form element
+     * @return the addressing kind, or {@code null} when no kind token denotes this EClass
+     */
+    private static Kind addressableKindOf(String eClassName)
+    {
+        if (ELEM_BUTTON.equals(eClassName))
+        {
+            return Kind.BUTTON;
+        }
+        if (ECLASS_DECORATION.equals(eClassName))
+        {
+            return Kind.DECORATION;
+        }
+        if (ECLASS_FORM_FIELD.equals(eClassName))
+        {
+            return Kind.FIELD;
+        }
+        if (ECLASS_FORM_GROUP.equals(eClassName))
+        {
+            return Kind.GROUP;
+        }
+        if (ECLASS_TABLE.equals(eClassName))
+        {
+            return Kind.TABLE;
+        }
+        return null;
+    }
+
+    /**
      * Finds the event handler bound to {@code eventName} (English or Russian, case-insensitive) on
      * {@code container} (the form root or a form item), or {@code null}. Used to delete a handler by
      * the event its FQN names. Call on the tx-bound form model.
