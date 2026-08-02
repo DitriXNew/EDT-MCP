@@ -6,8 +6,13 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Collection;
+
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IPath;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -85,6 +90,63 @@ public final class ProjectContext
     public static IProject[] allProjects()
     {
         return ResourcesPlugin.getWorkspace().getRoot().getProjects();
+    }
+
+    /**
+     * Whether {@code project} carries any of {@code natureIds} - answered for a CLOSED project too.
+     *
+     * <p>{@link IProject#hasNature} and {@link IProject#getDescription} both require an OPEN project,
+     * yet the nature of a closed one is a knowable fact: its {@code .project} descriptor is on disk
+     * and {@code IWorkspace.loadProjectDescription} reads it without opening anything. Callers that
+     * must tell "this project could hold X" from "this project never could" need that answer
+     * regardless of the project's state, so the two paths live here rather than in each caller.</p>
+     *
+     * @param project the project to inspect (may be {@code null})
+     * @param natureIds the nature ids to look for
+     * @return {@code TRUE}/{@code FALSE} when the natures could be read, and {@code null} when they
+     *     could NOT be determined at all - which is never the same statement as "no"
+     */
+    public static Boolean hasAnyNature(IProject project, Collection<String> natureIds)
+    {
+        if (project == null || natureIds == null || natureIds.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            if (project.isOpen())
+            {
+                for (String natureId : natureIds)
+                {
+                    if (project.hasNature(natureId))
+                    {
+                        return Boolean.TRUE;
+                    }
+                }
+                return Boolean.FALSE;
+            }
+            IPath location = project.getLocation();
+            if (location == null)
+            {
+                return null;
+            }
+            IProjectDescription description = ResourcesPlugin.getWorkspace()
+                .loadProjectDescription(location.append(IProjectDescription.DESCRIPTION_FILE_NAME));
+            for (String natureId : description.getNatureIds())
+            {
+                if (natureIds.contains(natureId))
+                {
+                    return Boolean.TRUE;
+                }
+            }
+            return Boolean.FALSE;
+        }
+        catch (CoreException | RuntimeException e)
+        {
+            // Removed mid-flight, descriptor unreadable, ...: unknowable, and saying "no" here would
+            // turn a project we could not classify into proof that it holds nothing.
+            return null;
+        }
     }
 
     /**

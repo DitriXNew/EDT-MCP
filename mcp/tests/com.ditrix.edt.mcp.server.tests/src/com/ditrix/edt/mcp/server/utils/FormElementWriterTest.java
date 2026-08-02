@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT - Tests
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -2842,5 +2842,32 @@ public class FormElementWriterTest
             commonForm.eGet(MdClassPackage.Literals.BASIC_FORM__FORM));
         org.mockito.Mockito.verify(tx, org.mockito.Mockito.never())
             .attachTopObject(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    public void testPluralKindTokensAreAcceptedInBothLanguages()
+    {
+        // The bilingual alias catalogue the object filter advertises (MetadataTypeUtils' nested
+        // kinds) accepts the SINGULAR and the PLURAL of every form kind, in both languages. This
+        // parser accepted only a subset, so an advertised address like
+        // '...Form.ItemForm.Fields.Price' resolved the element by NAME and was then rejected on its
+        // KIND - a real field reported as objectsNotFound. Every advertised spelling must parse.
+        assertEquals(Kind.ATTRIBUTE, FormElementWriter.kindForToken("attributes")); //$NON-NLS-1$
+        assertEquals(Kind.ATTRIBUTE, FormElementWriter.kindForToken("\u0440\u0435\u043A\u0432\u0438\u0437\u0438\u0442\u044B")); //$NON-NLS-1$
+        assertEquals(Kind.COMMAND, FormElementWriter.kindForToken("commands")); //$NON-NLS-1$
+        assertEquals(Kind.COMMAND, FormElementWriter.kindForToken("\u043A\u043E\u043C\u0430\u043D\u0434\u044B")); //$NON-NLS-1$
+        assertEquals(Kind.GROUP, FormElementWriter.kindForToken("groups")); //$NON-NLS-1$
+        assertEquals(Kind.GROUP, FormElementWriter.kindForToken("\u0433\u0440\u0443\u043F\u043F\u044B")); //$NON-NLS-1$
+        assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("decorations")); //$NON-NLS-1$
+        assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("\u0434\u0435\u043A\u043E\u0440\u0430\u0446\u0438\u0438")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("fields")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("\u043F\u043E\u043B\u044F")); //$NON-NLS-1$
+        assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("buttons")); //$NON-NLS-1$
+        assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("\u043A\u043D\u043E\u043F\u043A\u0438")); //$NON-NLS-1$
+        assertEquals(Kind.TABLE, FormElementWriter.kindForToken("tables")); //$NON-NLS-1$
+        assertEquals(Kind.TABLE, FormElementWriter.kindForToken("\u0442\u0430\u0431\u043B\u0438\u0446\u044B")); //$NON-NLS-1$
+        // Case must not matter either - a location renders these capitalized.
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("Fields")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("\u041F\u043E\u043B\u044F")); //$NON-NLS-1$
     }
 }

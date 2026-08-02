@@ -1181,6 +1181,87 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testAClosedProjectIsUndecidedRatherThanSilentlyDroppedFromTheVerdict()
+    {
+        // A closed project used to leave the universe entirely: never asked, so never disagreeing.
+        // An address living only in it came back as objectsNotFound while its persisted markers were
+        // dropped from the scan - the answer looked complete and was not. "Cannot be consulted" is
+        // UNKNOWN, and UNKNOWN must reach the verdict.
+        List<String> candidates = Collections.singletonList("Catalog.Nope"); //$NON-NLS-1$
+
+        // 1) It must stay in the UNIVERSE. Filtering it out here is what made it invisible: never
+        //    asked, so never disagreeing.
+        IProject open = project("open", true); //$NON-NLS-1$
+        IProject shut = closedProject("archived"); //$NON-NLS-1$
+        assertEquals("a closed project belongs to the universe like any other", //$NON-NLS-1$
+            Arrays.asList(open, shut),
+            GetProjectErrorsTool.exactScopeProjects(new IProject[] {open, shut}));
+
+        // 2) And it must be classified UNKNOWN, not skipped.
+        GetProjectErrorsTool.ProjectResolution closed = GetProjectErrorsTool.projectDecision(
+            shut, null, null, candidates);
+        assertNotNull("a closed project must not be dropped from the universe", closed); //$NON-NLS-1$
+        assertFalse(closed.passCompleted);
+        assertEquals(singleton("Catalog.Nope"), closed.undecided); //$NON-NLS-1$
+
+        // With a readable project alongside, the address must NOT be called missing.
+        GetProjectErrorsTool.ProjectResolution readable = GetProjectErrorsTool.resolveInProject(
+            project("open"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            candidates);
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(r, candidates, Arrays.asList(readable, closed));
+
+        assertNotNull("a closed project makes the absence claim unprovable", r.error); //$NON-NLS-1$
+        assertTrue(r.error.contains("Catalog.Nope")); //$NON-NLS-1$
+        assertTrue("nothing may be declared missing", r.notFound.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAddressFoundInOneProjectStillReportsThatAnotherCouldNotBeConsulted()
+    {
+        // The corner that survived the per-address fix: the address IS found in A, so the undecided
+        // state of B was simply dropped. B never gets a scan scope, its markers are skipped, and the
+        // report reads as complete while a whole project's problems on that address are missing.
+        // Found-somewhere settles EXISTENCE; it does not make the ANSWER complete.
+        String fqn = "Catalog.C"; //$NON-NLS-1$
+        List<String> candidates = Collections.singletonList(fqn);
+
+        GetProjectErrorsTool.ProjectResolution owner = GetProjectErrorsTool.resolveInProject(
+            project("A"), readModel(), configWithCatalog("C"), candidates); //$NON-NLS-1$ //$NON-NLS-2$
+        GetProjectErrorsTool.ProjectResolution unreadable = GetProjectErrorsTool.projectDecision(
+            project("B", true), null, null, candidates); //$NON-NLS-1$
+
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(r, candidates, Arrays.asList(owner, unreadable));
+
+        // Existence is settled - no refusal, no "missing".
+        assertNull("an owner settles existence", r.error); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(fqn), r.resolved);
+        assertTrue(r.notFound.isEmpty());
+        // ...but the incompleteness must be REPORTED, naming the project that could not answer.
+        assertEquals("the partial answer must be reported, not swallowed", //$NON-NLS-1$
+            singleton("B"), r.incompleteFor.get(fqn)); //$NON-NLS-1$
+        // Only the owner scopes a scan; B contributes no markers, which is exactly why it is partial.
+        assertTrue(r.scopeByProject.containsKey("A")); //$NON-NLS-1$
+        assertFalse(r.scopeByProject.containsKey("B")); //$NON-NLS-1$
+
+        StringBuilder md = new StringBuilder();
+        GetProjectErrorsTool.appendIncompleteScopeWarning(md, r.incompleteFor);
+        assertTrue("the human report must carry the same caveat", //$NON-NLS-1$
+            md.toString().contains(fqn) && md.toString().contains("B")); //$NON-NLS-1$
+
+        // The counterpart: with every project consulted there is nothing to warn about.
+        GetProjectErrorsTool.ProjectResolution absentHere = GetProjectErrorsTool.resolveInProject(
+            project("B"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), candidates); //$NON-NLS-1$
+        GetProjectErrorsTool.AddressResolution complete =
+            new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(complete, candidates,
+            Arrays.asList(owner, absentHere));
+        assertTrue("a fully consulted universe is not partial", complete.incompleteFor.isEmpty()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(fqn), complete.resolved);
+    }
+
+    @Test
     public void testEachProjectScopesTheScanByItsOwnSpellingOnly()
     {
         // With no projectName the SAME address can resolve to a DIFFERENT stored spelling in each
@@ -1578,6 +1659,7 @@ public class GetProjectErrorsToolTest
     private static IProject project(String name, boolean edt)
     {
         IProject project = project(name);
+        when(project.isOpen()).thenReturn(true);
         try
         {
             when(project.hasNature(anyString())).thenReturn(false);
@@ -1591,6 +1673,19 @@ public class GetProjectErrorsToolTest
         {
             throw new IllegalStateException(e); // stubbing only; never thrown
         }
+        return project;
+    }
+
+    /**
+     * A CLOSED project. {@code hasNature} is not answerable for one (it throws), and with no
+     * readable location the natures cannot be determined at all - which is the state that must be
+     * treated as "could hold metadata", never as proof that it could not.
+     */
+    private static IProject closedProject(String name)
+    {
+        IProject project = project(name);
+        when(project.isOpen()).thenReturn(false);
+        when(project.getLocation()).thenReturn(null);
         return project;
     }
 

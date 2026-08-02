@@ -811,6 +811,19 @@ public class MetadataTypeUtilsTest
             // address translated through this map stays addressable.
             assertEquals(kind, FormElementWriter.kindForToken(canon.getEnglish()));
             assertEquals(kind, FormElementWriter.kindForToken(canon.getRussian()));
+
+            // THE REVERSE DIRECTION. Walking only the parser's own tokens proves that what it
+            // ACCEPTS is translatable here - never that everything this catalogue ADVERTISES is
+            // accepted there. That gap let the PLURAL spellings (Fields.Price and its Russian twin)
+            // be advertised by the filter and rejected by the form parser on the KIND check, so a
+            // real field came back as objectsNotFound. Every alias this map publishes for the kind
+            // must therefore be readable by the parser as that same kind.
+            for (String alias : MetadataTypeUtils.nestedKindAliases(canon.getEnglish()))
+            {
+                assertEquals("this map advertises '" + alias + "' for " + kind //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", so the form parser must accept it too", //$NON-NLS-1$
+                    kind, FormElementWriter.kindForToken(alias));
+            }
         }
         // Column is a nested kind of the MDCLASS model (a DocumentJournal column), which this map
         // must translate; whether the form parser knows it is decided by the loop above, so this

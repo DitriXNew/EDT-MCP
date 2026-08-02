@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -414,6 +414,13 @@ public final class FormElementWriter
     private static final String RU_FIELD = cp(0x043f, 0x043e, 0x043b, 0x0435); // pole
     private static final String RU_BUTTON = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430); // knopka
     private static final String RU_TABLE = cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430); // tablica
+    private static final String RU_ATTRIBUTES = cp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b); // rekvizity
+    private static final String RU_COMMANDS = cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x044b); // komandy
+    private static final String RU_GROUPS = cp(0x0433, 0x0440, 0x0443, 0x043f, 0x043f, 0x044b); // gruppy
+    private static final String RU_DECORATIONS = cp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x0438); // dekoracii
+    private static final String RU_FIELDS = cp(0x043f, 0x043e, 0x043b, 0x044f); // polya
+    private static final String RU_BUTTONS = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0438); // knopki
+    private static final String RU_TABLES = cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b); // tablicy
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
@@ -496,13 +503,21 @@ public final class FormElementWriter
     static
     {
         Map<Kind, List<String>> tokens = new EnumMap<>(Kind.class);
-        tokens.put(Kind.ATTRIBUTE, tokenList("attribute", FEATURE_ATTRIBUTES, RU_ATTRIBUTE)); //$NON-NLS-1$
-        tokens.put(Kind.COMMAND, tokenList("command", "commands", RU_COMMAND)); //$NON-NLS-1$ //$NON-NLS-2$
-        tokens.put(Kind.GROUP, tokenList(FEATURE_GROUP, RU_GROUP));
-        tokens.put(Kind.DECORATION, tokenList("decoration", RU_DECORATION)); //$NON-NLS-1$
-        tokens.put(Kind.FIELD, tokenList("field", RU_FIELD)); //$NON-NLS-1$
-        tokens.put(Kind.BUTTON, tokenList("button", RU_BUTTON)); //$NON-NLS-1$
-        tokens.put(Kind.TABLE, tokenList("table", RU_TABLE)); //$NON-NLS-1$
+        // Singular AND plural, in BOTH languages. The bilingual alias catalogue this addressing is
+        // advertised through (MetadataTypeUtils' nested kinds) accepts all four spellings of every
+        // form kind, so accepting fewer here made the tool reject an address it documents:
+        // '...Form.ItemForm.Fields.Price' resolved the element by name and was then rejected on its
+        // KIND, sending a real field to objectsNotFound. MetadataTypeUtilsTest pins the two
+        // catalogues against each other in BOTH directions so they cannot drift again.
+        tokens.put(Kind.ATTRIBUTE, tokenList("attribute", FEATURE_ATTRIBUTES, //$NON-NLS-1$
+            RU_ATTRIBUTE, RU_ATTRIBUTES));
+        tokens.put(Kind.COMMAND, tokenList("command", "commands", RU_COMMAND, RU_COMMANDS)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.GROUP, tokenList(FEATURE_GROUP, "groups", RU_GROUP, RU_GROUPS)); //$NON-NLS-1$
+        tokens.put(Kind.DECORATION, tokenList("decoration", "decorations", //$NON-NLS-1$ //$NON-NLS-2$
+            RU_DECORATION, RU_DECORATIONS));
+        tokens.put(Kind.FIELD, tokenList("field", "fields", RU_FIELD, RU_FIELDS)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.BUTTON, tokenList("button", "buttons", RU_BUTTON, RU_BUTTONS)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.TABLE, tokenList("table", "tables", RU_TABLE, RU_TABLES)); //$NON-NLS-1$ //$NON-NLS-2$
         Map<String, Kind> byToken = new HashMap<>();
         for (Map.Entry<Kind, List<String>> entry : tokens.entrySet())
         {

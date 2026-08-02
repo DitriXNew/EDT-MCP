@@ -649,6 +649,35 @@ def test_exact_address_written_with_yo_resolves_against_the_stored_ye_name():
 
 
 @e2e_test(tool="get_project_errors", kind="read")
+def test_exact_form_member_kind_token_accepts_both_numbers_and_both_languages():
+    """Every kind spelling the filter ADVERTISES must also RESOLVE - plurals included.
+
+    The bilingual alias catalogue accepts the singular and the plural of each form kind in both
+    languages, but the form parser knew only a subset. `...Form.ItemForm.Fields.Code` therefore
+    resolved the element by NAME and was then rejected on its KIND, so a field that plainly exists
+    came back in objectsNotFound - the tool refusing an address it documents.
+
+    Severity NONE keeps the row set empty, so `resolved` is a real resolution and not an artefact of
+    rows that happen to exist.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    for kind in ("Field", "Fields", "Поле", "Поля"):
+        address = "%s.%s.%s" % (form, kind, FIXTURE_FORM_FIELD)
+        r = call("get_project_errors",
+                 {"projectName": PROJECT, "objectFqns": [address], "severity": "NONE"})
+        assert_ok(r, "form member addressed with the %r kind token" % kind)
+        _assert_verdicts(r, resolved=[address], not_found=[], unsupported=[])
+
+    # The guarantee is about SPELLING, not about accepting anything: a wrong kind is still a miss,
+    # in the plural too.
+    wrong = "%s.Buttons.%s" % (form, FIXTURE_FORM_FIELD)
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [wrong]})
+    assert_ok(w, "a plural token of the WRONG kind")
+    _assert_verdicts(w, resolved=[], not_found=[wrong], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
 def test_exact_address_with_unknown_head_or_kind_is_reported_missing():
     """An unknown TYPE token and a misspelt KIND token are both plain misses.
 

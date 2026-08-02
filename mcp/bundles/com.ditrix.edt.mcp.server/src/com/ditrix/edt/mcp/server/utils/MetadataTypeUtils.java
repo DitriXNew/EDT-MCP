@@ -770,6 +770,38 @@ public final class MetadataTypeUtils
     }
 
     /**
+     * EVERY spelling this catalogue accepts for the same nested kind as {@code segment} - singular
+     * and plural, English and Russian, lowercase.
+     *
+     * <p>Exists so a consistency test can assert the reverse direction of the parity with the
+     * specialized parsers: walking a parser's own tokens only proves that what it ACCEPTS is
+     * translatable here, never that everything this catalogue ADVERTISES is accepted there. That
+     * one-way check is what let the PLURAL spellings ({@code Fields.Price} and its Russian twin) be
+     * advertised by the filter and rejected by the form parser, sending a real field to
+     * {@code objectsNotFound}.</p>
+     *
+     * @param segment any accepted spelling of a nested kind
+     * @return its sibling spellings (including itself), or an empty set when the token is unknown
+     */
+    public static Set<String> nestedKindAliases(String segment)
+    {
+        NestedKindInfo info = resolveNestedKind(segment);
+        if (info == null)
+        {
+            return Collections.emptySet();
+        }
+        Set<String> aliases = new LinkedHashSet<>();
+        for (Map.Entry<String, NestedKindInfo> entry : NESTED_KIND_LOOKUP.entrySet())
+        {
+            if (entry.getValue() == info)
+            {
+                aliases.add(entry.getKey());
+            }
+        }
+        return aliases;
+    }
+
+    /**
      * Returns all FQN variants (original, all-English, all-Russian) for a given FQN, lowercased.
      * Useful for case-insensitive matching of markers against user-provided FQNs regardless of
      * the configuration language.

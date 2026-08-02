@@ -435,6 +435,13 @@ public class GetProjectErrorsTool implements IMcpTool
          * <p>Internal only: the wire keeps the caller's spelling.</p>
          */
         final Map<String, Set<String>> scopeByProject = new LinkedHashMap<>();
+        /**
+         * Addresses that DID resolve but whose report cannot be complete: requested address -&gt; the
+         * projects that could not be consulted about it (closed, still indexing, unreadable). Their
+         * problems on that address, if any, are missing from the report, and that has to be said -
+         * a partial answer must not read as a full one.
+         */
+        final Map<String, Set<String>> incompleteFor = new LinkedHashMap<>();
         /** A ready JSON error payload when no verdict could be reached at all; {@code null} otherwise. */
         String error;
     }
@@ -541,6 +548,7 @@ public class GetProjectErrorsTool implements IMcpTool
             // some did not) must be visible next to the results too, not only on an empty report.
             appendObjectsNotFoundWarning(md, resolution.notFound);
             appendObjectsUnsupportedWarning(md, resolution.unsupported);
+            appendIncompleteScopeWarning(md, resolution.incompleteFor);
             appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
 
             return addressPayload(md.toString(), errors.size(), resolution);
@@ -592,31 +600,48 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * The projects an {@code objectFqns} entry is resolved against: the named project alone, or
-     * every OPEN workspace project. A closed project is excluded because its metadata model cannot
-     * be read at all, so it could only ever contribute a false "not found".
+     * The UNIVERSE of projects an {@code objectFqns} entry is judged against: the named project, or
+     * every workspace project - CLOSED ones included.
+     *
+     * <p>A closed project used to be dropped here, which quietly made it invisible to the whole
+     * verdict: it was never asked, so it never disagreed, and an address that lives only in it came
+     * back as {@code objectsNotFound} while its persisted markers were dropped from the scan. Being
+     * unable to consult a project is not the same fact as that project not holding the address, so
+     * it stays in the universe and is classified as UNDECIDED like any other unreadable project (see
+     * {@link #projectDecision}).</p>
      *
      * @param projectName the project filter, may be {@code null}/empty for all projects
-     * @return the projects to resolve in (never {@code null}; possibly empty)
+     * @return the projects to judge against (never {@code null}; possibly empty)
      */
     private static List<IProject> exactScopeProjects(String projectName)
     {
-        List<IProject> scope = new ArrayList<>();
         if (projectName != null && !projectName.isEmpty())
         {
             ProjectContext ctx = ProjectContext.of(projectName);
-            if (ctx.isOpen())
-            {
-                scope.add(ctx.project());
-            }
-            return scope;
+            return ctx.exists() ? Collections.singletonList(ctx.project())
+                : Collections.<IProject> emptyList();
         }
-        for (IProject project : ProjectContext.allProjects())
+        return exactScopeProjects(ProjectContext.allProjects());
+    }
+
+    /**
+     * The workspace half of {@link #exactScopeProjects(String)}, taking the project list so the
+     * membership rule is testable without a live workspace.
+     *
+     * <p>The rule is deliberately "everything": OPEN or CLOSED, EDT or not. Filtering here is what
+     * made a closed project invisible to the verdict; the classification into
+     * OWNS / ABSENT / UNKNOWN belongs to {@link #projectDecision}, which is the single place that
+     * may decide a project contributes nothing.</p>
+     *
+     * @param allProjects every project in the workspace
+     * @return the universe to judge against (never {@code null})
+     */
+    static List<IProject> exactScopeProjects(IProject[] allProjects)
+    {
+        List<IProject> scope = new ArrayList<>();
+        if (allProjects != null)
         {
-            if (project.isOpen())
-            {
-                scope.add(project);
-            }
+            Collections.addAll(scope, allProjects);
         }
         return scope;
     }
@@ -665,10 +690,17 @@ public class GetProjectErrorsTool implements IMcpTool
         List<ProjectResolution> perProject = new ArrayList<>();
         for (IProject project : scope)
         {
-            IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
-            ProjectContext.ConfigurationResult configResult =
-                ProjectContext.of(project.getName()).resolveConfiguration();
-            Configuration config = configResult.ok() ? configResult.configuration() : null;
+            IBmModel bmModel = null;
+            Configuration config = null;
+            if (project.isOpen())
+            {
+                // Only an OPEN project can be asked; a closed one goes straight to the unreadable
+                // branch instead of being probed (and instead of being silently dropped).
+                bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+                ProjectContext.ConfigurationResult configResult =
+                    ProjectContext.of(project.getName()).resolveConfiguration();
+                config = configResult.ok() ? configResult.configuration() : null;
+            }
             ProjectResolution decided = projectDecision(project, bmModel, config, candidates);
             if (decided != null)
             {
@@ -685,8 +717,9 @@ public class GetProjectErrorsTool implements IMcpTool
      * project carrying none of them is an ordinary Eclipse/Java/Maven project.
      *
      * <p>The nature is read from the project description, NOT from the model, on purpose: an EDT
-     * project that is still indexing has no readable BM model yet but already carries its nature,
-     * which is exactly the case that must be told apart from a non-EDT project.</p>
+     * project that is still indexing - or one that is CLOSED - has no readable BM model but already
+     * carries its nature, which is exactly the case that must be told apart from a non-EDT
+     * project.</p>
      */
     private static final List<String> V8_PROJECT_NATURES = Arrays.asList(
         "com._1c.g5.v8.dt.core.V8ConfigurationNature", //$NON-NLS-1$
@@ -766,53 +799,99 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static boolean canHoldMetadata(IProject project)
     {
-        for (String nature : V8_PROJECT_NATURES)
-        {
-            try
-            {
-                if (project.hasNature(nature))
-                {
-                    return true;
-                }
-            }
-            catch (CoreException e)
-            {
-                // The project was closed/removed between the scope snapshot and here. We cannot
-                // tell what it is, so we must not conclude it holds no metadata.
-                return true;
-            }
-        }
-        return false;
+        // null = the natures could not be determined at all (removed mid-flight, unreadable
+        // descriptor). That is not the same statement as "no", so it must not exclude the project.
+        return !Boolean.FALSE.equals(ProjectContext.hasAnyNature(project, V8_PROJECT_NATURES));
     }
 
     /**
-     * Folds every project's own decision into the request-level verdicts: which addresses resolved,
-     * which are really missing, which project scopes the scan by which spellings, and whether the
-     * answer must be refused instead.
+     * The state of ONE (address, project) pair - the real unit of this filter's knowledge.
      *
-     * <p>Two refusals, both guarding the same thing - never claim absence nobody verified:</p>
-     * <ul>
-     *   <li>NO project could be inspected at all (every pass threw, or the scope held no readable
-     *       model): every address would be declared missing on the strength of no inspection;</li>
-     *   <li>an individual address resolved NOWHERE but stayed UNDECIDED in at least one project.
-     *       A request-wide "was anything inspected" flag cannot see this: another project's
-     *       completed pass would satisfy it and the undecided address would be reported as
-     *       {@code objectsNotFound}, even though the only project that could have held it never
-     *       reached a verdict.</li>
-     * </ul>
+     * <p>Everything the tool answers is an aggregation of these. Tracking the state per ADDRESS
+     * alone (or per RUN) is what produced three separate defects in a row: a project that could not
+     * be consulted disappeared from the verdict, from the scan scope, or from both, and the answer
+     * still looked complete.</p>
+     */
+    enum AddressState
+    {
+        /** The project was inspected and HOLDS the address. */
+        OWNS,
+        /** The project was inspected and does NOT hold the address. */
+        ABSENT,
+        /** The project could not be consulted at all - never evidence of absence. */
+        UNKNOWN
+    }
+
+    /**
+     * The aggregated knowledge about ONE address across every project in the universe.
      *
-     * <p>An address that resolved in ANY project is settled, so an undecided verdict elsewhere is
-     * irrelevant to it.</p>
+     * <p>Deliberately separate from the wire shape: {@link #applyWireContract} is the ONLY place
+     * that turns this into {@code objectsResolved} / {@code objectsNotFound} / a refusal, so the
+     * open question of a fourth {@code objectsUndecided} bucket is a change to that one method and
+     * to nothing else.</p>
+     */
+    static final class AddressKnowledge
+    {
+        /** Names of the projects that HOLD the address. */
+        final Set<String> owners = new LinkedHashSet<>();
+        /** Names of the projects that could not be consulted about it. */
+        final Set<String> unknown = new LinkedHashSet<>();
+
+        /** The address exists somewhere we could look. */
+        boolean isFound()
+        {
+            return !owners.isEmpty();
+        }
+
+        /**
+         * Nobody could decide it: no owner, and at least one project that could not answer. NOT the
+         * same as absent - the difference this whole input exists to preserve.
+         */
+        boolean isUndecided()
+        {
+            return owners.isEmpty() && !unknown.isEmpty();
+        }
+
+        /** Proven absent: every project in the universe was consulted and none holds it. */
+        boolean isAbsent()
+        {
+            return owners.isEmpty() && unknown.isEmpty();
+        }
+
+        /**
+         * Found, but the answer about it cannot be complete: some project could not be consulted, so
+         * its problems on this address (if any) are missing from the report. Saying nothing here is
+         * how a partial answer used to pass for a full one.
+         */
+        boolean isIncomplete()
+        {
+            return !owners.isEmpty() && !unknown.isEmpty();
+        }
+    }
+
+    /**
+     * Folds every project's own decision into the request-level verdicts.
+     *
+     * <p>Two stages, on purpose. First the (address, project) states are collected into one
+     * {@link AddressKnowledge} per address - the model. Then {@link #applyWireContract} maps that
+     * model onto the response. Every completeness decision this tool makes is taken in the second
+     * stage and nowhere else: the marker scan is scoped purely from {@link
+     * AddressResolution#scopeByProject}, which is filled here, so a project can no longer be dropped
+     * from the verdict and from the scan independently.</p>
      *
      * @param resolution the resolution being filled (its {@code unsupported} entries are already in)
      * @param candidates the addresses that need resolution, in request order
-     * @param perProject what each inspected project decided, in scope order
+     * @param perProject what each project in the universe decided, in scope order
      */
     static void foldProjectDecisions(AddressResolution resolution, List<String> candidates,
         List<ProjectResolution> perProject)
     {
-        Set<String> found = new LinkedHashSet<>();
-        Set<String> undecided = new LinkedHashSet<>();
+        Map<String, AddressKnowledge> knowledge = new LinkedHashMap<>();
+        for (String fqn : candidates)
+        {
+            knowledge.put(fqn, new AddressKnowledge());
+        }
+
         boolean inspectedAny = false;
         for (ProjectResolution decided : perProject)
         {
@@ -820,12 +899,23 @@ public class GetProjectErrorsTool implements IMcpTool
             // nothing, so treating it as an inspection would turn its undecided addresses into
             // "not found" (see resolveInProject).
             inspectedAny |= decided.passCompleted;
-            undecided.addAll(decided.undecided);
+            for (String fqn : candidates)
+            {
+                AddressKnowledge known = knowledge.get(fqn);
+                if (decided.resolved.containsKey(fqn))
+                {
+                    known.owners.add(decided.projectName);
+                }
+                else if (decided.undecided.contains(fqn))
+                {
+                    known.unknown.add(decided.projectName);
+                }
+                // else: inspected and ABSENT here - it contributes nothing but its own silence.
+            }
             if (decided.resolved.isEmpty())
             {
                 continue;
             }
-            found.addAll(decided.resolved.keySet());
             Set<String> projectScope = new LinkedHashSet<>();
             for (Set<String> spellings : decided.resolved.values())
             {
@@ -834,6 +924,30 @@ public class GetProjectErrorsTool implements IMcpTool
             resolution.scopeByProject.put(decided.projectName, projectScope);
         }
 
+        applyWireContract(resolution, candidates, knowledge, inspectedAny);
+    }
+
+    /**
+     * The ONLY mapping from the {@link AddressKnowledge} model onto the response contract.
+     *
+     * <p>Today: {@code OWNS somewhere} -&gt; {@code objectsResolved}; {@code ABSENT everywhere} -&gt;
+     * {@code objectsNotFound}; {@code UNDECIDED} -&gt; the call is REFUSED naming those addresses;
+     * {@code INCOMPLETE} (found, but some project could not be consulted) -&gt; reported as a warning
+     * next to the results, because the report about that address is a partial one.</p>
+     *
+     * <p>The undecided verdict has no wire field of its own yet - whether it should become a fourth
+     * {@code objectsUndecided} bucket is an open question for the tool's owner. Keeping the mapping
+     * in ONE method is what makes that decision a local change: the model above already distinguishes
+     * all four outcomes regardless of how they are published.</p>
+     *
+     * @param resolution the resolution being filled
+     * @param candidates the addresses that need resolution, in request order
+     * @param knowledge what is known about each address across the whole universe
+     * @param inspectedAny whether ANY project completed a resolve pass
+     */
+    private static void applyWireContract(AddressResolution resolution, List<String> candidates,
+        Map<String, AddressKnowledge> knowledge, boolean inspectedAny)
+    {
         if (!inspectedAny)
         {
             resolution.error = ToolResult.error("Cannot resolve " + PARAM_OBJECT_FQNS //$NON-NLS-1$
@@ -852,7 +966,7 @@ public class GetProjectErrorsTool implements IMcpTool
         List<String> undecidedMisses = new ArrayList<>();
         for (String fqn : candidates)
         {
-            if (!found.contains(fqn) && undecided.contains(fqn))
+            if (knowledge.get(fqn).isUndecided())
             {
                 undecidedMisses.add(fqn);
             }
@@ -872,10 +986,18 @@ public class GetProjectErrorsTool implements IMcpTool
 
         for (String fqn : candidates)
         {
-            if (found.contains(fqn))
+            AddressKnowledge known = knowledge.get(fqn);
+            if (known.isFound())
             {
                 // The wire keeps the caller's spelling; the scan uses the per-project spellings.
                 resolution.resolved.add(fqn);
+                if (known.isIncomplete())
+                {
+                    // Found, but a project that could hold it too was never consulted: its rows are
+                    // missing from the report. Say so instead of letting a partial answer read as a
+                    // complete one.
+                    resolution.incompleteFor.put(fqn, new LinkedHashSet<>(known.unknown));
+                }
             }
             else
             {
@@ -1723,6 +1845,34 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param md the Markdown builder to append to
      * @param objectsUnsupported the {@code fqn} / {@code reason} entries, may be {@code null}/empty
      */
+    /**
+     * Appends the PARTIAL-ANSWER warning: addresses that resolved while some project that could hold
+     * them could not be consulted, so the rows below are not the whole story.
+     *
+     * <p>Without this the caller cannot tell a complete report from one missing a whole project's
+     * problems - and "looks complete" is precisely the failure this input exists to remove.</p>
+     *
+     * @param md the Markdown builder to append to
+     * @param incompleteFor address -&gt; the projects that could not be consulted about it
+     */
+    static void appendIncompleteScopeWarning(StringBuilder md, Map<String, Set<String>> incompleteFor)
+    {
+        if (incompleteFor == null || incompleteFor.isEmpty())
+        {
+            return;
+        }
+        for (Map.Entry<String, Set<String>> entry : incompleteFor.entrySet())
+        {
+            md.append("\n> ⚠️ Partial answer for ") //$NON-NLS-1$
+              .append(entry.getKey())
+              .append(": could not consult ") //$NON-NLS-1$
+              .append(String.join(", ", entry.getValue())) //$NON-NLS-1$
+              .append(" (closed, still indexing, or unreadable), so problems this address may have") //$NON-NLS-1$
+              .append(" there are NOT in this report. Open/await that project, or name an indexed") //$NON-NLS-1$
+              .append(" one with projectName, to get a complete answer."); //$NON-NLS-1$
+        }
+    }
+
     static void appendObjectsUnsupportedWarning(StringBuilder md,
         List<Map<String, String>> objectsUnsupported)
     {
