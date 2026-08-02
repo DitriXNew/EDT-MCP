@@ -534,7 +534,25 @@ public final class FormElementWriter
      */
     public static String columnAddressingError(FormMemberRef ref)
     {
-        if (ref == null || ref.isAttributeColumn() || kindForToken(ref.kindToken) != Kind.COLUMN)
+        if (ref == null || ref.isAttributeColumn())
+        {
+            return null;
+        }
+        if (kindForToken(ref.itemKindToken) == Kind.COLUMN)
+        {
+            // An ITEM-LEVEL handler whose owning item is addressed as a Column
+            // ('...Form.F.Column.Price.Handler.OnChange'). The leaf kind is Handler, so the check
+            // below would pass, and resolveHandlerContainer treats every non-Command item token as a
+            // visual-item lookup BY NAME - the handler would be created, rebound or deleted on a
+            // same-named visual item. Attribute columns are not form items and carry no events at
+            // all, so this address is refused outright (issue #295 review).
+            return "An attribute column has no event handlers: a column is form DATA, not a visual " //$NON-NLS-1$
+                + "item. '" + ref.itemName + "' here would be looked up among the form's items, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "which is not what a column address means. Bind the handler to the ITEM that " //$NON-NLS-1$
+                + "displays the column (a Field or a Table), e.g. " //$NON-NLS-1$
+                + "'...Form.FormName.Field.<ItemName>.Handler." + ref.name + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (kindForToken(ref.kindToken) != Kind.COLUMN)
         {
             return null;
         }

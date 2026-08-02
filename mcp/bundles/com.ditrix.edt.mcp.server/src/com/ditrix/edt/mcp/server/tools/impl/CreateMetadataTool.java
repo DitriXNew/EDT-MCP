@@ -490,6 +490,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         if (formRef != null)
         {
+            // Checked BEFORE the handler/member split: a handler FQN whose owning item is addressed
+            // as a Column takes the handler branch, which never sees createFormMember's guard, and
+            // would bind the handler to a same-named visual ITEM (issue #295 review).
+            String columnErr = FormElementWriter.columnAddressingError(formRef);
+            if (columnErr != null)
+            {
+                return ToolResult.error(columnErr).toJson();
+            }
             if (FormElementWriter.isHandlerToken(formRef.kindToken))
             {
                 return createFormHandler(projectName, normFqn, formRef, properties, callType);
@@ -1269,11 +1277,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
-        String columnErr = FormElementWriter.columnAddressingError(ref);
-        if (columnErr != null)
-        {
-            return ToolResult.error(columnErr).toJson();
-        }
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
         if (kind == null)
         {

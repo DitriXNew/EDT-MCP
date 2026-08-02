@@ -2828,6 +2828,34 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testColumnHandlerFqnIsRefusedBeforeItReachesTheItemTree()
+    {
+        // The leaf kind here is Handler, so the bare-Column guard alone would pass this through -
+        // and resolveHandlerContainer looks an item-level handler's owner up BY NAME for every
+        // non-Command token, so the handler would be created/rebound/deleted on a visual item that
+        // happens to share the column's name. Columns are form DATA and carry no events at all.
+        FormMemberRef ref = FormElementWriter.parse(
+            "Catalog.Products.Form.ItemForm.Column.Price.Handler.OnChange"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Handler", ref.kindToken); //$NON-NLS-1$
+        assertEquals("Column", ref.itemKindToken); //$NON-NLS-1$
+        assertTrue("the shape parses as an ITEM-LEVEL handler", ref.isItemLevel()); //$NON-NLS-1$
+
+        String err = FormElementWriter.columnAddressingError(ref);
+        assertNotNull("a handler addressed on a Column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must say a column has no handlers", //$NON-NLS-1$
+            err.contains("no event handlers")); //$NON-NLS-1$
+        assertTrue("and point at the ITEM that displays it", err.contains("Field.<ItemName>")); //$NON-NLS-1$
+
+        // A handler on a real ITEM kind stays untouched.
+        assertNull(FormElementWriter.columnAddressingError(FormElementWriter.parse(
+            "Catalog.Products.Form.ItemForm.Field.Price.Handler.OnChange"))); //$NON-NLS-1$
+        // ... and so does a well-formed COLUMN address.
+        assertNull(FormElementWriter.columnAddressingError(FormElementWriter.parse(
+            "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testParsePlainMemberHasNoOwnerAttribute()
     {
         // The new field must stay null for every pre-existing shape (a regression guard for the

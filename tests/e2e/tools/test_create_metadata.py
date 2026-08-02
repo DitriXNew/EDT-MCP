@@ -1219,6 +1219,36 @@ def test_inapplicable_properties_are_refused_on_a_column():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_column_handler_fqn_does_not_bind_to_a_same_named_item():
+    # '...Form.F.Column.X.Handler.Event' parses as an ITEM-LEVEL handler, so the bare-Column guard
+    # alone let it through and the handler container was looked up among the form's ITEMS by name -
+    # binding the handler to a visual item that merely shares the name (issue #295 review).
+    attr, fld = "E2EColHandlerAttr", "E2EColHandlerField"
+    a = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(a, "seed the form attribute")
+    wait_for_project_ready()
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(f, "seed a FIELD with the name the bad address will use")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Column." + fld + ".Handler.OnChange",
+        "properties": [{"name": "procedure", "value": "Hijacked"}]})
+    e = assert_error(r, "a handler addressed on a Column must be refused")
+    assert_contains(e, "no event handlers", "the refusal must say a column carries no events")
+
+    # The same-named FIELD must not have gained a handler.
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "Hijacked",
+                        "the same-named visual item must NOT have been bound")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_column_on_missing_attribute_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT,
