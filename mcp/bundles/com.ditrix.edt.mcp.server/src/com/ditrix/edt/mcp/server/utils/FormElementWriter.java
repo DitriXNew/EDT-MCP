@@ -2185,7 +2185,15 @@ public final class FormElementWriter
     }
 
     /** Whether a form attribute carries a {@code DynamicListExtInfo} (i.e. it is a dynamic list). */
-    private static boolean isDynamicListAttribute(EObject attribute)
+    /**
+     * Whether the form attribute is ALREADY a dynamic list. Public so a caller can tell a query
+     * update on an existing list from a RETYPE of a plain (or collection-typed) attribute, which is
+     * destructive and must be consented to first (issue #295 review). Call on the tx-bound model.
+     *
+     * @param attribute the form attribute to inspect
+     * @return {@code true} when it already carries a dynamic-list ext-info
+     */
+    public static boolean isDynamicListAttribute(EObject attribute)
     {
         EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
         return extInfo != null && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());

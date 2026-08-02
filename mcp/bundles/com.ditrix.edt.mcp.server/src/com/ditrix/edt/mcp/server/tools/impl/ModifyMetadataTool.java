@@ -3786,6 +3786,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 ctx.config, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address the dynamic-list attribute as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Attribute.Name'."); //$NON-NLS-1$
+            // Converting a plain (or collection-typed) attribute into a dynamic list REPLACES its
+            // valueType, exactly like the `type` property does - and that path asks the consent gate.
+            // Read first whether this is a retype at all, then ask, then write; the gate may block on
+            // a dialog, so it must not be held inside the transaction (issue #295 review).
+            String retypeConsent = consentForDynamicListRetype(fctx, normFqn, ref);
+            if (retypeConsent != null)
+            {
+                return retypeConsent;
+            }
             persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
@@ -4114,6 +4123,50 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // prepare() appends exactly one change on success.
         return new HolderChange(holder.onExtInfo, built.get(0));
+    }
+
+    /**
+     * Asks the destructive-consent gate before a dynamic-list CONVERSION, or returns {@code null}
+     * when nothing destructive happens. A query update on an attribute that is already a dynamic
+     * list changes no type and is not gated; turning a plain or collection-typed attribute INTO one
+     * replaces its {@code valueType}, which the ordinary {@code type} path has always gated
+     * (issue #295 review).
+     *
+     * <p>Reads the current shape in its own READ transaction and asks OUTSIDE any transaction,
+     * because the gate may block on a UI dialog.</p>
+     *
+     * @param fctx the resolved form edit context
+     * @param normFqn the normalized attribute FQN
+     * @param ref the parsed form-member ref
+     * @return a ready JSON error when consent was refused, or {@code null} to proceed
+     */
+    private static String consentForDynamicListRetype(FormElementWriter.FormEditContext fctx,
+        String normFqn, FormElementWriter.FormMemberRef ref)
+    {
+        Boolean alreadyList = FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                // A missing attribute is reported by the write pass with its own actionable error;
+                // nothing is destroyed here, so do not prompt for it.
+                return member == null || FormElementWriter.isDynamicListAttribute(member);
+            });
+        if (Boolean.TRUE.equals(alreadyList))
+        {
+            return null;
+        }
+        ConsentPreview preview = new ConsentPreview(
+            "Convert a form attribute into a dynamic list", //$NON-NLS-1$
+            "This replaces the attribute's data type with DynamicList. Any value the form held " //$NON-NLS-1$
+                + "through it is dropped on the next database update.", //$NON-NLS-1$
+            1, List.of(normFqn));
+        DestructiveConsentGate.ConsentDecision decision =
+            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
+        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+        }
+        return null;
     }
 
     /**
