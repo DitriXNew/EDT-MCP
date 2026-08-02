@@ -322,6 +322,19 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Attribute", "Attributes", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442),
             cp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b));
+        // Subsystem NESTED under another subsystem (ru: podsistema / podsistemy). SubsystemUtils
+        // parses 'Podsistema.Sales.Subsystem.Orders' and modify_metadata documents it, so the second
+        // token must translate too - it is a top-level type AND a nested one.
+        putNestedKind(m, "Subsystem", "Subsystems", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x043e, 0x0434, 0x0441, 0x0438, 0x0441, 0x0442, 0x0435, 0x043c, 0x0430),
+            cp(0x041f, 0x043e, 0x0434, 0x0441, 0x0438, 0x0441, 0x0442, 0x0435, 0x043c, 0x044b));
+        // Predefined item (ru: predopredelennye / predopredelyonnye - PredefinedWriter accepts BOTH
+        // the 'e' and the 'yo' spelling, so both are aliases here as well).
+        putNestedKind(m, "Predefined", "Predefined", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0440, 0x0435, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b,
+                0x0435, 0x043d, 0x043d, 0x044b, 0x0435),
+            cp(0x041f, 0x0440, 0x0435, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b,
+                0x0451, 0x043d, 0x043d, 0x044b, 0x0435));
         // Module (ru: modul / moduli). Not an mdclass child kind, but EDT ends a BSL marker's
         // presentation with it (e.g. "CommonModule.Calc.Module"), so a filter that names the module
         // segment must translate too - otherwise it silently matches nothing.

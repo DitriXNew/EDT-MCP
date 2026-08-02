@@ -637,6 +637,28 @@ public class MetadataTypeUtilsTest
         assertNull(MetadataTypeUtils.resolveNestedKind("Catalog"));
     }
 
+    // ---- the alias inventory must match the repo's PUBLIC FQN parsers (issue #312 review) -------
+
+    @Test
+    public void testNestedSubsystemAndPredefinedTranslate()
+    {
+        // SubsystemUtils parses a nested subsystem chain and PredefinedWriter a Predefined item;
+        // both shapes are documented FQNs, so both structural tokens must normalize in either
+        // direction - otherwise they reproduce the very locale miss issue #312 fixes.
+        Set<String> subsystem =
+            MetadataTypeUtils.getAllFqnVariants("Subsystem.Sales.Subsystem.Orders"); //$NON-NLS-1$
+        assertTrue("a nested Subsystem token must translate", //$NON-NLS-1$
+            subsystem.contains("\u043F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u0430.sales.\u043F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u0430.orders")); //$NON-NLS-1$
+
+        Set<String> predefined =
+            MetadataTypeUtils.getAllFqnVariants("Catalog.Goods.Predefined.Service"); //$NON-NLS-1$
+        assertTrue("the Predefined token must translate", //$NON-NLS-1$
+            predefined.contains("\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.goods.\u043F\u0440\u0435\u0434\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435.service")); //$NON-NLS-1$
+
+        // The natural yo spelling is accepted too, exactly as PredefinedWriter accepts it.
+        assertNotNull(MetadataTypeUtils.resolveNestedKind("\u041F\u0440\u0435\u0434\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D\u043D\u044B\u0435")); //$NON-NLS-1$
+    }
+
     // ---- form-content kinds inside a nested FQN (issue #312 review) ------------------------------
 
     @Test
