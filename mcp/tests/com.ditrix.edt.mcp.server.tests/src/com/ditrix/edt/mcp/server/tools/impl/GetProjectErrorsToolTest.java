@@ -40,6 +40,7 @@ import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
@@ -51,6 +52,7 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 
 /**
  * Unit tests for the marker filtering / building helpers of {@link GetProjectErrorsTool}.
@@ -789,14 +791,16 @@ public class GetProjectErrorsToolTest
         // addresses are declared missing on the strength of an inspection that never happened.
         IBmModel model = mock(IBmModel.class);
         when(model.executeReadonlyTask(any())).thenThrow(new IllegalStateException("model busy")); //$NON-NLS-1$
-        Map<String, Set<String>> found = new LinkedHashMap<>();
 
-        boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), model, //$NON-NLS-1$
-            MdClassFactory.eINSTANCE.createConfiguration(),
-            Collections.singletonList("Catalog.Products"), found); //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.resolveInProject(
+            project("P"), model, MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            Collections.singletonList("Catalog.Products")); //$NON-NLS-1$
 
-        assertFalse("a pass that threw decided nothing and is not an inspection", inspected); //$NON-NLS-1$
-        assertTrue("and it must not decide any address either", found.isEmpty()); //$NON-NLS-1$
+        assertFalse("a pass that threw decided nothing and is not an inspection", //$NON-NLS-1$
+            decided.passCompleted);
+        assertTrue("and it must not decide any address either", decided.resolved.isEmpty()); //$NON-NLS-1$
+        assertEquals("every address it was asked about stays UNDECIDED, never 'not found'", //$NON-NLS-1$
+            singleton("Catalog.Products"), decided.undecided); //$NON-NLS-1$
     }
 
     @Test
@@ -805,13 +809,13 @@ public class GetProjectErrorsToolTest
         // The counterpart: a pass that ran to the end IS an inspection, even when it resolved
         // nothing - only then may an address be reported as missing.
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
-        Map<String, Set<String>> found = new LinkedHashMap<>();
 
-        boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), readModel(), //$NON-NLS-1$
-            config, Collections.singletonList("Catalog.Nope"), found); //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.resolveInProject(
+            project("P"), readModel(), config, Collections.singletonList("Catalog.Nope")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertTrue("a completed pass is an inspection", inspected); //$NON-NLS-1$
-        assertTrue("nothing resolved in an empty configuration", found.isEmpty()); //$NON-NLS-1$
+        assertTrue("a completed pass is an inspection", decided.passCompleted); //$NON-NLS-1$
+        assertTrue("nothing resolved in an empty configuration", decided.resolved.isEmpty()); //$NON-NLS-1$
+        assertTrue("a decided absence is NOT undecided", decided.undecided.isEmpty()); //$NON-NLS-1$
     }
 
     // ========== objectFqns: yo (U+0451) addressing ==========
@@ -831,19 +835,14 @@ public class GetProjectErrorsToolTest
         catalog.setName(stored);
         config.getCatalogs().add(catalog);
 
-        Map<String, Set<String>> found = new LinkedHashMap<>();
-        assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
-            Collections.singletonList(requested), found));
-
+        Map<String, Set<String>> found = resolvedIn(config, requested);
         assertEquals("the yo spelling must resolve against the stored ye name", //$NON-NLS-1$
             singleton("Catalog." + stored), found.get(requested)); //$NON-NLS-1$
         // A Russian TYPE token takes the same route (Spravochnik.M[yo]d).
         String ruRequested = fromCp(0x0421, 0x043f, 0x0440, 0x0430, 0x0432, 0x043e, 0x0447, 0x043d,
             0x0438, 0x043a) + "." + fromCp(0x041c, 0x0451, 0x0434); //$NON-NLS-1$
-        Map<String, Set<String>> ruFound = new LinkedHashMap<>();
-        assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
-            Collections.singletonList(ruRequested), ruFound));
-        assertEquals(singleton("Catalog." + stored), ruFound.get(ruRequested)); //$NON-NLS-1$
+        assertEquals(singleton("Catalog." + stored), //$NON-NLS-1$
+            resolvedIn(config, ruRequested).get(ruRequested));
     }
 
     @Test
@@ -857,9 +856,8 @@ public class GetProjectErrorsToolTest
         catalog.setName(stored);
         config.getCatalogs().add(catalog);
 
-        Map<String, Set<String>> found = new LinkedHashMap<>();
-        assertTrue(GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
-            Arrays.asList("Catalog." + stored, "Catalog." + fromCp(0x041b, 0x0451, 0x0434)), found)); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<String, Set<String>> found = resolvedIn(config, "Catalog." + stored, //$NON-NLS-1$
+            "Catalog." + fromCp(0x041b, 0x0451, 0x0434)); //$NON-NLS-1$
 
         assertEquals(singleton("Catalog." + stored), found.get("Catalog." + stored)); //$NON-NLS-1$
         assertNull("a name that exists in neither spelling must stay undecided", //$NON-NLS-1$
@@ -1016,6 +1014,36 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testAResolvedFormMemberIsScopedByTheFormItsProblemsAreReportedOn()
+    {
+        // EDT indexes a form's markers on the form CONTENT object, whose presentation is
+        // "<formPath>.Form" - never on the item. Verified live on EDT 2026.1: a form FIELD bound to a
+        // missing handler procedure produced form-legacy-check-event-handler at
+        // "Catalog.Catalog.Form.ItemForm.Form", with no trace of the field. So a member address
+        // scoped by the member alone matches NOTHING: objectsResolved next to "# No Errors Found",
+        // on an element that demonstrably has a problem. The owning form must scope the scan too.
+        FormModel form = newFormModel();
+
+        for (String address : new String[] {
+            FORM_FQN + ".Field.Price", //$NON-NLS-1$
+            HANDLER_ON_FIELD,
+            FORM_FQN + ".Command.Save.Handler.Action"}) //$NON-NLS-1$
+        {
+            List<String> spellings = scopeSpellings(form, address);
+            assertTrue("the address must resolve: " + address, !spellings.isEmpty()); //$NON-NLS-1$
+            assertTrue("the address itself stays in the scope: " + address, //$NON-NLS-1$
+                spellings.contains(address));
+            assertTrue("the OWNING FORM must scope the scan too, or the member selects nothing: " //$NON-NLS-1$
+                + address, spellings.contains(FORM_FQN));
+        }
+
+        // A member that does NOT resolve must stay an empty verdict - the widening may never turn a
+        // miss into a hit on the containing form.
+        assertTrue("a ghost member must not be absolved by its form", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Field.NoSuchItem").isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAFormMemberWhoseContentModelCannotBeReadStaysUndecided()
     {
         // The form EXISTS in the configuration, but its CONTENT model cannot be read (here: no BM
@@ -1030,20 +1058,142 @@ public class GetProjectErrorsToolTest
         catalog.getForms().add(form);
         config.getCatalogs().add(catalog);
 
-        Map<String, Set<String>> found = new LinkedHashMap<>();
-        boolean inspected = GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
-            Collections.singletonList("Catalog.C.Form.ItemForm.Field.Code"), found); //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.resolveInProject(
+            project("P"), readModel(), config, //$NON-NLS-1$
+            Collections.singletonList("Catalog.C.Form.ItemForm.Field.Code")); //$NON-NLS-1$
 
-        assertFalse("a form whose content model could not be read decided nothing", inspected); //$NON-NLS-1$
-        assertTrue("and it must not decide the address either", found.isEmpty()); //$NON-NLS-1$
+        assertTrue("and it must not decide the address", decided.resolved.isEmpty()); //$NON-NLS-1$
+        assertEquals("the ADDRESS is what stays undecided, not the whole project", //$NON-NLS-1$
+            singleton("Catalog.C.Form.ItemForm.Field.Code"), decided.undecided); //$NON-NLS-1$
 
-        // The counterpart: a form that is simply ABSENT is a decided miss, so the pass still counts
-        // as an inspection - the undecided verdict must not swallow the ordinary not-found one.
-        Map<String, Set<String>> absent = new LinkedHashMap<>();
-        assertTrue("an absent form is a decided miss", //$NON-NLS-1$
-            GetProjectErrorsTool.resolveInProject(project("P"), readModel(), config, //$NON-NLS-1$
-                Collections.singletonList("Catalog.C.Form.NoSuchForm.Field.Code"), absent)); //$NON-NLS-1$
-        assertTrue(absent.isEmpty());
+        // The counterpart: a form that is simply ABSENT is a decided miss - the undecided verdict
+        // must not swallow the ordinary not-found one.
+        GetProjectErrorsTool.ProjectResolution absent = GetProjectErrorsTool.resolveInProject(
+            project("P"), readModel(), config, //$NON-NLS-1$
+            Collections.singletonList("Catalog.C.Form.NoSuchForm.Field.Code")); //$NON-NLS-1$
+        assertTrue(absent.resolved.isEmpty());
+        assertTrue("an absent form is a decided miss, never undecided", //$NON-NLS-1$
+            absent.undecided.isEmpty());
+    }
+
+    @Test
+    public void testAnAddressNoProjectCouldDecideRefusesInsteadOfBeingCalledMissing()
+    {
+        // The whole point of the per-ADDRESS undecided state. Project A cannot read the form's
+        // content model, so it decides nothing about the member; project B completes normally but
+        // simply does not hold that form. A request-wide "was anything inspected" flag would be
+        // true here (B inspected fine) and the member would be declared objectsNotFound on the
+        // strength of an inspection that never looked at it.
+        Configuration withForm = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("C"); //$NON-NLS-1$
+        CatalogForm form = MdClassFactory.eINSTANCE.createCatalogForm();
+        form.setName("ItemForm"); //$NON-NLS-1$
+        catalog.getForms().add(form);
+        withForm.getCatalogs().add(catalog);
+
+        String member = "Catalog.C.Form.ItemForm.Field.Code"; //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution undecided = GetProjectErrorsTool.resolveInProject(
+            project("A"), readModel(), withForm, Collections.singletonList(member)); //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution complete = GetProjectErrorsTool.resolveInProject(
+            project("B"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            Collections.singletonList(member));
+
+        // The premise: A left it undecided while B ran to the end and resolved nothing.
+        assertEquals(singleton(member), undecided.undecided);
+        assertTrue(complete.passCompleted);
+        assertTrue(complete.undecided.isEmpty());
+
+        // So the request-level verdict must be a REFUSAL naming the address, never "not found".
+        GetProjectErrorsTool.AddressResolution resolution =
+            new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(resolution, Collections.singletonList(member),
+            Arrays.asList(undecided, complete));
+
+        assertNotNull("an address nobody could decide must refuse the call", resolution.error); //$NON-NLS-1$
+        assertTrue("the refusal must name the address it could not decide", //$NON-NLS-1$
+            resolution.error.contains("Form.ItemForm.Field.Code")); //$NON-NLS-1$
+        assertTrue("nothing may be declared missing", resolution.notFound.isEmpty()); //$NON-NLS-1$
+
+        // And the counterpart: once ANY project resolves it, the undecided project is irrelevant.
+        GetProjectErrorsTool.ProjectResolution resolvedSomewhere =
+            new GetProjectErrorsTool.ProjectResolution("B"); //$NON-NLS-1$
+        resolvedSomewhere.passCompleted = true;
+        resolvedSomewhere.resolved.put(member, singleton(member));
+        GetProjectErrorsTool.AddressResolution ok = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(ok, Collections.singletonList(member),
+            Arrays.asList(undecided, resolvedSomewhere));
+        assertNull("a resolution elsewhere settles the address", ok.error); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(member), ok.resolved);
+    }
+
+    @Test
+    public void testEachProjectScopesTheScanByItsOwnSpellingOnly()
+    {
+        // With no projectName the SAME address can resolve to a DIFFERENT stored spelling in each
+        // project. One merged scope would let project A's spelling select project B's markers - and
+        // would silently drop every problem B stores under its own. The scope is therefore kept
+        // per project, and a project that resolved NOTHING contributes no marker at all.
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // Med
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // M[yo]d
+        String requested = "Catalog." + yo; //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution a = GetProjectErrorsTool.resolveInProject(
+            project("A"), readModel(), configWithCatalog(ye), //$NON-NLS-1$
+            Collections.singletonList(requested));
+        GetProjectErrorsTool.ProjectResolution b = GetProjectErrorsTool.resolveInProject(
+            project("B"), readModel(), configWithCatalog(yo), //$NON-NLS-1$
+            Collections.singletonList(requested));
+        GetProjectErrorsTool.ProjectResolution c = GetProjectErrorsTool.resolveInProject(
+            project("C"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            Collections.singletonList(requested));
+
+        GetProjectErrorsTool.AddressResolution resolution =
+            new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(resolution,
+            Collections.singletonList(requested), Arrays.asList(a, b, c));
+
+        assertEquals("each project must scope by the spelling IT stores", //$NON-NLS-1$
+            singleton("Catalog." + ye), resolution.scopeByProject.get("A")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(singleton("Catalog." + yo), resolution.scopeByProject.get("B")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a project that resolved nothing must not be scoped at all", //$NON-NLS-1$
+            resolution.scopeByProject.containsKey("C")); //$NON-NLS-1$
+
+        // And the filter each project's marker scan really receives keeps that separation
+        // (asserted through the consumption point, not the map: merging the scopes anywhere
+        // between the two would put B's spelling in front of A's markers).
+        Map<String, Set<String>> variants =
+            GetProjectErrorsTool.filterVariantsByProject(resolution.scopeByProject);
+        Set<String> forA = scanFilterFor(variants, "A"); //$NON-NLS-1$
+        Set<String> forB = scanFilterFor(variants, "B"); //$NON-NLS-1$
+
+        assertTrue(forA.contains("catalog." + ye.toLowerCase())); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("project A must NOT be scoped by project B's spelling", //$NON-NLS-1$
+            forA.contains("catalog." + yo.toLowerCase())); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(forB.contains("catalog." + yo.toLowerCase())); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("project B must NOT be scoped by project A's spelling", //$NON-NLS-1$
+            forB.contains("catalog." + ye.toLowerCase())); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("and a project that resolved nothing is scanned for nothing", //$NON-NLS-1$
+            scanFilterFor(variants, "C")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAProjectOutsideTheResolvedScopeContributesNoMarker()
+    {
+        // The per-project scope decides membership, not just the spelling: a project whose name is
+        // absent from the map resolved nothing, so its markers - including a CLOSED project's, which
+        // are in the marker index but whose model was never resolved against - must be skipped
+        // entirely rather than matched by another project's spelling.
+        Map<String, Set<String>> byProject = new LinkedHashMap<>();
+        byProject.put("A", singleton("catalog.products")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the resolving project keeps its own filter", //$NON-NLS-1$
+            singleton("catalog.products"), objectsFor(byProject, "A")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a project outside the resolved scope must be skipped, not matched", //$NON-NLS-1$
+            objectsFor(byProject, "B")); //$NON-NLS-1$
+        // A loose (non-exact) call is unaffected: one filter still applies to every project.
+        assertEquals(singleton("catalog.products"), //$NON-NLS-1$
+            objectsFor(null, "B")); //$NON-NLS-1$
     }
 
     @Test
@@ -1058,17 +1208,130 @@ public class GetProjectErrorsToolTest
         String yo = fromCp(0x041c, 0x0451, 0x0434); // M[yo]d
         String requested = "Catalog." + yo; //$NON-NLS-1$
 
-        Map<String, Set<String>> found = new LinkedHashMap<>();
-        assertTrue(GetProjectErrorsTool.resolveInProject(project("A"), readModel(), //$NON-NLS-1$
-            configWithCatalog(ye), Collections.singletonList(requested), found));
-        assertTrue(GetProjectErrorsTool.resolveInProject(project("B"), readModel(), //$NON-NLS-1$
-            configWithCatalog(yo), Collections.singletonList(requested), found));
+        GetProjectErrorsTool.ProjectResolution a = GetProjectErrorsTool.resolveInProject(
+            project("A"), readModel(), configWithCatalog(ye), //$NON-NLS-1$
+            Collections.singletonList(requested));
+        GetProjectErrorsTool.ProjectResolution b = GetProjectErrorsTool.resolveInProject(
+            project("B"), readModel(), configWithCatalog(yo), //$NON-NLS-1$
+            Collections.singletonList(requested));
 
-        assertEquals("every project's own stored spelling must scope the scan", //$NON-NLS-1$
-            new HashSet<>(Arrays.asList("Catalog." + ye, "Catalog." + yo)), found.get(requested)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("project A must report the spelling IT stores", //$NON-NLS-1$
+            singleton("Catalog." + ye), a.resolved.get(requested)); //$NON-NLS-1$
+        assertEquals("project B must report the spelling IT stores", //$NON-NLS-1$
+            singleton("Catalog." + yo), b.resolved.get(requested)); //$NON-NLS-1$
+    }
+
+    // ========== objectFqns: what the scan is really scoped to ==========
+
+    @Test
+    public void testAMemberAddressIsScopedByTheNodeEdtReportsItsProblemsOn()
+    {
+        // Marker.getObjectPresentation() - the only thing this filter can compare against - names
+        // the object EDT indexed the problem under, never a member inside it. Verified live on EDT
+        // 2026.1: an attribute with no type yields md-legacy-emf-check markers located on the OWNING
+        // "Catalog.Catalog", and a form item's dangling handler yields form-legacy-check-event-handler
+        // on "Catalog.Catalog.Form.ItemForm.Form". Scoping a member address by the member alone
+        // therefore matches NOTHING and answers objectsResolved next to a clean report.
+        assertEquals("an mdclass member is scoped by its owning object", //$NON-NLS-1$
+            "Catalog.Products", GetProjectErrorsTool.markerOwnerFqn("Catalog.Products.Attribute.Weight")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a nested member is scoped by the same owning object", "Catalog.Products", //$NON-NLS-1$ //$NON-NLS-2$
+            GetProjectErrorsTool.markerOwnerFqn(
+                "Catalog.Products.TabularSection.Goods.Attribute.Price")); //$NON-NLS-1$
+        assertEquals("a predefined item is scoped by its owner too", "Catalog.Products", //$NON-NLS-1$ //$NON-NLS-2$
+            GetProjectErrorsTool.markerOwnerFqn("Catalog.Products.Predefined.Sample")); //$NON-NLS-1$
+
+        // Addresses that ALREADY name the node EDT reports on must not be widened.
+        assertNull("a top object is the node itself", //$NON-NLS-1$
+            GetProjectErrorsTool.markerOwnerFqn("Catalog.Products")); //$NON-NLS-1$
+        assertNull("a FORM's own presentation already starts with its address", //$NON-NLS-1$
+            GetProjectErrorsTool.markerOwnerFqn("Catalog.Products.Form.ItemForm")); //$NON-NLS-1$
+        assertNull(GetProjectErrorsTool.markerOwnerFqn("CommonForm.Settings")); //$NON-NLS-1$
+        assertNull("a nested Subsystem is a top object of its own", //$NON-NLS-1$
+            GetProjectErrorsTool.markerOwnerFqn("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResolvedMemberCarriesTheOwnerInItsScanScope()
+    {
+        // The end-to-end shape of the rule above: a resolved mdclass member scopes the scan by BOTH
+        // its own address and the owner EDT actually reports its problems on.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("C"); //$NON-NLS-1$
+        catalog.getAttributes().add(attribute("A")); //$NON-NLS-1$
+        config.getCatalogs().add(catalog);
+
+        Set<String> scope = resolvedIn(config, "Catalog.C.Attribute.A").get("Catalog.C.Attribute.A"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("the member must resolve", scope); //$NON-NLS-1$
+        assertTrue("the address itself stays in the scope", //$NON-NLS-1$
+            scope.contains("Catalog.C.Attribute.A")); //$NON-NLS-1$
+        assertTrue("and so does the node EDT reports its problems on", //$NON-NLS-1$
+            scope.contains("Catalog.C")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPredefinedItemIsScopedByItsStoredNameNotTheRequestedYoSpelling()
+    {
+        // PredefinedWriter.findByName carries its OWN yo (U+0451) fallback, so a probe written
+        // "...Predefined.M[yo]d" matches an item stored as "M[ye]d" and returns true. Recording the
+        // REQUESTED spelling as the scan scope would then filter out every problem on the very item
+        // that was just proven to exist - objectsResolved next to a clean report.
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // Med
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // M[yo]d
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("C"); //$NON-NLS-1$
+        assertFalse("the fixture item must be created", //$NON-NLS-1$
+            PredefinedWriter.create(catalog, ye, new PredefinedWriter.ItemProps(), false).isError());
+        config.getCatalogs().add(catalog);
+
+        String requested = "Catalog.C.Predefined." + yo; //$NON-NLS-1$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertNotNull("the yo spelling must resolve through the writer's own fallback", scope); //$NON-NLS-1$
+        assertTrue("the scan must be scoped by the STORED name, not the requested one", //$NON-NLS-1$
+            scope.contains("Catalog.C.Predefined." + ye)); //$NON-NLS-1$
+        assertFalse("the requested yo spelling must not scope the scan", //$NON-NLS-1$
+            scope.contains(requested));
+        // The owner is in the scope as well - that is where EDT reports a predefined item's problem.
+        assertTrue(scope.contains("Catalog.C")); //$NON-NLS-1$
     }
 
     // ========== helpers ==========
+
+    /**
+     * Resolves the given addresses against {@code config} in a single synthetic project and returns
+     * that project's own decisions (requested address -&gt; the spellings that scope the scan).
+     */
+    private static Map<String, Set<String>> resolvedIn(Configuration config, String... fqns)
+    {
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.resolveInProject(
+            project("P"), readModel(), config, Arrays.asList(fqns)); //$NON-NLS-1$
+        assertTrue("the resolve pass must complete", decided.passCompleted); //$NON-NLS-1$
+        return decided.resolved;
+    }
+
+    /** The object filter one project gets, given a per-project map (null = the loose single filter). */
+    private static Set<String> objectsFor(Map<String, Set<String>> byProject, String projectName)
+    {
+        return GetProjectErrorsTool.objectsForProject(byProject, singleton("catalog.products"), //$NON-NLS-1$
+            projectName);
+    }
+
+    /** The filter one project's marker scan really receives on an EXACT-address call. */
+    private static Set<String> scanFilterFor(Map<String, Set<String>> variants, String projectName)
+    {
+        return GetProjectErrorsTool.objectsForProject(variants, Collections.<String> emptySet(),
+            projectName);
+    }
+
+    /** A catalog attribute under the given Name. */
+    private static CatalogAttribute attribute(String name)
+    {
+        CatalogAttribute attr = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        attr.setName(name);
+        return attr;
+    }
 
     /** A configuration holding one catalog under the given stored Name. */
     private static Configuration configWithCatalog(String storedName)

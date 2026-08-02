@@ -352,9 +352,10 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Package", "Package", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x041f, 0x0430, 0x043a, 0x0435, 0x0442),
             cp(0x041f, 0x0430, 0x043a, 0x0435, 0x0442));
-        // The FORM-CONTENT kinds. A form validation marker's presentation descends into the form
-        // item tree, and this tool advertises bilingual tokens at EVERY level, so the kinds
-        // FormElementWriter already accepts in a form-member FQN must translate here too.
+        // The FORM-CONTENT kinds. get_project_errors advertises bilingual tokens for every
+        // structural segment of a form address, and modify/delete_metadata address form members by
+        // these very tokens, so the kinds FormElementWriter accepts in a form-member FQN must
+        // translate here too - otherwise a Russian-script address silently normalizes to nothing.
         // MetadataTypeUtilsTest pins these against FormElementWriter.kindForToken so the two token
         // tables cannot drift apart.
         // Field (ru: pole / polya)

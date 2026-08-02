@@ -27,6 +27,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -110,7 +111,7 @@ public class GetProjectErrorsTool implements IMcpTool
         return "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. " + //$NON-NLS-1$
                "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
                "Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. " + //$NON-NLS-1$
-               "Both accept English or Russian tokens at EVERY level, nested addresses included (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'). " + //$NON-NLS-1$
+               "Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). " + //$NON-NLS-1$
                "Use this for the detailed marker list; for severity totals only call get_problem_summary. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
@@ -123,8 +124,8 @@ public class GetProjectErrorsTool implements IMcpTool
             .enumProperty("severity", "Filter by severity (optional)", //$NON-NLS-1$ //$NON-NLS-2$
                 "ERRORS", "BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL", "NONE") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty(PARAM_OBJECTS, "LOOSE filter: case-insensitive SUBSTRING match of each entry against the reported object location, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian tokens accepted at every level. Deliberate fragments are supported, so an entry that matches nothing is NOT reported back - use objectFqns when you need that. Mutually exclusive with objectFqns (optional)") //$NON-NLS-1$
-            .stringArrayProperty(PARAM_OBJECT_FQNS, "EXACT filter: each entry must be the full address of one model node (top object, member, Subsystem chain, Predefined item, form, form member) and is resolved against the model; problems INSIDE the resolved node are reported. Entries that resolve to nothing come back in objectsNotFound and entries this filter cannot scope (XDTO members) in objectsUnsupported, both in structuredContent. Mutually exclusive with objects (optional)") //$NON-NLS-1$
+            .stringArrayProperty(PARAM_OBJECTS, "LOOSE filter: case-insensitive SUBSTRING match of each entry against the reported object location, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian type/kind tokens accepted throughout an mdclass, form, Subsystem or Predefined address (the XDTO grammar is English-only). Deliberate fragments are supported, so an entry that matches nothing is NOT reported back - use objectFqns when you need that. Mutually exclusive with objectFqns (optional)") //$NON-NLS-1$
+            .stringArrayProperty(PARAM_OBJECT_FQNS, "EXACT filter: each entry must be the full address of one model node (top object, member, Subsystem chain, Predefined item, form, form member) and is resolved against the model; problems INSIDE the resolved node are reported. A MEMBER address reports its owner's problems (EDT indexes a marker on the owning object - an attribute's problem on 'Catalog.Products', a form item's on 'Catalog.Products.Form.ItemForm.Form' - never on the member), so the answer is wider than the address, never silently empty. Entries that resolve to nothing come back in objectsNotFound and entries this filter cannot scope (XDTO members) in objectsUnsupported, both in structuredContent. Mutually exclusive with objects (optional)") //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$
@@ -416,20 +417,54 @@ public class GetProjectErrorsTool implements IMcpTool
         final List<String> notFound = new ArrayList<>();
         final List<Map<String, String>> unsupported = new ArrayList<>();
         /**
-         * EVERY spelling that actually resolved, across every inspected project: the requested
-         * address unless a yo-fallback or a handler's other event spelling hit, in which case the
-         * STORED one is here too. This is what scopes the marker scan - filtering on the caller's
-         * spelling alone would match no marker even though the object exists.
+         * The spellings that scope the marker scan, kept PER PROJECT: project name -&gt; every
+         * spelling that resolved THERE (the requested address unless a yo-fallback, a handler's
+         * other event spelling or a predefined item's stored name applied, in which case the STORED
+         * one is here too, plus the owner node EDT actually reports a member's problems on - see
+         * {@link #markerOwnerFqn}).
          *
-         * <p>A SET, deliberately not a list parallel to {@link #resolved}: with no
-         * {@code projectName} the same requested address can legitimately resolve to DIFFERENT
-         * stored spellings in different projects ({@code Catalog.M[yo]d} stored yo-normalized in one
-         * project and verbatim in another), and keeping only the first would silently scope every
-         * project by one variant. Internal only: the wire keeps the caller's spelling.</p>
+         * <p>Per PROJECT, deliberately not one global set: with no {@code projectName} the same
+         * requested address can legitimately resolve to DIFFERENT stored spellings in different
+         * projects ({@code Catalog.M[yo]d} stored yo-normalized in one project and verbatim in
+         * another). A single merged set would apply project A's spelling to project B's markers,
+         * silently dropping every problem B stores under its own spelling. A project that resolved
+         * NOTHING is absent from this map and contributes no marker at all: an exact address is a
+         * claim about one node, and a project the node does not live in cannot own its problems.</p>
+         *
+         * <p>Internal only: the wire keeps the caller's spelling.</p>
          */
-        final Set<String> scopeFqns = new LinkedHashSet<>();
+        final Map<String, Set<String>> scopeByProject = new LinkedHashMap<>();
         /** A ready JSON error payload when no verdict could be reached at all; {@code null} otherwise. */
         String error;
+    }
+
+    /**
+     * What ONE project could decide about the requested addresses: the spellings that resolved
+     * HERE, the addresses this project could not decide at all, and whether its resolve pass ran to
+     * the end.
+     *
+     * <p>The undecided set is per ADDRESS on purpose. A single "was anything inspected" flag cannot
+     * separate "inspected and absent" from "nobody could look": with no {@code projectName} one
+     * project whose form content model is unreadable leaves its addresses undecided while another
+     * project completes normally, and a request-wide flag would then let those undecided addresses
+     * be reported as {@code objectsNotFound} - the very false verdict this input exists to
+     * prevent.</p>
+     */
+    static final class ProjectResolution
+    {
+        /** The name of the project this decision belongs to (the key of the per-project scope). */
+        final String projectName;
+        /** Requested address -&gt; the spellings that resolved in THIS project. */
+        final Map<String, Set<String>> resolved = new LinkedHashMap<>();
+        /** Requested addresses this project could not decide (infrastructure failure, never absence). */
+        final Set<String> undecided = new LinkedHashSet<>();
+        /** Whether the read pass ran to the end; {@code false} when it threw and decided nothing. */
+        boolean passCompleted;
+
+        ProjectResolution(String projectName)
+        {
+            this.projectName = projectName;
+        }
     }
 
     /**
@@ -480,13 +515,14 @@ public class GetProjectErrorsTool implements IMcpTool
             List<ErrorInfo> errors = Collections.emptyList();
             if (!resolution.resolved.isEmpty())
             {
-                // The SCAN is scoped by the spellings that really resolved (see
-                // AddressResolution.scopeFqns), not by the caller's - a yo spelling that resolved
-                // through the fallback would otherwise match no marker at all.
+                // The SCAN is scoped by the spellings that really resolved, PER PROJECT (see
+                // AddressResolution.scopeByProject) - not by the caller's spelling (a yo spelling
+                // that resolved through the fallback would match no marker at all) and not by one
+                // merged set (that would apply one project's spelling to another's markers).
                 CollectContext collectContext = new CollectContext(parseSeverityFilter(severity),
-                    checkId, buildObjectFilterVariants(resolution.scopeFqns),
+                    checkId, Collections.<String> emptySet(),
                     Activator.getDefault().getCheckRepository(), limit, unresolvedShown,
-                    unresolvedFilteredOut, true);
+                    unresolvedFilteredOut, true, filterVariantsByProject(resolution.scopeByProject));
                 errors = collectErrors(groupMarkersByProject(markerManager, projectName),
                     bmModelManager, collectContext);
             }
@@ -513,6 +549,23 @@ public class GetProjectErrorsTool implements IMcpTool
             Activator.logError("Error getting project errors by address", e); //$NON-NLS-1$
             return ToolResult.error("Failed to get project errors: " + e.getMessage()).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Expands each project's resolved spellings into the lowercased bilingual variants the marker
+     * scan compares against, keeping the per-project separation intact.
+     *
+     * @param scopeByProject project name -&gt; the spellings that resolved there
+     * @return project name -&gt; its own filter variants (never {@code null})
+     */
+    static Map<String, Set<String>> filterVariantsByProject(Map<String, Set<String>> scopeByProject)
+    {
+        Map<String, Set<String>> variants = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : scopeByProject.entrySet())
+        {
+            variants.put(entry.getKey(), buildObjectFilterVariants(entry.getValue()));
+        }
+        return variants;
     }
 
     /**
@@ -608,8 +661,7 @@ public class GetProjectErrorsTool implements IMcpTool
             return resolution;
         }
 
-        Map<String, Set<String>> found = new LinkedHashMap<>();
-        boolean inspectedAny = false;
+        List<ProjectResolution> perProject = new ArrayList<>();
         for (IProject project : scope)
         {
             IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
@@ -622,10 +674,59 @@ public class GetProjectErrorsTool implements IMcpTool
                 // it must not be counted as an inspection either.
                 continue;
             }
+            perProject.add(resolveInProject(project, bmModel, config, candidates));
+        }
+        foldProjectDecisions(resolution, candidates, perProject);
+        return resolution;
+    }
+
+    /**
+     * Folds every project's own decision into the request-level verdicts: which addresses resolved,
+     * which are really missing, which project scopes the scan by which spellings, and whether the
+     * answer must be refused instead.
+     *
+     * <p>Two refusals, both guarding the same thing - never claim absence nobody verified:</p>
+     * <ul>
+     *   <li>NO project could be inspected at all (every pass threw, or the scope held no readable
+     *       model): every address would be declared missing on the strength of no inspection;</li>
+     *   <li>an individual address resolved NOWHERE but stayed UNDECIDED in at least one project.
+     *       A request-wide "was anything inspected" flag cannot see this: another project's
+     *       completed pass would satisfy it and the undecided address would be reported as
+     *       {@code objectsNotFound}, even though the only project that could have held it never
+     *       reached a verdict.</li>
+     * </ul>
+     *
+     * <p>An address that resolved in ANY project is settled, so an undecided verdict elsewhere is
+     * irrelevant to it.</p>
+     *
+     * @param resolution the resolution being filled (its {@code unsupported} entries are already in)
+     * @param candidates the addresses that need resolution, in request order
+     * @param perProject what each inspected project decided, in scope order
+     */
+    static void foldProjectDecisions(AddressResolution resolution, List<String> candidates,
+        List<ProjectResolution> perProject)
+    {
+        Set<String> found = new LinkedHashSet<>();
+        Set<String> undecided = new LinkedHashSet<>();
+        boolean inspectedAny = false;
+        for (ProjectResolution decided : perProject)
+        {
             // Counted as inspected only when the pass really COMPLETED: a pass that threw decided
             // nothing, so treating it as an inspection would turn its undecided addresses into
             // "not found" (see resolveInProject).
-            inspectedAny |= resolveInProject(project, bmModel, config, candidates, found);
+            inspectedAny |= decided.passCompleted;
+            undecided.addAll(decided.undecided);
+            if (decided.resolved.isEmpty())
+            {
+                continue;
+            }
+            found.addAll(decided.resolved.keySet());
+            Set<String> projectScope = new LinkedHashSet<>();
+            for (Set<String> spellings : decided.resolved.values())
+            {
+                projectScope.addAll(spellings);
+            }
+            resolution.scopeByProject.put(decided.projectName, projectScope);
         }
 
         if (!inspectedAny)
@@ -637,35 +738,56 @@ public class GetProjectErrorsTool implements IMcpTool
                 + " Wait for indexing to finish, name an indexed project with projectName," //$NON-NLS-1$
                 + " check the state with list_projects, or use the loose '" + PARAM_OBJECTS //$NON-NLS-1$
                 + "' filter, which needs no resolution.").toJson(); //$NON-NLS-1$
-            return resolution;
+            return;
+        }
+
+        // An address that resolved NOWHERE but stayed UNDECIDED somewhere is not missing - nobody
+        // could look. Reporting it as objectsNotFound is the false verdict this input exists to
+        // prevent, so the call is refused instead, exactly as an entirely uninspectable scope is.
+        List<String> undecidedMisses = new ArrayList<>();
+        for (String fqn : candidates)
+        {
+            if (!found.contains(fqn) && undecided.contains(fqn))
+            {
+                undecidedMisses.add(fqn);
+            }
+        }
+        if (!undecidedMisses.isEmpty())
+        {
+            resolution.error = ToolResult.error("Cannot decide " + PARAM_OBJECT_FQNS + ": " //$NON-NLS-1$ //$NON-NLS-2$
+                + String.join(", ", undecidedMisses) //$NON-NLS-1$
+                + " - a project in scope could not be read (a form's content model, or the whole" //$NON-NLS-1$
+                + " resolve pass), so nothing can be said about these addresses. They are NOT" //$NON-NLS-1$
+                + " reported as missing, because no project ever decided them." //$NON-NLS-1$
+                + " Wait for indexing to finish, name the project that owns them with projectName," //$NON-NLS-1$
+                + " check the state with list_projects, or use the loose '" + PARAM_OBJECTS //$NON-NLS-1$
+                + "' filter, which needs no resolution.").toJson(); //$NON-NLS-1$
+            return;
         }
 
         for (String fqn : candidates)
         {
-            Set<String> resolvedAs = found.get(fqn);
-            if (resolvedAs != null && !resolvedAs.isEmpty())
+            if (found.contains(fqn))
             {
-                // The wire keeps the caller's spelling; the scan uses EVERY one that resolved.
+                // The wire keeps the caller's spelling; the scan uses the per-project spellings.
                 resolution.resolved.add(fqn);
-                resolution.scopeFqns.addAll(resolvedAs);
             }
             else
             {
                 resolution.notFound.add(fqn);
             }
         }
-        return resolution;
     }
 
     /**
-     * Adds to {@code found} every candidate address that resolves in this project, mapped to the
-     * spelling(s) that actually resolved HERE (see {@link #addressProbes} and
-     * {@link #formMemberScopeSpellings}).
+     * Decides every candidate address against THIS project, mapping the ones that resolve to the
+     * spelling(s) that actually resolved here (see {@link #addressProbes},
+     * {@link #scopeSpellingsOf} and {@link #formMemberScopeSpellings}).
      *
-     * <p>The accumulator is a MULTI-map on purpose: with no {@code projectName} the same requested
+     * <p>The decision is kept per project on purpose: with no {@code projectName} the same requested
      * address is offered to every project in scope, and two projects may legitimately store it under
-     * different spellings, each of which must scope the scan in its own project. Resolution
-     * therefore runs in every project, and only the per-project decision short-circuits.</p>
+     * different spellings, each of which must scope the scan IN ITS OWN project. Merging them would
+     * let one project's spelling select the other's markers.</p>
      *
      * <p>Two boundaries are used, because a form MEMBER does not live in the mdclass model: every
      * other family is decided inside ONE BM read transaction on this project's model, while a form
@@ -677,65 +799,59 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param bmModel its BM model
      * @param config its configuration
      * @param candidates the addresses to decide
-     * @param found the accumulator: requested address -&gt; the spellings that resolved
-     * @return {@code true} when the project was really INSPECTED (every address reached a verdict);
-     *     {@code false} when the pass threw or a form's content model could not be read, in which
-     *     case the affected addresses stay undecided and this project must not count as an
-     *     inspection - a project that could not answer must never turn an address into "not found"
+     * @return what this project decided: the spellings that resolved HERE, the addresses it could
+     *     not decide at all (the pass threw, or a form's content model could not be read - never a
+     *     "does not exist"), and whether the pass ran to the end
      */
-    static boolean resolveInProject(IProject project, IBmModel bmModel, Configuration config,
-        List<String> candidates, Map<String, Set<String>> found)
+    static ProjectResolution resolveInProject(IProject project, IBmModel bmModel,
+        Configuration config, List<String> candidates)
     {
+        ProjectResolution decided = new ProjectResolution(project.getName());
         List<DeferredMember> deferred = new ArrayList<>();
-        // This project's own decisions: the cross-project accumulator must not short-circuit the
-        // probe order here, or the second project's stored spelling would never be discovered.
-        Map<String, Set<String>> local = new LinkedHashMap<>();
         try
         {
             BmTransactions.<Void>read(bmModel, "ResolveErrorObjectAddresses", (tx, pm) -> { //$NON-NLS-1$
                 for (String fqn : candidates)
                 {
-                    resolveCandidate(config, fqn, local, deferred);
+                    resolveCandidate(config, fqn, decided.resolved, deferred);
                 }
                 return null;
             });
         }
         catch (Exception e)
         {
-            // A failure here is a failure to DECIDE, never a "does not exist": leave the addresses
-            // undecided so another project in scope can still answer for them, and report the
-            // project as NOT inspected so a lone failure refuses the call instead of answering it.
+            // A failure here is a failure to DECIDE, never a "does not exist": every address this
+            // project was asked about stays undecided, so another project in scope can still answer
+            // for it and a lone failure refuses the call instead of answering it.
             Activator.logError("Failed to resolve " + PARAM_OBJECT_FQNS + " in project " //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName(), e);
-            return false;
+            decided.resolved.clear();
+            decided.undecided.addAll(candidates);
+            return decided;
         }
 
         // Addresses whose ONLY attempt failed to read the form content model. They are undecided,
         // exactly like the addresses of a pass that threw - never "not found".
-        Set<String> undecided = new HashSet<>();
         for (DeferredMember member : deferred)
         {
-            if (local.containsKey(member.requestFqn))
+            if (decided.resolved.containsKey(member.requestFqn))
             {
                 continue;
             }
             List<String> spellings = formMemberScopeSpellings(project, config, member);
             if (spellings == null)
             {
-                undecided.add(member.requestFqn);
+                decided.undecided.add(member.requestFqn);
             }
             else if (!spellings.isEmpty())
             {
                 // A later probe of the same address did decide it after all.
-                undecided.remove(member.requestFqn);
-                local.put(member.requestFqn, new LinkedHashSet<>(spellings));
+                decided.undecided.remove(member.requestFqn);
+                decided.resolved.put(member.requestFqn, new LinkedHashSet<>(spellings));
             }
         }
-        for (Map.Entry<String, Set<String>> entry : local.entrySet())
-        {
-            found.computeIfAbsent(entry.getKey(), k -> new LinkedHashSet<>()).addAll(entry.getValue());
-        }
-        return undecided.isEmpty();
+        decided.passCompleted = true;
+        return decided;
     }
 
     /**
@@ -762,12 +878,79 @@ public class GetProjectErrorsTool implements IMcpTool
             {
                 deferred.add(new DeferredMember(fqn, probe, memberRef));
             }
-            else if (resolvesInConfiguration(config, probe))
+            else
             {
-                found.put(fqn, new LinkedHashSet<>(Collections.singletonList(probe)));
-                return;
+                String stored = resolvedSpelling(config, probe);
+                if (stored != null)
+                {
+                    found.put(fqn, scopeSpellingsOf(stored));
+                    return;
+                }
             }
         }
+    }
+
+    /**
+     * The scan-scoping spellings of ONE resolved non-form address: the spelling that really
+     * resolved, plus the node EDT actually reports its problems on when the address names a MEMBER
+     * (see {@link #markerOwnerFqn}).
+     *
+     * @param resolvedFqn the spelling that resolved
+     * @return the spellings, in order, without duplicates
+     */
+    private static Set<String> scopeSpellingsOf(String resolvedFqn)
+    {
+        Set<String> spellings = new LinkedHashSet<>();
+        spellings.add(resolvedFqn);
+        String owner = markerOwnerFqn(resolvedFqn);
+        if (owner != null)
+        {
+            spellings.add(owner);
+        }
+        return spellings;
+    }
+
+    /**
+     * The node a MEMBER address' problems are really reported on, or {@code null} when the address
+     * already names that node itself.
+     *
+     * <p>{@link Marker#getObjectPresentation()} - the ONLY thing this filter can compare against -
+     * names the object EDT indexed the problem under, and that is never a member inside it. Verified
+     * live on EDT 2026.1: an attribute with no type produces two {@code md-legacy-emf-check} markers
+     * whose presentation is the OWNING catalog ({@code Catalog.Catalog}), and a form item's dangling
+     * event handler produces a {@code form-legacy-check-event-handler} marker on the form CONTENT
+     * object ({@code Catalog.Catalog.Form.ItemForm.Form}) - in neither case is the member itself in
+     * the presentation. The member detail lives in {@code Marker#getLocation()}, which this filter
+     * deliberately does not read (matching it is a separate feature - see the XDTO note in
+     * {@link #unsupportedAddressReason}).</p>
+     *
+     * <p>So a member address scoped by its own spelling alone matches NOTHING and hands the caller
+     * {@code objectsResolved} next to a clean report - the false-clean this input exists to
+     * prevent. Scoping by the owning node instead widens the answer to that node's problems, which
+     * is visible in every row's Location and never hides one.</p>
+     *
+     * @param normFqn the type-normalized address that resolved
+     * @return the owning node's address, or {@code null} when {@code normFqn} is already it
+     */
+    static String markerOwnerFqn(String normFqn)
+    {
+        // A Subsystem chain IS the addressed node - a nested subsystem is a top object of its own.
+        if (SubsystemUtils.parseSubsystemPath(normFqn) != null)
+        {
+            return null;
+        }
+        // A FORM object's own presentation already starts with its address ("....ItemForm.Form").
+        if (FormElementWriter.parseFormPath(normFqn) != null)
+        {
+            return null;
+        }
+        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
+        if (parts.length <= 2)
+        {
+            // Type.Name is the object itself, and a one-segment address names nothing narrower.
+            return null;
+        }
+        return parts[0] + "." + parts[1]; //$NON-NLS-1$
     }
 
     /**
@@ -857,23 +1040,32 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Whether {@code normFqn} names a node that exists in {@code config}, dispatching to the
-     * specialized resolver of the address family it belongs to. Form MEMBERS are NOT decided here
-     * (see {@link #formMemberExists}); every other supported family is.
+     * The spelling {@code normFqn} really resolved to in {@code config}, dispatching to the
+     * specialized resolver of the address family it belongs to, or {@code null} when it resolves to
+     * nothing. Form MEMBERS are NOT decided here (see {@link #formMemberScopeSpellings}); every
+     * other supported family is.
+     *
+     * <p>The STORED spelling is returned, not the probed one, because it is what scopes the marker
+     * scan. Only {@code Predefined} can differ: {@link PredefinedWriter#findByName} carries its own
+     * yo (U+0451) fallback, so a probe written {@code ...Predefined.M[yo]d} matches an item stored
+     * as {@code M[ye]d} - and scoping the scan by the probe would then filter out every problem on
+     * the very item that was just proven to exist. Every other family matches the name literally
+     * (case aside, which the lowercased filter variants already absorb), so its probe IS the stored
+     * spelling.</p>
      *
      * <p>Call inside a BM read transaction bound to this configuration's model.</p>
      *
      * @param config the configuration to resolve against
      * @param normFqn the type-normalized address
-     * @return {@code true} when the address resolves
+     * @return the resolved (stored) spelling, or {@code null} when the address resolves to nothing
      */
-    static boolean resolvesInConfiguration(Configuration config, String normFqn)
+    static String resolvedSpelling(Configuration config, String normFqn)
     {
         // A Subsystem chain nests the same kind token repeatedly, which the generic child-feature
         // navigation does not model - SubsystemUtils owns that grammar.
         if (SubsystemUtils.parseSubsystemPath(normFqn) != null)
         {
-            return SubsystemUtils.resolveByFqn(config, normFqn) != null;
+            return SubsystemUtils.resolveByFqn(config, normFqn) != null ? normFqn : null;
         }
         // A predefined item is not an mdclass child either: it lives in the owner's predefined tree.
         PredefinedWriter.PredefinedRef predefined = PredefinedWriter.parseRef(normFqn);
@@ -881,17 +1073,24 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             MetadataNodeResolver.MetadataNode owner =
                 MetadataNodeResolver.resolveExisting(config, predefined.ownerFqn());
-            return owner != null
-                && PredefinedWriter.findByName(owner.object, predefined.itemName) != null;
+            if (owner == null)
+            {
+                return null;
+            }
+            PredefinedItem item = PredefinedWriter.findByName(owner.object, predefined.itemName);
+            // The item's OWN stored Name replaces the requested leaf: findByName's yo fallback can
+            // have matched a differently spelled item, and the markers carry the stored spelling.
+            return item == null ? null
+                : normFqn.substring(0, normFqn.lastIndexOf('.') + 1) + item.getName();
         }
         // A FORM object: the mdclass metamodel deliberately does not lead into the form package, so
         // the shared node resolver cannot navigate the Form kind - the form reader can.
         String formPath = FormElementWriter.parseFormPath(normFqn);
         if (formPath != null)
         {
-            return FormStructureReader.resolveMdForm(config, formPath) != null;
+            return FormStructureReader.resolveMdForm(config, formPath) != null ? normFqn : null;
         }
-        return MetadataNodeResolver.resolveExisting(config, normFqn) != null;
+        return MetadataNodeResolver.resolveExisting(config, normFqn) != null ? normFqn : null;
     }
 
     /**
@@ -983,7 +1182,8 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return FormElementWriter.matchesRequestedKind(
                 FormElementWriter.resolveFormMember(formModel, ref), ref)
-                    ? Collections.singletonList(member.probeFqn) : Collections.<String> emptyList();
+                    ? scopedByOwningForm(member, Collections.singletonList(member.probeFqn))
+                    : Collections.<String> emptyList();
         }
         EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
         if (container == null)
@@ -1002,8 +1202,49 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return Collections.emptyList();
         }
-        return handlerScopeSpellings(member.probeFqn,
-            FormElementWriter.handlerEventSpellings(container, handler));
+        return scopedByOwningForm(member, handlerScopeSpellings(member.probeFqn,
+            FormElementWriter.handlerEventSpellings(container, handler)));
+    }
+
+    /**
+     * Adds the OWNING FORM to a resolved member's scan scope - the node EDT really reports the
+     * problem on.
+     *
+     * <p>A form's markers are indexed on the form CONTENT object, whose presentation is
+     * {@code <formPath>.Form}; nothing below it ever appears there. Verified live on EDT 2026.1: a
+     * form item bound to a missing handler procedure produces a {@code form-legacy-check-event-handler}
+     * marker located at {@code Catalog.Catalog.Form.ItemForm.Form}, with no trace of the item. So a
+     * member address scoped by the member alone matches nothing, and the caller gets
+     * {@code objectsResolved} next to "# No Errors Found" - a false all-clear on an element that
+     * demonstrably has a problem. The form path is a PREFIX of that presentation, so adding it
+     * selects the form's problems (see {@link #markerOwnerFqn} for the same rule elsewhere).</p>
+     *
+     * <p>The prefix is cut off the PROBED address, not taken from
+     * {@link FormElementWriter.FormMemberRef#formPath}: that field is normalized to the
+     * {@code Type.Object.forms.FormName} shape {@code resolveMdForm} needs (plural, lowercase), while
+     * a marker renders the singular {@code Form} - and the bilingual expansion would faithfully keep
+     * the plural, matching nothing. The member tail is 2 segments for a form-level member and 4 for
+     * an item-level handler, exactly as {@link FormElementWriter#parse} split it.</p>
+     *
+     * @param member the deferred member probe (its {@code probeFqn} carries the caller's own tokens)
+     * @param spellings the member's own scoping spellings
+     * @return the spellings plus the owning form path, without duplicates
+     */
+    private static List<String> scopedByOwningForm(DeferredMember member, List<String> spellings)
+    {
+        List<String> scoped = new ArrayList<>(spellings);
+        String[] parts = member.probeFqn.split("\\."); //$NON-NLS-1$
+        int tail = member.ref.isItemLevel() ? 4 : 2;
+        if (parts.length > tail)
+        {
+            String formPrefix = String.join(".", //$NON-NLS-1$
+                Arrays.copyOfRange(parts, 0, parts.length - tail));
+            if (!scoped.contains(formPrefix))
+            {
+                scoped.add(formPrefix);
+            }
+        }
+        return scoped;
     }
 
     /**
@@ -1097,6 +1338,18 @@ public class GetProjectErrorsTool implements IMcpTool
                 break;
             }
 
+            // The objects filter of THIS project. An exact-address call scopes each project by the
+            // spellings that resolved THERE, so a project that resolved nothing contributes no
+            // marker: an exact address is a claim about one node, and a project the node does not
+            // live in cannot own its problems. (This is also what keeps a CLOSED project - whose
+            // markers are in the index but whose model cannot be resolved against - from being
+            // matched by another project's spelling.)
+            final Set<String> projectObjects = context.objectsFor(entry.getKey());
+            if (projectObjects == null)
+            {
+                continue;
+            }
+
             final List<Marker> projectMarkers = entry.getValue();
             final int remaining = context.limit - errors.size();
 
@@ -1108,7 +1361,7 @@ public class GetProjectErrorsTool implements IMcpTool
 
             Runnable collector = () -> projectMarkers.stream()
                 .map(marker -> buildIfMatches(marker, context.severityFilter, context.checkId,
-                    context.objects, context.checkRepository, context.unresolvedShown,
+                    projectObjects, context.checkRepository, context.unresolvedShown,
                     context.unresolvedFilteredOut, context.exactScope))
                 .filter(Objects::nonNull)
                 .limit(remaining)
@@ -1147,10 +1400,26 @@ public class GetProjectErrorsTool implements IMcpTool
         final int[] unresolvedShown;
         final int[] unresolvedFilteredOut;
         final boolean exactScope;
+        /**
+         * PER-PROJECT object filters, or {@code null} when {@link #objects} applies to every
+         * project. Only an exact-address call sets it: each project is scoped by the spellings that
+         * resolved THERE, and a project that is absent resolved nothing and must contribute no
+         * marker at all.
+         */
+        final Map<String, Set<String>> objectsByProject;
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
             ICheckRepository checkRepository, int limit, int[] unresolvedShown,
             int[] unresolvedFilteredOut, boolean exactScope)
+        {
+            this(severityFilter, checkId, objects, checkRepository, limit, unresolvedShown,
+                unresolvedFilteredOut, exactScope, null);
+        }
+
+        CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
+            ICheckRepository checkRepository, int limit, int[] unresolvedShown,
+            int[] unresolvedFilteredOut, boolean exactScope,
+            Map<String, Set<String>> objectsByProject)
         {
             this.severityFilter = severityFilter;
             this.checkId = checkId;
@@ -1160,7 +1429,41 @@ public class GetProjectErrorsTool implements IMcpTool
             this.unresolvedShown = unresolvedShown;
             this.unresolvedFilteredOut = unresolvedFilteredOut;
             this.exactScope = exactScope;
+            this.objectsByProject = objectsByProject;
         }
+
+        /**
+         * The object filter to apply to {@code project}'s markers, or {@code null} when the project
+         * must contribute nothing at all (an exact-address call whose addresses resolved in some
+         * OTHER project).
+         *
+         * @param project the project whose markers are about to be scanned
+         * @return the filter variants, or {@code null} to skip the project entirely
+         */
+        Set<String> objectsFor(IProject project)
+        {
+            return objectsForProject(objectsByProject, objects, project.getName());
+        }
+    }
+
+    /**
+     * The object filter that applies to one project's markers.
+     *
+     * @param objectsByProject the per-project filters of an exact-address call, or {@code null} when
+     *     one filter applies to every project (the loose {@code objects} call)
+     * @param objects the single filter to use when {@code objectsByProject} is {@code null}
+     * @param projectName the project whose markers are about to be scanned
+     * @return the filter variants, or {@code null} when the project must contribute nothing at all
+     */
+    static Set<String> objectsForProject(Map<String, Set<String>> objectsByProject,
+        Set<String> objects, String projectName)
+    {
+        if (objectsByProject == null)
+        {
+            return objects;
+        }
+        Set<String> scoped = objectsByProject.get(projectName);
+        return scoped == null || scoped.isEmpty() ? null : scoped;
     }
 
     /**

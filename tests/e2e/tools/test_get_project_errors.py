@@ -13,9 +13,11 @@ the marker stream and applied the filters, so a broken/no-op tool would fail it.
 
 There are TWO object filters and they behave differently on purpose:
   * `objects`    - a loose case-insensitive SUBSTRING match over the reported location, with
-                   every structural segment normalized to both languages. It makes NO
-                   existence claim: a fragment and a typo are indistinguishable there, so it
-                   never emits objectsNotFound.
+                   every structural segment the filter knows normalized to both languages
+                   (the XDTO member grammar is the documented exception - it is English-only
+                   and is not a filter address at all). It makes NO existence claim: a
+                   fragment and a typo are indistinguishable there, so it never emits
+                   objectsNotFound.
   * `objectFqns` - EXACT model addresses, resolved with the same resolvers the write tools
                    use. This is the only input that reports back: the response is JSON with
                    `report` (the Markdown for a human) plus `objectsResolved` /
@@ -24,6 +26,13 @@ There are TWO object filters and they behave differently on purpose:
                    OWNER's kind in an item-level handler address included - and the
                    ё/е retry the write tools use (a name typed with ё resolves against the
                    stored е form).
+                   SELECTION is coarser than ADDRESSING on purpose: EDT indexes a marker on
+                   the object it belongs to, never on a member inside it (an attribute's
+                   problem is reported on `Catalog.X`, a form item's on
+                   `Catalog.X.Form.Y.Form`), so a resolved MEMBER address is scoped to that
+                   owning node. Scoping it to the member alone would match nothing and answer
+                   `objectsResolved` next to "# No Errors Found" - the false all-clear this
+                   input exists to prevent.
 
 Anything that must observe a REAL marker seeds it first (a syntax error written into a
 fixture module with write_module_source, then a forced revalidation): the live marker set
@@ -73,6 +82,10 @@ YO_CATALOG_YE = "Полет"
 # Names that cannot exist in the fixture, so the not-found verdicts are deterministic.
 NO_SUCH_OBJECT = "NoSuchObject_e2e_xyz"
 NO_SUCH_ATTRIBUTE = "NoSuchAttribute_e2e_xyz"
+
+# A handler procedure that is deliberately never written into the form module: binding an event to
+# it is a guaranteed EDT problem ON A FORM ITEM, which is how a form marker gets seeded on demand.
+GHOST_HANDLER_PROC = "E2eGpeGhostHandlerXyz"
 
 # The fixture common module the marker is seeded into. Its NAME is Cyrillic on purpose: the
 # programmatic name must survive the bilingual normalization untouched (only the STRUCTURAL
@@ -144,6 +157,43 @@ def _assert_verdicts(result, resolved, not_found, unsupported):
     for entry in actual_unsupported:
         if not entry.get("reason"):
             _fail("an unsupported verdict must carry a reason: %r" % (entry,))
+
+
+def _seed_form_problem_and_wait():
+    """Bind an OnChange handler to a procedure that does not exist and wait for EDT's marker.
+
+    The fixture form has no module at all, so the binding is a guaranteed
+    `form-legacy-check-event-handler` problem - a problem that belongs to a form ITEM. Returns the
+    marker's reported LOCATION, which is the point of the exercise: EDT indexes it on the form
+    CONTENT object, not on the item.
+
+    Fails (rather than skipping) if no marker appears: the assertions that follow would be
+    vacuously true otherwise, which is the false-green this file exists to avoid.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    bound = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "%s.Field.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD),
+        "properties": [{"name": "procedure", "value": GHOST_HANDLER_PROC}],
+    })
+    assert_ok(bound, "binding an OnChange handler to a procedure that does not exist")
+    wait_for_project_ready()
+    call("revalidate_objects", {"projectName": PROJECT, "objects": [form]})
+
+    deadline = time.time() + MARKER_POLL_TIMEOUT
+    last = ""
+    while time.time() < deadline:
+        r = call("get_project_errors", {"projectName": PROJECT, "objects": [form]})
+        assert_ok(r, "polling for the seeded form marker")
+        last = _report(r)
+        for row in _rows(last)[2:]:
+            cells = [c.strip() for c in row.strip("|").split("|")]
+            if len(cells) > 1 and cells[1].startswith(form):
+                return cells[1]
+        time.sleep(2)
+    _fail("no marker appeared on %s within %ds; last report:\n%s"
+          % (form, MARKER_POLL_TIMEOUT, last[:600]))
+    return ""  # unreachable; _fail raises
 
 
 def _seed_bsl_error_and_wait():
@@ -470,6 +520,61 @@ def test_exact_handler_address_must_name_the_owning_items_kind():
     g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost_event]})
     assert_ok(g, "a handler address whose event is bound to nothing")
     _assert_verdicts(g, resolved=[], not_found=[ghost_event], unsupported=[])
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_form_and_form_member_addresses_really_select_the_forms_problems():
+    """A resolved FORM and a resolved FORM MEMBER must both SELECT rows, not just resolve.
+
+    Every other positive selection test in this file runs on a CommonModule; for forms only the
+    resolution was covered, never the selection - and that is exactly where the addressing and the
+    marker granularity disagree. EDT indexes a form's problems on the form CONTENT object
+    (`<form>.Form`), never on the item that owns them, so a member address scoped to itself matches
+    NOTHING: `objectsResolved` next to "# No Errors Found" on an element that demonstrably has a
+    problem, which is the false all-clear this whole input exists to prevent.
+
+    The marker is part of the ARRANGE (an event bound to a procedure that does not exist), so this
+    does not depend on whatever the live workspace happens to carry.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    location = _seed_form_problem_and_wait()
+
+    # The premise, stated as an assertion: the problem of a form ITEM is reported on the form's
+    # CONTENT object, and the item is nowhere in that location.
+    if not location.startswith(form + "."):
+        _fail("expected the form's problem to be located under %r, got %r" % (form, location))
+    if FIXTURE_FORM_FIELD in location.split(".")[len(form.split(".")):]:
+        _fail("unexpected: the item appears in the marker location %r - re-check the scoping rule"
+              % location)
+
+    # 1) The FORM address selects it (its own address is a prefix of the location).
+    f = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(f, "exact address of the seeded form")
+    _assert_verdicts(f, resolved=[form], not_found=[], unsupported=[])
+    if (f.structured or {}).get("problemsFound", 0) < 1:
+        _fail("the form's own address must select its problem: %r" % (f.structured,))
+
+    # 2) The MEMBER and the item-level HANDLER address must select it too.
+    for member in ("%s.Field.%s" % (form, FIXTURE_FORM_FIELD),
+                   "%s.Field.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)):
+        m = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [member]})
+        assert_ok(m, "exact address of the form member %r" % member)
+        _assert_verdicts(m, resolved=[member], not_found=[], unsupported=[])
+        if (m.structured or {}).get("problemsFound", 0) < 1:
+            _fail("a resolved member must never answer 'no problems' while its form has one "
+                  "(address %r, marker at %r): %r" % (member, location, m.structured))
+        assert_contains(_report(m), location,
+                        "the member's rows must be the form's own rows, location included")
+
+    # 3) The widening must not blur the MISS verdicts: a ghost member and a wrong-kind member are
+    #    still reported missing and select nothing, even though their form has a problem.
+    misses = ["%s.Field.%s" % (form, NO_SUCH_ATTRIBUTE),
+              "%s.Button.%s" % (form, FIXTURE_FORM_FIELD)]
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": misses})
+    assert_ok(w, "ghost / wrong-kind members of a form that HAS a problem")
+    _assert_verdicts(w, resolved=[], not_found=misses, unsupported=[])
+    if (w.structured or {}).get("problemsFound", 0) != 0:
+        _fail("an address that resolved to nothing must select nothing: %r" % (w.structured,))
 
 
 @e2e_test(tool="get_project_errors", kind="write-metadata")
