@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -498,6 +498,8 @@ public class MetadataTypeUtilsTest
     private static final String RU_TABULAR_SECTION_LOWER =
         "\u0442\u0430\u0431\u043B\u0438\u0447\u043D\u0430\u044F\u0447\u0430\u0441\u0442\u044C"; // табличнаячасть
     private static final String RU_ATTRIBUTE_LOWER = "\u0440\u0435\u043A\u0432\u0438\u0437\u0438\u0442"; // реквизит
+    private static final String RU_ATTRIBUTE = "\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442"; // Attribute (ru)
+    private static final String RU_MODULE_LOWER = "\u043C\u043E\u0434\u0443\u043B\u044C"; // Module (ru, lowercase)
 
     @Test
     public void testGetAllFqnVariantsNestedEnglishInputProducesFullRussianVariant()
@@ -577,6 +579,49 @@ public class MetadataTypeUtilsTest
         assertTrue(variants.contains("catalog.products.widget.foo"));
         assertTrue("The known type token must still translate",
             variants.contains(RU_CATALOG_LOWER + ".products.widget.foo"));
+    }
+
+    @Test
+    public void testALooseFragmentThatStartsOnANestedKindStillTranslates()
+    {
+        // `objects` entries are documented FRAGMENTS and may begin in the MIDDLE of a location.
+        // A fragment starting on a nested KIND was only ever looked up in the TYPE catalogue, so it
+        // stayed Russian, matched no English location, and - because a loose entry reports no miss -
+        // handed the caller an empty report: the #312 symptom in the loose mode.
+        Set<String> form = MetadataTypeUtils.getAllFqnVariants(RU_FORM + ".ItemForm");
+        assertTrue("the fragment as typed must stay", form.contains(RU_FORM_LOWER + ".itemform"));
+        assertTrue("a fragment starting on a nested kind must reach the English location",
+            form.contains("form.itemform"));
+
+        Set<String> attribute = MetadataTypeUtils.getAllFqnVariants(RU_ATTRIBUTE + ".Weight");
+        assertTrue(attribute.contains("attribute.weight"));
+
+        // Symmetrical: an English fragment must reach a Russian-rendered location.
+        Set<String> english = MetadataTypeUtils.getAllFqnVariants("Form.ItemForm");
+        assertTrue(english.contains(RU_FORM_LOWER + ".itemform"));
+    }
+
+    @Test
+    public void testTheNestedKindFallbackDoesNotTranslateNameSegments()
+    {
+        // The boundary of the fallback above: it changes only WHICH catalogue the LEADING segment is
+        // looked up in. The parity is untouched, so an odd-index segment is still a programmatic
+        // Name copied verbatim - a fragment that begins on a NAME is deliberately NOT translated,
+        // because without segment alignment a name cannot be told from a kind.
+        Set<String> startsOnName = MetadataTypeUtils.getAllFqnVariants("Calc.Module");
+        assertTrue("the fragment as typed must stay", startsOnName.contains("calc.module"));
+        for (String variant : startsOnName)
+        {
+            assertFalse("a kind token at a NAME position must never be translated: " + variant,
+                variant.contains(RU_MODULE_LOWER));
+        }
+
+        // And a real NAME after a leading kind is still verbatim (an object literally called Forma).
+        Set<String> nameAfterKind = MetadataTypeUtils.getAllFqnVariants(RU_FORM + "." + RU_FORM);
+        assertTrue("only the leading segment translates",
+            nameAfterKind.contains("form." + RU_FORM_LOWER));
+        assertFalse("the NAME must not be translated too",
+            nameAfterKind.contains("form.form"));
     }
 
     @Test

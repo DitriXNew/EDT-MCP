@@ -103,6 +103,11 @@ RU_MODULE_OWNER = "ОбщийМодуль.%s" % SEEDED_MODULE_NAME
 EN_MODULE_KIND = "Module"
 RU_MODULE_KIND = "Модуль"
 
+# The FORM kind token in both languages. Used as the LEADING segment of a loose fragment, which is
+# the shape that used to be looked up in the metadata-TYPE catalogue only.
+EN_FORM_KIND = "Form"
+RU_FORM_KIND = "Форма"
+
 # How long to wait for EDT to publish the seeded marker after the write + revalidation.
 MARKER_POLL_TIMEOUT = 120
 
@@ -520,6 +525,39 @@ def test_exact_handler_address_must_name_the_owning_items_kind():
     g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost_event]})
     assert_ok(g, "a handler address whose event is bound to nothing")
     _assert_verdicts(g, resolved=[], not_found=[ghost_event], unsupported=[])
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_loose_fragment_starting_on_a_nested_kind_crosses_languages():
+    """A loose `objects` entry may START on a nested KIND - and must still be bilingual.
+
+    Fragments are documented to begin anywhere in a location, but only the LEADING segment was
+    translated, and only through the metadata-TYPE catalogue. `Форма.ItemForm` is a fragment whose
+    first segment is a nested KIND, so it stayed Russian, matched no English-rendered location, and
+    - because a loose entry deliberately reports no miss - answered with a silently empty report.
+    That is the #312 symptom in the loose mode.
+
+    The marker is seeded here, so "selected nothing" cannot be an accident of the live workspace.
+    """
+    location = _seed_form_problem_and_wait()
+
+    # The English fragment is a literal substring of the location EDT rendered, so it is the
+    # control: whatever it selects, the Russian spelling of the SAME fragment must select too.
+    en_fragment = "%s.%s" % (EN_FORM_KIND, FIXTURE_FORM)
+    ru_fragment = "%s.%s" % (RU_FORM_KIND, FIXTURE_FORM)
+    if en_fragment.lower() not in location.lower():
+        _fail("the control fragment %r must be a substring of the marker location %r"
+              % (en_fragment, location))
+
+    en_rows = _rows_for(en_fragment)
+    if not en_rows:
+        _fail("the control fragment %r selected no rows though the marker is at %r"
+              % (en_fragment, location))
+
+    ru_rows = _rows_for(ru_fragment)
+    if ru_rows != en_rows:
+        _fail("a fragment starting on a nested kind must select the same rows in both languages:\n"
+              "EN(%s)=%r\nRU(%s)=%r" % (en_fragment, en_rows, ru_fragment, ru_rows))
 
 
 @e2e_test(tool="get_project_errors", kind="write-metadata")

@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -26,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
@@ -1128,6 +1130,57 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testAnUnreadableEdtProjectIsUndecidedWhileANonEdtOneIsSkipped()
+    {
+        // The two reasons a project in scope has no readable model are NOT the same fact, and the
+        // answer must differ:
+        //   * an ordinary Eclipse/Java/Maven project has no BM model by definition. It cannot hold
+        //     1C metadata, so it is skipped - otherwise ONE such project would mute the missing
+        //     address report for the whole workspace (exactly what the review of e4cf002b caught).
+        //   * a 1C:EDT project that is still INDEXING could perfectly well hold the address.
+        //     Skipping it lets another project's completed pass stand in as the inspection, and the
+        //     address is reported missing on the strength of a project nobody looked at.
+        List<String> candidates = Collections.singletonList("Catalog.Nope"); //$NON-NLS-1$
+
+        // Entered through the SAME seam the scope loop uses, with the null model/configuration a
+        // project in either state really presents - so this covers the branch, not just the helper.
+        assertNull("a non-EDT project is legitimately skipped", //$NON-NLS-1$
+            GetProjectErrorsTool.projectDecision(project("plain-java", false), null, null, //$NON-NLS-1$
+                candidates));
+
+        GetProjectErrorsTool.ProjectResolution loading = GetProjectErrorsTool.projectDecision(
+            project("indexing", true), null, null, candidates); //$NON-NLS-1$
+        assertNotNull("an unreadable EDT project must decide NOTHING, not be skipped", loading); //$NON-NLS-1$
+        assertFalse("it never ran a pass", loading.passCompleted); //$NON-NLS-1$
+        assertEquals("and every candidate stays undecided", //$NON-NLS-1$
+            singleton("Catalog.Nope"), loading.undecided); //$NON-NLS-1$
+        assertTrue(loading.resolved.isEmpty());
+
+        // End to end, both halves of the author's requirement in one fold:
+        // a readable EDT project + a non-EDT one must still report the address missing...
+        GetProjectErrorsTool.ProjectResolution readable = GetProjectErrorsTool.resolveInProject(
+            project("edt-ok"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            candidates);
+        GetProjectErrorsTool.AddressResolution withNonEdt =
+            new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(withNonEdt, candidates,
+            Collections.singletonList(readable));
+        assertNull("a non-EDT project must not mute the missing-address report", //$NON-NLS-1$
+            withNonEdt.error);
+        assertEquals(candidates, withNonEdt.notFound);
+
+        // ...while the same query with an INDEXING EDT project alongside must not claim absence.
+        GetProjectErrorsTool.AddressResolution withLoading =
+            new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(withLoading, candidates,
+            Arrays.asList(readable, loading));
+        assertNotNull("an unreadable EDT project must stop the absence claim", withLoading.error); //$NON-NLS-1$
+        assertTrue("the refusal must name the address", //$NON-NLS-1$
+            withLoading.error.contains("Catalog.Nope")); //$NON-NLS-1$
+        assertTrue("and nothing may be declared missing", withLoading.notFound.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testEachProjectScopesTheScanByItsOwnSpellingOnly()
     {
         // With no projectName the SAME address can resolve to a DIFFERENT stored spelling in each
@@ -1515,6 +1568,29 @@ public class GetProjectErrorsToolTest
     {
         IProject project = mock(IProject.class);
         when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    /**
+     * A project mock that answers the nature query the way a real workspace project would: a 1C:EDT
+     * project carries exactly one V8 nature, an ordinary Eclipse/Java/Maven project carries none.
+     */
+    private static IProject project(String name, boolean edt)
+    {
+        IProject project = project(name);
+        try
+        {
+            when(project.hasNature(anyString())).thenReturn(false);
+            if (edt)
+            {
+                when(project.hasNature("com._1c.g5.v8.dt.core.V8ConfigurationNature")) //$NON-NLS-1$
+                    .thenReturn(true);
+            }
+        }
+        catch (CoreException e)
+        {
+            throw new IllegalStateException(e); // stubbing only; never thrown
+        }
         return project;
     }
 

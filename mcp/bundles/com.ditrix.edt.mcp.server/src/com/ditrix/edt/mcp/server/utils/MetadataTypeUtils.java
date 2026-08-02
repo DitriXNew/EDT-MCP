@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -857,9 +857,23 @@ public final class MetadataTypeUtils
      * Translates a single structural segment to one language, returning it unchanged when the
      * token is not in the matching catalogue.
      *
+     * <p>The LEADING segment is looked up in the type catalogue FIRST and, only when it is not a
+     * metadata type, in the nested-KIND catalogue. That second lookup exists for the loose
+     * {@code objects} filter, whose entries are documented FRAGMENTS and may therefore begin in the
+     * middle of a location: {@code Форма.ItemForm} or {@code Реквизит.Weight} start on a nested kind,
+     * and translating only type tokens left them Russian - matching no English location, and (since
+     * a loose entry reports no miss) answering with a silently empty report.</p>
+     *
+     * <p>This does NOT widen matching beyond the documented reading. The parity is untouched: even
+     * indexes stay structural, odd indexes stay programmatic Names copied verbatim, so no name is
+     * ever translated. The leading segment was ALREADY assumed structural - only the catalogue it is
+     * looked up in changed. A fragment that begins on a NAME instead (e.g. {@code Calc.Module}) is
+     * therefore still not translated: without segment alignment a name cannot be told from a kind,
+     * and guessing would break the "Names are verbatim" guarantee.</p>
+     *
      * @param segment the structural segment token
-     * @param topLevel {@code true} for the leading TYPE segment (resolved through
-     *     {@link MetadataTypeInfo}), {@code false} for a nested KIND segment (resolved through
+     * @param topLevel {@code true} for the leading segment (a TYPE through {@link MetadataTypeInfo},
+     *     falling back to a nested KIND), {@code false} for a nested KIND segment (resolved through
      *     {@link #resolveNestedKind(String)})
      * @param toEnglish {@code true} for the English spelling, {@code false} for the Russian one
      * @return the translated segment, or the input when it is not recognized
@@ -869,16 +883,16 @@ public final class MetadataTypeUtils
         if (topLevel)
         {
             MetadataTypeInfo typeInfo = resolve(segment);
-            if (typeInfo == null)
+            if (typeInfo != null)
             {
-                return segment;
+                if (toEnglish)
+                {
+                    return typeInfo.getEnglishSingular();
+                }
+                String[] russianNames = typeInfo.getRussianNames();
+                return russianNames.length > 0 ? russianNames[0] : segment;
             }
-            if (toEnglish)
-            {
-                return typeInfo.getEnglishSingular();
-            }
-            String[] russianNames = typeInfo.getRussianNames();
-            return russianNames.length > 0 ? russianNames[0] : segment;
+            // Not a metadata type: a fragment may start on a nested kind instead - fall through.
         }
 
         NestedKindInfo kindInfo = resolveNestedKind(segment);

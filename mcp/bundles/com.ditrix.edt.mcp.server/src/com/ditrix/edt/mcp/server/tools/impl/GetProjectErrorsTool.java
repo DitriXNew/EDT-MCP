@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 
@@ -668,16 +669,120 @@ public class GetProjectErrorsTool implements IMcpTool
             ProjectContext.ConfigurationResult configResult =
                 ProjectContext.of(project.getName()).resolveConfiguration();
             Configuration config = configResult.ok() ? configResult.configuration() : null;
-            if (bmModel == null || config == null)
+            ProjectResolution decided = projectDecision(project, bmModel, config, candidates);
+            if (decided != null)
             {
-                // Not an EDT project, or one whose model is not loaded yet: it cannot answer, and
-                // it must not be counted as an inspection either.
-                continue;
+                perProject.add(decided);
             }
-            perProject.add(resolveInProject(project, bmModel, config, candidates));
         }
         foldProjectDecisions(resolution, candidates, perProject);
         return resolution;
+    }
+
+    /**
+     * The three project natures 1C:EDT gives a project that can hold metadata. Declared by
+     * {@code com._1c.g5.v8.dt.core} (verified against the installed EDT 2026.1) - a workspace
+     * project carrying none of them is an ordinary Eclipse/Java/Maven project.
+     *
+     * <p>The nature is read from the project description, NOT from the model, on purpose: an EDT
+     * project that is still indexing has no readable BM model yet but already carries its nature,
+     * which is exactly the case that must be told apart from a non-EDT project.</p>
+     */
+    private static final List<String> V8_PROJECT_NATURES = Arrays.asList(
+        "com._1c.g5.v8.dt.core.V8ConfigurationNature", //$NON-NLS-1$
+        "com._1c.g5.v8.dt.core.V8ExtensionNature", //$NON-NLS-1$
+        "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"); //$NON-NLS-1$
+
+    /**
+     * What ONE project in scope contributes to the request: a real resolve pass when its model is
+     * readable, an UNDECIDED verdict when it is a 1C:EDT project whose model is not (yet) readable,
+     * and {@code null} when it is not an EDT project at all and is legitimately skipped.
+     *
+     * <p>The whole per-project branch lives here, and not inline in the scope loop, so the choice
+     * between "skip" and "undecided" is exercised by tests rather than only reasoned about.</p>
+     *
+     * @param project the project in scope
+     * @param bmModel its BM model, or {@code null} when it could not be obtained
+     * @param config its configuration, or {@code null} when it could not be resolved
+     * @param candidates the addresses this request is asking about
+     * @return this project's decision, or {@code null} when it contributes nothing at all
+     */
+    static ProjectResolution projectDecision(IProject project, IBmModel bmModel, Configuration config,
+        List<String> candidates)
+    {
+        if (bmModel == null || config == null)
+        {
+            // It cannot answer - but WHY decides everything (see unreadableProjectDecision).
+            return unreadableProjectDecision(project, candidates);
+        }
+        return resolveInProject(project, bmModel, config, candidates);
+    }
+
+    /**
+     * What a project whose model could NOT be read contributes to the request, or {@code null} when
+     * it is legitimately skipped.
+     *
+     * <p>"Could not be read" has two very different causes and they must not share an answer:</p>
+     * <ul>
+     *   <li>an ordinary Eclipse/Java/Maven project has no BM model BY DEFINITION. It cannot hold 1C
+     *       metadata, so skipping it costs nothing - and treating it as undecidable would let one
+     *       such project mute the missing-address report for the whole workspace;</li>
+     *   <li>a 1C:EDT project whose model is not loaded YET (still indexing) is a project that could
+     *       perfectly well hold the address. Skipping it silently lets another project's completed
+     *       pass stand in as the inspection, and the address is then reported in
+     *       {@code objectsNotFound} - absence "proved" by a project nobody looked at.</li>
+     * </ul>
+     *
+     * <p>So the second case returns a resolution with every candidate UNDECIDED and
+     * {@code passCompleted} false: it decides nothing, and it stops an unresolved address from being
+     * called missing (see {@link #foldProjectDecisions}).</p>
+     *
+     * @param project the in-scope project whose model could not be read
+     * @param candidates the addresses this request is asking about
+     * @return the undecided resolution for an EDT project, or {@code null} for a non-EDT one
+     */
+    static ProjectResolution unreadableProjectDecision(IProject project, List<String> candidates)
+    {
+        if (!canHoldMetadata(project))
+        {
+            return null;
+        }
+        ProjectResolution unreadable = new ProjectResolution(project.getName());
+        unreadable.undecided.addAll(candidates);
+        return unreadable;
+    }
+
+    /**
+     * Whether {@code project} is a 1C:EDT project, i.e. one that could hold metadata at all.
+     *
+     * <p>Decided by project NATURE rather than by {@code IV8ProjectManager}: while EDT is still
+     * indexing, the project manager can itself answer {@code null}, which would misclassify the very
+     * project this distinction exists for. The nature lives in the project description and is
+     * readable throughout.</p>
+     *
+     * @param project the project to classify
+     * @return {@code true} when the project carries a V8 nature, or when its description could not
+     *     be read at all (unknowable is never evidence of "not an EDT project")
+     */
+    static boolean canHoldMetadata(IProject project)
+    {
+        for (String nature : V8_PROJECT_NATURES)
+        {
+            try
+            {
+                if (project.hasNature(nature))
+                {
+                    return true;
+                }
+            }
+            catch (CoreException e)
+            {
+                // The project was closed/removed between the scope snapshot and here. We cannot
+                // tell what it is, so we must not conclude it holds no metadata.
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
