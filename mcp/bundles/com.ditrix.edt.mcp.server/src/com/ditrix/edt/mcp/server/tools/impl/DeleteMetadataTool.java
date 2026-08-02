@@ -74,6 +74,60 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /**
+     * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
+     * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
+     * a unit test substitutes a requester answering REJECT / TIMEOUT to prove the write never runs
+     * (issue #331 / #295 review).
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
+    private final ConsentRequester consentRequester;
+
+    /** Production instance: consent goes to the real gate. */
+    public DeleteMetadataTool()
+    {
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+    }
+
+    /**
+     * Test seam constructor.
+     *
+     * @param consentRequester the consent source to use instead of the singleton gate
+     */
+    DeleteMetadataTool(ConsentRequester consentRequester)
+    {
+        this.consentRequester = consentRequester;
+    }
+
+    /**
+     * THE single point where a destructive delete is authorized: asks, and invokes {@code write} ONLY
+     * on ALLOW. Every gated branch routes through here, so "did we ask before mutating?" is one
+     * testable question rather than one per call site.
+     *
+     * @param preview what the user is being asked to authorize
+     * @param write the mutation, invoked only when consent is granted
+     * @return the mutation's result, or the refusal error
+     */
+    String deleteWithConsent(ConsentPreview preview, java.util.function.Supplier<String> write)
+    {
+        DestructiveConsentGate.ConsentDecision decision = consentRequester.request(NAME, preview);
+        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+        }
+        return write.get();
+    }
+
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
 
     /** Output key: title of the delete refactoring (preview). */
@@ -570,22 +624,29 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
                     + "Column on a collection attribute / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
-            if (confirm)
+            if (!confirm)
             {
-                // The form paths used to reach the destructive branch WITHOUT asking (issue #331),
-                // so with consent=ask an agent removed a form member with no human dialog while
-                // every mdclass branch prompted. Gated here - outside the transaction, because the
-                // gate may block on a UI dialog and a tx must not be held open across it.
-                String consentError = requireFormDeleteConsent(normFqn,
-                    handler ? "Delete form event handler" : "Delete form member"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (consentError != null)
-                {
-                    return consentError;
-                }
+                return buildFormDeletePreview(fctx, normFqn, ref, handler);
             }
-            return confirm
-                ? performFormDelete(fctx, normFqn, ref, handler)
-                : buildFormDeletePreview(fctx, normFqn, ref, handler);
+            // Resolve and read the real preview BEFORE asking: a typo must answer "not found"
+            // without ever raising a destructive dialog, and the prompt must list what will actually
+            // be removed. The gate is the LAST check before the write, and runs outside any
+            // transaction because it may block on a UI dialog (issue #331 / #295 review).
+            FormDeletePreview data = readFormDeletePreview(fctx, ref, handler);
+            if (!data.found)
+            {
+                return formMemberNotFound(ref, handler);
+            }
+            ConsentPreview consentPreview = new ConsentPreview(
+                handler ? "Delete form event handler" : "Delete form member", //$NON-NLS-1$ //$NON-NLS-2$
+                data.descendants.isEmpty()
+                    ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
+                    : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
+                        + " contained element(s) (nested items, attribute columns) from " //$NON-NLS-1$
+                        + ref.formPath + '.',
+                1 + data.descendants.size(), Collections.singletonList(normFqn));
+            return deleteWithConsent(consentPreview,
+                () -> performFormDelete(fctx, normFqn, ref, handler));
         }
         catch (Exception e)
         {
@@ -626,10 +687,22 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
-    private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
+    /**
+     * Reads what a form delete would remove, inside a READ transaction: the target's type and, for a
+     * non-handler, every contained descendant (items subtree AND attribute columns). Shared by the
+     * {@code confirm=false} preview and by the consent prompt, so the dialog lists exactly what the
+     * preview promised - and so a typo answers "not found" without ever raising a destructive dialog
+     * (issue #295 review).
+     *
+     * @param fctx the resolved form edit context
+     * @param ref the parsed form-member ref
+     * @param handler whether the FQN addresses an event handler
+     * @return the preview data; {@code found} is false when the target does not exist
+     */
+    private FormDeletePreview readFormDeletePreview(FormElementWriter.FormEditContext fctx,
         FormElementWriter.FormMemberRef ref, boolean handler)
     {
-        FormDeletePreview data = FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
+        return FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
             (formModel, tx) ->
             {
                 EObject target = resolveFormTarget(formModel, ref, handler);
@@ -646,6 +719,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 }
                 return d;
             });
+    }
+
+    private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, boolean handler)
+    {
+        FormDeletePreview data = readFormDeletePreview(fctx, ref, handler);
 
         if (!data.found)
         {
@@ -708,35 +787,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    /**
-     * Asks the {@link DestructiveConsentGate} before a CONFIRMED form delete, or returns a ready JSON
-     * error when the user declined or nobody answered. Both form paths (the owned form OBJECT and any
-     * form MEMBER, columns included) route through this single point, which is what issue #331 was
-     * about: every mdclass branch already prompted, while the form branches removed content with no
-     * dialog at all under {@code consent=ask}.
-     *
-     * <p>Call OUTSIDE a transaction - the gate may block on a UI dialog, and a BM transaction must not
-     * be held open across it.</p>
-     *
-     * @param normFqn the normalized FQN being deleted, shown to the user
-     * @param title the consent dialog title naming what is about to be removed
-     * @return a ready JSON error when consent was not granted, or {@code null} to proceed
-     */
-    private static String requireFormDeleteConsent(String normFqn, String title)
-    {
-        ConsentPreview preview = new ConsentPreview(title,
-            "The element and everything it contains (nested items, attribute columns) are removed " //$NON-NLS-1$
-                + "from the form. Call with confirm=false first to see the full list.", //$NON-NLS-1$
-            1, Collections.singletonList(normFqn));
-        DestructiveConsentGate.ConsentDecision decision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
-        {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
-        }
-        return null;
-    }
-
     // ==================== FORM object (owned BasicForm, symmetric with create) ====================
 
     /**
@@ -790,9 +840,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
-        // Same gate as the form-member path: an owned FORM is a destructive delete that used to skip
-        // the consent dialog entirely (issue #331). Asked before any mutation, outside a transaction.
-        String consentError = requireFormDeleteConsent(normFqn, "Delete form"); //$NON-NLS-1$
+        // Same authorization point as the form-member path: an owned FORM is a destructive delete
+        // that used to skip the consent dialog entirely (issue #331). The form is already resolved
+        // and the preview branch has returned, so this is the LAST check before the write, outside
+        // any transaction.
+        String consentError = deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
+            "Removes the form and its content from the owner, clearing any default-form setting " //$NON-NLS-1$
+                + "that pointed at it. Call confirm=false first to see the details.", //$NON-NLS-1$
+            1, Collections.singletonList(normFqn)), () -> null);
         if (consentError != null)
         {
             return consentError;

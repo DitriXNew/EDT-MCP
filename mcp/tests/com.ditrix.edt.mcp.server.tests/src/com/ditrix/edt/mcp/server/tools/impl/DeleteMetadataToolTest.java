@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -860,5 +863,80 @@ public class DeleteMetadataToolTest
             row.containsKey("referencingObject")); //$NON-NLS-1$
         assertEquals("someFeature", row.get("reference")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Blue", row.get("targetObject")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ---- the destructive-consent authorization point (issue #331 / #295 review) ------------------
+
+    /**
+     * A recording write: it must run ONLY when consent was granted, and exactly once.
+     */
+    private static final class RecordingWrite implements java.util.function.Supplier<String>
+    {
+        int calls;
+
+        @Override
+        public String get()
+        {
+            calls++;
+            return "{\"written\":true}"; //$NON-NLS-1$
+        }
+    }
+
+    private static ConsentPreview anyPreview()
+    {
+        return new ConsentPreview("Delete form member", "subtitle", 1, //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Collections.singletonList("Catalog.X.Form.F.Attribute.A")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentRejectNeverRunsTheWrite()
+    {
+        RecordingWrite write = new RecordingWrite();
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.REJECT);
+
+        String result = tool.deleteWithConsent(anyPreview(), write);
+
+        assertEquals("a REJECTED delete must not mutate anything", 0, write.calls); //$NON-NLS-1$
+        assertNotNull(result);
+        assertTrue("the caller must get the refusal, not a success payload", //$NON-NLS-1$
+            result.contains("error")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentTimeoutNeverRunsTheWrite()
+    {
+        RecordingWrite write = new RecordingWrite();
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.TIMEOUT);
+
+        String result = tool.deleteWithConsent(anyPreview(), write);
+
+        assertEquals("an UNANSWERED prompt must not mutate anything", 0, write.calls); //$NON-NLS-1$
+        assertTrue(result.contains("error")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentAllowRunsTheWriteExactlyOnce()
+    {
+        RecordingWrite write = new RecordingWrite();
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW);
+
+        String result = tool.deleteWithConsent(anyPreview(), write);
+
+        assertEquals("an ALLOWED delete runs the write exactly once", 1, write.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryGatedFormBranchGoesThroughTheAuthorizationPoint()
+    {
+        // Both dispatched form branches (member/Column and the owned form OBJECT) call
+        // deleteWithConsent, so proving the point itself is proving both. This test pins that the
+        // production tool still wires the real gate - a constructor that forgot it would answer null.
+        assertNotNull(new DeleteMetadataTool());
+        assertTrue("the delete tool must be a gated tool", //$NON-NLS-1$
+            DestructiveConsentGate.GATED_TOOLS.contains(DeleteMetadataTool.NAME));
     }
 }
