@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -713,6 +714,19 @@ public class MetadataTypeUtilsTest
         {
             addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
         }
+        // Applicability of the mdclass resolver is DECLARED, not inferred from the map under test.
+        // Deriving it from resolverTokens.keySet() still let the subject opt out: deleting the whole
+        // Attribute block made the group vanish, so the exact-equality branch never ran, and the
+        // form owner kept the "no owner declared" assertion quiet. A vanished group is exactly the
+        // regression this test exists to catch, so the set below is written by hand ON PURPOSE -
+        // the alternative is not inference but self-confirmation. Adding an mdclass kind requires
+        // adding it here, and that is the step that must not be silent.
+        for (String canonical : MDCLASS_RESOLVED_KINDS)
+        {
+            assertTrue("the mdclass resolver must still map the kind '" + canonical //$NON-NLS-1$
+                + "' - its whole token group disappeared", resolverTokens.containsKey(canonical)); //$NON-NLS-1$
+            addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
+        }
 
         // Every OTHER kind is an mdclass member, and its exact resolver is MetadataNodeResolver:
         // it maps the kind token to the EMF child feature. That is a real owner, not an excuse -
@@ -778,6 +792,19 @@ public class MetadataTypeUtilsTest
             }
         }
     }
+
+    /**
+     * Canonical kinds the mdclass resolver MUST map, declared explicitly.
+     *
+     * <p>The one place in this file where a hand-written list is the right answer. Everything else
+     * is derived from a catalogue so a new entry cannot slip past; here derivation would mean asking
+     * the map under test whether it still contains the group, which is self-confirmation - losing a
+     * group would switch off the check that a group must not be lost.</p>
+     */
+    private static final Set<String> MDCLASS_RESOLVED_KINDS = new LinkedHashSet<>(Arrays.asList(
+        "Attribute", "TabularSection", "Dimension", "Resource", "EnumValue", "Command",
+        "AccountingFlag", "ExtDimensionAccountingFlag", "AddressingAttribute", "Column",
+        "Template", "Recalculation", "URLTemplate", "Method", "Operation", "Parameter"));
 
     /** Registers one more applicable consumer for a canonical kind. */
     private static void addOwner(Map<String, List<Predicate<String>>> owners, String canonical,
@@ -1052,8 +1079,13 @@ public class MetadataTypeUtilsTest
                 assertEquals("the form parser must read '" + token + "' as " + kind, //$NON-NLS-1$ //$NON-NLS-2$
                     kind, FormElementWriter.kindForToken(token));
                 MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
-                assertNotNull("this map must know the form-kind token '" + token + "' (" + kind //$NON-NLS-1$ //$NON-NLS-2$
-                    + ")", info); //$NON-NLS-1$
+                if (info == null)
+                {
+                    // NOT this test's business: whether the catalogue publishes every token the
+                    // parser accepts is set parity, owned by the consolidated test. Asserting it
+                    // here too made one mutation raise two identical signals.
+                    continue;
+                }
                 if (canon == null)
                 {
                     canon = info;
