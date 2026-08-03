@@ -203,6 +203,73 @@ public class ToolSettingsServiceTest
     }
 
     /**
+     * The regression this guards: the OLD code gated BOTH the v1 (git) and v2 (apply_quick_fix)
+     * steps behind a single "storedVersion &lt; CURRENT(=2)" check. For a store already at
+     * version 1 - meaning the v1 git-migration ALREADY ran once, and the user has SINCE
+     * deliberately removed git again - upgrading to a build with version 2 would re-enter that
+     * shared block and unconditionally re-add git, silently fighting the user's later choice.
+     * Each step must instead be gated by its OWN threshold ({@code storedVersion < 1} for git),
+     * so a store already past that threshold never re-runs it just because a LATER, unrelated
+     * migration also needs to apply.
+     */
+    @Test
+    public void testMigrationToVersion2DoesNotReAddGitRemovedAfterVersion1()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // An arbitrary custom selection WITHOUT git - the user's choice, made after the version 1
+        // migration (which this store already passed through) had added it.
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "debug_launch");
+        // Already at version 1 (NOT the current version, and NOT 0) - this is the exact
+        // intermediate state the bug required: past v1, still owing v2.
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 1);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertFalse("a git choice made after version 1 must survive the version 2 migration: "
+            + disabled, disabled.contains("git"));
+        assertEquals("the store must still be recorded as fully migrated",
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    /**
+     * The companion of the regression test above: a store at version 1 whose selection was NOT
+     * touched since (still exactly the Code Review shape minus apply_quick_fix, git included -
+     * what the version 1 migration itself would have produced under Code Review) must still gain
+     * apply_quick_fix normally when the version 2 migration runs. Confirms the per-step version
+     * gating does not accidentally suppress a migration that legitimately still applies.
+     */
+    @Test
+    public void testMigrationToVersion2StillAppliesWhenNothingElseChangedSinceVersion1()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        Set<String> afterV1 = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        afterV1.remove("apply_quick_fix"); // not migrated in yet - that's version 2's own job
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(afterV1));
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 1);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("git must still be present (untouched since version 1): " + disabled,
+            disabled.contains("git"));
+        assertTrue("version 2's own migration must still apply normally: " + disabled,
+            disabled.contains("apply_quick_fix"));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    /**
      * apply_quick_fix is a normal (default-ON) tool, unlike git - so the migration must not add it
      * to every stored list, only to one that, once it gains apply_quick_fix, becomes EXACTLY a
      * read-only preset's current shape: the signature of a store saved by a build that predates the

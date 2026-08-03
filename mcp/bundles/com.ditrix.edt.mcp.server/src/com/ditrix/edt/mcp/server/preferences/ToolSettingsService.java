@@ -90,8 +90,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private void ensureMigrated(IPreferenceStore store)
     {
-        if (store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION)
-            >= PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION)
+        int storedVersion = store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION);
+        if (storedVersion >= PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION)
         {
             return;
         }
@@ -103,10 +103,21 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             Set<String> disabled =
                 new LinkedHashSet<>(parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS)));
             boolean changed = false;
+            // Each step is gated by its OWN version threshold, NOT merely "storedVersion is below
+            // the CURRENT version" - an installation already at version 1 (git migrated in) that has
+            // since deliberately RE-ENABLED git must not have version 2's migration run re-silently
+            // re-disable it: bumping TOOL_PREFS_MIGRATION_VERSION for a NEW migration must never
+            // re-run an EARLIER one an installation already passed through.
             // The tool names are used as literals here on purpose: the preferences layer must not
             // depend on tools/impl (see the architecture rules).
-            changed |= disabled.add("git"); //$NON-NLS-1$
-            changed |= migrateApplyQuickFixIntoReadOnlyPreset(disabled);
+            if (storedVersion < 1)
+            {
+                changed |= disabled.add("git"); //$NON-NLS-1$
+            }
+            if (storedVersion < 2)
+            {
+                changed |= migrateApplyQuickFixIntoReadOnlyPreset(disabled);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
