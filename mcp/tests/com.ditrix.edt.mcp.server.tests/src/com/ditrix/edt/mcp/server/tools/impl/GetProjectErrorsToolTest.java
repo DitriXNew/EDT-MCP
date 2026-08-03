@@ -2218,6 +2218,9 @@ public class GetProjectErrorsToolTest
             "NoSuchType_e2e.X",                     // unknown leading TYPE token //$NON-NLS-1$
             "Catalog.Products.Fom.ItemForm",        // misspelt nested KIND //$NON-NLS-1$
             "Catalog.Products.Field.Code",          // form-only kind on a mdclass object //$NON-NLS-1$
+            "Catalog.Products.Column.Number",       // Column is a DocumentJournal containment //$NON-NLS-1$
+            "Document.Invoice.Predefined.Sample",   // Documents hold no predefined items //$NON-NLS-1$
+            "NoSuchType.X.Form.F",                  // form grammar never checked the leading TYPE //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Fielld.Code", // misspelt form-element KIND //$NON-NLS-1$
             "Catalog.Products.Module"})             // odd arity: no grammar has it //$NON-NLS-1$
         {
@@ -2236,6 +2239,9 @@ public class GetProjectErrorsToolTest
             "Catalog.Products.Form.ItemForm.Field.Code.Handler.OnChange", //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Handler.OnOpen", // form-LEVEL handler //$NON-NLS-1$
             "DocumentJournal.Sales.Column.Number", // a real mdclass Column //$NON-NLS-1$
+            "Catalog.Products.TabularSection.Goods", // the owner question must not swallow this //$NON-NLS-1$
+            "Catalog.Products.Predefined.Sample", // Catalogs DO hold predefined items //$NON-NLS-1$
+            "ChartOfAccounts.Main.Predefined.Cash", // ...and so do charts of accounts //$NON-NLS-1$
             "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
             "Catalog.Products.Predefined.Sample", //$NON-NLS-1$
             "XDTOPackage.Exchange"}) //$NON-NLS-1$

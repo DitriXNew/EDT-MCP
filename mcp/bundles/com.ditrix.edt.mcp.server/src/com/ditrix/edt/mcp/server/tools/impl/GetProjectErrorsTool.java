@@ -1541,10 +1541,21 @@ public class GetProjectErrorsTool implements IMcpTool
      * exist" - and a lenient answer HERE is a false gap: the address gets carried into the model as
      * if a project might hold it, and an impossible string ends up undecided instead of absent.</p>
      *
-     * <p>Each grammar is asked in its STRICT form. Several of the parsers below are deliberately
-     * lenient for their own callers - they answer "close enough to report on" rather than "could
-     * exist" - and a lenient answer HERE is a false gap: the address gets carried into the model as
-     * if a project might hold it, and an impossible string ends up undecided instead of absent.</p>
+     * <p><b>This filter is SOUND but deliberately NOT COMPLETE, and the direction is not a
+     * compromise.</b> Saying "possible" about something impossible costs only the WORDING of the
+     * answer when no project could be read: the caller is told "could not decide" instead of "no
+     * such address". Saying "impossible" about something real costs a confident "No Errors Found"
+     * for an address that has problems - the false all-clear this whole filter exists to prevent.
+     * So every question here errs towards possible, and gaps are left open on purpose.</p>
+     *
+     * <p>Concretely: the owner question below is asked of the mdclass metamodel, which answers for
+     * mdclass containment only. Combinations forbidden INSIDE a form - an attribute owning an event
+     * handler, a command carrying an event other than its single Action slot - are NOT ruled out
+     * here. The form metamodel cannot be imported (the form layer is reflective by canon), so that
+     * knowledge is not available without a model, and inventing a parallel copy of it is exactly the
+     * duplicated grammar this design refuses. Those addresses stay possible and the model decides
+     * them, correctly, as soon as any project can be read.</p>
+     *
      *
      * <p>Single source for the shape question: the enumeration gate above asks it too, so the two
      * cannot drift into disagreeing about what a supported address looks like.</p>
@@ -1561,12 +1572,69 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         String normFqn = MetadataTypeUtils.normalizeFqn(canonical);
         return SubsystemUtils.parseSubsystemPath(normFqn) != null
-            || PredefinedWriter.parseRef(normFqn) != null
-            || FormElementWriter.parseFormPath(normFqn) != null
+            || predefinedOwnerCanHoldItems(normFqn)
+            || (FormElementWriter.parseFormPath(normFqn) != null && formOwnerCanHoldForms(normFqn))
             // The STRICT form question, not the lenient parse: parse accepts any Kind.Name tail, so
             // asking it would call a misspelled kind a shape some configuration might hold.
-            || FormElementWriter.addressesKnownKinds(FormElementWriter.parse(normFqn))
+            || (FormElementWriter.addressesKnownKinds(FormElementWriter.parse(normFqn))
+                && formOwnerCanHoldForms(normFqn))
             || isMdclassChain(normFqn);
+    }
+
+    /**
+     * Whether {@code normFqn} is a predefined-item address whose OWNER type can hold predefined
+     * items at all. Predefined items are a containment of only a few types, and the metamodel says
+     * which - so {@code Document.Invoice.Predefined.Sample} names nothing anywhere, however well it
+     * parses.
+     *
+     * @param normFqn the type-normalized, canonical address
+     * @return {@code true} when the address is a predefined reference on a type that can hold them
+     */
+    private static boolean predefinedOwnerCanHoldItems(String normFqn)
+    {
+        PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef(normFqn);
+        if (ref == null)
+        {
+            return false;
+        }
+        String ownerFqn = ref.ownerFqn();
+        int dot = ownerFqn.indexOf('.');
+        String ownerType = dot < 0 ? ownerFqn : ownerFqn.substring(0, dot);
+        return MetadataTypeUtils.typeCanContain(ownerType, PREDEFINED_FEATURE);
+    }
+
+    /** The EMF containment feature holding a type's predefined items. */
+    private static final String PREDEFINED_FEATURE = "predefined"; //$NON-NLS-1$
+
+    /** The EMF containment feature holding a type's owned forms. */
+    private static final String FORMS_FEATURE = "forms"; //$NON-NLS-1$
+
+    /**
+     * Whether an OWNED-form address names an owner type that can hold forms. The form grammars look
+     * at the {@code .Form.} segment and the member kind but never at the leading TYPE, so
+     * {@code NoSuchType.X.Form.F} parsed cleanly.
+     *
+     * <p>A {@code CommonForm.Name} address has no owner to ask - the form IS the top object - so it
+     * is passed through untouched.</p>
+     *
+     * @param normFqn the type-normalized, canonical address
+     * @return {@code true} unless the leading type is modelled and provably cannot own forms
+     */
+    private static boolean formOwnerCanHoldForms(String normFqn)
+    {
+        String[] p = normFqn.split("\\.", -1); //$NON-NLS-1$
+        MetadataTypeUtils.NestedKindInfo kind =
+            p.length >= 4 ? MetadataTypeUtils.resolveNestedKind(p[2]) : null;
+        if (kind == null || !"Form".equals(kind.getEnglish())) //$NON-NLS-1$
+        {
+            return true;
+        }
+        // An owned form needs a real owner TYPE. The mdclass chain has always rejected an unknown
+        // leading token, but the form grammars never looked at it, so 'NoSuchType.X.Form.F' parsed
+        // cleanly. typeCanContain cannot answer this: it is permissive on tokens it does not know,
+        // exactly so it never turns a real address into a false miss.
+        return MetadataTypeUtils.resolve(p[0]) != null
+            && MetadataTypeUtils.typeCanContain(p[0], FORMS_FEATURE);
     }
 
     /**
@@ -1593,7 +1661,17 @@ public class GetProjectErrorsTool implements IMcpTool
             // pass as a shape some configuration might hold. Nothing can: the mdclass metamodel has
             // no such containment. Form / Handler are absent here on purpose; they lead out of the
             // mdclass model and the two form grammars above own them.
-            if (MetadataNodeResolver.featureNameForKind(parts[i]) == null)
+            String feature = MetadataNodeResolver.featureNameForKind(parts[i]);
+            if (feature == null)
+            {
+                return false;
+            }
+            // ...and, at the FIRST level, whether THIS owner can hold that child at all: 'Column' is
+            // a real kind but a containment of DocumentJournal, so 'Catalog.Products.Column.Number'
+            // names nothing in any configuration. Only the first level is checked because deeper
+            // owners are not named by a type token (the owner of an Attribute under a TabularSection
+            // is the tabular section, which no segment types), and a gap here is the safe direction.
+            if (i == 2 && !MetadataTypeUtils.typeCanContain(parts[0], feature))
             {
                 return false;
             }
