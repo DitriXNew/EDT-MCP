@@ -1857,7 +1857,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
                 ref.formPath, formNotFound);
             persisted = FormElementWriter.writeEditableForm(fctx, "CreateFormHandler", //$NON-NLS-1$
-                (formModel, tx) -> writeHandler(formModel, spec));
+                (formModel, tx) -> writeHandler(formModel, spec, normFqn));
         }
         catch (Exception e)
         {
@@ -1928,18 +1928,29 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * ref ({@code ...Form.F.Command.C.Handler.Action}) to the form command. Performs the BM mutation
      * inside the write transaction.
      *
+     * <p>The OWNER's kind is part of that resolution (issue #343), so an address naming the wrong kind
+     * ({@code ...Button.Price.Handler.OnChange} for a FIELD) no longer binds the handler to the
+     * element that merely bears the name; the error then names the kind it actually has.</p>
+     *
      * @throws IllegalStateException if the container is missing or the writer rejects the event
      */
-    private static void writeHandler(EObject formModel, HandlerWriteSpec spec)
+    private static void writeHandler(EObject formModel, HandlerWriteSpec spec, String normFqn)
     {
         EObject container = FormElementWriter.resolveHandlerContainer(formModel, spec.ref);
         if (container == null)
         {
+            String advice =
+                FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, spec.ref, normFqn);
+            // With advice the subject is the KIND, so the message names it: nothing of that kind
+            // bears the name, even though something else does. Without it, the plain miss stands.
+            String kindTail = " (kind '" + spec.ref.itemKindToken + "')"; //$NON-NLS-1$ //$NON-NLS-2$
             throw new IllegalStateException(spec.commandOwner
                 ? "Form command not found: " + spec.ref.itemName //$NON-NLS-1$
-                    + ". Create the command first, then add the handler." //$NON-NLS-1$
+                    + (advice.isEmpty() ? ". Create the command first, then add the handler." //$NON-NLS-1$
+                        : kindTail + advice)
                 : "Form item not found: " + spec.ref.itemName //$NON-NLS-1$
-                    + ". Create the item first, then add the handler."); //$NON-NLS-1$
+                    + (advice.isEmpty() ? ". Create the item first, then add the handler." //$NON-NLS-1$
+                        : kindTail + advice));
         }
         String err = FormElementWriter.createHandler(container, spec.eventName, spec.procName,
             spec.version, spec.langCode, spec.callType, spec.createdKind);

@@ -58,6 +58,10 @@ from harness import (
 )
 
 
+# The fixture form the kind-resolution probes write to (issue #343).
+_KIND_PROBE_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
 def _objects_text(metadata_type):
     """Read back the model's object list for one type as markdown (the client view)."""
     r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": metadata_type})
@@ -1510,6 +1514,48 @@ def test_create_form_command_action_missing_command_is_error():
     e = assert_error(r, "Action handler on a missing command")
     assert_error_quality(e, names=["NoSuchCmd_zz"], suggests=["Form command not found"],
                          ctx="an Action handler on a missing command is a clean error")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_handler_on_an_owner_of_a_foreign_kind_is_refused():
+    # Issue #343: the OWNER's kind segment of an item-level handler address is part of the
+    # resolution. Before the fix the owner was looked up by NAME alone, so a handler addressed at
+    # 'Button.<a field>' was bound to the FIELD that merely bears the name.
+    attr, fld = "CkAttr", "CreateKindFld"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed the probe attribute")
+    wait_for_project_ready()
+    poll_disk_contains(_KIND_PROBE_FORM, attr, timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r, "seed the probe field")
+    wait_for_project_ready()
+    poll_disk_contains(_KIND_PROBE_FORM, fld, timeout=60,
+                       ctx="the seeded probe field must be on disk first")
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Button.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": "CreateKindWrong_zz"}]})
+    e = assert_error(r, "bind a handler through an owner of a foreign kind")
+    assert_error_quality(e, names=[fld], suggests=["Field"],
+                         ctx="a foreign owner kind must name the kind the owner really has")
+    assert_contains(e, "(kind 'Button')", "the refusal must name the kind that found nothing")
+    assert_not_contains(read_disk(_KIND_PROBE_FORM),
+                        "CreateKindWrong_zz",
+                        "the refused handler create must not have bound anything")
+
+    # The owner's OWN kind still binds it.
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": "CreateKindRight_zz"}]})
+    assert_ok(r, "bind the handler through the owner's own kind")
+    poll_disk_contains(_KIND_PROBE_FORM, "CreateKindRight_zz", timeout=60,
+                       ctx="the correctly-addressed handler must land on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -592,16 +592,60 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return FormElementWriter.resolveFormMember(formModel, ref);
     }
 
-    private static String formMemberNotFound(FormElementWriter.FormMemberRef ref, boolean handler)
+    /**
+     * The "not found" error for a form delete target. {@code advice} is the kind-mismatch tail computed
+     * INSIDE the transaction (see {@link FormElementWriter#kindMismatchAdvice}): the resolution is
+     * kind-aware (issue #343), so an address whose kind segment names another element's kind must say
+     * which kind the same-named element really has instead of a bare "not found". Empty when there is
+     * nothing to add, in which case the generic pointer is kept verbatim.
+     */
+    private static String formMemberNotFound(FormElementWriter.FormMemberRef ref, boolean handler,
+        String advice)
     {
         if (handler)
         {
+            // A non-empty advice here is only produced when the OWNER itself did not resolve (see
+            // formTargetAdvice), so the miss is the owner's, not the handler's - saying "no event
+            // handler" would blame the wrong thing about an element that does have one. The subject
+            // follows the OWNER's token: a Command address misses a form COMMAND, not an item.
+            if (!advice.isEmpty())
+            {
+                boolean commandOwner = FormElementWriter.kindForToken(ref.itemKindToken)
+                    == FormElementWriter.Kind.COMMAND;
+                return ToolResult.error((commandOwner ? "Form command not found: " //$NON-NLS-1$
+                    : "Form item not found: ") + ref.itemName + " (kind '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref.itemKindToken + "') on " + ref.formPath + advice).toJson(); //$NON-NLS-1$
+            }
             return ToolResult.error("No event handler for '" + ref.name + "' on " //$NON-NLS-1$ //$NON-NLS-2$
                 + (ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath) //$NON-NLS-1$
                 + ". Use get_metadata_details to list the handlers.").toJson(); //$NON-NLS-1$
         }
         return ToolResult.error("Form member not found: " + ref.name + " (kind '" + ref.kindToken //$NON-NLS-1$ //$NON-NLS-2$
-            + "') on " + ref.formPath + ". Use get_metadata_details to list the members.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            + "') on " + ref.formPath //$NON-NLS-1$
+            + (advice.isEmpty() ? ". Use get_metadata_details to list the members." : advice)) //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * The kind-mismatch advice for a delete target that did not resolve, computed on the tx-bound form
+     * model: for an ITEM-LEVEL handler address the OWNER's kind segment is the one that can be wrong,
+     * for a member address the leaf's. A FORM-LEVEL handler address ({@code ...Form.F.Handler.OnOpen})
+     * carries no element kind segment at all - its leaf is an EVENT name - so it has no advice.
+     *
+     * <p>For a handler the advice is asked for ONLY when the owner itself did not resolve. Otherwise a
+     * genuinely missing handler on a resolved owner would pick up advice about a same-named element of
+     * another kind ({@code ...Command.Sync.Handler.Action} on an existing command {@code Sync} while a
+     * BUTTON {@code Sync} also exists) and report an owner miss that did not happen.</p>
+     */
+    private static String formTargetAdvice(EObject formModel, FormElementWriter.FormMemberRef ref,
+        boolean handler, String normFqn)
+    {
+        if (handler)
+        {
+            return FormElementWriter.resolveHandlerContainer(formModel, ref) != null
+                ? "" : FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn); //$NON-NLS-1$
+        }
+        return FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken, ref.name, normFqn);
     }
 
     /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
@@ -614,7 +658,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 EObject target = resolveFormTarget(formModel, ref, handler);
                 if (target == null)
                 {
-                    return new FormDeletePreview(); // found stays false
+                    FormDeletePreview miss = new FormDeletePreview(); // found stays false
+                    // The advice must be read HERE: the model is tx-bound and must not escape.
+                    miss.kindAdvice = formTargetAdvice(formModel, ref, handler, normFqn);
+                    return miss;
                 }
                 FormDeletePreview d = new FormDeletePreview();
                 d.found = true;
@@ -628,7 +675,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         if (!data.found)
         {
-            return formMemberNotFound(ref, handler);
+            return formMemberNotFound(ref, handler, data.kindAdvice);
         }
 
         List<Map<String, Object>> removed = new ArrayList<>();
@@ -669,7 +716,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 if (target == null)
                 {
                     // Thrown (not flagged): rolls the unchanged tx back and skips the export.
-                    throw new FormValidationException(formMemberNotFound(ref, handler));
+                    throw new FormValidationException(formMemberNotFound(ref, handler,
+                        formTargetAdvice(formModel, ref, handler, normFqn)));
                 }
                 capturedType[0] = target.eClass().getName();
                 // items is containment, so removing a Group/Table cascades its contained subtree.
@@ -1856,6 +1904,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         boolean found;
         String type;
+        /** The kind-mismatch advice for a MISS, read inside the transaction (issue #343); never null. */
+        String kindAdvice = ""; //$NON-NLS-1$
         final List<Map<String, Object>> descendants = new ArrayList<>();
     }
 }

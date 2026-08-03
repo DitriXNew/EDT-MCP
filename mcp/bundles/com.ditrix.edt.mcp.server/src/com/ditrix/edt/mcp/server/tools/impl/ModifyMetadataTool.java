@@ -3562,6 +3562,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * The tail of a form "not found" message: the kind-mismatch advice when there is one (issue
+     * #343), otherwise the branch's own generic pointer. Keeps every form miss in this tool phrased
+     * the same way - name the kind that found nothing, then either explain what DOES bear the name or
+     * point at {@code get_metadata_details}.
+     *
+     * @param advice the advice from {@code FormElementWriter} (never {@code null}, possibly empty)
+     * @param fallback the generic tail to use when there is no advice
+     * @return the tail to append
+     */
+    private static String advisedOr(String advice, String fallback)
+    {
+        return advice.isEmpty() ? fallback : advice;
+    }
+
+    /**
      * Modifies the ordinary (non-handler, non-command, non-move) properties of a form member, the
      * remaining case of {@link #modifyFormMember} once those three structural branches are ruled out.
      * Resolves the platform version, then validates + applies every property inside ONE BM write
@@ -3617,9 +3632,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                     if (member == null)
                     {
+                        // The KIND is part of the resolution (issue #343), so a member that exists
+                        // under another kind is reported as exactly that, with the corrected address -
+                        // otherwise "not found" contradicts what get_metadata_details lists.
+                        String advice = FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                            ref.name, normFqn);
                         throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
                             + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                            + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
+                            + advisedOr(advice,
+                                ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                     }
                     List<HolderChange> changes =
                         prepareFormMemberChanges(config, version, member, properties, normReport);
@@ -3783,9 +3804,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                     if (member == null)
                     {
+                        // A dynamic list lives on a form ATTRIBUTE; when the name belongs to an element
+                        // of another kind, say so instead of advising a create that would collide.
+                        String advice = FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                            ref.name, normFqn);
                         throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
                             + ref.name + " on " + ref.formPath //$NON-NLS-1$
-                            + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
+                            + advisedOr(advice,
+                                ". Create it with create_metadata, then set its query.")).toJson()); //$NON-NLS-1$
                     }
                     applied.addAll(FormElementWriter.configureDynamicListQuery(
                         formModel, member, qt, cq, mt, ctx.config, version));
@@ -4328,8 +4354,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
             final String mdFormName = fctx.mdForm.getName();
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
-                (formModel, tx) -> destination[0] = FormElementWriter.moveItem(formModel, itemName,
-                    targetParentFinal, positionFinal, mdFormName));
+                (formModel, tx) ->
+                {
+                    // The addressed move goes through the SAME kind-aware resolver the property /
+                    // delete / read paths use (issue #343): 'Button.<a field>' with a 'parent'
+                    // property must not move the field. The strict variant additionally rejects an
+                    // ambiguous name instead of moving the first match.
+                    EObject item = FormElementWriter.resolveUniqueFormMember(formModel, ref);
+                    if (item == null)
+                    {
+                        throw new FormValidationException(ToolResult.error("Form item not found: " //$NON-NLS-1$
+                            + itemName + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                                itemName, normFqn),
+                                ". Use get_metadata_details on the form to inspect its items.")) //$NON-NLS-1$
+                            .toJson());
+                    }
+                    destination[0] = FormElementWriter.moveResolvedItem(formModel, item, itemName,
+                        targetParentFinal, positionFinal, mdFormName);
+                });
         }
         catch (Exception e)
         {
@@ -4407,9 +4450,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
                     if (container == null)
                     {
+                        // The OWNER's kind is resolved too (issue #343): an item of that name under
+                        // another kind is named, with the corrected address. The message then names
+                        // the KIND that found nothing, so it cannot read as a lie about the element.
+                        String advice =
+                            FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn);
                         throw new FormValidationException(ToolResult.error((commandOwner
                             ? "Form command not found: " : "Form item not found: ") + ref.itemName //$NON-NLS-1$ //$NON-NLS-2$
-                            + ". Use get_metadata_details to inspect the form items.").toJson()); //$NON-NLS-1$
+                            + (advice.isEmpty()
+                                ? ". Use get_metadata_details to inspect the form items." //$NON-NLS-1$
+                                : " (kind '" + ref.itemKindToken + "')" + advice)).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     String err = FormElementWriter.rebindHandler(container, eventName, procName);
                     if (err != null)
@@ -4485,15 +4535,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    // Strict resolution: an AMBIGUOUS button name (several items by that name anywhere
-                    // in the form-item tree) is rejected with a clear error instead of silently
-                    // re-pointing the first match (findUniqueFormItem throws; the tx rolls back).
-                    EObject button = FormElementWriter.findUniqueFormItem(formModel, buttonName);
+                    // Strict resolution: the KIND is verified by the shared resolver (issue #343), so
+                    // 'Button.<a field>' with a 'command' property cannot reach the field, and an
+                    // AMBIGUOUS button name (several items by that name anywhere in the form-item
+                    // tree) is rejected instead of silently re-pointing the first match (the strict
+                    // lookup throws; the tx rolls back).
+                    EObject button = FormElementWriter.resolveUniqueFormMember(formModel, ref);
                     if (button == null)
                     {
                         throw new FormValidationException(ToolResult.error("Form button not found: " //$NON-NLS-1$
-                            + buttonName + ". Use get_metadata_details to inspect the form items.") //$NON-NLS-1$
-                            .toJson());
+                            + buttonName + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                                buttonName, normFqn),
+                                ". Use get_metadata_details to inspect the form items.")).toJson()); //$NON-NLS-1$
                     }
                     String err =
                         FormElementWriter.rebindButtonCommand(formModel, button, commandNameFinal);

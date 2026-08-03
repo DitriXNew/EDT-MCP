@@ -397,12 +397,20 @@ public class GetMetadataDetailsTool implements IMcpTool
         FormElementWriter.FormMemberRef memberRef = FormElementWriter.parse(normFqn);
         if (memberRef != null)
         {
+            // The resolution is kind-aware (issue #343), so a wrong / misspelt kind segment is a MISS
+            // here too; the advice (read inside the transaction) names the kind the same-named element
+            // really has, so the reason is not "does not exist" about something the caller can see.
+            String[] kindAdvice = new String[] { "" }; //$NON-NLS-1$
             String memberAssignable =
-                renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef);
+                renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef, kindAdvice);
             if (memberAssignable == null)
             {
-                failures.add(new String[] { fqn, "the form member could not be resolved (the form " //$NON-NLS-1$
-                    + "may have no editable content model, or the element does not exist)" }); //$NON-NLS-1$
+                // With advice the element DOES exist under another kind, so the generic "or the
+                // element does not exist" would contradict the very next clause - drop it there.
+                failures.add(new String[] { fqn, kindAdvice[0].isEmpty()
+                    ? "the form member could not be resolved (the form may have no editable content " //$NON-NLS-1$
+                        + "model, or the element does not exist)" //$NON-NLS-1$
+                    : "the form member could not be resolved" + kindAdvice[0] }); //$NON-NLS-1$
                 return;
             }
             sb.append(memberAssignable);
@@ -1108,11 +1116,14 @@ public class GetMetadataDetailsTool implements IMcpTool
      * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
      * @param normFqn the normalized member FQN, for the section heading
      * @param ref the parsed form-member reference (see {@link FormElementWriter#parse})
+     * @param kindAdviceOut a one-slot out-parameter that receives the kind-mismatch advice (issue
+     *     #343) when the member does not resolve; the model is tx-bound, so it must be read INSIDE the
+     *     read task. Left as the caller's empty default when there is nothing to add.
      * @return the Markdown assignable table, or {@code null} when the BM model is unavailable, the form
      *     has no editable content model, or the member does not exist
      */
     private static String renderFormMemberAssignable(Configuration config, IBmModel bmModel,
-        String normFqn, FormElementWriter.FormMemberRef ref)
+        String normFqn, FormElementWriter.FormMemberRef ref, String[] kindAdviceOut)
     {
         if (bmModel == null)
         {
@@ -1139,6 +1150,13 @@ public class GetMetadataDetailsTool implements IMcpTool
             EObject member = FormElementWriter.resolveFormMember(formModel, ref);
             if (member == null)
             {
+                // A handler FQN has no element kind segment at its leaf (the leaf is the EVENT), and
+                // this view never renders handlers anyway - only a MEMBER address gets kind advice.
+                if (!FormElementWriter.isHandlerToken(ref.kindToken))
+                {
+                    kindAdviceOut[0] = FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                        ref.name, normFqn);
+                }
                 return null;
             }
             return formatAssignable(normFqn, member);

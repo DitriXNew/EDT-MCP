@@ -37,6 +37,8 @@ from harness import (
     assert_diff_contains,
     poll_disk_path_gone,
     poll_disk_lacks,
+    poll_disk_contains,
+    read_disk,
     tree_snapshot,
     wait_for_project_ready,
     e2e_test,
@@ -345,6 +347,125 @@ def test_delete_form_missing_member_is_error():
     assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_metadata_details"],
                          ctx="a missing form member points to get_metadata_details")
     assert_no_diff("a rejected form-member delete must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Negative — the FQN's KIND segment is part of the address, not a hint (issue #343).
+# Before the fix every kind except Attribute / Command fell through to a by-NAME item
+# search, so 'Button.<a field>' - and even a misspelt 'Fielld.<a field>' - previewed
+# removing the FIELD and, with confirm=true, would have deleted the wrong element.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_member_addressed_with_a_foreign_kind_is_refused():
+    _seed_form_attribute("KpAttr")
+    poll_disk_contains(_FORM, "KpAttr", timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.KindProbeFld",
+        "properties": [{"name": "dataPath", "value": "KpAttr"}]})
+    assert_ok(r, "seed the probe field")
+    wait_for_project_ready()
+    poll_disk_contains(_FORM, "KindProbeFld", timeout=60,
+                       ctx="the seeded probe field must be on disk first")
+
+    # Every foreign kind - and a typo in the kind segment - is refused, in PREVIEW already.
+    for kind in ("Button", "Decoration", "Group", "Table", "Fielld"):
+        fqn = "Catalog.Catalog.Form.ItemForm.%s.KindProbeFld" % kind
+        pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+        e = assert_error(pv, "preview a delete addressed with kind '%s'" % kind)
+        assert_error_quality(e, names=["KindProbeFld"], suggests=["Field"],
+                             ctx="a foreign kind must name the kind the element REALLY has "
+                                 "(kind '%s')" % kind)
+        assert_contains(e, "Catalog.Catalog.Form.ItemForm.Field.KindProbeFld",
+                        "the refusal must spell the CORRECTED address (kind '%s')" % kind)
+
+    # confirm=true is refused the same way, and the field is still on disk afterwards.
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button.KindProbeFld",
+        "confirm": True})
+    assert_error(r, "a CONFIRMED delete addressed with a foreign kind")
+    assert_contains(read_disk(_FORM), "KindProbeFld",
+                    "the wrongly-addressed delete must not have removed the field")
+
+    # The element's OWN kind still deletes it (the fix refuses the wrong address, not the right one).
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.KindProbeFld",
+        "confirm": True})
+    assert_ok(r, "delete the field by its own kind")
+    poll_disk_lacks(_FORM, "KindProbeFld", timeout=60,
+                    ctx="the correctly-addressed delete must remove the field")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_handler_owner_with_a_foreign_kind_is_refused():
+    # The OWNER's kind segment of an item-level handler address is resolved too: a handler
+    # addressed at 'Button.<a field>' must not be found on the same-named FIELD.
+    _seed_form_attribute("HkAttr")
+    poll_disk_contains(_FORM, "HkAttr", timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.HandlerKindFld",
+        "properties": [{"name": "dataPath", "value": "HkAttr"}]})
+    assert_ok(r, "seed the handler-owner probe field")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.HandlerKindFld.Handler.OnChange",
+        "properties": [{"name": "procedure", "value": "HandlerKindProc_zz"}]})
+    assert_ok(r, "seed the field's OnChange handler")
+    wait_for_project_ready()
+    poll_disk_contains(_FORM, "HandlerKindProc_zz", timeout=60,
+                       ctx="the seeded handler must be on disk first")
+
+    r = call("delete_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Button.HandlerKindFld.Handler.OnChange",
+        "confirm": True})
+    e = assert_error(r, "delete a handler addressed at an owner of a foreign kind")
+    assert_error_quality(e, names=["HandlerKindFld"], suggests=["Field"],
+                         ctx="a foreign owner kind must name the kind the owner really has")
+    # The miss is the OWNER's, not the handler's: blaming a missing handler would be false about an
+    # element that does have one, and the message must name the kind that found nothing.
+    assert_contains(e, "Form item not found",
+                    "a foreign OWNER kind must be reported as the owner miss it is")
+    assert_contains(e, "(kind 'Button')", "the refusal must name the kind that found nothing")
+    assert_not_contains(e, "No event handler",
+                        "the handler exists - the address named the wrong owner kind")
+    assert_contains(read_disk(_FORM), "HandlerKindProc_zz",
+                    "the wrongly-addressed handler delete must not have removed the handler")
+
+    # The owner's own kind still deletes it.
+    r = call("delete_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.HandlerKindFld.Handler.OnChange",
+        "confirm": True})
+    assert_ok(r, "delete the handler by the owner's own kind")
+    poll_disk_lacks(_FORM, "HandlerKindProc_zz", timeout=60,
+                    ctx="the correctly-addressed handler delete must remove the binding")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_preview_reaches_a_designer_child_by_its_inherited_kind_only():
+    # Regression guard for the OTHER half of issue #343: the designer's own children have no kind
+    # token of their own, but a token addresses its EClass AND its subclasses - an AutoCommandBar IS
+    # a Group. So the form-root command bar keeps exactly ONE supported address ('Group'), and a
+    # foreign token must NOT reach it either ("no token denotes it" is not "every token fits").
+    pv = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group.FormCommandBar"})
+    assert_ok(pv, "preview the auto command bar via its inherited kind 'Group'")
+    names = [it.get("name") for it in (pv.structured.get("items") or [])]
+    assert "FormCommandBar" in names, \
+        "the auto command bar must stay addressable via 'Group': %r" % (pv.structured,)
+
+    for kind in ("Field", "Button", "Decoration", "Table", "Grroup"):
+        r = call("delete_metadata", {
+            "projectName": PROJECT,
+            "fqn": "Catalog.Catalog.Form.ItemForm.%s.FormCommandBar" % kind})
+        e = assert_error(r, "preview the auto command bar via the foreign kind '%s'" % kind)
+        assert_error_quality(e, names=["FormCommandBar"], suggests=["not found"],
+                             ctx="a designer child must not answer to a foreign kind ('%s')" % kind)
+    assert_no_diff("previews must not touch the project on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

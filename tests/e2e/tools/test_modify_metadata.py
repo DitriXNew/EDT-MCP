@@ -44,6 +44,10 @@ from harness import (
 )
 
 
+# The fixture form every form-member test writes to.
+_ITEM_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
 def _assignable_text(fqn):
     r = call("get_metadata_details",
              {"projectName": PROJECT, "objectFqns": [fqn], "assignable": True})
@@ -654,6 +658,138 @@ def test_modify_form_missing_member_is_error():
     assert_error_quality(e, names=["NoSuchField_zz"], suggests=["not found", "get_metadata_details"],
                          ctx="a missing form member points to get_metadata_details")
     assert_no_diff("a rejected form modify must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_member_addressed_with_a_foreign_kind_is_refused():
+    # Issue #343: the kind segment used to be a hint - modify_metadata on
+    # '...Button.<a field>' reported action=modified and really changed the FIELD.
+    attr, fld = "MkAttr", "ModKindFld"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed the probe attribute")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, attr, timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r, "seed the probe field")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, fld, timeout=60,
+                       ctx="the seeded probe field must be on disk first")
+
+    for kind in ("Button", "Decoration", "Group", "Table", "Fielld"):
+        r = call("modify_metadata", {
+            "projectName": PROJECT,
+            "fqn": "Catalog.Catalog.Form.ItemForm.%s.%s" % (kind, fld),
+            "properties": [{"name": "title", "value": "WrongKind", "language": "en"}],
+        })
+        e = assert_error(r, "modify a form member addressed with kind '%s'" % kind)
+        assert_error_quality(e, names=[fld], suggests=["Field"],
+                             ctx="a foreign kind must name the kind the element REALLY has "
+                                 "(kind '%s')" % kind)
+        assert_contains(e, "Catalog.Catalog.Form.ItemForm.Field." + fld,
+                        "the refusal must spell the CORRECTED address (kind '%s')" % kind)
+    assert_not_contains(read_disk(_ITEM_FORM), "WrongKind",
+                        "a refused modify must not have written the title anywhere")
+
+    # The element's OWN kind still modifies it.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "title", "value": "RightKind", "language": "en"}],
+    })
+    assert_ok(r, "modify the field by its own kind")
+    poll_disk_contains(_ITEM_FORM, "RightKind", timeout=60,
+                       ctx="the correctly-addressed modify must land on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_move_and_button_rebind_also_refuse_a_foreign_kind():
+    # The 'parent'/'position' MOVE branch and the 'command' button-rebind branch resolve the item
+    # through their own strict lookup, not through the property path. Issue #343 has to hold for
+    # EVERY path: before the fix these two still reached the field by NAME, so '...Button.<a field>'
+    # with a 'parent' property moved the field while the same FQN with a 'title' was refused.
+    attr, fld, grp = "MvAttr", "MoveKindFld", "MoveKindGrp"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed the probe attribute")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, attr, timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r, "seed the probe field")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group." + grp})
+    assert_ok(r, "seed the destination group")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, fld, timeout=60, ctx="the seeded field must be on disk first")
+
+    # MOVE addressed with a foreign kind.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + fld,
+        "properties": [{"name": "parent", "value": grp}]})
+    e = assert_error(r, "move a form item addressed with a foreign kind")
+    assert_error_quality(e, names=[fld], suggests=["Field"],
+                         ctx="a move with a foreign kind must name the kind the item really has")
+
+    # Button command re-point addressed with a foreign kind (the field is not a Button).
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Button." + fld,
+        "properties": [{"name": "command", "value": "NoSuchCmd_zz"}]})
+    e = assert_error(r, "re-point a command on an item addressed with a foreign kind")
+    assert_error_quality(e, names=[fld], suggests=["Field"],
+                         ctx="a command re-point with a foreign kind must name the actual kind")
+
+    # The item's OWN kind still moves it.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "parent", "value": grp}]})
+    assert_ok(r, "move the field by its own kind")
+    assert grp in (r.structured.get("destination") or ""), \
+        "the correctly-addressed move must report the destination group: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_rebind_handler_on_an_owner_of_a_foreign_kind_is_refused():
+    # The OWNER's kind of an item-level handler address is resolved too (issue #343): a rebind
+    # aimed at 'Button.<a field>' must not re-point the same-named FIELD's handler.
+    attr, fld = "RkAttr", "RebindKindFld"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed the probe attribute")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, attr, timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r, "seed the probe field")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": "RebindKindOrig_zz"}]})
+    assert_ok(r, "seed the field's OnChange handler")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, "RebindKindOrig_zz", timeout=60,
+                       ctx="the seeded handler must be on disk first")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Button.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": "RebindKindWrong_zz"}]})
+    e = assert_error(r, "rebind a handler on an owner of a foreign kind")
+    assert_error_quality(e, names=[fld], suggests=["Field"],
+                         ctx="a foreign owner kind must name the kind the owner really has")
+    assert_contains(e, "(kind 'Button')", "the refusal must name the kind that found nothing")
+    form_xml = read_disk(_ITEM_FORM)
+    assert_not_contains(form_xml, "RebindKindWrong_zz",
+                        "the refused rebind must not have re-pointed the field's handler")
+    assert_contains(form_xml, "RebindKindOrig_zz", "the original binding must survive")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

@@ -1109,6 +1109,406 @@ public class FormElementWriterTest
         assertNull(FormElementWriter.resolveHandlerContainer(form, missingRef));
     }
 
+    // ---- issue #343: the KIND segment is part of the resolution, not a hint --------------------
+
+    /** The Russian FIELD kind token ("pole"), built from code points like the writer builds its own. */
+    private static final String RU_FIELD = fromCp(0x043f, 0x043e, 0x043b, 0x0435);
+    /** The Russian BUTTON kind token ("knopka"). */
+    private static final String RU_BUTTON = fromCp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430);
+    /** The Russian GROUP kind token ("gruppa"). */
+    private static final String RU_GROUP = fromCp(0x0433, 0x0440, 0x0443, 0x043f, 0x043f, 0x0430);
+    /** The Russian DECORATION kind token ("dekoraciya"). */
+    private static final String RU_DECORATION =
+        fromCp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f);
+    /** The Russian TABLE kind token ("tablica"). */
+    private static final String RU_TABLE = fromCp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430);
+    /** The Russian ATTRIBUTE kind token ("rekvizit"). */
+    private static final String RU_ATTRIBUTE =
+        fromCp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442);
+    /** The Russian COMMAND kind token ("komanda"). */
+    private static final String RU_COMMAND = fromCp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430);
+
+    /** A named item of {@code eClassName} appended to {@code owner}'s {@code items}. */
+    private static EObject addNamedItem(EObject owner, String eClassName, String name)
+    {
+        EObject item = newObject(modelClass(eClassName));
+        item.eSet(feature(item, "name"), name); //$NON-NLS-1$
+        addTo(owner, "items", item); //$NON-NLS-1$
+        return item;
+    }
+
+    @Test
+    public void testResolveFormMemberRejectsForeignAndUnknownKind()
+    {
+        EObject form = newForm();
+        EObject field = addNamedItem(form, "FormField", "KindProbeField"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The element's OWN kind resolves it, in either language.
+        assertSame(field, FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Field.KindProbeField"))); //$NON-NLS-1$
+        assertSame(field, FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F." + RU_FIELD + ".KindProbeField"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Every OTHER kind token - and a MISSPELT one - addresses nothing. Before issue #343 each of
+        // these fell through to the by-name item search and handed delete_metadata the FIELD.
+        String[] foreign = { "Button", "Decoration", "Group", "Table", "Attribute", "Command", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "Fielld", RU_BUTTON, RU_DECORATION, RU_GROUP, RU_TABLE, RU_ATTRIBUTE, RU_COMMAND }; //$NON-NLS-1$
+        for (String token : foreign)
+        {
+            assertNull("kind '" + token + "' must not address the FormField", //$NON-NLS-1$ //$NON-NLS-2$
+                FormElementWriter.resolveFormMember(form,
+                    FormElementWriter.parse("CommonForm.F." + token + ".KindProbeField"))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testResolveFormMemberKindIsCheckedForEveryAddressableKind()
+    {
+        EObject form = newForm();
+        EObject button = addNamedItem(form, "Button", "ProbeButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject group = addNamedItem(form, "FormGroup", "ProbeGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject decoration = addNamedItem(form, "Decoration", "ProbeDecoration"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject table = addNamedItem(form, "Table", "ProbeTable"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertSame(button, FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Button.ProbeButton"))); //$NON-NLS-1$
+        assertSame(group, FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Group.ProbeGroup"))); //$NON-NLS-1$
+        assertSame(decoration, FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Decoration.ProbeDecoration"))); //$NON-NLS-1$
+        assertSame(table, FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Table.ProbeTable"))); //$NON-NLS-1$
+
+        // Each of them is refused under a NEIGHBOUR's token.
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Field.ProbeButton"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Table.ProbeGroup"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Button.ProbeDecoration"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Group.ProbeTable"))); //$NON-NLS-1$
+    }
+
+    /**
+     * THE classification table of issue #343, pinned per EClass: every element {@code findFormItem}
+     * can return whose class a token DOES denote is addressed by exactly ONE token (its own, or the
+     * one denoting the base it inherits from) - and refused under every other one. "No token denotes
+     * it" must not silently mean "every token fits": that was the same hole one level down. The one
+     * class no token denotes, {@code Addition}, is pinned by
+     * {@link #testTableAdditionIsTheOneClassNoKindTokenDenotes} instead.
+     */
+    @Test
+    public void testEveryTokenDenotedFormItemClassResolvesOnlyUnderItsOwnToken()
+    {
+        EObject form = newForm();
+        // FormGroup / ContextMenu / AutoCommandBar / the two actions panels all inherit the abstract
+        // Group -> the Group token; ExtendedTooltip inherits Decoration -> the Decoration token.
+        EObject bar = FormElementWriter.findFormItem(form, "FormCommandBar"); //$NON-NLS-1$
+        assertNotNull(bar);
+        EObject field = addNamedItem(form, "FormField", "ClsField"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject menu = addChild(field, "contextMenu", "ContextMenu", "ClsFieldContextMenu"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EObject tooltip =
+            addChild(field, "extendedTooltip", "ExtendedTooltip", "ClsFieldExtendedTooltip"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EObject group = addNamedItem(form, "FormGroup", "ClsGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject selectedPanel =
+            addNamedItem(form, "SelectedItemsActionsPanel", "ClsSelectedPanel"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject rowPanel = addNamedItem(form, "RowActionsPanel", "ClsRowPanel"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject button = addNamedItem(form, "Button", "ClsButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject decoration = addNamedItem(form, "Decoration", "ClsDecoration"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject table = addNamedItem(form, "Table", "ClsTable"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertAddressedOnlyBy(form, bar, "Group", RU_GROUP); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, menu, "Group", RU_GROUP); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, group, "Group", RU_GROUP); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, selectedPanel, "Group", RU_GROUP); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, rowPanel, "Group", RU_GROUP); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, tooltip, "Decoration", RU_DECORATION); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, decoration, "Decoration", RU_DECORATION); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, field, "Field", RU_FIELD); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, button, "Button", RU_BUTTON); //$NON-NLS-1$
+        assertAddressedOnlyBy(form, table, "Table", RU_TABLE); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTableAdditionIsTheOneClassNoKindTokenDenotes()
+    {
+        // A table Addition inherits FormItem directly (the platform gives it its own base type,
+        // FormItemAddition), so NO token denotes it. It therefore stays reachable through any
+        // RECOGNIZED token - the deliberate exception, so an address that worked before issue #343
+        // keeps working - while an unrecognized token still addresses nothing.
+        EObject form = newForm();
+        EObject table = addNamedItem(form, "Table", "AddProbeTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject addition =
+            addChild(table, "searchStringAddition", "Addition", "AddProbeTableSearchString"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String[] tokens = { "Group", "Field", "Button", "Decoration", "Table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            RU_GROUP, RU_FIELD, RU_BUTTON, RU_DECORATION, RU_TABLE };
+        for (String token : tokens)
+        {
+            assertSame("the table addition must stay addressable through '" + token + "'", addition, //$NON-NLS-1$ //$NON-NLS-2$
+                FormElementWriter.resolveFormMember(form, FormElementWriter.parse(
+                    "CommonForm.F." + token + ".AddProbeTableSearchString"))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Fielld.AddProbeTableSearchString"))); //$NON-NLS-1$
+        // Only the ITEM kinds reach it: Attribute / Command are served from their own containments,
+        // not from the items tree - that was true before this change too, and the docs say so.
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Attribute.AddProbeTableSearchString"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Command.AddProbeTableSearchString"))); //$NON-NLS-1$
+    }
+
+    /** A named child attached to a SINGULAR containment (context menu / tooltip / table addition). */
+    private static EObject addChild(EObject owner, String featureName, String eClassName, String name)
+    {
+        EObject child = newObject(modelClass(eClassName));
+        child.eSet(feature(child, "name"), name); //$NON-NLS-1$
+        owner.eSet(feature(owner, featureName), child);
+        return child;
+    }
+
+    /**
+     * Asserts {@code element} resolves under {@code token} (English) and {@code ruToken} (Russian)
+     * and under NO other kind token, nor a misspelt one.
+     */
+    private static void assertAddressedOnlyBy(EObject form, EObject element, String token,
+        String ruToken)
+    {
+        String name = (String)element.eGet(feature(element, "name")); //$NON-NLS-1$
+        String label = element.eClass().getName() + " '" + name + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        for (String accepted : new String[] { token, ruToken })
+        {
+            assertSame(label + " must resolve under '" + accepted + "'", element, //$NON-NLS-1$ //$NON-NLS-2$
+                FormElementWriter.resolveFormMember(form,
+                    FormElementWriter.parse("CommonForm.F." + accepted + "." + name))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String[] all = { "Group", "Field", "Button", "Decoration", "Table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            RU_GROUP, RU_FIELD, RU_BUTTON, RU_DECORATION, RU_TABLE, "Fielld" }; //$NON-NLS-1$
+        for (String other : all)
+        {
+            if (other.equals(token) || other.equals(ruToken))
+            {
+                continue;
+            }
+            assertNull(label + " must NOT resolve under '" + other + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                FormElementWriter.resolveFormMember(form,
+                    FormElementWriter.parse("CommonForm.F." + other + "." + name))); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testResolveHandlerContainerRejectsForeignOwnerKind()
+    {
+        EObject form = newForm();
+        EObject field = addNamedItem(form, "FormField", "KindProbeField"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The owner's own kind binds, in either language.
+        assertSame(field, FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse("CommonForm.F.Field.KindProbeField.Handler.OnChange"))); //$NON-NLS-1$
+        assertSame(field, FormElementWriter.resolveHandlerContainer(form, FormElementWriter.parse(
+            "CommonForm.F." + RU_FIELD + ".KindProbeField.Handler.OnChange"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A foreign owner kind and a misspelt one bind nothing - the handler must not land on the
+        // element that merely bears the name.
+        assertNull(FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse("CommonForm.F.Button.KindProbeField.Handler.OnChange"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveHandlerContainer(form, FormElementWriter.parse(
+            "CommonForm.F." + RU_BUTTON + ".KindProbeField.Handler.OnChange"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse("CommonForm.F.Fielld.KindProbeField.Handler.OnChange"))); //$NON-NLS-1$
+
+        // A designer-owned owner keeps its supported address (an AutoCommandBar IS a Group), and is
+        // refused under a foreign token exactly like any other element.
+        EObject bar = FormElementWriter.findFormItem(form, "FormCommandBar"); //$NON-NLS-1$
+        assertSame(bar, FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse("CommonForm.F.Group.FormCommandBar.Handler.OnChange"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse("CommonForm.F.Field.FormCommandBar.Handler.OnChange"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testKindMismatchAdviceNamesTheActualKind()
+    {
+        EObject form = newForm();
+        addNamedItem(form, "FormField", "KindProbeField"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "ProbeAttr"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        String fqn = "Catalog.Catalog.Form.ItemForm.Button.KindProbeField"; //$NON-NLS-1$
+
+        // A foreign kind: name the kind the element REALLY has and spell the corrected address.
+        String advice = FormElementWriter.kindMismatchAdvice(form, "Button", "KindProbeField", fqn); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(advice, advice.contains("it is a Field")); //$NON-NLS-1$
+        assertTrue(advice, advice.contains("Catalog.Catalog.Form.ItemForm.Field.KindProbeField")); //$NON-NLS-1$
+        // A MISSPELT kind gets the same advice - the element is what matters, not the typo.
+        String typo = FormElementWriter.kindMismatchAdvice(form, "Fielld", "KindProbeField", //$NON-NLS-1$ //$NON-NLS-2$
+            "Catalog.Catalog.Form.ItemForm.Fielld.KindProbeField"); //$NON-NLS-1$
+        assertTrue(typo, typo.contains("it is a Field")); //$NON-NLS-1$
+        assertTrue(typo, typo.contains("Catalog.Catalog.Form.ItemForm.Field.KindProbeField")); //$NON-NLS-1$
+        // A Russian kind token is judged the same way.
+        String ru = FormElementWriter.kindMismatchAdvice(form, RU_BUTTON, "KindProbeField", //$NON-NLS-1$
+            "Catalog.Catalog.Form.ItemForm." + RU_BUTTON + ".KindProbeField"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(ru, ru.contains("it is a Field")); //$NON-NLS-1$
+        // An ATTRIBUTE is named with the right article.
+        String attr = FormElementWriter.kindMismatchAdvice(form, "Field", "ProbeAttr", //$NON-NLS-1$ //$NON-NLS-2$
+            "Catalog.Catalog.Form.ItemForm.Field.ProbeAttr"); //$NON-NLS-1$
+        assertTrue(attr, attr.contains("it is an Attribute")); //$NON-NLS-1$
+        assertTrue(attr, attr.contains("Catalog.Catalog.Form.ItemForm.Attribute.ProbeAttr")); //$NON-NLS-1$
+
+        // Nothing to add when the kind is right, or when no member bears the name at all (never
+        // claim an element exists when it does not).
+        assertEquals("", FormElementWriter.kindMismatchAdvice(form, "Field", "KindProbeField", fqn)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("", FormElementWriter.kindMismatchAdvice(form, "Field", "NoSuchName_zz", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Catalog.Catalog.Form.ItemForm.Field.NoSuchName_zz")); //$NON-NLS-1$
+        // An unrecognized token is still called out even when nothing bears the name.
+        String unknown = FormElementWriter.kindMismatchAdvice(form, "Nonsense", "NoSuchName_zz", //$NON-NLS-1$ //$NON-NLS-2$
+            "Catalog.Catalog.Form.ItemForm.Nonsense.NoSuchName_zz"); //$NON-NLS-1$
+        assertTrue(unknown, unknown.contains("not a form element kind")); //$NON-NLS-1$
+        assertTrue(unknown, unknown.contains("Nonsense")); //$NON-NLS-1$
+        // No FQN to retarget: the corrected Kind.Name tail is still spelled.
+        String bare = FormElementWriter.kindMismatchAdvice(form, "Button", "KindProbeField", null); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(bare, bare.contains("Field.KindProbeField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveUniqueFormMemberIsKindAwareAndStillRejectsAmbiguity()
+    {
+        // The STRICT resolver serves the structural write paths (a move, a button's command
+        // re-point). Before issue #343 those looked the item up by NAME alone, so a 'parent' /
+        // 'command' property on '...Button.<a field>' still reached the field after the property and
+        // delete paths had been fixed - the invariant has to hold for EVERY path, not most of them.
+        EObject form = newForm();
+        EObject field = addNamedItem(form, "FormField", "UniqProbeFld"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertSame(field, FormElementWriter.resolveUniqueFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Field.UniqProbeFld"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveUniqueFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Button.UniqProbeFld"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveUniqueFormMember(form,
+            FormElementWriter.parse("CommonForm.F.Fielld.UniqProbeFld"))); //$NON-NLS-1$
+
+        // The ambiguity rejection it exists for is NOT lost to the kind check: two items of the
+        // SAME kind bearing one name still throw rather than silently picking the first.
+        EObject group = addNamedItem(form, "FormGroup", "DupHost"); //$NON-NLS-1$ //$NON-NLS-2$
+        addNamedItem(form, "FormField", "DupName"); //$NON-NLS-1$ //$NON-NLS-2$
+        addNamedItem(group, "FormField", "DupName"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            FormElementWriter.resolveUniqueFormMember(form,
+                FormElementWriter.parse("CommonForm.F.Field.DupName")); //$NON-NLS-1$
+            fail("an ambiguous name must be rejected, not resolved to the first match"); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            assertNotNull(e.getMessage());
+        }
+    }
+
+    @Test
+    public void testHandlerOwnerAdviceNeverPointsAtAnAttribute()
+    {
+        // A handler attaches to a form ITEM or a form COMMAND. When only an ATTRIBUTE bears the
+        // owner's name, advising '...Attribute.<name>.Handler.<event>' would hand back an address
+        // that cannot resolve either - say what is true instead.
+        EObject form = newForm();
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "OwnerAttr"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        FormMemberRef ref =
+            FormElementWriter.parse("CommonForm.F.Button.OwnerAttr.Handler.OnChange"); //$NON-NLS-1$
+        String advice = FormElementWriter.handlerOwnerKindMismatchAdvice(form, ref,
+            "CommonForm.F.Button.OwnerAttr.Handler.OnChange"); //$NON-NLS-1$
+        assertTrue(advice, advice.contains("there IS a form ATTRIBUTE with this name")); //$NON-NLS-1$
+        assertFalse("the advice must NOT hand back an unresolvable attribute handler address: " //$NON-NLS-1$
+            + advice, advice.contains("Attribute.OwnerAttr.Handler")); //$NON-NLS-1$
+
+        // A form-LEVEL handler address carries no owner segment at all, so it has no advice.
+        assertEquals("", FormElementWriter.handlerOwnerKindMismatchAdvice(form, //$NON-NLS-1$
+            FormElementWriter.parse("CommonForm.F.Handler.OnOpen"), "CommonForm.F.Handler.OnOpen")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAdviceRetargetsTheOwnerSegmentEvenWhenTheLeafRepeatsIt()
+    {
+        // The corrected address is built from the address SHAPE, not by searching for the pair. THE
+        // discriminating case: an item named after an event, addressed with an owner token that
+        // equals the handler token. '<kindToken>.<name>' then occurs TWICE and a search from the end
+        // rewrites the LEAF, handing back 'CommonForm.F.Handler.OnChange.Field.OnChange' - which does
+        // not even parse as a handler address. Only the shape rule picks the owner pair.
+        EObject form = newForm();
+        addNamedItem(form, "FormField", "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        String fqn = "CommonForm.F.Handler.OnChange.Handler.OnChange"; //$NON-NLS-1$
+        FormMemberRef ref = FormElementWriter.parse(fqn);
+        assertEquals("Handler", ref.itemKindToken); //$NON-NLS-1$
+        String advice = FormElementWriter.handlerOwnerKindMismatchAdvice(form, ref, fqn);
+        assertTrue(advice, advice.contains("'CommonForm.F.Field.OnChange.Handler.OnChange'")); //$NON-NLS-1$
+        assertFalse("the LEAF pair must not be the one rewritten: " + advice, //$NON-NLS-1$
+            advice.contains("Handler.OnChange.Field.OnChange")); //$NON-NLS-1$
+
+        // A COMMAND owner is corrected too, but its only handler slot is the Action, so the advice
+        // must not hand back an address whose event a command can never carry.
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), "Refresh"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+        String cmdFqn = "CommonForm.F.Button.Refresh.Handler.OnChange"; //$NON-NLS-1$
+        String cmdAdvice = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
+            FormElementWriter.parse(cmdFqn), cmdFqn);
+        assertTrue(cmdAdvice, cmdAdvice.contains("'CommonForm.F.Command.Refresh.Handler.OnChange'")); //$NON-NLS-1$
+        assertTrue(cmdAdvice, cmdAdvice.contains("the leaf must be 'Action'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testKindTokensResolveIndependentlyOfTheDefaultLocale()
+    {
+        // Turkish/Azeri lowercasing turns 'I' into the dotless 'i', so a default-locale toLowerCase
+        // would make 'FIELD' match no token. Harmless while an unknown token fell through to the
+        // by-name search; since issue #343 made the kind decisive it would REJECT a valid address.
+        java.util.Locale previous = java.util.Locale.getDefault();
+        try
+        {
+            java.util.Locale.setDefault(new java.util.Locale("tr", "TR")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(Kind.FIELD, FormElementWriter.kindForToken("FIELD")); //$NON-NLS-1$
+            assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("DECORATION")); //$NON-NLS-1$
+            EObject form = newForm();
+            EObject field = addNamedItem(form, "FormField", "LocaleFld"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertSame(field, FormElementWriter.resolveFormMember(form,
+                FormElementWriter.parse("CommonForm.F.FIELD.LocaleFld"))); //$NON-NLS-1$
+        }
+        finally
+        {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @Test
+    public void testMatchesKindTokenClassifiesEveryFormItemKind()
+    {
+        EObject form = newForm();
+        EObject field = addNamedItem(form, "FormField", "MkField"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject button = addNamedItem(form, "Button", "MkButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject group = addNamedItem(form, "FormGroup", "MkGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject decoration = addNamedItem(form, "Decoration", "MkDecoration"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject table = addNamedItem(form, "Table", "MkTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject bar = FormElementWriter.findFormItem(form, "FormCommandBar"); //$NON-NLS-1$
+
+        assertTrue(FormElementWriter.matchesKindToken(field, "Field")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.matchesKindToken(button, RU_BUTTON));
+        assertTrue(FormElementWriter.matchesKindToken(group, "Group")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.matchesKindToken(decoration, RU_DECORATION));
+        assertTrue(FormElementWriter.matchesKindToken(table, "Table")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesKindToken(field, "Button")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesKindToken(table, RU_GROUP));
+        // An unrecognized token is the kind of nothing, and a null element matches nothing.
+        assertFalse(FormElementWriter.matchesKindToken(field, "Fielld")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesKindToken(null, "Field")); //$NON-NLS-1$
+        // An AutoCommandBar has no token of its OWN but IS a Group, so Group - and only Group - fits.
+        assertTrue(FormElementWriter.matchesKindToken(bar, "Group")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesKindToken(bar, "Field")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesKindToken(bar, "Grroup")); //$NON-NLS-1$
+    }
+
     @Test
     public void testCreateFieldDesignerDefaults()
     {
@@ -2312,6 +2712,9 @@ public class FormElementWriterTest
     {
         final EClass form;
         final EClass formItem;
+        /** The ABSTRACT base of every group-like item (FormGroup / ContextMenu / AutoCommandBar / the
+         * two actions panels) - what the {@code Group} kind token denotes. */
+        final EClass group;
         final EClass formGroup;
         final EClass usualGroupExtInfo;
         final EClass autoCommandBar;
@@ -2389,19 +2792,41 @@ public class FormElementWriterTest
             addString(f, formItem, "name"); //$NON-NLS-1$
             addInt(f, formItem, "id"); //$NON-NLS-1$
 
+            // The FormItem hierarchy is reproduced FAITHFULLY (verified against the shipped
+            // Form.xcore of 2026.1 and the 2025.2 javadoc): the abstract Group base over FormGroup /
+            // ContextMenu / AutoCommandBar / the two actions panels, and ExtendedTooltip UNDER
+            // Decoration. The writer's kind-token resolution (issue #343) maps a token to an EClass
+            // and its SUBCLASSES, so a flat fixture would test a hierarchy that does not exist.
+            group = f.createEClass();
+            group.setName("Group"); //$NON-NLS-1$
+            group.setAbstract(true);
+            group.getESuperTypes().add(formItem);
+
+            // Decoration's shell is created here (its features are added further down, where they
+            // read naturally) so ExtendedTooltip can inherit from it without a construction cycle.
+            decoration = f.createEClass();
+            decoration.setName("Decoration"); //$NON-NLS-1$
+            decoration.getESuperTypes().add(formItem);
+
             // The designer's auto-children (both are FormItems: named, id-bearing).
             EClass contextMenu = f.createEClass();
             contextMenu.setName("ContextMenu"); //$NON-NLS-1$
-            contextMenu.getESuperTypes().add(formItem);
+            contextMenu.getESuperTypes().add(group);
             addBoolean(f, contextMenu, "autoFill"); //$NON-NLS-1$
+            // An ExtendedTooltip IS a Decoration - it carries no own copy of type / autoMaxWidth /
+            // autoMaxHeight / extInfo, it inherits them.
             EClass extendedTooltip = f.createEClass();
             extendedTooltip.setName("ExtendedTooltip"); //$NON-NLS-1$
-            extendedTooltip.getESuperTypes().add(formItem);
-            addEnum(f, extendedTooltip, "type", decorationType); //$NON-NLS-1$
-            addBoolean(f, extendedTooltip, "autoMaxWidth"); //$NON-NLS-1$
-            addBoolean(f, extendedTooltip, "autoMaxHeight"); //$NON-NLS-1$
-            extendedTooltip.getEStructuralFeatures().add(
-                containment(f, "extInfo", extInfoBase, false)); //$NON-NLS-1$
+            extendedTooltip.getESuperTypes().add(decoration);
+            // The two selection panels: group-like designer children with no features of their own
+            // that the writer touches; present so the kind classification can be pinned for ALL five
+            // Group subclasses.
+            EClass selectedItemsActionsPanel = f.createEClass();
+            selectedItemsActionsPanel.setName("SelectedItemsActionsPanel"); //$NON-NLS-1$
+            selectedItemsActionsPanel.getESuperTypes().add(group);
+            EClass rowActionsPanel = f.createEClass();
+            rowActionsPanel.setName("RowActionsPanel"); //$NON-NLS-1$
+            rowActionsPanel.getESuperTypes().add(group);
 
             EClass commandHandler = f.createEClass();
             commandHandler.setName("CommandHandler"); //$NON-NLS-1$
@@ -2448,7 +2873,7 @@ public class FormElementWriterTest
 
             formGroup = f.createEClass();
             formGroup.setName("FormGroup"); //$NON-NLS-1$
-            formGroup.getESuperTypes().add(formItem);
+            formGroup.getESuperTypes().add(group);
             addEnum(f, formGroup, "type", groupType); //$NON-NLS-1$
             formGroup.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             formGroup.getEStructuralFeatures().add(
@@ -2456,9 +2881,6 @@ public class FormElementWriterTest
             formGroup.getEStructuralFeatures().add(
                 containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
 
-            decoration = f.createEClass();
-            decoration.setName("Decoration"); //$NON-NLS-1$
-            decoration.getESuperTypes().add(formItem);
             addEnum(f, decoration, "type", decorationType); //$NON-NLS-1$
             addBoolean(f, decoration, "visible"); //$NON-NLS-1$
             addBoolean(f, decoration, "enabled"); //$NON-NLS-1$
@@ -2522,7 +2944,7 @@ public class FormElementWriterTest
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
-            autoCommandBar.getESuperTypes().add(formItem);
+            autoCommandBar.getESuperTypes().add(group);
             autoCommandBar.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
 
             // The table additions (search string / view status / search control) are one concrete
@@ -2584,7 +3006,10 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(inputFieldExtInfo);
             pkg.getEClassifiers().add(contextMenu);
             pkg.getEClassifiers().add(extendedTooltip);
+            pkg.getEClassifiers().add(selectedItemsActionsPanel);
+            pkg.getEClassifiers().add(rowActionsPanel);
             pkg.getEClassifiers().add(formItem);
+            pkg.getEClassifiers().add(group);
             pkg.getEClassifiers().add(commandHandler);
             pkg.getEClassifiers().add(handlerContainer);
             pkg.getEClassifiers().add(formCommandHandlerContainer);
