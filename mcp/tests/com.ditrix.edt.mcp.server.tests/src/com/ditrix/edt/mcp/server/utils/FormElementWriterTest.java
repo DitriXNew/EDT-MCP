@@ -1231,33 +1231,128 @@ public class FormElementWriterTest
     }
 
     @Test
-    public void testTableAdditionIsTheOneClassNoKindTokenDenotes()
+    public void testTableAdditionIsAddressableByNoKindTokenAtAll()
     {
         // A table Addition inherits FormItem directly (the platform gives it its own base type,
-        // FormItemAddition), so NO token denotes it. It therefore stays reachable through any
-        // RECOGNIZED token - the deliberate exception, so an address that worked before issue #343
-        // keeps working - while an unrecognized token still addresses nothing.
+        // FormItemAddition), so NO token denotes it - and therefore NO token addresses it. Accepting
+        // "any recognized token" to keep it reachable was the same defect one level down: it let
+        // '...Button.<addition>' through to the DELETE path, removing an element under a kind it
+        // plainly is not.
         EObject form = newForm();
         EObject table = addNamedItem(form, "Table", "AddProbeTable"); //$NON-NLS-1$ //$NON-NLS-2$
         EObject addition =
             addChild(table, "searchStringAddition", "Addition", "AddProbeTableSearchString"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertSame(addition, FormElementWriter.findFormItem(form, "AddProbeTableSearchString")); //$NON-NLS-1$
 
-        String[] tokens = { "Group", "Field", "Button", "Decoration", "Table", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            RU_GROUP, RU_FIELD, RU_BUTTON, RU_DECORATION, RU_TABLE };
+        String[] tokens = { "Group", "Field", "Button", "Decoration", "Table", "Attribute", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "Command", "Fielld", RU_GROUP, RU_FIELD, RU_BUTTON, RU_DECORATION, RU_TABLE, //$NON-NLS-1$ //$NON-NLS-2$
+            RU_ATTRIBUTE, RU_COMMAND };
         for (String token : tokens)
         {
-            assertSame("the table addition must stay addressable through '" + token + "'", addition, //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull("no kind token may address a table addition, '" + token + "' included", //$NON-NLS-1$ //$NON-NLS-2$
                 FormElementWriter.resolveFormMember(form, FormElementWriter.parse(
                     "CommonForm.F." + token + ".AddProbeTableSearchString"))); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(token, FormElementWriter.matchesKindToken(addition, token));
+            // ... and it cannot own a handler under any of them either.
+            assertNull(token, FormElementWriter.resolveHandlerContainer(form, FormElementWriter.parse(
+                "CommonForm.F." + token + ".AddProbeTableSearchString.Handler.OnChange"))); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        assertNull(FormElementWriter.resolveFormMember(form,
-            FormElementWriter.parse("CommonForm.F.Fielld.AddProbeTableSearchString"))); //$NON-NLS-1$
-        // Only the ITEM kinds reach it: Attribute / Command are served from their own containments,
-        // not from the items tree - that was true before this change too, and the docs say so.
-        assertNull(FormElementWriter.resolveFormMember(form,
-            FormElementWriter.parse("CommonForm.F.Attribute.AddProbeTableSearchString"))); //$NON-NLS-1$
-        assertNull(FormElementWriter.resolveFormMember(form,
-            FormElementWriter.parse("CommonForm.F.Command.AddProbeTableSearchString"))); //$NON-NLS-1$
+
+        // The refusal must not read as "no such element": it exists, it simply has no address.
+        String advice = FormElementWriter.kindMismatchAdvice(form, "Button", //$NON-NLS-1$
+            "AddProbeTableSearchString", "CommonForm.F.Button.AddProbeTableSearchString"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(advice, advice.contains("there IS an element with this name")); //$NON-NLS-1$
+        assertTrue(advice, advice.contains("no kind token addresses")); //$NON-NLS-1$
+    }
+
+    /**
+     * The corrected address an advice quotes back must RESOLVE - the invariant, not its wording. A
+     * test that only greps the message would keep passing while the suggestion sends the caller to an
+     * address that cannot work (a command's handler leaf must be Action, not the event that was
+     * mistyped against it).
+     */
+    @Test
+    public void testEveryAddressAnAdviceSuggestsActuallyResolves()
+    {
+        EObject form = newForm();
+        addNamedItem(form, "FormField", "AdvFld"); //$NON-NLS-1$ //$NON-NLS-2$
+        addNamedItem(form, "FormGroup", "AdvGrp"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), "AdvCmd"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+
+        // Leaf addresses: the suggestion must resolve as a MEMBER.
+        String[][] leaves = { { "Button", "AdvFld" }, { "Field", "AdvGrp" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            { "Field", "AdvCmd" }, { "Fielld", "AdvFld" } }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String[] probe : leaves)
+        {
+            String fqn = "CommonForm.F." + probe[0] + "." + probe[1]; //$NON-NLS-1$ //$NON-NLS-2$
+            String suggested = quotedAddressOf(
+                FormElementWriter.kindMismatchAdvice(form, probe[0], probe[1], fqn));
+            assertNotNull("no address quoted for " + fqn, suggested); //$NON-NLS-1$
+            assertNotNull("the suggested address must resolve: " + suggested, //$NON-NLS-1$
+                FormElementWriter.resolveFormMember(form, FormElementWriter.parse(suggested)));
+        }
+
+        // Owner addresses: the suggestion must resolve as a handler CONTAINER, and for a COMMAND
+        // owner it must carry the only leaf a command accepts.
+        String cmdFqn = "CommonForm.F.Button.AdvCmd.Handler.OnChange"; //$NON-NLS-1$
+        String cmdSuggested = quotedAddressOf(FormElementWriter.handlerOwnerKindMismatchAdvice(form,
+            FormElementWriter.parse(cmdFqn), cmdFqn));
+        assertEquals("CommonForm.F.Command.AdvCmd.Handler.Action", cmdSuggested); //$NON-NLS-1$
+        EObject container = FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse(cmdSuggested));
+        assertSame(command, container);
+        // ... and the event leaf really is one the container accepts.
+        assertNull(FormElementWriter.createHandler(container, "Action", "AdvCmdProc", null, null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, new String[1]));
+
+        String itemFqn = "CommonForm.F.Button.AdvFld.Handler.OnChange"; //$NON-NLS-1$
+        String itemSuggested = quotedAddressOf(FormElementWriter.handlerOwnerKindMismatchAdvice(form,
+            FormElementWriter.parse(itemFqn), itemFqn));
+        assertEquals("CommonForm.F.Field.AdvFld.Handler.OnChange", itemSuggested); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse(itemSuggested)));
+
+        // An FQN this writer would not parse can never be offered as one to USE, whatever a caller
+        // passes - the guarantee lives in the advice, not in the callers' discipline. The advice
+        // still names the kind, so it stays actionable.
+        String junk = FormElementWriter.kindMismatchAdvice(form, "Button", "AdvFld", //$NON-NLS-1$ //$NON-NLS-2$
+            "Nonsense.Prefix.Button.AdvFld"); //$NON-NLS-1$
+        assertFalse("a non-parseable address must not be quoted back: " + junk, //$NON-NLS-1$
+            junk.contains("Use '")); //$NON-NLS-1$
+        assertTrue(junk, junk.contains("Address it with the 'Field' kind")); //$NON-NLS-1$
+    }
+
+    /** The FQN an advice quotes between single quotes, or {@code null} when it quotes none. */
+    private static String quotedAddressOf(String advice)
+    {
+        int open = advice.indexOf('\'');
+        int close = advice.indexOf('\'', open + 1);
+        return open < 0 || close < 0 ? null : advice.substring(open + 1, close);
+    }
+
+    /**
+     * The two resolvers are NOT symmetric: {@code resolveFormMember} routes Attribute / Command into
+     * their own containments before the items tree, but {@code resolveHandlerContainer} routes away
+     * only Command - so an Attribute owner token DOES reach the by-name item lookup. This guards the
+     * ordinary-item case, which both the old and the new predicate reject (an item's EClass denotes a
+     * kind, and that kind is not ATTRIBUTE); the case that DISCRIMINATES the fix is a tokenless class,
+     * pinned by {@link #testTableAdditionIsAddressableByNoKindTokenAtAll}.
+     */
+    @Test
+    public void testAttributeOwnerTokenIsRefusedForAnOrdinaryItem()
+    {
+        EObject form = newForm();
+        addNamedItem(form, "FormField", "OwnerProbeFld"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("Attribute names no element kind and must not own a handler", //$NON-NLS-1$
+            FormElementWriter.resolveHandlerContainer(form, FormElementWriter.parse(
+                "CommonForm.F.Attribute.OwnerProbeFld.Handler.OnChange"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.resolveHandlerContainer(form, FormElementWriter.parse(
+            "CommonForm.F." + RU_ATTRIBUTE + ".OwnerProbeFld.Handler.OnChange"))); //$NON-NLS-1$ //$NON-NLS-2$
+        // The item's own kind still owns its handler.
+        assertNotNull(FormElementWriter.resolveHandlerContainer(form, FormElementWriter.parse(
+            "CommonForm.F.Field.OwnerProbeFld.Handler.OnChange"))); //$NON-NLS-1$
     }
 
     /** A named child attached to a SINGULAR containment (context menu / tooltip / table addition). */
@@ -1367,9 +1462,24 @@ public class FormElementWriterTest
             "Catalog.Catalog.Form.ItemForm.Nonsense.NoSuchName_zz"); //$NON-NLS-1$
         assertTrue(unknown, unknown.contains("not a form element kind")); //$NON-NLS-1$
         assertTrue(unknown, unknown.contains("Nonsense")); //$NON-NLS-1$
-        // No FQN to retarget: the corrected Kind.Name tail is still spelled.
+        // No FQN to retarget: name the KIND, never quote a '<Kind>.<Name>' tail as an address -
+        // parse() rejects such a string, so "Use 'Field.KindProbeField'" would send the caller
+        // somewhere that cannot work.
         String bare = FormElementWriter.kindMismatchAdvice(form, "Button", "KindProbeField", null); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(bare, bare.contains("Field.KindProbeField")); //$NON-NLS-1$
+        assertTrue(bare, bare.contains("Address it with the 'Field' kind")); //$NON-NLS-1$
+        assertFalse(bare, bare.contains("Use '")); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse("Field.KindProbeField")); //$NON-NLS-1$
+
+        // The COMMAND-owner fallback is the discriminating case: with the pre-fix tail fallback the
+        // Action rewrite chopped 'Command.Refresh' into 'Command.Action', losing the owner name.
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), "BareCmd"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+        String bareOwner = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
+            FormElementWriter.parse("CommonForm.F.Button.BareCmd.Handler.OnChange"), null); //$NON-NLS-1$
+        assertTrue(bareOwner, bareOwner.contains("Address it with the 'Command' kind")); //$NON-NLS-1$
+        assertFalse("the owner name must not be swallowed by the Action rewrite: " + bareOwner, //$NON-NLS-1$
+            bareOwner.contains("Command.Action")); //$NON-NLS-1$
     }
 
     @Test
@@ -1447,16 +1557,17 @@ public class FormElementWriterTest
         assertFalse("the LEAF pair must not be the one rewritten: " + advice, //$NON-NLS-1$
             advice.contains("Handler.OnChange.Field.OnChange")); //$NON-NLS-1$
 
-        // A COMMAND owner is corrected too, but its only handler slot is the Action, so the advice
-        // must not hand back an address whose event a command can never carry.
+        // A COMMAND owner is corrected too - kind AND event leaf, because a command's only handler
+        // slot is its Action. Suggesting '...Command.Refresh.Handler.OnChange' would be right about
+        // the owner and still unusable. (What the suggestion must RESOLVE is pinned separately by
+        // testEveryAddressAnAdviceSuggestsActuallyResolves.)
         EObject command = newObject(MODEL.formCommand);
         command.eSet(feature(command, "name"), "Refresh"); //$NON-NLS-1$ //$NON-NLS-2$
         addTo(form, "formCommands", command); //$NON-NLS-1$
         String cmdFqn = "CommonForm.F.Button.Refresh.Handler.OnChange"; //$NON-NLS-1$
         String cmdAdvice = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
             FormElementWriter.parse(cmdFqn), cmdFqn);
-        assertTrue(cmdAdvice, cmdAdvice.contains("'CommonForm.F.Command.Refresh.Handler.OnChange'")); //$NON-NLS-1$
-        assertTrue(cmdAdvice, cmdAdvice.contains("the leaf must be 'Action'")); //$NON-NLS-1$
+        assertTrue(cmdAdvice, cmdAdvice.contains("'CommonForm.F.Command.Refresh.Handler.Action'")); //$NON-NLS-1$
     }
 
     @Test

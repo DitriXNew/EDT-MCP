@@ -358,6 +358,45 @@ def test_assignable_on_a_form_member_addressed_with_a_foreign_kind_is_refused():
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
+def test_form_member_fqn_in_the_default_view_never_renders_the_owner():
+    # The DEFAULT view (assignable omitted) resolved the object from the first two FQN segments only,
+    # so a form-member address rendered the OWNING catalog's details - a confident answer about
+    # something else, with the kind segment never examined at all. Issue #343 requires a foreign kind
+    # to be refused on get_metadata_details; that was only true on the assignable path.
+    for fqn in ("Catalog.Catalog.Form.ItemForm.Button.Description",   # foreign kind
+                "Catalog.Catalog.Form.ItemForm.Fielld.Description",   # misspelt kind
+                "Catalog.Catalog.Form.ItemForm.Field.Description"):   # even the RIGHT kind
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
+        assert_ok(r, "a form-member FQN in the default view: " + fqn)
+        assert_contains(r.text, "## Errors",
+            "a form-member FQN must be reported, not silently answered for its owner: " + fqn)
+        assert_contains(r.text, "assignable=true",
+            "the reason must point at the view that does render a member: " + fqn)
+        # '**Origin:**' is emitted only when an OBJECT's details were actually rendered.
+        assert_not_contains(r.text, "**Origin:**",
+            "the owning object's details must not be rendered for a member FQN: " + fqn)
+
+    # A HANDLER address is not renderable by either view, so it must NOT be told to retry with
+    # assignable=true - an actionable message has to point somewhere that works.
+    h = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": ["Catalog.Catalog.Form.ItemForm.Field.Description.Handler.OnChange"]})
+    assert_ok(h, "a form-handler FQN in the default view")
+    assert_contains(h.text, "## Errors", "a handler FQN must be reported, not answered for the owner")
+    assert_not_contains(h.text, "assignable=true",
+        "the assignable view never renders handlers - it must not be recommended for one")
+
+    # ... and the advice the MEMBER case gives must be true: assignable=true really does render it.
+    ok = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": ["Catalog.Catalog.Form.ItemForm.Field.Description"], "assignable": True})
+    assert_ok(ok, "the recommended view must render the member")
+    assert_contains(ok.text, "Assignable properties",
+        "the reason recommends assignable=true - it must actually render the member there")
+    assert_no_diff("a read must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
 def test_assignable_reaches_a_designer_child_by_its_inherited_kind_only():
     # The other half of issue #343: the designer's own children carry no kind token of their own,
     # but a token addresses its EClass AND its subclasses - an AutoCommandBar IS a Group. So the

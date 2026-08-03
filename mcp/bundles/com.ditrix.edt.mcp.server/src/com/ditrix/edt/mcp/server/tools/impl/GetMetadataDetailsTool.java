@@ -335,6 +335,30 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
+        // A FORM MEMBER FQN must not fall through to resolveObject either: like the predefined-item
+        // branch above, resolveObject reads only the first two segments, so it would silently render
+        // the OWNING object's details for an address the caller meant as a member - and would do so
+        // whatever the kind segment said, which is the very thing issue #343 is about. The member view
+        // lives behind assignable=true, so say that instead of answering about something else.
+        FormElementWriter.FormMemberRef defaultMemberRef =
+            FormElementWriter.parse(MetadataTypeUtils.normalizeFqn(fqn));
+        if (defaultMemberRef != null)
+        {
+            // A HANDLER address is not renderable by either view (the assignable view never renders
+            // handlers), so it must not be told to retry there - the form's structure is what lists
+            // handlers.
+            boolean handlerRef = FormElementWriter.isHandlerToken(defaultMemberRef.kindToken);
+            failures.add(new String[] { fqn, "this addresses a form " //$NON-NLS-1$
+                + (handlerRef ? "event HANDLER, which this tool renders as part of the form's " //$NON-NLS-1$
+                    + "structure - read the form's own FQN ('" + defaultMemberRef.formPath + "')" //$NON-NLS-1$ //$NON-NLS-2$
+                    : "MEMBER, whose properties render with assignable=true (which also names the " //$NON-NLS-1$
+                        + "kind when the FQN's kind segment is wrong); the whole form's structure " //$NON-NLS-1$
+                        + "renders from the form's own FQN ('" + defaultMemberRef.formPath + "')") //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Rendering the owning object's details instead would answer about something " //$NON-NLS-1$
+                + "else." }); //$NON-NLS-1$
+            return;
+        }
+
         MdObject mdObject = resolveObject(ctx.config, fqn);
         if (mdObject == null)
         {

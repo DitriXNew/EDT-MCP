@@ -150,6 +150,8 @@ public final class FormElementWriter
     private static final String ECLASS_AUTO_COMMAND_BAR = "AutoCommandBar"; //$NON-NLS-1$
     private static final String ECLASS_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
+    /** The concrete table-addition EClass (search string / view status / search control). */
+    private static final String ECLASS_ADDITION = "Addition"; //$NON-NLS-1$
     private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_HANDLER_CONTAINER = "FormCommandHandlerContainer"; //$NON-NLS-1$
     private static final String ECLASS_COMMAND_HANDLER = "CommandHandler"; //$NON-NLS-1$
@@ -4313,10 +4315,9 @@ public final class FormElementWriter
      *
      * @param element the resolved form element, may be {@code null}
      * @param kindToken the kind token the address named, may be {@code null}
-     * @return {@code true} when the element's EClass denotes exactly the named kind (see
-     *     {@link #addressableKindOf}), or denotes no addressable kind at all - today only
-     *     {@code Addition}, the one class no token names; {@code false} for a wrong or unrecognized
-     *     token
+     * @return {@code true} only when the element's EClass denotes exactly the named kind (see
+     *     {@link #addressableKindOf}); {@code false} for a wrong or unrecognized token, and for an
+     *     EClass no token denotes at all
      */
     public static boolean matchesKindToken(EObject element, String kindToken)
     {
@@ -4330,8 +4331,12 @@ public final class FormElementWriter
             // An unrecognized kind token addresses nothing: it cannot be the kind of anything.
             return false;
         }
-        Kind actual = addressableKindOf(element.eClass());
-        return actual == null || actual == requested;
+        // An EClass NO token denotes matches NO token either. Accepting "any recognized token" for it
+        // looked like a harmless way to keep such an element reachable, but a token that addresses an
+        // element it does not describe is the whole defect of issue #343: it let
+        // '...Button.<a table Addition>' through to EcoreUtil.remove, deleting an element under a kind
+        // it plainly is not. Reachability is not worth a destructive wrong-kind address.
+        return addressableKindOf(element.eClass()) == requested;
     }
 
     /**
@@ -4360,12 +4365,11 @@ public final class FormElementWriter
      *
      * <p>{@code Addition} (a table's search-string / view-status / search-control addition) is the one
      * class no token denotes: it inherits from {@code FormItem} directly, and the platform gives it its
-     * own base type too ({@code FormItemAddition}, see {@link #PLATFORM_TYPE_BY_ECLASS}). It stays
-     * reachable through any recognized ITEM kind token ({@code Field} / {@code Button} / {@code Group}
-     * / {@code Decoration} / {@code Table}) so an address that worked before this check keeps working -
-     * the single remaining place where the token is not verified. {@code Attribute} and {@code Command}
-     * do NOT reach it, and never did: those two tokens are served from their own containments, not from
-     * the items tree.</p>
+     * own base type too ({@code FormItemAddition}, see {@link #PLATFORM_TYPE_BY_ECLASS}). No FQN
+     * addresses it: {@link #matchesKindToken} matches a tokenless class against NO token. Accepting
+     * any recognized one to keep it reachable was the same defect one level down - it let
+     * {@code ...Button.<addition>} through to the delete path. An addition is created and removed
+     * with its table, so nothing needs to address it on its own.</p>
      *
      * @param eClass the EClass of a resolved form element, may be {@code null}
      * @return the addressing kind, or {@code null} when no kind token denotes this EClass
@@ -4477,18 +4481,32 @@ public final class FormElementWriter
             return " - there IS a form ATTRIBUTE with this name, but an event handler attaches to a " //$NON-NLS-1$
                 + "form ITEM or a form COMMAND, never to an attribute."; //$NON-NLS-1$
         }
+        EObject tokenless = actual == null ? findFormItem(formModel, name) : null;
+        if (tokenless != null)
+        {
+            // The element exists but NO kind token denotes its class. Naming a token here would be
+            // inventing one; name the CLASS instead, from the model, so a form-model class added by a
+            // later platform version is described as itself rather than as a table addition.
+            String eClassName = tokenless.eClass().getName();
+            String what = ECLASS_ADDITION.equals(eClassName)
+                ? "a table addition (search string / view status / search control), which is created " //$NON-NLS-1$
+                    + "and removed together with its table" //$NON-NLS-1$
+                : "a " + eClassName; //$NON-NLS-1$
+            return " - there IS an element with this name, but it is " + what //$NON-NLS-1$
+                + ", and no kind token addresses it."; //$NON-NLS-1$
+        }
         if (actual != null && actual != requested)
         {
             String correct = englishTokenOf(actual);
-            // A form COMMAND owns exactly ONE handler slot, its Action, so the corrected owner
-            // address only works with that leaf - say so rather than let the caller re-send an
-            // address that is right about the owner and still cannot bind.
-            String eventNote = ownerPosition && actual == Kind.COMMAND
-                ? " A form command has only its Action handler, so the leaf must be 'Action'." : ""; //$NON-NLS-1$ //$NON-NLS-2$
+            String corrected =
+                correctedAddress(normFqn, kindToken, name, correct, ownerPosition, actual);
+            // Quote a whole address ONLY when there is one. A bare '<Kind>.<Name>' tail is not an
+            // FQN - parse() rejects it - so offering it as something to "use" would send the caller
+            // to an address that cannot work.
             return " - there IS an element with this name, but it is " //$NON-NLS-1$
-                + (actual == Kind.ATTRIBUTE ? "an " : "a ") + correct + ". Use '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + retargetKindSegment(normFqn, kindToken, name, correct, ownerPosition) + "'." //$NON-NLS-1$
-                + eventNote;
+                + (actual == Kind.ATTRIBUTE ? "an " : "a ") + correct //$NON-NLS-1$ //$NON-NLS-2$
+                + (corrected == null ? ". Address it with the '" + correct + "' kind." //$NON-NLS-1$ //$NON-NLS-2$
+                    : ". Use '" + corrected + "'."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (requested == null)
         {
@@ -4496,6 +4514,38 @@ public final class FormElementWriter
                 + "Command / Field / Button / Group / Decoration / Table."; //$NON-NLS-1$
         }
         return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * The corrected address to quote back - and it must RESOLVE, not merely carry the right kind. A
+     * form COMMAND owns exactly one handler slot, its Action, so retargeting only the kind of
+     * {@code ...Button.Refresh.Handler.OnChange} would hand back {@code ...Command.Refresh.Handler.
+     * OnChange}, which {@link #findFormHandler} rejects for a command. The event leaf is corrected
+     * with it.
+     */
+    private static String correctedAddress(String normFqn, String kindToken, String name,
+        String correct, boolean ownerPosition, Kind actual) // NOSONAR signature is inherent: the address, the pair to replace, and the position all vary independently
+    {
+        String retargeted = retargetKindSegment(normFqn, kindToken, name, correct, ownerPosition);
+        if (retargeted == null)
+        {
+            // The FQN did not carry the pair where its shape says it must, so there is NO whole
+            // address to correct. Returning a '<Kind>.<Name>' tail here would be worse than nothing:
+            // parse() rejects it, and the Action rewrite below would mistake the element NAME for an
+            // event leaf. The caller names the kind instead of quoting a fake address.
+            return null;
+        }
+        String corrected = retargeted;
+        if (ownerPosition && actual == Kind.COMMAND)
+        {
+            int lastDot = retargeted.lastIndexOf('.');
+            corrected = lastDot < 0 ? retargeted
+                : retargeted.substring(0, lastDot + 1) + COMMAND_ACTION_EVENT;
+        }
+        // Self-enforcing: quote an address back ONLY if it is one this writer would accept. Every
+        // production caller has already parsed the FQN it passes, so this holds today by
+        // construction - but the guarantee belongs here, not in the callers' discipline.
+        return parse(corrected) == null ? null : corrected;
     }
 
     /**
@@ -4549,22 +4599,24 @@ public final class FormElementWriter
      * searched for: the LEAF pair is the last two segments, the OWNER pair of an item-level handler
      * address ({@code ...Button.Price.Handler.OnChange}) the two before {@code Handler.<Event>}. A
      * search would pick the wrong pair whenever the same {@code Kind.Name} spelling occurs twice in
-     * one FQN (an item named after an event). Falls back to the bare {@code <correct>.<name>} tail
-     * when the FQN is absent or does not carry the pair where the shape says it must.
+     * one FQN (an item named after an event).
+     *
+     * @return the whole corrected FQN, or {@code null} when the FQN is absent or does not carry the
+     *     pair where the shape says it must - the caller then quotes the {@code <correct>.<name>} tail
+     *     instead of treating a partial string as an address
      */
     private static String retargetKindSegment(String normFqn, String kindToken, String name,
         String correct, boolean ownerPosition)
     {
-        String tail = correct + "." + name; //$NON-NLS-1$
         if (normFqn == null || kindToken == null || name == null)
         {
-            return tail;
+            return null;
         }
         String[] p = normFqn.split("\\."); //$NON-NLS-1$
         int kindAt = p.length - (ownerPosition ? 4 : 2);
         if (kindAt < 0 || !kindToken.equalsIgnoreCase(p[kindAt]) || !name.equalsIgnoreCase(p[kindAt + 1]))
         {
-            return tail;
+            return null;
         }
         p[kindAt] = correct;
         return String.join(".", p); //$NON-NLS-1$
