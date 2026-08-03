@@ -3177,6 +3177,49 @@ public class FormElementWriterTest
         assertTrue(FormElementWriter.rowConsumersBoundToAttribute(plain).isEmpty());
     }
 
+    @Test
+    public void testARowConsumerIsMatchedByAddressNotByLeafName()
+    {
+        // The name conflict: a COLUMN 'Price' inside 'Rows', and a SEPARATE top-level collection
+        // attribute also called 'Price' shown by a table. Matching the leaf name against a
+        // one-segment data path made the column answer for that table and refused a legitimate
+        // column retype (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        EObject sameNamedAttribute = newCollectionAttribute(form, "Price"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createTable(form, "PriceTable", null, "Price", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+
+        // The table consumes the ATTRIBUTE's rows...
+        assertEquals(Collections.singletonList("PriceTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(sameNamedAttribute));
+        // ...and NOT the column's: the column is addressed 'Rows.Price'.
+        assertTrue("a same-named column must not answer for the attribute's table", //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(column).isEmpty());
+    }
+
+    @Test
+    public void testATableBoundToAColumnIsStillFoundForThatColumn()
+    {
+        // The other side of addressing by path: a table bound to 'Rows.Price' DOES consume that
+        // column's rows, and the leaf-name match (one segment only) could never have seen it.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "NestedTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject path = newObject(modelClass("DataPath")); //$NON-NLS-1$
+        ((List<String>)path.eGet(feature(path, "segments"))).add("Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<String>)path.eGet(feature(path, "segments"))).add("Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "dataPath"), path); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+
+        assertEquals("a table bound to the COLUMN's path must be found for it", //$NON-NLS-1$
+            Collections.singletonList("NestedTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(column));
+    }
+
     /** Gives {@code member} a value type of the named platform PRIMITIVE. */
     @SuppressWarnings("unchecked")
     private static void setPrimitiveType(EObject member, String typeName)

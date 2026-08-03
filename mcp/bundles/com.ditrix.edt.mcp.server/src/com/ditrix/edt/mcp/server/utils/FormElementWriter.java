@@ -652,9 +652,13 @@ public final class FormElementWriter
     public static List<String> rowConsumersBoundToAttribute(EObject attribute)
     {
         List<String> consumers = new ArrayList<>();
-        String attributeName = attribute == null ? null : stringFeature(attribute, FEATURE_NAME);
+        // The member's OWN address, not its bare name: 'Rows' for a top-level attribute, but
+        // 'Rows.Price' for a column. Matching the leaf name against a one-segment path made a COLUMN
+        // named Price answer for a table bound to a same-named top-level attribute - a false refusal
+        // of a legitimate retype (issue #295 review). The same address builder the below-scan uses.
+        List<String> ownPath = ownDataPath(attribute);
         EObject formModel = attribute == null ? null : contentFormOf(attribute);
-        if (attributeName == null || attributeName.isEmpty() || formModel == null)
+        if (ownPath.isEmpty() || formModel == null)
         {
             return consumers;
         }
@@ -662,7 +666,9 @@ public final class FormElementWriter
         {
             EObject item = it.next();
             String[] segments = dataPathSegments(item);
-            if (segments.length == 1 && attributeName.equalsIgnoreCase(segments[0])
+            // EQUAL to the address, not merely starting with it: a table bound BELOW the member does
+            // not consume the member's own rows.
+            if (segments.length == ownPath.size() && startsWithIgnoreCase(segments, ownPath)
                 && ECLASS_TABLE.equals(item.eClass().getName()))
             {
                 consumers.add(stringFeature(item, FEATURE_NAME));
