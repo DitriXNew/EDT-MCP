@@ -779,7 +779,25 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         return symbolicCheckId != null && symbolicCheckId.toLowerCase().contains(needle);
     }
-    
+
+    /**
+     * Returns true when {@code checkId} is EXACTLY (case-insensitively) either the marker short
+     * UID or its resolved symbolic check id. Unlike {@link #checkIdMatches}, this is NOT a
+     * substring match: a read-only filter (get_project_errors) can afford to over-match and show
+     * extra rows, but a mutation locator (apply_quick_fix) cannot - a loose needle like "doc"
+     * would substring-match several unrelated checks, and if only one marker among them currently
+     * exists the tool would silently auto-fix it without ever surfacing the ambiguity.
+     */
+    static boolean checkIdMatchesExact(String shortUid, String symbolicCheckId, String checkId)
+    {
+        String needle = checkId.toLowerCase();
+        if (shortUid != null && shortUid.toLowerCase().equals(needle))
+        {
+            return true;
+        }
+        return symbolicCheckId != null && symbolicCheckId.toLowerCase().equals(needle);
+    }
+
     /**
      * Placeholder location for a marker whose {@link Marker#getObjectPresentation()} could not
      * be resolved, so the marker is reported instead of being dropped.

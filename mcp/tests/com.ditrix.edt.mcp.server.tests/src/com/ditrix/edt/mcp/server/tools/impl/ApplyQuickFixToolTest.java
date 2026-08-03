@@ -12,12 +12,15 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool.MarkerMatch;
 import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool.SelectorArgument;
 
 /**
@@ -205,5 +208,52 @@ public class ApplyQuickFixToolTest
         assertFalse(result.isRejected());
         assertEquals(-1, result.value);
         assertNull(result.rejection);
+    }
+
+    // ---- MarkerMatch.DETERMINISTIC_ORDER: index stability across marker-stream encounter order ---
+
+    @Test
+    public void testDeterministicOrderIsSameRegardlessOfEncounterOrder()
+    {
+        // The bug this guards: IMarkerManager.markers() makes no ordering promise, so an index
+        // chosen from one call's listing must still resolve to the same marker on the next call
+        // even if the stream happens to enumerate the same set in a different order.
+        MarkerMatch a = new MarkerMatch(null, "check-a", "Module1.bsl", 5, "first"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        MarkerMatch b = new MarkerMatch(null, "check-b", "Module1.bsl", 10, "second"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        MarkerMatch c = new MarkerMatch(null, "check-c", "Module2.bsl", 1, "third"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        List<MarkerMatch> encounterOrder1 = new ArrayList<>(List.of(c, a, b));
+        List<MarkerMatch> encounterOrder2 = new ArrayList<>(List.of(b, c, a));
+        encounterOrder1.sort(MarkerMatch.DETERMINISTIC_ORDER);
+        encounterOrder2.sort(MarkerMatch.DETERMINISTIC_ORDER);
+
+        List<String> sortedIds1 = idsOf(encounterOrder1);
+        List<String> sortedIds2 = idsOf(encounterOrder2);
+        assertEquals("two different stream encounter orders of the same set must sort identically", //$NON-NLS-1$
+            sortedIds1, sortedIds2);
+        assertEquals(List.of("check-a", "check-b", "check-c"), sortedIds1); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testDeterministicOrderSortsNullModulePathAndLineFirst()
+    {
+        MarkerMatch withModule = new MarkerMatch(null, "check-a", "Module1.bsl", 1, "msg"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        MarkerMatch metadataOnly = new MarkerMatch(null, "check-b", null, null, "msg"); //$NON-NLS-1$ //$NON-NLS-2$
+        MarkerMatch noLine = new MarkerMatch(null, "check-c", "Module1.bsl", null, "msg"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        List<MarkerMatch> matches = new ArrayList<>(List.of(withModule, noLine, metadataOnly));
+        matches.sort(MarkerMatch.DETERMINISTIC_ORDER);
+
+        assertEquals(List.of("check-b", "check-c", "check-a"), idsOf(matches)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    private static List<String> idsOf(List<MarkerMatch> matches)
+    {
+        List<String> ids = new ArrayList<>();
+        for (MarkerMatch m : matches)
+        {
+            ids.add(m.checkId);
+        }
+        return ids;
     }
 }

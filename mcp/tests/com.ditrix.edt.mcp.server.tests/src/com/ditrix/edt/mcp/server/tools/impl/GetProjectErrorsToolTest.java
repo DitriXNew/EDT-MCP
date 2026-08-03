@@ -80,6 +80,50 @@ public class GetProjectErrorsToolTest
         assertFalse(GetProjectErrorsTool.checkIdMatches(null, null, "anything")); //$NON-NLS-1$
     }
 
+    // ========== checkIdMatchesExact (pure) ==========
+    // Used by apply_quick_fix, a mutation locator: unlike checkIdMatches, a substring must NOT
+    // match, since a loose needle could silently pick the wrong check to auto-fix.
+
+    @Test
+    public void testCheckIdMatchesExactBySymbolicId()
+    {
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "ql-temp-table-index")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactByShortUid()
+    {
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "SU23")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactCaseInsensitive()
+    {
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("Su23", null, "su23")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact(null, "QL-Temp-Table", "ql-temp-table")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactRejectsSubstring()
+    {
+        // The exact bug this guards: "doc" must NOT match "doc-comment-parameter-section" here,
+        // even though the loose checkIdMatches used by get_project_errors would allow it.
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU1", "doc-comment-parameter-section", "doc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU23", null, "su2")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactNoMatch()
+    {
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "zzz")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactBothNull()
+    {
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact(null, null, "anything")); //$NON-NLS-1$
+    }
+
     // ========== unresolvedPlaceholder ==========
 
     @Test

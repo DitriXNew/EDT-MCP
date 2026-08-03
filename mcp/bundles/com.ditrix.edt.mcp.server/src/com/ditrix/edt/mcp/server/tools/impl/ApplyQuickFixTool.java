@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -80,8 +81,9 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             .stringProperty(KEY_PROJECT, "EDT project name the marker belongs to (required).", true) //$NON-NLS-1$
             .stringProperty(KEY_CHECK_ID,
                 "Check id of the marker to fix (required): the 'Check code' from get_project_errors " //$NON-NLS-1$
-                + "(symbolic id like 'doc-comment-parameter-section', or the short UID). Matched " //$NON-NLS-1$
-                + "case-insensitively against both.", true) //$NON-NLS-1$
+                + "(symbolic id like 'doc-comment-parameter-section', or the short UID). Matched by " //$NON-NLS-1$
+                + "EXACT case-insensitive equality against either - not a substring, since this " //$NON-NLS-1$
+                + "mutates the model and a loose match could silently pick the wrong check.", true) //$NON-NLS-1$
             .stringProperty(KEY_MODULE_PATH,
                 "Narrow to a BSL module: the 'Module path' from get_project_errors " //$NON-NLS-1$
                 + "(e.g. 'CommonModules/MyModule/Module.bsl'). Optional but recommended when the same " //$NON-NLS-1$
@@ -193,12 +195,20 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Streams the project's markers and returns those whose check id matches {@code checkId}
-     * (symbolic or short UID, case-insensitive substring) and, when given, the {@code modulePath}
+     * Streams the project's markers and returns those whose check id EXACTLY matches
+     * {@code checkId} (symbolic or short UID, case-insensitive - not a substring; see
+     * {@link GetProjectErrorsTool#checkIdMatchesExact}) and, when given, the {@code modulePath}
      * and 1-based {@code line}. No BM read transaction is needed: only the marker's own check id
      * and extra-info (module URI + line) are read, never the lazily-resolved object presentation.
+     * <p>
+     * The result is sorted into a DETERMINISTIC order (module path, then line, then check id, then
+     * message) before being returned: {@link IMarkerManager#markers()} makes no ordering promise,
+     * so an {@code index} chosen from one call's error listing (see {@link #multipleMarkersError})
+     * must still resolve to the SAME candidate on a follow-up call with the same locator + selector,
+     * even though the underlying stream may enumerate the same marker set in a different order each
+     * time. Content-derived sorting removes stream order as a source of that instability.
      */
-    private static List<MarkerMatch> findMatches(IMarkerManager markerManager,
+    static List<MarkerMatch> findMatches(IMarkerManager markerManager,
         ICheckRepository checkRepository, IProject project, String checkId, String modulePath, int line)
     {
         List<MarkerMatch> matches = new ArrayList<>();
@@ -210,7 +220,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             }
             String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
             String symbolic = GetProjectErrorsTool.resolveSymbolicCheckId(marker, shortUid, checkRepository);
-            if (!GetProjectErrorsTool.checkIdMatches(shortUid, symbolic, checkId))
+            if (!GetProjectErrorsTool.checkIdMatchesExact(shortUid, symbolic, checkId))
             {
                 return;
             }
@@ -227,6 +237,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             matches.add(new MarkerMatch(marker, symbolic != null ? symbolic : shortUid,
                 loc.modulePath, loc.line, marker.getMessage() != null ? marker.getMessage() : "")); //$NON-NLS-1$
         });
+        matches.sort(MarkerMatch.DETERMINISTIC_ORDER);
         return matches;
     }
 
@@ -445,9 +456,24 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         return details != null && !details.isEmpty() ? details : "(unnamed fix)"; //$NON-NLS-1$
     }
 
-    /** One marker matched by the locator, with the bits needed for selection + reporting. */
-    private static final class MarkerMatch
+    /**
+     * One marker matched by the locator, with the bits needed for selection + reporting.
+     * Package-visible (not {@code private}) so {@link #findMatches}'s ordering is unit-testable.
+     */
+    static final class MarkerMatch
     {
+        /**
+         * Content-derived total order (module path, then line, then check id, then message), all
+         * null-safe: markers with no module path sort first, followed by unattributed lines. Two
+         * markers that are identical across all four fields are genuinely indistinguishable to the
+         * caller, so their relative order does not matter.
+         */
+        static final Comparator<MarkerMatch> DETERMINISTIC_ORDER = Comparator
+            .comparing((MarkerMatch m) -> m.modulePath, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(m -> m.line, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(m -> m.checkId, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(m -> m.message, Comparator.nullsFirst(Comparator.naturalOrder()));
+
         final Marker marker;
         final String checkId;
         final String modulePath;

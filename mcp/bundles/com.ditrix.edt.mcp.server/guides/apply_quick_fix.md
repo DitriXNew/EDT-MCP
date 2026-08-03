@@ -15,16 +15,20 @@ is exactly what the IDE would produce.
 EDT validation markers have **no stable per-marker id**, so the tool addresses the marker by the same
 **locator** `get_project_errors` prints:
 - `checkId` (required) — the row's **Check code** (symbolic id like `doc-comment-parameter-section`, or
-  the short UID). Matched case-insensitively against both.
+  the short UID). Matched by **exact** case-insensitive equality against either — not a substring: this
+  tool mutates the model, so a loose needle like `doc` (which would happily substring-match several
+  unrelated checks in `get_project_errors`) could silently auto-fix the wrong one here.
 - `modulePath` (optional) — the row's **Module path** (e.g. `CommonModules/MyModule/Module.bsl`), to
   narrow when the same check fires in several modules.
 - `line` (optional) — the row's **Line**.
 
-The tool streams the project's markers and selects the one matching that locator. When the locator
-still matches **several** markers (e.g. two parameter-doc problems on the same line), the error lists
-them with a 1-based index — re-call adding `index=<n>`. When the chosen marker's fix offers **several
-variants** (e.g. "add to Public region" vs "Private"), the error lists those — re-call adding
-`variant=<n>`.
+The tool streams the project's markers, filters to the locator, and sorts the result into a
+**deterministic order** (module path, then line, then check id, then message) before indexing it — the
+underlying marker stream makes no ordering promise, so this keeps a given `index` pointing at the same
+marker across calls, independent of stream iteration order. When the locator still matches **several**
+markers (e.g. two parameter-doc problems on the same line), the error lists them with a 1-based index —
+re-call adding `index=<n>`. When the chosen marker's fix offers **several variants** (e.g. "add to
+Public region" vs "Private"), the error lists those — re-call adding `variant=<n>`.
 
 ## Parameter details
 - `projectName` (required) — the EDT project the marker belongs to.
@@ -51,6 +55,10 @@ A JSON result:
 - The fix **mutates the source** through the platform's own change processor; re-validate afterwards to
   see the updated marker list. There is no dry-run — inspect the marker (and `get_check_description`)
   first if unsure.
+- **Excluded from the read-only presets.** The *Analysis Only* and *Code Review* Tools-tab presets
+  disable this tool alongside the other write-capable ones, even though it sits in the `PROBLEMS` group
+  next to read-only tools like `get_project_errors`. An installation that saved one of those presets
+  before this tool existed is migrated once, on upgrade, to disable it there too.
 
 ## Maintainer note
 After adding/changing this tool, the `tools/list` golden snapshot (`tools_list.golden.json`) MUST be
