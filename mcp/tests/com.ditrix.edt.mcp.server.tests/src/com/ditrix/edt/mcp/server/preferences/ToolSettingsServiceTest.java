@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.preferences;
 import static org.junit.Assert.*;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 
 import org.eclipse.jface.preference.PreferenceStore;
@@ -199,5 +200,97 @@ public class ToolSettingsServiceTest
             store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertFalse("a one-time migration must not fight the user's choice: " + disabled,
             disabled.contains("git"));
+    }
+
+    /**
+     * apply_quick_fix is a normal (default-ON) tool, unlike git - so the migration must not add it
+     * to every stored list, only to one that, once it gains apply_quick_fix, becomes EXACTLY a
+     * read-only preset's current shape: the signature of a store saved by a build that predates the
+     * tool, under Code Review or Analysis Only, before it existed to be excluded from them.
+     */
+    @Test
+    public void testMigrationAddsApplyQuickFixToAPreExistingCodeReviewPreset()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // What an installation running Code Review would have persisted BEFORE apply_quick_fix
+        // was added to the preset's definition.
+        Set<String> oldShape = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        oldShape.remove("apply_quick_fix");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(oldShape));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("a stored Code Review preset must gain apply_quick_fix on migration: " + disabled,
+            disabled.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testMigrationAddsApplyQuickFixToAPreExistingAnalysisOnlyPreset()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        Set<String> oldShape = new HashSet<>(ToolPreset.ANALYSIS_ONLY.getDisabledTools());
+        oldShape.remove("apply_quick_fix");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(oldShape));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("a stored Analysis Only preset must gain apply_quick_fix on migration: " + disabled,
+            disabled.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testMigrationDoesNotAddApplyQuickFixToACustomSelection()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // A genuinely custom selection that merely overlaps a preset in a couple of tools must not
+        // be mistaken for one - only an EXACT (minus apply_quick_fix) shape match migrates.
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "debug_launch,run_yaxunit_tests");
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertFalse("a custom selection must not gain apply_quick_fix: " + disabled,
+            disabled.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testMigrationDoesNotFightAUserWhoAlreadyEnabledApplyQuickFix()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // Already migrated once (version stored == current): a user who has since deliberately
+        // re-enabled apply_quick_fix under an otherwise Code-Review-shaped selection must be left
+        // alone by a later migration run.
+        Set<String> shape = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        shape.remove("apply_quick_fix");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(shape));
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertFalse("an already-migrated store must not be touched again: " + disabled,
+            disabled.contains("apply_quick_fix"));
     }
 }
