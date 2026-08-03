@@ -1600,7 +1600,30 @@ public class GetProjectErrorsTool implements IMcpTool
         String ownerFqn = ref.ownerFqn();
         int dot = ownerFqn.indexOf('.');
         String ownerType = dot < 0 ? ownerFqn : ownerFqn.substring(0, dot);
-        return MetadataTypeUtils.typeCanContain(ownerType, PREDEFINED_FEATURE);
+        return ownerTypeCanContain(ownerType, PREDEFINED_FEATURE);
+    }
+
+    /**
+     * THE owner question, asked as one thing: {@code typeToken} must name a metadata type that
+     * exists at all, AND that type must really carry {@code featureName}.
+     *
+     * <p>Two separate pieces of model-independent knowledge, deliberately joined here because every
+     * caller needs both and none needs one alone. {@link MetadataTypeUtils#typeCanContain} is
+     * permissive on tokens it does not recognize - on purpose, so it can never turn a real address
+     * into a false miss - which means it cannot rule out an unknown leading type. That second half
+     * lived inline at two of the three call sites, in two different spellings, and was simply
+     * missing at the third: {@code NoSuchType.X.Predefined.Item} passed the gate and was carried
+     * into the projects, where a closed or still-indexing one made it undecided instead of absent.
+     * A single entry means a fourth caller inherits both halves instead of remembering them.</p>
+     *
+     * @param typeToken the OWNER's metadata type token (English/Russian, singular/plural, any case)
+     * @param featureName the EMF containment feature the address needs on that owner
+     * @return {@code true} only when the type is known and can hold that feature
+     */
+    private static boolean ownerTypeCanContain(String typeToken, String featureName)
+    {
+        return MetadataTypeUtils.resolve(typeToken) != null
+            && MetadataTypeUtils.typeCanContain(typeToken, featureName);
     }
 
     /** The EMF containment feature holding a type's predefined items. */
@@ -1629,12 +1652,9 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return true;
         }
-        // An owned form needs a real owner TYPE. The mdclass chain has always rejected an unknown
-        // leading token, but the form grammars never looked at it, so 'NoSuchType.X.Form.F' parsed
-        // cleanly. typeCanContain cannot answer this: it is permissive on tokens it does not know,
-        // exactly so it never turns a real address into a false miss.
-        return MetadataTypeUtils.resolve(p[0]) != null
-            && MetadataTypeUtils.typeCanContain(p[0], FORMS_FEATURE);
+        // An owned form needs a real owner TYPE: the form grammars never looked at the leading
+        // token, so 'NoSuchType.X.Form.F' parsed cleanly.
+        return ownerTypeCanContain(p[0], FORMS_FEATURE);
     }
 
     /**
@@ -1671,7 +1691,7 @@ public class GetProjectErrorsTool implements IMcpTool
             // names nothing in any configuration. Only the first level is checked because deeper
             // owners are not named by a type token (the owner of an Attribute under a TabularSection
             // is the tabular section, which no segment types), and a gap here is the safe direction.
-            if (i == 2 && !MetadataTypeUtils.typeCanContain(parts[0], feature))
+            if (i == 2 && !ownerTypeCanContain(parts[0], feature))
             {
                 return false;
             }

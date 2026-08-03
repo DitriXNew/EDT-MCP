@@ -2221,6 +2221,7 @@ public class GetProjectErrorsToolTest
             "Catalog.Products.Column.Number",       // Column is a DocumentJournal containment //$NON-NLS-1$
             "Document.Invoice.Predefined.Sample",   // Documents hold no predefined items //$NON-NLS-1$
             "NoSuchType.X.Form.F",                  // form grammar never checked the leading TYPE //$NON-NLS-1$
+            "NoSuchType.X.Predefined.Item",         // ...nor did the predefined grammar //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Fielld.Code", // misspelt form-element KIND //$NON-NLS-1$
             "Catalog.Products.Module"})             // odd arity: no grammar has it //$NON-NLS-1$
         {
