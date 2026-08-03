@@ -34,6 +34,7 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
@@ -60,6 +61,7 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 
@@ -1439,6 +1441,74 @@ public class GetProjectErrorsToolTest
         // The owner is in the scope as well - that is where EDT reports a predefined item's problem.
         assertTrue(scope.contains("Catalog.C")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testEveryValidFirstStepIsAContainmentAndStaysPossible()
+    {
+        // The table of valid first steps is DERIVED from the grammar catalogue, not hand-written:
+        // every nested kind the catalogue publishes, mapped through the resolver's own token ->
+        // feature map, crossed with every type the gate can address. A new putTokens entry is
+        // therefore covered the moment it is added - it cannot slip past a list someone forgot to
+        // extend. (An earlier version of this check pinned SEVEN hand-picked pairs while the map
+        // holds many more: dimensions, resources, enumValues, accountingFlags, recalculations and
+        // the rest were never checked at all.)
+        int checked = 0;
+        for (String token : MetadataTypeUtils.nestedKindCanonicalTokens())
+        {
+            String feature = MetadataNodeResolver.featureNameForKind(token);
+            if (feature == null)
+            {
+                // Form / Handler / Predefined / Subsystem and the form-only item kinds: owned by
+                // other grammars, never a mdclass first step.
+                continue;
+            }
+            for (EClassifier classifier : MdClassPackage.eINSTANCE.getEClassifiers())
+            {
+                if (!(classifier instanceof EClass)
+                    || MetadataTypeUtils.toEnglishSingular(classifier.getName()) == null)
+                {
+                    continue;
+                }
+                EStructuralFeature f = ((EClass)classifier).getEStructuralFeature(feature);
+                if (f == null)
+                {
+                    continue;
+                }
+                String type = classifier.getName();
+                assertTrue("a valid first step must be a CONTAINMENT reference: " //$NON-NLS-1$
+                    + type + "." + feature, //$NON-NLS-1$
+                    f instanceof EReference && ((EReference)f).isContainment());
+                assertTrue("the owner question must accept it: " + type + "." + feature, //$NON-NLS-1$ //$NON-NLS-2$
+                    MetadataTypeUtils.typeCanContain(type, feature));
+                String address = type + ".X." + token + ".Y"; //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue("a valid first step must stay POSSIBLE: " + address, //$NON-NLS-1$
+                    GetProjectErrorsTool.possibleAddressShape(address));
+                checked++;
+            }
+        }
+        assertTrue("the derived table must not be empty - the catalogue walk broke", checked > 50); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testKindsThatAreLegalOnlyDeeperAreNotValidFirstSteps()
+    {
+        // Method lives on an HTTPService URLTemplate and Parameter on a WebService Operation, so
+        // neither is a first step. They must NOT be swept into the derived table above just because
+        // the catalogue publishes their tokens.
+        for (String address : new String[] {
+            "HTTPService.Service.Method.Get",        // Method belongs to a URLTemplate //$NON-NLS-1$
+            "WebService.Service.Parameter.Value"})   // Parameter belongs to an Operation //$NON-NLS-1$
+        {
+            assertFalse("legal only deeper, so not a valid first step: " + address, //$NON-NLS-1$
+                GetProjectErrorsTool.possibleAddressShape(address));
+        }
+        // ...and the legitimate deeper shapes they belong to must still be possible.
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "HTTPService.Service.URLTemplate.Root.Method.Get")); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "WebService.Service.Operation.Calc.Parameter.Value")); //$NON-NLS-1$
+    }
+
 
     @Test
     public void testTheOwnerQuestionIsAboutCONTAINMENT()
