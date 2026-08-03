@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -8,11 +8,20 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import java.util.function.Predicate;
 import org.junit.Test;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 
 /**
  * Tests for {@link MetadataTypeUtils}.
@@ -480,5 +489,558 @@ public class MetadataTypeUtilsTest
         {
             assertEquals("Variant should be lowercase: " + v, v.toLowerCase(), v);
         }
+    }
+
+    // ========== getAllFqnVariants: NESTED FQNs (issue #312) ==========
+
+    /** Russian tokens are written as code points so this source stays pure ASCII. */
+    private static final String RU_DOCUMENT_LOWER = "\u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442"; // документ
+    private static final String RU_DOCUMENT = "\u0414\u043E\u043A\u0443\u043C\u0435\u043D\u0442"; // Документ
+    private static final String RU_CATALOG_LOWER = "\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A"; // справочник
+    private static final String RU_FORM = "\u0424\u043E\u0440\u043C\u0430"; // Форма
+    private static final String RU_FORMS = "\u0424\u043E\u0440\u043C\u044B"; // Формы
+    private static final String RU_FORM_LOWER = "\u0444\u043E\u0440\u043C\u0430"; // форма
+    private static final String RU_TABULAR_SECTION_LOWER =
+        "\u0442\u0430\u0431\u043B\u0438\u0447\u043D\u0430\u044F\u0447\u0430\u0441\u0442\u044C"; // табличнаячасть
+    private static final String RU_ATTRIBUTE_LOWER = "\u0440\u0435\u043A\u0432\u0438\u0437\u0438\u0442"; // реквизит
+    private static final String RU_ATTRIBUTE = "\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442"; // Attribute (ru)
+    private static final String RU_MODULE_LOWER = "\u043C\u043E\u0434\u0443\u043B\u044C"; // Module (ru, lowercase)
+
+    @Test
+    public void testGetAllFqnVariantsNestedEnglishInputProducesFullRussianVariant()
+    {
+        // THE regression (issue #312): an English NESTED FQN must produce a variant whose EVERY
+        // structural segment is Russian. Translating only the leading type token yields
+        // "документ.meeting.form.itemform", which never matches the Russian marker location
+        // "Документ.Meeting.Форма.ItemForm" -> the filter silently drops every finding and the
+        // tool reports a clean project.
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Document.Meeting.Form.ItemForm");
+        assertTrue("Should contain original lowercased",
+            variants.contains("document.meeting.form.itemform"));
+        assertTrue("Should translate BOTH structural segments to Russian",
+            variants.contains(RU_DOCUMENT_LOWER + ".meeting." + RU_FORM_LOWER + ".itemform"));
+        assertFalse("The half-translated form must not be produced",
+            variants.contains(RU_DOCUMENT_LOWER + ".meeting.form.itemform"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNestedRussianInputProducesFullEnglishVariant()
+    {
+        // Документ.Встреча.Форма.ФормаЭлемента
+        String meeting = "\u0412\u0441\u0442\u0440\u0435\u0447\u0430"; // Встреча
+        String itemForm = "\u0424\u043E\u0440\u043C\u0430\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0430"; // ФормаЭлемента
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants(
+            RU_DOCUMENT + "." + meeting + "." + RU_FORM + "." + itemForm);
+        assertTrue("Should translate BOTH structural segments to English",
+            variants.contains("document." + meeting.toLowerCase() + ".form." + itemForm.toLowerCase()));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsProgrammaticNamesAreNeverTranslated()
+    {
+        // An object AND its form both literally named Forma (the Russian word for "Form"): the
+        // NAME segments (odd indexes) must survive untouched while only the structural segments
+        // (even indexes) translate.
+        Set<String> variants =
+            MetadataTypeUtils.getAllFqnVariants("Catalog." + RU_FORM + ".Form." + RU_FORM);
+        assertTrue("Names must stay as typed in the all-English variant",
+            variants.contains("catalog." + RU_FORM_LOWER + ".form." + RU_FORM_LOWER));
+        assertFalse("A NAME that spells a kind token must NOT be translated",
+            variants.contains("catalog.form.form.form"));
+        assertTrue("Structural segments must still translate to Russian",
+            variants.contains(RU_CATALOG_LOWER + "." + RU_FORM_LOWER + "." + RU_FORM_LOWER
+                + "." + RU_FORM_LOWER));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsThreeLevelNestedFqn()
+    {
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants(
+            "Catalog.Products.TabularSection.Goods.Attribute.Price");
+        assertTrue("Should contain original lowercased",
+            variants.contains("catalog.products.tabularsection.goods.attribute.price"));
+        assertTrue("All three structural segments must translate to Russian",
+            variants.contains(RU_CATALOG_LOWER + ".products." + RU_TABULAR_SECTION_LOWER
+                + ".goods." + RU_ATTRIBUTE_LOWER + ".price"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNestedPluralKindToken()
+    {
+        // A plural nested kind token is accepted and canonicalized to the singular.
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Catalog.Products.Forms.ItemForm");
+        assertTrue("Plural kind token must canonicalize to the English singular",
+            variants.contains("catalog.products.form.itemform"));
+        assertTrue("Plural kind token must canonicalize to the Russian singular",
+            variants.contains(RU_CATALOG_LOWER + ".products." + RU_FORM_LOWER + ".itemform"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsUnknownNestedSegmentIsKept()
+    {
+        // An unrecognized structural segment is copied verbatim - it must never break the method
+        // nor swallow the other segments' translation.
+        Set<String> variants = MetadataTypeUtils.getAllFqnVariants("Catalog.Products.Widget.Foo");
+        assertTrue(variants.contains("catalog.products.widget.foo"));
+        assertTrue("The known type token must still translate",
+            variants.contains(RU_CATALOG_LOWER + ".products.widget.foo"));
+    }
+
+    @Test
+    public void testALooseFragmentThatStartsOnANestedKindStillTranslates()
+    {
+        // `objects` entries are documented FRAGMENTS and may begin in the MIDDLE of a location.
+        // A fragment starting on a nested KIND was only ever looked up in the TYPE catalogue, so it
+        // stayed Russian, matched no English location, and - because a loose entry reports no miss -
+        // handed the caller an empty report: the #312 symptom in the loose mode.
+        Set<String> form = MetadataTypeUtils.getAllFqnVariants(RU_FORM + ".ItemForm");
+        assertTrue("the fragment as typed must stay", form.contains(RU_FORM_LOWER + ".itemform"));
+        assertTrue("a fragment starting on a nested kind must reach the English location",
+            form.contains("form.itemform"));
+
+        Set<String> attribute = MetadataTypeUtils.getAllFqnVariants(RU_ATTRIBUTE + ".Weight");
+        assertTrue(attribute.contains("attribute.weight"));
+
+        // Symmetrical: an English fragment must reach a Russian-rendered location.
+        Set<String> english = MetadataTypeUtils.getAllFqnVariants("Form.ItemForm");
+        assertTrue(english.contains(RU_FORM_LOWER + ".itemform"));
+    }
+
+    @Test
+    public void testTheNestedKindFallbackDoesNotTranslateNameSegments()
+    {
+        // The boundary of the fallback above: it changes only WHICH catalogue the LEADING segment is
+        // looked up in. The parity is untouched, so an odd-index segment is still a programmatic
+        // Name copied verbatim - a fragment that begins on a NAME is deliberately NOT translated,
+        // because without segment alignment a name cannot be told from a kind.
+        Set<String> startsOnName = MetadataTypeUtils.getAllFqnVariants("Calc.Module");
+        assertTrue("the fragment as typed must stay", startsOnName.contains("calc.module"));
+        for (String variant : startsOnName)
+        {
+            assertFalse("a kind token at a NAME position must never be translated: " + variant,
+                variant.contains(RU_MODULE_LOWER));
+        }
+
+        // And a real NAME after a leading kind is still verbatim (an object literally called Forma).
+        Set<String> nameAfterKind = MetadataTypeUtils.getAllFqnVariants(RU_FORM + "." + RU_FORM);
+        assertTrue("only the leading segment translates",
+            nameAfterKind.contains("form." + RU_FORM_LOWER));
+        assertFalse("the NAME must not be translated too",
+            nameAfterKind.contains("form.form"));
+    }
+
+    @Test
+    public void testGetAllFqnVariantsNeverExplodesCombinatorially()
+    {
+        // At most THREE candidates (original + all-English + all-Russian), never the per-segment
+        // cross product, which would grow exponentially with the FQN depth.
+        Set<String> deep = MetadataTypeUtils.getAllFqnVariants(
+            "Catalog.Products.TabularSection.Goods.Attribute.Price");
+        assertTrue("deep FQN produced " + deep.size() + " variants", deep.size() <= 3);
+
+        // A MIXED-language input is the case that really yields all three distinct forms.
+        Set<String> mixed = MetadataTypeUtils.getAllFqnVariants("Document.X." + RU_FORM + ".Y");
+        assertEquals(3, mixed.size());
+        assertTrue(mixed.contains("document.x." + RU_FORM_LOWER + ".y")); // original
+        assertTrue(mixed.contains("document.x.form.y")); // all-English
+        assertTrue(mixed.contains(RU_DOCUMENT_LOWER + ".x." + RU_FORM_LOWER + ".y")); // all-Russian
+    }
+
+
+    /**
+     * Every nested kind this catalogue publishes must have an OWNER predicate on the exact path, and
+     * that owner must accept EVERY spelling the catalogue advertises for it.
+     *
+     * <p>This is the invariant behind three separate review findings, each one a fresh copy of the
+     * same mistake: the catalogue advertised a spelling, the exact resolver's own list of literals
+     * did not have it, so an address we document resolved by NAME and was then refused on its KIND -
+     * a node that plainly exists reported as objectsNotFound. Enumerating the fixes is what let the
+     * next copy through, so the property is checked over the WHOLE catalogue instead.</p>
+     *
+     * <p>A kind added to the catalogue later has no owner here and FAILS this test until one is
+     * declared. That is deliberate: declaring the owner is exactly the step that was being missed.</p>
+     */
+    @Test
+    public void testEveryPublishedNestedKindTokenIsAcceptedByItsExactResolver()
+    {
+        Map<String, Predicate<String>> owners = new LinkedHashMap<>();
+        // Form-content kinds: the form parser resolves the element and then checks the KIND token.
+        for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
+        {
+            List<String> tokens = FormElementWriter.tokensForKind(kind);
+            if (tokens.isEmpty())
+            {
+                continue;
+            }
+            MetadataTypeUtils.NestedKindInfo info =
+                MetadataTypeUtils.resolveNestedKind(tokens.get(0));
+            assertNotNull("the form parser accepts '" + tokens.get(0) + "' but this map does not",
+                info);
+            owners.put(info.getEnglish(), t -> FormElementWriter.kindForToken(t) == kind);
+        }
+        // The structural tokens that route an address to a branch rather than to an element kind.
+        owners.put("Form", FormElementWriter::isFormToken);
+        owners.put("Handler", FormElementWriter::isHandlerToken);
+        owners.put("Subsystem", SubsystemUtils::isSubsystemTypeToken);
+        owners.put("Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+
+        // Every OTHER kind is an mdclass member, and its exact resolver is MetadataNodeResolver:
+        // it maps the kind token to the EMF child feature. That is a real owner, not an excuse -
+        // listing these by hand is exactly the "enumerate the fixes" habit that let the same drift
+        // through twice, so they are checked through their resolver like everything else.
+        Map<String, String> notAddressed = new LinkedHashMap<>();
+        // The only genuine exceptions: CONTENT segments of a marker location. They are translated so
+        // the filter can match a location, but no address is ever parsed with them as a segment.
+        notAddressed.put("Module", "a CONTENT segment of a marker location (CommonModule.X.Module), "
+            + "never an address segment - it is translated for matching only");
+        notAddressed.put("Package", "the CONTENT of an XDTO package (XDTOPackage.P.Package) - a "
+            + "marker location segment; XDTO members are answered as objectsUnsupported");
+
+        for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
+        {
+            Predicate<String> owner = owners.get(canonical);
+            if (owner == null && !notAddressed.containsKey(canonical))
+            {
+                // An mdclass member kind: its exact resolver is the child-feature mapping.
+                owner = t -> MetadataNodeResolver.featureNameForKind(t) != null;
+            }
+            if (owner == null)
+            {
+                continue; // a documented content-only segment
+            }
+            Set<String> aliases = MetadataTypeUtils.nestedKindAliases(canonical);
+            assertFalse("a published kind must have spellings: " + canonical, aliases.isEmpty());
+            for (String alias : aliases)
+            {
+                assertTrue("the catalogue advertises '" + alias + "' for " + canonical
+                    + ", so the exact resolver must accept it", owner.test(alias));
+                // ...and case must not matter: a marker location renders these capitalized.
+                assertTrue("case must not matter for '" + alias + "'",
+                    owner.test(alias.substring(0, 1).toUpperCase() + alias.substring(1)));
+            }
+        }
+    }
+
+    /** The predefined-item token predicate, which is private to its writer - probed through parseRef. */
+    private static boolean predefinedTokenAccepted(String token)
+    {
+        return PredefinedWriter.parseRef("Catalog.Products." + token + ".Sample") != null;
+    }
+
+
+    @Test
+    public void testALooseFragmentIsTranslatedAtBOTHSegmentParities()
+    {
+        // A fragment's OFFSET into the location is unknown. It may start on the type
+        // (Catalog.Products), on a nested kind (Form.ItemForm) - or on a NAME (ItemForm.Form), and
+        // then the structural segments sit on the ODD indexes. Assuming one parity left the other
+        // untranslated, so the fragment matched nothing; and because a loose entry reports no miss,
+        // the caller just got an empty report. Three findings in a row, one per offset - so BOTH
+        // parities are emitted rather than one being guessed.
+        //
+        // 'ItemForm.<Forma>' is a real substring of the English location
+        // 'Catalog.C.Form.ItemForm.Form' once the Russian kind is translated, and it starts on a
+        // NAME.
+        Set<String> nameLeading = MetadataTypeUtils.getAllFragmentVariants("ItemForm." + RU_FORM);
+        assertTrue("the fragment as typed must stay",
+            nameLeading.contains("itemform." + RU_FORM_LOWER));
+        assertTrue("a NAME-leading fragment must translate its structural segment too",
+            nameLeading.contains("itemform.form"));
+
+        // The other parity still works - this is an addition, not a replacement.
+        Set<String> kindLeading = MetadataTypeUtils.getAllFragmentVariants(RU_FORM + ".ItemForm");
+        assertTrue(kindLeading.contains("form.itemform"));
+        Set<String> typeLeading = MetadataTypeUtils.getAllFragmentVariants("Document.Meeting");
+        assertTrue(typeLeading.contains(RU_DOCUMENT_LOWER + ".meeting"));
+
+        // Deeper, mixed: both readings of 'Products.Attribute.Weight' are produced.
+        Set<String> deep = MetadataTypeUtils.getAllFragmentVariants("Products.Attribute.Weight");
+        assertTrue("the odd parity must translate the nested kind",
+            deep.contains("products." + RU_ATTRIBUTE_LOWER + ".weight"));
+
+        // LINEAR, not combinatorial: original + 2 parities x 2 languages, deduplicated.
+        assertTrue("a fragment must never explode: got " + deep.size(), deep.size() <= 5);
+        Set<String> deeper = MetadataTypeUtils.getAllFragmentVariants(
+            "Products.Attribute.Weight.Form.ItemForm.Field.Code");
+        assertTrue("depth must not change the bound: got " + deeper.size(), deeper.size() <= 5);
+    }
+
+    @Test
+    public void testTheExactFilterKeepsTheSingleKnownParity()
+    {
+        // The dual parity belongs to the LOOSE filter alone. A full address always begins on a
+        // structural segment, so its parity is known - expanding the other one there would let a
+        // NAME that literally spells a kind token widen an EXACT scope onto unrelated objects.
+        Set<String> exact = MetadataTypeUtils.getAllFqnVariants("Catalog." + RU_FORM);
+        assertTrue(exact.contains("catalog." + RU_FORM_LOWER));
+        assertFalse("a NAME must never be translated on the exact path",
+            exact.contains("catalog.form"));
+        // ...while the same string read as a FRAGMENT does get the second reading.
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants("Catalog." + RU_FORM)
+            .contains("catalog.form"));
+    }
+
+
+    @Test
+    public void testASingleTokenFragmentIsTranslatedToo()
+    {
+        // The early return for a dotless input skipped the catalogues entirely, so a one-token
+        // fragment came back as nothing but its own lowercase. In an English workspace the Russian
+        // MODULE and FORM tokens are valid substrings of 'CommonModule.Calc.Module' and
+        // '...Form.ItemForm.Form', so the filter selected nothing - and a loose entry reports no
+        // miss. Same false all-clear, reached by an early return rather than by the parity logic.
+        Set<String> module = MetadataTypeUtils.getAllFragmentVariants(RU_MODULE_LOWER);
+        assertTrue("the token as typed must stay", module.contains(RU_MODULE_LOWER));
+        assertTrue("a lone nested-kind token must reach its English spelling",
+            module.contains("module"));
+
+        Set<String> form = MetadataTypeUtils.getAllFragmentVariants(RU_FORM);
+        assertTrue(form.contains("form"));
+
+        // A lone TYPE token too, and symmetrically from English into Russian.
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants(RU_DOCUMENT).contains("document"));
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants("Module").contains(RU_MODULE_LOWER));
+
+        // A bare word that is NOT a structural token stays exactly as typed - the early return's
+        // original point, which must survive: it must never be read as a type.
+        Set<String> plain = MetadataTypeUtils.getAllFragmentVariants("MethodName");
+        assertEquals(1, plain.size());
+        assertTrue(plain.contains("methodname"));
+
+        // And the EXACT path keeps the old behaviour: a lone token is not an address at all.
+        assertEquals(1, MetadataTypeUtils.getAllFqnVariants(RU_MODULE_LOWER).size());
+
+        // A LEADING dot is NOT a single token - it is a multi-token fragment, and a real substring
+        // of 'Catalog.Products.Form.ItemForm.Form'. Treating indexOf('.') <= 0 as "one token" left
+        // it untranslated: the very same early-return hole, one character further along.
+        Set<String> leadingDot = MetadataTypeUtils.getAllFragmentVariants("." + RU_FORM + ".ItemForm");
+        assertTrue("a leading-dot fragment must still translate its structural token",
+            leadingDot.contains(".form.itemform"));
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants(".Form.ItemForm")
+            .contains("." + RU_FORM_LOWER + ".itemform"));
+
+        // ...and BOTH parities, not just the odd one. With a leading dot the structural tokens can
+        // sit on EITHER side of the empty first segment, and delegating the even parity to
+        // getAllFqnVariants lost it - that method bails on a leading dot by design.
+        Set<String> bothWays = MetadataTypeUtils.getAllFragmentVariants(".Products." + RU_FORM);
+        assertTrue("the EVEN parity must be produced for a leading-dot fragment too",
+            bothWays.contains(".products.form"));
+
+        // A trailing dot, a doubled dot and an all-dots fragment behave the same way: an empty
+        // segment is simply a segment that translates to itself.
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants(RU_FORM + ".ItemForm.")
+            .contains("form.itemform."));
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants("Products.." + RU_FORM)
+            .contains("products..form"));
+        assertFalse(MetadataTypeUtils.getAllFragmentVariants("..").isEmpty());
+    }
+
+    // ========== resolveNestedKind ==========
+
+    @Test
+    public void testResolveNestedKindEnglishAndRussianSingularAndPlural()
+    {
+        for (String token : new String[]{"Form", "forms", "FORM", RU_FORM, RU_FORMS})
+        {
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
+            assertNotNull("token should resolve: " + token, info);
+            assertEquals("Form", info.getEnglish());
+            assertEquals(RU_FORM, info.getRussian());
+        }
+    }
+
+    @Test
+    public void testResolveNestedKindCoversTheStructuralKinds()
+    {
+        // The nested kinds an FQN can address; each must resolve from its English spelling and
+        // round-trip through its Russian canon.
+        String[] kinds = {"Form", "Attribute", "TabularSection", "Dimension", "Resource",
+            "EnumValue", "Command", "Template", "Column", "Recalculation", "AccountingFlag",
+            "AddressingAttribute", "Package"};
+        for (String kind : kinds)
+        {
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(kind);
+            assertNotNull("nested kind should be catalogued: " + kind, info);
+            assertEquals(kind, info.getEnglish());
+            MetadataTypeUtils.NestedKindInfo byRussian =
+                MetadataTypeUtils.resolveNestedKind(info.getRussian());
+            assertNotNull("Russian canon should resolve for: " + kind, byRussian);
+            assertEquals(kind, byRussian.getEnglish());
+        }
+    }
+
+    @Test
+    public void testResolveNestedKindUnknownAndNull()
+    {
+        assertNull(MetadataTypeUtils.resolveNestedKind(null));
+        assertNull(MetadataTypeUtils.resolveNestedKind(""));
+        assertNull(MetadataTypeUtils.resolveNestedKind("Widget"));
+        // A TOP-LEVEL type is NOT a nested kind: the two catalogues stay separate.
+        assertNull(MetadataTypeUtils.resolveNestedKind("Catalog"));
+    }
+
+    // ---- the alias inventory must match the repo's PUBLIC FQN parsers (issue #312 review) -------
+
+    @Test
+    public void testNestedSubsystemAndPredefinedTranslate()
+    {
+        // SubsystemUtils parses a nested subsystem chain and PredefinedWriter a Predefined item;
+        // both shapes are documented FQNs, so both structural tokens must normalize in either
+        // direction - otherwise they reproduce the very locale miss issue #312 fixes.
+        Set<String> subsystem =
+            MetadataTypeUtils.getAllFqnVariants("Subsystem.Sales.Subsystem.Orders"); //$NON-NLS-1$
+        assertTrue("a nested Subsystem token must translate", //$NON-NLS-1$
+            subsystem.contains("\u043F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u0430.sales.\u043F\u043E\u0434\u0441\u0438\u0441\u0442\u0435\u043C\u0430.orders")); //$NON-NLS-1$
+
+        Set<String> predefined =
+            MetadataTypeUtils.getAllFqnVariants("Catalog.Goods.Predefined.Service"); //$NON-NLS-1$
+        assertTrue("the Predefined token must translate", //$NON-NLS-1$
+            predefined.contains("\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.goods.\u043F\u0440\u0435\u0434\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435.service")); //$NON-NLS-1$
+
+        // The natural yo spelling is accepted too, exactly as PredefinedWriter accepts it.
+        assertNotNull(MetadataTypeUtils.resolveNestedKind("\u041F\u0440\u0435\u0434\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0451\u043D\u043D\u044B\u0435")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheXdtoPackageContentSegmentTranslatesBothWays()
+    {
+        // EDT reports every problem of an XDTO package on the package CONTENT, so a marker location
+        // ends in the structural segment Package (ru Paket) - which is exactly what this tool
+        // documents. Without that alias the trailing segment survived untranslated: a fully Russian
+        // address expanded to "xdtopackage.p.<cyrillic>", which never matches the location an
+        // English-language workspace renders, so the filter silently reported a clean package.
+        String ruPackage = "\u041F\u0430\u043A\u0435\u0442"; // Paket
+        String ruXdtoPackage = "\u041F\u0430\u043A\u0435\u0442XDTO"; // PaketXDTO
+
+        Set<String> fromRussian =
+            MetadataTypeUtils.getAllFqnVariants(ruXdtoPackage + ".P." + ruPackage); //$NON-NLS-1$
+        assertTrue("a Russian XDTO address must produce a fully ENGLISH variant", //$NON-NLS-1$
+            fromRussian.contains("xdtopackage.p.package")); //$NON-NLS-1$
+
+        Set<String> fromEnglish = MetadataTypeUtils.getAllFqnVariants("XDTOPackage.P.Package"); //$NON-NLS-1$
+        assertTrue("an English XDTO address must produce a fully RUSSIAN variant", //$NON-NLS-1$
+            fromEnglish.contains(ruXdtoPackage.toLowerCase() + ".p." + ruPackage.toLowerCase())); //$NON-NLS-1$
+    }
+
+    // ---- form-content kinds inside a nested FQN (issue #312 review) ------------------------------
+
+    @Test
+    public void testFormItemKindsTranslateInsideANestedFqn()
+    {
+        // A form validation marker's presentation descends into the ITEM tree, so a Russian
+        // form-member path must reach an English presentation (and back). Before the fix the
+        // `Pole` segment survived untranslated and matched nothing.
+        Set<String> fromRussian = MetadataTypeUtils.getAllFqnVariants(
+            "\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Goods." //$NON-NLS-1$
+                + "\u0424\u043E\u0440\u043C\u0430.ItemForm.\u041F\u043E\u043B\u0435.Price"); //$NON-NLS-1$
+        assertTrue("the Russian form-member path must yield a fully English variant", //$NON-NLS-1$
+            fromRussian.contains("catalog.goods.form.itemform.field.price")); //$NON-NLS-1$
+
+        Set<String> fromEnglish =
+            MetadataTypeUtils.getAllFqnVariants("Catalog.Goods.Form.ItemForm.Button.Post"); //$NON-NLS-1$
+        assertTrue("the English form-member path must yield a fully Russian variant", //$NON-NLS-1$
+            fromEnglish.contains("\u0441\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.goods." //$NON-NLS-1$
+                + "\u0444\u043E\u0440\u043C\u0430.itemform.\u043A\u043D\u043E\u043F\u043A\u0430.post")); //$NON-NLS-1$
+    }
+
+    /**
+     * The form kinds deliberately NOT required to be addressable as a nested FQN segment, each with
+     * the reason it is exempt. EMPTY today: every kind the form parser accepts is also a nested-kind
+     * alias here. An entry must carry its reason, so an omission is a recorded decision and never an
+     * oversight - which is exactly what a hand-written list of the INCLUDED kinds could not give.
+     */
+    private static final Map<FormElementWriter.Kind, String> KINDS_NOT_ADDRESSED_AS_FQN_SEGMENT =
+        Collections.emptyMap();
+
+    @Test
+    public void testEveryFormKindAliasAgreesWithTheFormParser()
+    {
+        // Two token tables describe the same form kinds: this one (for FILTER variants) and
+        // FormElementWriter's (for FQN parsing). They are separate on purpose - the parser maps a
+        // token to an EMF feature, this map to a bilingual canon - so pin them against each other.
+        //
+        // The pin walks Kind.values() and every token the parser ACCEPTS for each kind (exported by
+        // tokensForKind) instead of a hand-written list of pairs: a hand-written list keeps passing
+        // when a kind is added to one table only, which is the very drift this test claims to
+        // prevent. Adding a Kind now REQUIRES its bilingual alias here, or this test fails.
+        for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
+        {
+            if (KINDS_NOT_ADDRESSED_AS_FQN_SEGMENT.containsKey(kind))
+            {
+                continue;
+            }
+            List<String> tokens = FormElementWriter.tokensForKind(kind);
+            assertFalse("the form parser must publish the tokens it accepts for " + kind, //$NON-NLS-1$
+                tokens.isEmpty());
+            MetadataTypeUtils.NestedKindInfo canon = null;
+            boolean sawLatin = false;
+            boolean sawCyrillic = false;
+            for (String token : tokens)
+            {
+                assertEquals("the form parser must read '" + token + "' as " + kind, //$NON-NLS-1$ //$NON-NLS-2$
+                    kind, FormElementWriter.kindForToken(token));
+                MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
+                assertNotNull("this map must know the form-kind token '" + token + "' (" + kind //$NON-NLS-1$ //$NON-NLS-2$
+                    + ")", info); //$NON-NLS-1$
+                if (canon == null)
+                {
+                    canon = info;
+                }
+                assertEquals("every accepted spelling of " + kind //$NON-NLS-1$
+                    + " must resolve to the SAME canonical pair", //$NON-NLS-1$
+                    canon.getEnglish(), info.getEnglish());
+                assertEquals(canon.getRussian(), info.getRussian());
+                if (isCyrillic(token))
+                {
+                    sawCyrillic = true;
+                }
+                else
+                {
+                    sawLatin = true;
+                }
+            }
+            assertTrue("the form parser must accept an English spelling of " + kind, sawLatin); //$NON-NLS-1$
+            assertTrue("the form parser must accept a Russian spelling of " + kind, sawCyrillic); //$NON-NLS-1$
+            // Both canonical spellings must be readable back by the parser as the same kind, so an
+            // address translated through this map stays addressable.
+            assertEquals(kind, FormElementWriter.kindForToken(canon.getEnglish()));
+            assertEquals(kind, FormElementWriter.kindForToken(canon.getRussian()));
+
+            // THE REVERSE DIRECTION. Walking only the parser's own tokens proves that what it
+            // ACCEPTS is translatable here - never that everything this catalogue ADVERTISES is
+            // accepted there. That gap let the PLURAL spellings (Fields.Price and its Russian twin)
+            // be advertised by the filter and rejected by the form parser on the KIND check, so a
+            // real field came back as objectsNotFound. Every alias this map publishes for the kind
+            // must therefore be readable by the parser as that same kind.
+            for (String alias : MetadataTypeUtils.nestedKindAliases(canon.getEnglish()))
+            {
+                assertEquals("this map advertises '" + alias + "' for " + kind //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", so the form parser must accept it too", //$NON-NLS-1$
+                    kind, FormElementWriter.kindForToken(alias));
+            }
+        }
+        // Column is a nested kind of the MDCLASS model (a DocumentJournal column), which this map
+        // must translate; whether the form parser knows it is decided by the loop above, so this
+        // only pins that the alias itself never disappears.
+        assertNotNull(MetadataTypeUtils.resolveNestedKind("Column")); //$NON-NLS-1$
+        assertNotNull(MetadataTypeUtils.resolveNestedKind(
+            "\u041A\u043E\u043B\u043E\u043D\u043A\u0430")); //$NON-NLS-1$
+        // Handler is not a Kind (it routes to its own branch), but it IS a structural segment.
+        assertNotNull(MetadataTypeUtils.resolveNestedKind("Handler")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken(
+            "\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
+    }
+
+    /** Whether {@code token} is written in Cyrillic (its first letter decides). */
+    private static boolean isCyrillic(String token)
+    {
+        for (int i = 0; i < token.length(); i++)
+        {
+            if (Character.isLetter(token.charAt(i)))
+            {
+                return Character.UnicodeBlock.of(token.charAt(i)) == Character.UnicodeBlock.CYRILLIC;
+            }
+        }
+        return false;
     }
 }

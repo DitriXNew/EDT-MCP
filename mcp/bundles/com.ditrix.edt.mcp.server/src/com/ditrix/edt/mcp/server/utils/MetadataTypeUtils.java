@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -231,6 +231,46 @@ public final class MetadataTypeUtils
         }
     }
 
+    /**
+     * Canonical English and Russian spellings of a NESTED structural FQN segment kind - the
+     * {@code .Kind.} token that separates two programmatic names inside a nested full name
+     * (e.g. {@code Form} in {@code Document.Order.Form.ItemForm}).
+     * <p>
+     * Deliberately NOT a {@link MetadataTypeInfo} constant: that enum is the catalogue of
+     * TOP-LEVEL configuration types (each carries a {@code Configuration} collection reference
+     * and an {@code src/} directory name), and a nested kind has neither. Keeping the two
+     * catalogues apart lets {@link MetadataTypeUtils#getAllFqnVariants(String)} translate every
+     * structural segment of a nested FQN without polluting the top-level type catalogue with
+     * synthetic entries.
+     */
+    public static final class NestedKindInfo
+    {
+        private final String english;
+        private final String russian;
+
+        private NestedKindInfo(String english, String russian)
+        {
+            this.english = english;
+            this.russian = russian;
+        }
+
+        /**
+         * @return the canonical English singular token (e.g. {@code "Form"})
+         */
+        public String getEnglish()
+        {
+            return english;
+        }
+
+        /**
+         * @return the canonical Russian singular token (the Cyrillic spelling of the same kind)
+         */
+        public String getRussian()
+        {
+            return russian;
+        }
+    }
+
     /** Key: lowercase name variant -> MetadataTypeInfo */
     private static final Map<String, MetadataTypeInfo> LOOKUP = new HashMap<>();
 
@@ -258,6 +298,192 @@ public final class MetadataTypeUtils
             singulars.add(info.englishSingular);
         }
         ALL_ENGLISH_SINGULAR = Collections.unmodifiableSet(singulars);
+    }
+
+    /**
+     * Key: lowercase NESTED structural segment token (English/Russian, singular/plural) -&gt; the
+     * canonical English/Russian pair. This is a segment-alias catalogue ONLY: unlike the
+     * token-to-EMF-feature map in {@link MetadataNodeResolver} it says nothing about containment
+     * features, so a kind that has no navigable feature there (e.g. {@code Form}) still belongs here.
+     */
+    private static final Map<String, NestedKindInfo> NESTED_KIND_LOOKUP;
+    static
+    {
+        // The Russian tokens are built from Unicode code points via cp(...) so this source stays
+        // pure ASCII: no raw Cyrillic and no reliance on the compiler source encoding (the same
+        // non-UTF-8 Tycho-build risk the project guards against elsewhere). The trailing comment
+        // spells each token out in ASCII only.
+        Map<String, NestedKindInfo> m = new HashMap<>();
+        // Form (ru: forma / formy)
+        putNestedKind(m, "Form", "Forms", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0424, 0x043e, 0x0440, 0x043c, 0x0430),
+            cp(0x0424, 0x043e, 0x0440, 0x043c, 0x044b));
+        // Attribute (ru: rekvizit / rekvizity)
+        putNestedKind(m, "Attribute", "Attributes", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442),
+            cp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b));
+        // Subsystem NESTED under another subsystem (ru: podsistema / podsistemy). SubsystemUtils
+        // parses 'Podsistema.Sales.Subsystem.Orders' and modify_metadata documents it, so the second
+        // token must translate too - it is a top-level type AND a nested one.
+        putNestedKind(m, "Subsystem", "Subsystems", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x043e, 0x0434, 0x0441, 0x0438, 0x0441, 0x0442, 0x0435, 0x043c, 0x0430),
+            cp(0x041f, 0x043e, 0x0434, 0x0441, 0x0438, 0x0441, 0x0442, 0x0435, 0x043c, 0x044b));
+        // Predefined item (ru: predopredelennye / predopredelyonnye - PredefinedWriter accepts BOTH
+        // the 'e' and the 'yo' spelling, so both are aliases here as well).
+        putNestedKind(m, "Predefined", "Predefined", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0440, 0x0435, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b,
+                0x0435, 0x043d, 0x043d, 0x044b, 0x0435),
+            cp(0x041f, 0x0440, 0x0435, 0x0434, 0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b,
+                0x0451, 0x043d, 0x043d, 0x044b, 0x0435));
+        // Module (ru: modul / moduli). Not an mdclass child kind, but EDT ends a BSL marker's
+        // presentation with it (e.g. "CommonModule.Calc.Module"), so a filter that names the module
+        // segment must translate too - otherwise it silently matches nothing.
+        putNestedKind(m, "Module", "Modules", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041c, 0x043e, 0x0434, 0x0443, 0x043b, 0x044c),
+            cp(0x041c, 0x043e, 0x0434, 0x0443, 0x043b, 0x0438));
+        // Package (ru: paket) - the CONTENT of an XDTO package. Not an mdclass child kind either,
+        // but EDT reports every problem of a package on that content, so a marker location ends with
+        // this segment (e.g. "XDTOPackage.Exchange.Package"), which is exactly what get_project_errors
+        // documents and what validate_xdto_package scopes by. EDT's own localizer translates the
+        // trailing segment through MdLocalizerUtil/MdTypesTranslationIntoRussian, whose
+        // externalObjectsTranslation maps "Package" to the Cyrillic token below - so a Russian-script
+        // project really does render it translated, and this filter must translate it BOTH ways.
+        // Singular only: a package holds exactly one content object, so no plural segment exists.
+        putNestedKind(m, "Package", "Package", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0430, 0x043a, 0x0435, 0x0442),
+            cp(0x041f, 0x0430, 0x043a, 0x0435, 0x0442));
+        // The FORM-CONTENT kinds. get_project_errors advertises bilingual tokens for every
+        // structural segment of a form address, and modify/delete_metadata address form members by
+        // these very tokens, so the kinds FormElementWriter accepts in a form-member FQN must
+        // translate here too - otherwise a Russian-script address silently normalizes to nothing.
+        // MetadataTypeUtilsTest pins these against FormElementWriter.kindForToken so the two token
+        // tables cannot drift apart.
+        // Field (ru: pole / polya)
+        putNestedKind(m, "Field", "Fields", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x043e, 0x043b, 0x0435), cp(0x041f, 0x043e, 0x043b, 0x044f));
+        // Button (ru: knopka / knopki)
+        putNestedKind(m, "Button", "Buttons", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430),
+            cp(0x041a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0438));
+        // Group (ru: gruppa / gruppy)
+        putNestedKind(m, "Group", "Groups", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0413, 0x0440, 0x0443, 0x043f, 0x043f, 0x0430),
+            cp(0x0413, 0x0440, 0x0443, 0x043f, 0x043f, 0x044b));
+        // Decoration (ru: dekoraciya / dekoracii)
+        putNestedKind(m, "Decoration", "Decorations", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0414, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f),
+            cp(0x0414, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x0438));
+        // Table (ru: tablica / tablicy)
+        putNestedKind(m, "Table", "Tables", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430),
+            cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b));
+        // Handler (ru: obrabotchik / obrabotchiki)
+        putNestedKind(m, "Handler", "Handlers", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a),
+            cp(0x041e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a, 0x0438));
+        // TabularSection (ru: tablichnaya chast / tablichnye chasti)
+        putNestedKind(m, "TabularSection", "TabularSections", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0447, 0x043d, 0x0430, 0x044f,
+                0x0427, 0x0430, 0x0441, 0x0442, 0x044c),
+            cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0447, 0x043d, 0x044b, 0x0435,
+                0x0427, 0x0430, 0x0441, 0x0442, 0x0438));
+        // Dimension (ru: izmerenie / izmereniya)
+        putNestedKind(m, "Dimension", "Dimensions", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0418, 0x0437, 0x043c, 0x0435, 0x0440, 0x0435, 0x043d, 0x0438, 0x0435),
+            cp(0x0418, 0x0437, 0x043c, 0x0435, 0x0440, 0x0435, 0x043d, 0x0438, 0x044f));
+        // Resource (ru: resurs / resursy)
+        putNestedKind(m, "Resource", "Resources", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0420, 0x0435, 0x0441, 0x0443, 0x0440, 0x0441),
+            cp(0x0420, 0x0435, 0x0441, 0x0443, 0x0440, 0x0441, 0x044b));
+        // EnumValue (ru: znachenie perechisleniya / znacheniya perechisleniya)
+        putNestedKind(m, "EnumValue", "EnumValues", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0435,
+                0x041f, 0x0435, 0x0440, 0x0435, 0x0447, 0x0438, 0x0441, 0x043b, 0x0435, 0x043d, 0x0438, 0x044f),
+            cp(0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x044f,
+                0x041f, 0x0435, 0x0440, 0x0435, 0x0447, 0x0438, 0x0441, 0x043b, 0x0435, 0x043d, 0x0438, 0x044f));
+        // Command (ru: komanda / komandy)
+        putNestedKind(m, "Command", "Commands", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430),
+            cp(0x041a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x044b));
+        // Template (ru: maket / makety)
+        putNestedKind(m, "Template", "Templates", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041c, 0x0430, 0x043a, 0x0435, 0x0442),
+            cp(0x041c, 0x0430, 0x043a, 0x0435, 0x0442, 0x044b));
+        // Column (ru: kolonka / kolonki)
+        putNestedKind(m, "Column", "Columns", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430),
+            cp(0x041a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438));
+        // Recalculation (ru: pereraschet / pereraschety)
+        putNestedKind(m, "Recalculation", "Recalculations", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442),
+            cp(0x041f, 0x0435, 0x0440, 0x0435, 0x0440, 0x0430, 0x0441, 0x0447, 0x0435, 0x0442, 0x044b));
+        // AccountingFlag (ru: priznak ucheta / priznaki ucheta)
+        putNestedKind(m, "AccountingFlag", "AccountingFlags", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0423, 0x0447, 0x0435, 0x0442, 0x0430),
+            cp(0x041f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0438, 0x0423, 0x0447, 0x0435, 0x0442, 0x0430));
+        // ExtDimensionAccountingFlag (ru: priznak ucheta subkonto / priznaki ucheta subkonto)
+        putNestedKind(m, "ExtDimensionAccountingFlag", "ExtDimensionAccountingFlags", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0423, 0x0447, 0x0435, 0x0442, 0x0430,
+                0x0421, 0x0443, 0x0431, 0x043a, 0x043e, 0x043d, 0x0442, 0x043e),
+            cp(0x041f, 0x0440, 0x0438, 0x0437, 0x043d, 0x0430, 0x043a, 0x0438, 0x0423, 0x0447, 0x0435, 0x0442, 0x0430,
+                0x0421, 0x0443, 0x0431, 0x043a, 0x043e, 0x043d, 0x0442, 0x043e));
+        // AddressingAttribute (ru: rekvizit adresacii / rekvizity adresacii)
+        putNestedKind(m, "AddressingAttribute", "AddressingAttributes", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442,
+                0x0410, 0x0434, 0x0440, 0x0435, 0x0441, 0x0430, 0x0446, 0x0438, 0x0438),
+            cp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b,
+                0x0410, 0x0434, 0x0440, 0x0435, 0x0441, 0x0430, 0x0446, 0x0438, 0x0438));
+        // URLTemplate (ru token is Cyrillic "Shablon" + ASCII "URL")
+        putNestedKind(m, "URLTemplate", "URLTemplates", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0428, 0x0430, 0x0431, 0x043b, 0x043e, 0x043d) + "URL", //$NON-NLS-1$
+            cp(0x0428, 0x0430, 0x0431, 0x043b, 0x043e, 0x043d, 0x044b) + "URL"); //$NON-NLS-1$
+        // Method (ru: metod / metody)
+        putNestedKind(m, "Method", "Methods", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041c, 0x0435, 0x0442, 0x043e, 0x0434),
+            cp(0x041c, 0x0435, 0x0442, 0x043e, 0x0434, 0x044b));
+        // Operation (ru: operaciya / operacii)
+        putNestedKind(m, "Operation", "Operations", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041e, 0x043f, 0x0435, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f),
+            cp(0x041e, 0x043f, 0x0435, 0x0440, 0x0430, 0x0446, 0x0438, 0x0438));
+        // Parameter (ru: parametr / parametry)
+        putNestedKind(m, "Parameter", "Parameters", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x041f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440),
+            cp(0x041f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440, 0x044b));
+        NESTED_KIND_LOOKUP = Collections.unmodifiableMap(m);
+    }
+
+    /**
+     * Registers one nested structural kind under all four of its accepted spellings.
+     * The canonical pair stored for every spelling is the SINGULAR English/Russian form,
+     * because that is how EDT renders a segment in a marker location / object presentation.
+     *
+     * @param map the map under construction
+     * @param englishSingular the canonical English singular token (e.g. {@code "Form"})
+     * @param englishPlural the English plural spelling accepted on input
+     * @param russianSingular the canonical Russian singular token
+     * @param russianPlural the Russian plural spelling accepted on input
+     */
+    private static void putNestedKind(Map<String, NestedKindInfo> map, String englishSingular,
+        String englishPlural, String russianSingular, String russianPlural)
+    {
+        NestedKindInfo info = new NestedKindInfo(englishSingular, russianSingular);
+        map.put(englishSingular.toLowerCase(), info);
+        map.put(englishPlural.toLowerCase(), info);
+        map.put(russianSingular.toLowerCase(), info);
+        map.put(russianPlural.toLowerCase(), info);
+    }
+
+    /**
+     * Builds a string from Unicode code points, keeping the Russian nested-kind tokens above out
+     * of the source as raw Cyrillic (encoding-independent under a non-UTF-8 Tycho build).
+     * Delegates to the shared {@link MetadataLanguageUtils#cp}.
+     *
+     * @param codePoints the BMP code points of the token characters
+     * @return the assembled token string
+     */
+    private static String cp(int... codePoints)
+    {
+        return MetadataLanguageUtils.cp(codePoints);
     }
 
     private MetadataTypeUtils()
@@ -523,23 +749,109 @@ public final class MetadataTypeUtils
     }
 
     /**
-     * Returns all FQN variants (original, English, Russian) for a given FQN, lowercased.
-     * Useful for case-insensitive matching of markers against user-provided FQNs
-     * regardless of the configuration language.
+     * Resolves a NESTED structural FQN segment token (English or Russian, singular or plural,
+     * any case) to its canonical English/Russian spellings - e.g. {@code "Forms"} and the Russian
+     * plural both resolve to the {@code Form} pair.
      * <p>
-     * Example: "Документ.Встреча" produces:
+     * Nested kinds are catalogued separately from {@link MetadataTypeInfo} on purpose: that enum
+     * is the catalogue of TOP-LEVEL configuration types and must not gain synthetic entries.
+     *
+     * @param segment the segment token (may be {@code null})
+     * @return the canonical English/Russian pair, or {@code null} if the token is not a known
+     *     nested structural kind
+     */
+    public static NestedKindInfo resolveNestedKind(String segment)
+    {
+        if (segment == null || segment.isEmpty())
+        {
+            return null;
+        }
+        return NESTED_KIND_LOOKUP.get(segment.toLowerCase());
+    }
+
+    /**
+     * EVERY spelling this catalogue accepts for the same nested kind as {@code segment} - singular
+     * and plural, English and Russian, lowercase.
+     *
+     * <p>Exists so a consistency test can assert the reverse direction of the parity with the
+     * specialized parsers: walking a parser's own tokens only proves that what it ACCEPTS is
+     * translatable here, never that everything this catalogue ADVERTISES is accepted there. That
+     * one-way check is what let the PLURAL spellings ({@code Fields.Price} and its Russian twin) be
+     * advertised by the filter and rejected by the form parser, sending a real field to
+     * {@code objectsNotFound}.</p>
+     *
+     * @param segment any accepted spelling of a nested kind
+     * @return its sibling spellings (including itself), or an empty set when the token is unknown
+     */
+    /**
+     * The canonical English spelling of every nested kind this catalogue publishes, once each.
+     *
+     * <p>Exists so a consistency test can walk the WHOLE catalogue instead of a hand-written list:
+     * what this map advertises is what the object filters promise, and every promised token must be
+     * accepted by the exact resolver of its family. Enumerating the kinds here means a kind added
+     * later is covered automatically - a hand-written list keeps passing and lets the next copy of
+     * the same drift through (it already did twice: the visual kinds' plurals, then Handler's).</p>
+     *
+     * @return the canonical English kind names (never {@code null})
+     */
+    public static Set<String> nestedKindCanonicalTokens()
+    {
+        Set<String> canonical = new LinkedHashSet<>();
+        for (NestedKindInfo info : NESTED_KIND_LOOKUP.values())
+        {
+            canonical.add(info.getEnglish());
+        }
+        return canonical;
+    }
+
+    public static Set<String> nestedKindAliases(String segment)
+    {
+        NestedKindInfo info = resolveNestedKind(segment);
+        if (info == null)
+        {
+            return Collections.emptySet();
+        }
+        Set<String> aliases = new LinkedHashSet<>();
+        for (Map.Entry<String, NestedKindInfo> entry : NESTED_KIND_LOOKUP.entrySet())
+        {
+            if (entry.getValue() == info)
+            {
+                aliases.add(entry.getKey());
+            }
+        }
+        return aliases;
+    }
+
+    /**
+     * Returns all FQN variants (original, all-English, all-Russian) for a given FQN, lowercased.
+     * Useful for case-insensitive matching of markers against user-provided FQNs regardless of
+     * the configuration language.
+     * <p>
+     * <b>Every</b> structural segment is translated, not just the leading type token. In a 1C full
+     * name the dot-separated segments alternate: the EVEN indexes (0, 2, 4, ...) are structural
+     * tokens - index 0 is the top-level TYPE, the rest are nested KIND tokens - and the ODD indexes
+     * are programmatic Names, which are copied verbatim (a name that happens to spell a kind token
+     * is NOT translated). A segment that matches neither catalogue is copied verbatim too, so an
+     * unknown token never breaks the expansion.
+     * <p>
+     * Exactly three candidates are produced (deduplicated): the original, the all-English form and
+     * the all-Russian form. This is deliberately NOT the full cross product of per-segment
+     * languages, which grows exponentially with the FQN depth; a marker location is rendered in ONE
+     * language, so the two single-language forms are all that can ever match.
+     * <p>
+     * Example: {@code "Документ.Встреча"} produces:
      * <ul>
-     *   <li>"документ.встреча" (original, lowercased)</li>
-     *   <li>"document.встреча" (English type)</li>
+     *   <li>{@code "документ.встреча"} (original, lowercased)</li>
+     *   <li>{@code "document.встреча"} (all-English structural segments)</li>
      * </ul>
-     * Example: "Document.SalesOrder" produces:
+     * Example: {@code "Document.SalesOrder.Form.ItemForm"} produces:
      * <ul>
-     *   <li>"document.salesorder" (original, lowercased)</li>
-     *   <li>"документ.salesorder" (Russian type, if available)</li>
+     *   <li>{@code "document.salesorder.form.itemform"} (original, lowercased)</li>
+     *   <li>{@code "документ.salesorder.форма.itemform"} (all-Russian structural segments)</li>
      * </ul>
      *
      * @param fqn fully qualified name with dot separator
-     * @return set of lowercase FQN variants (never empty if input is non-null)
+     * @return set of lowercase FQN variants (never empty if input is non-null and non-empty)
      */
     public static Set<String> getAllFqnVariants(String fqn)
     {
@@ -555,28 +867,165 @@ public final class MetadataTypeUtils
         int dotIdx = fqn.indexOf('.');
         if (dotIdx <= 0)
         {
+            // No separator (or a leading dot): there is no Type.Name shape to translate, so the
+            // input is returned untouched - a bare word must never be read as a type token.
             return variants;
         }
 
-        String typePart = fqn.substring(0, dotIdx);
-        String rest = fqn.substring(dotIdx); // includes the dot
-
-        MetadataTypeInfo typeInfo = resolve(typePart);
-        if (typeInfo == null)
-        {
-            return variants;
-        }
-
-        // Add English singular variant
-        variants.add((typeInfo.getEnglishSingular() + rest).toLowerCase());
-
-        // Add Russian variant (first Russian name)
-        String[] russianNames = typeInfo.getRussianNames();
-        if (russianNames.length > 0)
-        {
-            variants.add((russianNames[0] + rest).toLowerCase());
-        }
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        variants.add(translateStructuralSegments(segments, true, 0).toLowerCase());
+        variants.add(translateStructuralSegments(segments, false, 0).toLowerCase());
 
         return variants;
+    }
+
+    /**
+     * As {@link #getAllFqnVariants}, but for a loose FRAGMENT, whose OFFSET into the location is
+     * unknown.
+     *
+     * <p>A full address always starts on a structural segment, so its parity is known. A fragment
+     * may start anywhere: on the type ({@code Catalog.Products}), on a nested kind
+     * ({@code Form.ItemForm}) - or on a NAME ({@code ItemForm.Form}), and then the structural
+     * segments sit on the ODD indexes. Assuming one parity left the other silently untranslated, so
+     * the fragment matched nothing and - because a loose entry reports no miss - the caller got an
+     * empty report. That is the same false all-clear, found three times in a row at three different
+     * offsets.</p>
+     *
+     * <p>So BOTH parities are emitted rather than one being guessed, and that is why there is no
+     * fourth case: a fragment's structural segments are either all on even indexes or all on odd
+     * ones - there is no third offset. The count is bounded and LINEAR, not combinatorial: the
+     * original plus (2 parities x 2 languages) = at most 5 variants, deduplicated, whatever the
+     * fragment's depth.</p>
+     *
+     * <p>The price is deliberate and belongs to the loose filter alone: under the odd parity a NAME
+     * that literally spells a kind token is translated, so an over-short fragment can over-match -
+     * which {@code objects} already documents, and which it never turns into a claim about
+     * existence. The EXACT filter keeps {@link #getAllFqnVariants}, where the offset is known.</p>
+     *
+     * @param fqn the fragment (may be {@code null})
+     * @return the deduplicated, lowercased variants (never {@code null})
+     */
+    public static Set<String> getAllFragmentVariants(String fqn)
+    {
+        Set<String> variants = new LinkedHashSet<>();
+        if (fqn == null || fqn.isEmpty())
+        {
+            return variants;
+        }
+        variants.add(fqn.toLowerCase());
+        if (fqn.indexOf('.') < 0)
+        {
+            // A SINGLE token, i.e. NO separator at all. getAllFqnVariants returns it untranslated on
+            // purpose - with no separator there is no Type.Name shape, and a bare word must not be
+            // read as a type there. But a one-token FRAGMENT is a perfectly ordinary filter: in an
+            // English workspace '[Modul]' and '[Forma]' are valid substrings of
+            // 'CommonModule.Calc.Module' and '...Form.ItemForm.Form'. Leaving them untranslated
+            // matched nothing, and a loose entry reports no miss - the same false all-clear, reached
+            // by the early return rather than by the parity logic below.
+            //
+            // The test is `< 0`, NOT `<= 0`: a LEADING dot ('.Form.ItemForm') is a multi-token
+            // fragment - a real substring of 'Catalog.Products.Form.ItemForm.Form' - and lumping it
+            // in here left it untranslated, which is the very same early-return hole one character
+            // further along. It belongs to the parity expansion below, where its empty first segment
+            // simply shifts the structural tokens onto the odd indexes.
+            variants.add(translateStructuralSegment(fqn, true, true).toLowerCase());
+            variants.add(translateStructuralSegment(fqn, true, false).toLowerCase());
+            return variants;
+        }
+        // BOTH parities are produced HERE rather than by delegating the even one to
+        // getAllFqnVariants: that method bails on a LEADING dot (there is no Type.Name shape to
+        // translate for an exact address), so a fragment like '.Products.<Forma>' used to get only
+        // the odd parity and never the even one that actually matches
+        // 'Catalog.Products.Form.ItemForm.Form'. Owning both offsets here also makes the trailing
+        // dot, the doubled dot and the all-dots fragment behave identically - an empty segment is
+        // simply a segment that translates to itself.
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        for (int structuralOffset = 0; structuralOffset <= 1; structuralOffset++)
+        {
+            variants.add(translateStructuralSegments(segments, true, structuralOffset).toLowerCase());
+            variants.add(translateStructuralSegments(segments, false, structuralOffset).toLowerCase());
+        }
+        return variants;
+    }
+
+    /**
+     * Rebuilds a split FQN with every STRUCTURAL segment rendered in one language, copying the
+     * programmatic Names (the odd indexes) untouched.
+     *
+     * @param segments the dot-split FQN segments
+     * @param toEnglish {@code true} to render the structural segments in English, {@code false}
+     *     to render them in Russian
+     * @param structuralOffset the index of the FIRST structural segment: {@code 0} for a full
+     *     address (and for a fragment that starts on a type or a kind), {@code 1} for a fragment
+     *     that starts on a programmatic NAME. Segments of the other parity are copied verbatim.
+     * @return the rebuilt FQN (never {@code null})
+     */
+    private static String translateStructuralSegments(String[] segments, boolean toEnglish,
+        int structuralOffset)
+    {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < segments.length; i++)
+        {
+            if (i > 0)
+            {
+                sb.append('.');
+            }
+            // Structural token every other segment from the offset (the first one may be a
+            // top-level type); the alternating segments are programmatic Names, never translated.
+            sb.append(i % 2 == structuralOffset % 2
+                ? translateStructuralSegment(segments[i], i == 0, toEnglish)
+                : segments[i]);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Translates a single structural segment to one language, returning it unchanged when the
+     * token is not in the matching catalogue.
+     *
+     * <p>The LEADING segment is looked up in the type catalogue FIRST and, only when it is not a
+     * metadata type, in the nested-KIND catalogue. That second lookup exists for the loose
+     * {@code objects} filter, whose entries are documented FRAGMENTS and may therefore begin in the
+     * middle of a location: {@code Форма.ItemForm} or {@code Реквизит.Weight} start on a nested kind,
+     * and translating only type tokens left them Russian - matching no English location, and (since
+     * a loose entry reports no miss) answering with a silently empty report.</p>
+     *
+     * <p>This does NOT widen matching beyond the documented reading. The parity is untouched: even
+     * indexes stay structural, odd indexes stay programmatic Names copied verbatim, so no name is
+     * ever translated. The leading segment was ALREADY assumed structural - only the catalogue it is
+     * looked up in changed. A fragment that begins on a NAME instead (e.g. {@code Calc.Module}) is
+     * therefore still not translated: without segment alignment a name cannot be told from a kind,
+     * and guessing would break the "Names are verbatim" guarantee.</p>
+     *
+     * @param segment the structural segment token
+     * @param topLevel {@code true} for the leading segment (a TYPE through {@link MetadataTypeInfo},
+     *     falling back to a nested KIND), {@code false} for a nested KIND segment (resolved through
+     *     {@link #resolveNestedKind(String)})
+     * @param toEnglish {@code true} for the English spelling, {@code false} for the Russian one
+     * @return the translated segment, or the input when it is not recognized
+     */
+    private static String translateStructuralSegment(String segment, boolean topLevel, boolean toEnglish)
+    {
+        if (topLevel)
+        {
+            MetadataTypeInfo typeInfo = resolve(segment);
+            if (typeInfo != null)
+            {
+                if (toEnglish)
+                {
+                    return typeInfo.getEnglishSingular();
+                }
+                String[] russianNames = typeInfo.getRussianNames();
+                return russianNames.length > 0 ? russianNames[0] : segment;
+            }
+            // Not a metadata type: a fragment may start on a nested kind instead - fall through.
+        }
+
+        NestedKindInfo kindInfo = resolveNestedKind(segment);
+        if (kindInfo == null)
+        {
+            return segment;
+        }
+        return toEnglish ? kindInfo.getEnglish() : kindInfo.getRussian();
     }
 }

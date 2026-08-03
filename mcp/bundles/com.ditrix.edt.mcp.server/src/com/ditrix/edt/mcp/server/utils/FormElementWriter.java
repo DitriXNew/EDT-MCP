@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -86,6 +87,10 @@ public final class FormElementWriter
     private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
     private static final String FEATURE_ID = "id"; //$NON-NLS-1$
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
+    /** The RUSSIAN name of a platform member (an event, in particular) - the twin of {@code name}. */
+    private static final String FEATURE_NAME_RU = "nameRu"; //$NON-NLS-1$
+    /** The event an EventHandler is bound to (its {@code name} / {@code nameRu} is the event name). */
+    private static final String FEATURE_EVENT = "event"; //$NON-NLS-1$
     /** The command-bar / menu "auto-fill from the form commands" flag. */
     private static final String FEATURE_AUTO_FILL = "autoFill"; //$NON-NLS-1$
     /** The default field ext-info EClass (a plain input field, before the value type is known). */
@@ -324,6 +329,31 @@ public final class FormElementWriter
     }
 
     /**
+     * Whether every KIND token in {@code ref} names a form element kind this writer really
+     * addresses - the STRICT question, as opposed to what {@link #parse} accepts.
+     *
+     * <p>{@code parse} is lenient about the leaf on purpose: it accepts any {@code Kind.Name} tail so
+     * a caller holds a parsed shape to report on. A caller deciding whether an address could name
+     * ANYTHING in ANY configuration needs the strict question instead - {@code Form.ItemForm.Fielld.
+     * Code} parses, but {@code Fielld} is a kind nothing has, so no model needs to be read to answer.
+     * Asking here keeps the strictness in the class that OWNS the kind catalogue, so a new kind is
+     * accepted by both questions at once.</p>
+     *
+     * @param ref a parsed form-member reference, or {@code null}
+     * @return {@code true} when the leaf kind - and, for an item-level handler, the owning item's
+     *     kind too - is recognized
+     */
+    public static boolean addressesKnownKinds(FormMemberRef ref)
+    {
+        if (ref == null)
+        {
+            return false;
+        }
+        boolean leafKnown = kindForToken(ref.kindToken) != null || isHandlerToken(ref.kindToken);
+        return ref.isItemLevel() ? leafKnown && kindForToken(ref.itemKindToken) != null : leafKnown;
+    }
+
+    /**
      * Builds the canonical owned-form path {@code Type.Object.forms.FormName} — THE shape
      * {@code FormStructureReader.resolveMdForm} / {@code MetadataPathResolver} expect. Single
      * owner of the literal so the parse helpers here and external callers (e.g. the delete
@@ -348,13 +378,34 @@ public final class FormElementWriter
      */
     public static boolean isFormToken(String token)
     {
+        return isNestedKind(token, "Form"); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether {@code token} is any spelling the shared alias catalogue publishes for the nested kind
+     * whose canonical English name is {@code canonicalEnglish}.
+     *
+     * <p>THE anti-drift seam for the structural tokens an exact address is parsed with. Each of
+     * these predicates used to carry its own list of literals, and the object filter advertises the
+     * catalogue - so every spelling the catalogue gained and a predicate did not became an address
+     * we document and then refuse: the element resolves by name, the KIND check rejects it, and a
+     * node that plainly exists is reported missing. That happened for the visual kinds (plural
+     * tokens) and then again for {@code Handler}, which is the same bug in the neighbouring token.
+     * Reading the catalogue makes the two impossible to disagree.</p>
+     *
+     * @param token the FQN segment to test (may be {@code null})
+     * @param canonicalEnglish the kind's canonical English spelling
+     * @return {@code true} when the catalogue maps {@code token} to that kind
+     */
+    private static boolean isNestedKind(String token, String canonicalEnglish)
+    {
         if (token == null)
         {
             return false;
         }
-        String s = token.toLowerCase();
-        return "form".equals(s) || KEY_FORMS.equals(s) //$NON-NLS-1$
-            || RU_FORM.equals(s) || RU_FORMS.equals(s);
+        MetadataTypeUtils.NestedKindInfo info =
+            MetadataTypeUtils.resolveNestedKind(token.trim());
+        return info != null && canonicalEnglish.equals(info.getEnglish());
     }
 
     /**
@@ -431,10 +482,6 @@ public final class FormElementWriter
         return null;
     }
 
-    /**
-     * Resolves a form-member FQN kind token (English or Russian, case-insensitive) to a {@link Kind},
-     * or {@code null} if it is not a supported form-element kind.
-     */
     // Russian kind / form tokens, built from code points so this source stays pure ASCII (the same
     // non-UTF-8 Tycho-build guard the rest of the project uses; no raw Cyrillic literals).
     private static final String RU_ATTRIBUTE = cp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442); // rekvizit
@@ -444,6 +491,13 @@ public final class FormElementWriter
     private static final String RU_FIELD = cp(0x043f, 0x043e, 0x043b, 0x0435); // pole
     private static final String RU_BUTTON = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430); // knopka
     private static final String RU_TABLE = cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430); // tablica
+    private static final String RU_ATTRIBUTES = cp(0x0440, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b); // rekvizity
+    private static final String RU_COMMANDS = cp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x044b); // komandy
+    private static final String RU_GROUPS = cp(0x0433, 0x0440, 0x0443, 0x043f, 0x043f, 0x044b); // gruppy
+    private static final String RU_DECORATIONS = cp(0x0434, 0x0435, 0x043a, 0x043e, 0x0440, 0x0430, 0x0446, 0x0438, 0x0438); // dekoracii
+    private static final String RU_FIELDS = cp(0x043f, 0x043e, 0x043b, 0x044f); // polya
+    private static final String RU_BUTTONS = cp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0438); // knopki
+    private static final String RU_TABLES = cp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x044b); // tablicy
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
@@ -452,7 +506,10 @@ public final class FormElementWriter
     // The Russian platform NAMES of the value types this writer classifies are not repeated here: the
     // classification is asked of MetadataTypeBuilder, whose bilingual kind maps are the same ones the
     // type builder resolves a spec with (issue #295 review).
-    private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
+    // Unlike the kind tokens above (matched through the lowercasing kindForToken), this one is an
+    // event LEAF: it is both matched case-insensitively and EMITTED as a scoping address segment,
+    // so it is held in the capitalized spelling EDT renders.
+    private static final String RU_ACTION = cp(0x0414, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // Dejstvie
     // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
     // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
     private static final String RU_SUFFIX_EXTENDED_TOOLTIP = cp(0x0420, 0x0430, 0x0441, 0x0448,
@@ -512,13 +569,11 @@ public final class FormElementWriter
      */
     public static boolean isColumnToken(String token)
     {
-        if (token == null)
-        {
-            return false;
-        }
-        String t = token.trim().toLowerCase();
-        return "column".equals(t) || FEATURE_COLUMNS.equals(t) //$NON-NLS-1$
-            || RU_COLUMN.equals(t) || RU_COLUMNS.equals(t);
+        // Answered by the SAME token table every other kind is resolved through, not by a private
+        // list of literals - the anti-drift seam #342 introduced for exactly this class of predicate
+        // (a spelling the catalogue gained and a predicate did not became an address the tool
+        // documents and then refuses).
+        return kindForToken(token) == Kind.COLUMN;
     }
 
     /**
@@ -769,54 +824,90 @@ public final class FormElementWriter
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
     {
-        if (token == null)
-        {
-            return false;
-        }
-        String t = token.trim().toLowerCase();
-        return FEATURE_HANDLER.equals(t) || RU_HANDLER.equals(t);
+        return isNestedKind(token, "Handler"); //$NON-NLS-1$
     }
 
+    /**
+     * The FQN kind tokens accepted for each {@link Kind}: the English spelling(s) and the Russian
+     * one, all lowercase (the form {@link #kindForToken} normalizes its input to). THE single source
+     * of both the lookup and {@link #tokensForKind}, so what is accepted and what is exported cannot
+     * drift apart.
+     */
+    private static final Map<Kind, List<String>> KIND_TOKENS;
+
+    /** Reverse index of {@link #KIND_TOKENS}: lowercase token -&gt; the kind it addresses. */
+    private static final Map<String, Kind> KIND_BY_TOKEN;
+
+    static
+    {
+        Map<Kind, List<String>> tokens = new EnumMap<>(Kind.class);
+        // Singular AND plural, in BOTH languages. The bilingual alias catalogue this addressing is
+        // advertised through (MetadataTypeUtils' nested kinds) accepts all four spellings of every
+        // form kind, so accepting fewer here made the tool reject an address it documents:
+        // '...Form.ItemForm.Fields.Price' resolved the element by name and was then rejected on its
+        // KIND, sending a real field to objectsNotFound. MetadataTypeUtilsTest pins the two
+        // catalogues against each other in BOTH directions so they cannot drift again.
+        tokens.put(Kind.ATTRIBUTE, tokenList("attribute", FEATURE_ATTRIBUTES, //$NON-NLS-1$
+            RU_ATTRIBUTE, RU_ATTRIBUTES));
+        tokens.put(Kind.COMMAND, tokenList("command", "commands", RU_COMMAND, RU_COMMANDS)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.GROUP, tokenList(FEATURE_GROUP, "groups", RU_GROUP, RU_GROUPS)); //$NON-NLS-1$
+        tokens.put(Kind.DECORATION, tokenList("decoration", "decorations", //$NON-NLS-1$ //$NON-NLS-2$
+            RU_DECORATION, RU_DECORATIONS));
+        tokens.put(Kind.FIELD, tokenList("field", "fields", RU_FIELD, RU_FIELDS)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.BUTTON, tokenList("button", "buttons", RU_BUTTON, RU_BUTTONS)); //$NON-NLS-1$ //$NON-NLS-2$
+        tokens.put(Kind.TABLE, tokenList("table", "tables", RU_TABLE, RU_TABLES)); //$NON-NLS-1$ //$NON-NLS-2$
+        // A COLUMN is a DATA kind, not a visual one - it is the leaf of '...Attribute.T.Column.C'
+        // (issue #295) - but it is addressed by the same token grammar, so it belongs in the same
+        // table rather than in a predicate of its own (issue #295 review / #342 merge).
+        tokens.put(Kind.COLUMN, tokenList("column", FEATURE_COLUMNS, RU_COLUMN, RU_COLUMNS)); //$NON-NLS-1$
+        Map<String, Kind> byToken = new HashMap<>();
+        for (Map.Entry<Kind, List<String>> entry : tokens.entrySet())
+        {
+            for (String token : entry.getValue())
+            {
+                byToken.put(token, entry.getKey());
+            }
+        }
+        KIND_TOKENS = Collections.unmodifiableMap(tokens);
+        KIND_BY_TOKEN = Collections.unmodifiableMap(byToken);
+    }
+
+    /** One kind's accepted tokens, lowercased and made immutable. */
+    private static List<String> tokenList(String... tokens)
+    {
+        List<String> lower = new ArrayList<>(tokens.length);
+        for (String token : tokens)
+        {
+            lower.add(token.toLowerCase());
+        }
+        return Collections.unmodifiableList(lower);
+    }
+
+    /**
+     * Resolves a form-member FQN kind token (English or Russian, case-insensitive) to a {@link Kind},
+     * or {@code null} if it is not a supported form-element kind.
+     */
     public static Kind kindForToken(String token)
     {
-        if (token == null)
-        {
-            return null;
-        }
-        String t = token.trim().toLowerCase();
-        if ("attribute".equals(t) || FEATURE_ATTRIBUTES.equals(t) || RU_ATTRIBUTE.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.ATTRIBUTE;
-        }
-        if ("command".equals(t) || "commands".equals(t) || RU_COMMAND.equals(t)) //$NON-NLS-1$ //$NON-NLS-2$
-        {
-            return Kind.COMMAND;
-        }
-        if (FEATURE_GROUP.equals(t) || RU_GROUP.equals(t))
-        {
-            return Kind.GROUP;
-        }
-        if ("decoration".equals(t) || RU_DECORATION.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.DECORATION;
-        }
-        if ("field".equals(t) || RU_FIELD.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.FIELD;
-        }
-        if ("button".equals(t) || RU_BUTTON.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.BUTTON;
-        }
-        if ("table".equals(t) || RU_TABLE.equals(t)) //$NON-NLS-1$
-        {
-            return Kind.TABLE;
-        }
-        if (isColumnToken(t))
-        {
-            return Kind.COLUMN;
-        }
-        return null;
+        return token == null ? null : KIND_BY_TOKEN.get(token.trim().toLowerCase());
+    }
+
+    /**
+     * The FQN kind tokens this writer accepts for {@code kind} - every spelling
+     * {@link #kindForToken} resolves to it, English and Russian, lowercase.
+     *
+     * <p>Exported so a consistency test can walk {@link Kind#values()} and assert the bilingual
+     * coverage of EVERY kind against {@code MetadataTypeUtils}' nested-kind alias catalogue (the one
+     * the marker-location filter translates a form address with). A hand-written list of kinds
+     * cannot notice a kind added later; walking the enum can.</p>
+     *
+     * @param kind the kind, may be {@code null}
+     * @return the accepted tokens (never {@code null}; empty for an unknown kind)
+     */
+    public static List<String> tokensForKind(Kind kind)
+    {
+        List<String> tokens = kind == null ? null : KIND_TOKENS.get(kind);
+        return tokens == null ? Collections.<String> emptyList() : tokens;
     }
 
     /** Builds a string from BMP code points (keeps this source pure ASCII). Delegates to the shared
@@ -4259,7 +4350,7 @@ public final class FormElementWriter
     private static boolean isActionToken(String eventName)
     {
         return COMMAND_ACTION_EVENT.equalsIgnoreCase(eventName)
-            || (eventName != null && RU_ACTION.equals(eventName.trim().toLowerCase()));
+            || (eventName != null && RU_ACTION.equalsIgnoreCase(eventName.trim()));
     }
 
     /**
@@ -4285,12 +4376,12 @@ public final class FormElementWriter
     private static EStructuralFeature handlerEventFeature(EStructuralFeature handlersFeat)
     {
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
-        return ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
+        return ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
     }
 
     private static String eventNameOf(EObject event, boolean russian)
     {
-        return stringFeature(event, russian ? "nameRu" : "name"); //$NON-NLS-1$ //$NON-NLS-2$
+        return stringFeature(event, russian ? FEATURE_NAME_RU : FEATURE_NAME);
     }
 
     /**
@@ -4989,6 +5080,116 @@ public final class FormElementWriter
     }
 
     /**
+     * Whether {@code member} - the element {@link #resolveFormMember} returned for {@code ref} -
+     * really is of the KIND the FQN asked for.
+     *
+     * <p>{@link #resolveFormMember} routes only ATTRIBUTE and COMMAND into their own containment;
+     * EVERY other kind token falls through to the by-NAME item search. So
+     * {@code ...Form.F.Button.Price} "resolves" to the FIELD named {@code Price}, and an
+     * unrecognized token ({@code Fielld.Price}) resolves to whatever bears the name. Both are a
+     * caller's typo, so a consumer whose whole answer IS "does this address exist" - it has no
+     * later kind-specific step that would trip over the mismatch - must ask this too.</p>
+     *
+     * @param member the resolved member, may be {@code null}
+     * @param ref the parsed member reference {@code member} was resolved from, may be {@code null}
+     * @return {@code true} when the member exists and its concrete EClass denotes exactly the
+     *     requested kind, or denotes no addressable kind at all (an auto command bar / context menu
+     *     / extended tooltip and the attribute-and-command containments are reached by name or by
+     *     containment, so their token contradicts nothing); {@code false} for a wrong or
+     *     unrecognized kind token
+     */
+    public static boolean matchesRequestedKind(EObject member, FormMemberRef ref)
+    {
+        return ref != null && matchesKindToken(member, ref.kindToken);
+    }
+
+    /**
+     * Whether {@code element} really is of the KIND that {@code kindToken} names - the element-level
+     * form of {@link #matchesRequestedKind}, for a caller holding a kind token that is not the ref's
+     * leaf one (the OWNER token of an item-level handler FQN,
+     * {@code ...Form.F.Button.Price.Handler.OnChange}).
+     *
+     * <p>The owner lookup behind such an address finds an item by NAME alone, exactly like the leaf
+     * lookup does, so a foreign owner kind ({@code Button.} for a FIELD) or a misspelt one
+     * ({@code Fielld.}) would otherwise pass as resolved.</p>
+     *
+     * @param element the resolved form element, may be {@code null}
+     * @param kindToken the kind token the address named, may be {@code null}
+     * @return {@code true} when the element exists and its concrete EClass denotes exactly the named
+     *     kind, or denotes no addressable kind at all (an auto command bar / context menu / extended
+     *     tooltip, and the attribute / command containments, are reached by name or by containment,
+     *     so their token contradicts nothing); {@code false} for a wrong or unrecognized token
+     */
+    public static boolean matchesKindToken(EObject element, String kindToken)
+    {
+        if (element == null)
+        {
+            return false;
+        }
+        Kind requested = kindForToken(kindToken);
+        if (requested == null)
+        {
+            // An unrecognized kind token addresses nothing: it cannot be the kind of anything.
+            return false;
+        }
+        Kind actual = addressableKindOf(element.eClass().getName());
+        return actual == null || actual == requested;
+    }
+
+    /**
+     * The {@link Kind} whose token addresses an element of this concrete form-model EClass, or
+     * {@code null} for an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which
+     * is deliberately limited to the kinds that carry PLACEMENT rules.
+     *
+     * @param eClassName the concrete EClass simple name of a resolved form element
+     * @return the addressing kind, or {@code null} when no kind token denotes this EClass
+     */
+    /**
+     * The element KIND {@code element} can be addressed by, or {@code null} when its class carries
+     * no addressable kind token at all ({@code AutoCommandBar}, {@code ContextMenu},
+     * {@code ExtendedTooltip}, and the non-item members {@code FormAttribute} / {@code FormCommand},
+     * which are reached through their own containment rather than by an item kind).
+     *
+     * <p>Exposed so a caller that must be STRICT can tell "this element is a Button" from "this
+     * element answers to no kind token", which {@link #matchesKindToken} deliberately blurs: it
+     * accepts any requested kind for a tokenless class so that such elements stay reachable at all.
+     * That leniency is right for the write tools and wrong for an EXACT filter, which would
+     * otherwise call {@code ...Button.FormCommandBar} a resolved address.</p>
+     *
+     * @param element the form element (may be {@code null})
+     * @return the addressable kind, or {@code null} when the class has none
+     */
+    public static Kind addressableKind(EObject element)
+    {
+        return element == null ? null : addressableKindOf(element.eClass().getName());
+    }
+
+    private static Kind addressableKindOf(String eClassName)
+    {
+        if (ELEM_BUTTON.equals(eClassName))
+        {
+            return Kind.BUTTON;
+        }
+        if (ECLASS_DECORATION.equals(eClassName))
+        {
+            return Kind.DECORATION;
+        }
+        if (ECLASS_FORM_FIELD.equals(eClassName))
+        {
+            return Kind.FIELD;
+        }
+        if (ECLASS_FORM_GROUP.equals(eClassName))
+        {
+            return Kind.GROUP;
+        }
+        if (ECLASS_TABLE.equals(eClassName))
+        {
+            return Kind.TABLE;
+        }
+        return null;
+    }
+
+    /**
      * Finds the event handler bound to {@code eventName} (English or Russian, case-insensitive) on
      * {@code container} (the form root or a form item), or {@code null}. Used to delete a handler by
      * the event its FQN names. Call on the tx-bound form model.
@@ -5010,18 +5211,90 @@ public final class FormElementWriter
             return null;
         }
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
-        EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature("event") : null; //$NON-NLS-1$
+        EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
         for (EObject handler : referenceList(container, KEY_HANDLERS))
         {
             Object ev = evFeat != null ? handler.eGet(evFeat) : null;
             if (ev instanceof EObject
-                && (eventName.equalsIgnoreCase(stringFeature((EObject)ev, "name")) //$NON-NLS-1$
-                    || eventName.equalsIgnoreCase(stringFeature((EObject)ev, "nameRu")))) //$NON-NLS-1$
+                && (eventName.equalsIgnoreCase(stringFeature((EObject)ev, FEATURE_NAME))
+                    || eventName.equalsIgnoreCase(stringFeature((EObject)ev, FEATURE_NAME_RU))))
             {
                 return handler;
             }
         }
         return null;
+    }
+
+    /**
+     * The event-name spellings of an event handler: the English {@code name} and the Russian
+     * {@code nameRu} of the {@code event} it is bound to, blanks and duplicates dropped, English
+     * first.
+     *
+     * <p>{@link #findFormHandler} matches EITHER spelling, so the token a caller searched with says
+     * nothing about the one the model (and anything rendered from it) actually carries. A caller that
+     * must name the matched event afterwards - e.g. to scope a marker query by the address EDT really
+     * renders - has to ask the handler instead of reusing its own input. A handler slot with no
+     * {@code event} reference (a form COMMAND's Action) yields an empty list.</p>
+     *
+     * <p>Reflective, so no compile-time form-model dependency. Call on the tx-bound form model.</p>
+     *
+     * @param handler the event handler, may be {@code null}
+     * @return the event's spellings (never {@code null}; possibly empty)
+     */
+    public static List<String> eventNameSpellings(EObject handler)
+    {
+        List<String> names = new ArrayList<>(2);
+        if (handler == null)
+        {
+            return names;
+        }
+        EStructuralFeature eventFeat = handler.eClass().getEStructuralFeature(FEATURE_EVENT);
+        Object event = eventFeat instanceof EReference ? handler.eGet(eventFeat) : null;
+        if (!(event instanceof EObject))
+        {
+            return names;
+        }
+        for (String feature : new String[] {FEATURE_NAME, FEATURE_NAME_RU})
+        {
+            String name = stringFeature((EObject)event, feature);
+            if (name != null && !name.isEmpty() && !names.contains(name))
+            {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    /**
+     * The event-leaf spellings the ADDRESS of a resolved handler can be written with - i.e. the
+     * spellings a marker location for that handler may end in.
+     *
+     * <p>For the form root or a form ITEM this is the bound event's own
+     * {@link #eventNameSpellings}. A form COMMAND, however, carries no platform event at all - its
+     * single handler slot IS the {@code action} containment - so that list would be empty and a
+     * caller scoping by it would be left with nothing but the spelling it happened to type. The
+     * command's leaf is a FIXED token instead: {@link #findFormHandler} accepts the English
+     * {@code Action} and its Russian equivalent alike, so BOTH are returned and an address written
+     * in either language still scopes a project rendered in the other.</p>
+     *
+     * <p>The command is recognized by the resolved container's own EClass - the same criterion
+     * {@link #findFormHandler} branches on, and the one a {@code Command} kind token is routed to by
+     * {@link #resolveHandlerContainer}.</p>
+     *
+     * <p>Reflective, so no compile-time form-model dependency. Call on the tx-bound form model.</p>
+     *
+     * @param container the resolved handler container (the form root, a form item or a form command),
+     *     may be {@code null}
+     * @param handler the matched handler slot, may be {@code null}
+     * @return the spellings, English first, without duplicates (never {@code null})
+     */
+    public static List<String> handlerEventSpellings(EObject container, EObject handler)
+    {
+        if (container != null && ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
+        {
+            return Arrays.asList(COMMAND_ACTION_EVENT, RU_ACTION);
+        }
+        return eventNameSpellings(handler);
     }
 
     // ---- rebind: change an EXISTING handler's procedure / a button's command --------------------
