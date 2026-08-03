@@ -38,10 +38,18 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Reviews BSL code quality by running the external BSL Language Server engine over a
- * project (or one module) and rendering its diagnostics as an actionable table. This
- * is the delta over {@code get_project_errors}: EDT's own {@code v8-code-style}
- * checks already surface there, but the engine's <b>metrics</b> (magic number,
- * cyclomatic/cognitive complexity, method/line length, nesting, …) are not in EDT.
+ * project (or one module) and rendering its diagnostics as an actionable table.
+ * <p>
+ * <b>This is the engine's FULL diagnostic catalog, not a curated "metrics-only"
+ * subset</b> — every rule the engine ships (magic number, cyclomatic/cognitive
+ * complexity, method/line length, nesting, naming, unused code, … together, well over
+ * a hundred rules) comes through. Some of these OVERLAP with EDT's own
+ * {@code v8-code-style} checks surfaced by {@code get_project_errors} (both are BSL
+ * static analyzers with a partially shared rule set) — this is not a strict delta over
+ * it. Use {@code get_project_errors} for EDT's native check surface; use this tool for
+ * the (larger, partially different) BSL Language Server rule set, or to cross-check the
+ * two. Pass {@code excludeRule} to drop rule ids you already get elsewhere (e.g. ones
+ * {@code get_project_errors} already reports) so they do not double up in your review.
  * <p>
  * The engine runs as a subprocess (see {@link BslLsRunner}); we do not implement any
  * rules ourselves. Each row is a concrete defect located by {@code Module path} +
@@ -67,12 +75,14 @@ public class CodeReviewTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Review BSL code quality with the BSL Language Server engine: reports code-metric defects " //$NON-NLS-1$
-            + "(magic number, cyclomatic/cognitive complexity, method/line length, nesting, …) that EDT's own " //$NON-NLS-1$
-            + "checks do not cover. Each finding is a defect to FIX: it carries the rule, severity, Module path and " //$NON-NLS-1$
-            + "Line, ready for read_module_source / write_module_source — fix each, then re-run code_review to verify. " //$NON-NLS-1$
-            + "Scope the whole project or one module; filter by severity or rule. Needs the engine jar (see the guide). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('code_review')."; //$NON-NLS-1$
+        return "Review BSL code quality with the BSL Language Server engine: its FULL diagnostic catalog " //$NON-NLS-1$
+            + "(magic number, cyclomatic/cognitive complexity, method/line length, nesting, naming, unused " //$NON-NLS-1$
+            + "code, …) — this overlaps with EDT's own v8-code-style checks (get_project_errors), it is not a " //$NON-NLS-1$
+            + "strict delta over them; use excludeRule to drop rule ids you already get elsewhere. Each " //$NON-NLS-1$
+            + "finding is a defect to FIX: it carries the rule, severity, Module path and Line, ready for " //$NON-NLS-1$
+            + "read_module_source / write_module_source — fix each, then re-run code_review to verify. " //$NON-NLS-1$
+            + "Scope the whole project or one module; filter by severity, rule or excludeRule. Needs the " //$NON-NLS-1$
+            + "engine jar (see the guide). Full parameters and examples: call get_tool_guide('code_review')."; //$NON-NLS-1$
     }
 
     @Override
@@ -88,6 +98,9 @@ public class CodeReviewTool implements IMcpTool
                 "error", "warning", "information", "hint") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             .stringProperty("rule", //$NON-NLS-1$
                 "Optional: report only diagnostics whose rule id contains this substring (e.g. 'Magic', 'Complexity').") //$NON-NLS-1$
+            .stringProperty("excludeRule", //$NON-NLS-1$
+                "Optional: drop diagnostics whose rule id contains this substring — e.g. to exclude rules " //$NON-NLS-1$
+                    + "you already get from get_project_errors and avoid double-reporting the same issue.") //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max findings; default 100, max 1000 (optional).") //$NON-NLS-1$
             .build();
     }
@@ -113,6 +126,7 @@ public class CodeReviewTool implements IMcpTool
         String modulePath = JsonUtils.extractStringArgument(params, McpKeys.MODULE_PATH);
         String severity = JsonUtils.extractStringArgument(params, "severity"); //$NON-NLS-1$
         String rule = JsonUtils.extractStringArgument(params, "rule"); //$NON-NLS-1$
+        String excludeRule = JsonUtils.extractStringArgument(params, "excludeRule"); //$NON-NLS-1$
         int limit = Pagination.clampLimit(JsonUtils.extractIntArgument(params, McpKeys.LIMIT, DEFAULT_LIMIT), MAX_LIMIT);
 
         if (severity != null && !severity.isEmpty()
@@ -153,18 +167,36 @@ public class CodeReviewTool implements IMcpTool
                 return ToolResult.error("Module not found: src/" + modulePath //$NON-NLS-1$
                     + ". Pass a path from src/, e.g. 'CommonModules/Calc/Module.bsl'.").toJson(); //$NON-NLS-1$
             }
+            // resolveModuleFile also accepts absolute paths and workspace-relative paths carrying
+            // '..' segments, resolving against the WHOLE Eclipse workspace rather than just this
+            // project's src/. Without this check a caller could point modulePath at a sibling
+            // project (or any workspace-visible location) and have it silently analyzed instead of
+            // rejected as out of scope for the requested project.
+            if (!isWithinSrc(srcRoot, moduleOsFile))
+            {
+                return ToolResult.error("modulePath '" + modulePath + "' resolves outside project '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + projectName + "'s own src/ folder (" + srcRoot.getAbsolutePath() + "). Pass a path " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "relative to src/ that stays inside this project, e.g. 'CommonModules/Calc/Module.bsl' " //$NON-NLS-1$
+                    + "— not an absolute path or one using '..' to escape src/.").toJson(); //$NON-NLS-1$
+            }
             targetAbsPath = normalize(moduleOsFile.getAbsolutePath());
             scopeDir = moduleOsFile.getParentFile();
         }
 
-        BslLsRunner.Request request = new BslLsRunner.Request(scopeDir).configFile(projectConfig(srcRoot, project));
+        BslLsRunner.Request request = new BslLsRunner.Request(scopeDir)
+            .configFile(projectConfig(srcRoot, project))
+            // Pin the workspace root to the project's own src/ regardless of how narrow scopeDir is
+            // for a single-module review, so report paths and workspace-local settings stay scoped
+            // to THIS project (see BslLsRunner#buildCommand).
+            .workspaceDir(srcRoot);
         BslLsRunner.Result result = BslLsRunner.run(request);
         if (!result.ok())
         {
             return ToolResult.error(result.errorMessage()).toJson();
         }
 
-        return render(result.report(), projectName, modulePath, srcRoot, targetAbsPath, severity, rule, limit);
+        return render(result.report(), projectName, modulePath, srcRoot, targetAbsPath, severity, rule,
+            excludeRule, limit);
     }
 
     /**
@@ -205,32 +237,54 @@ public class CodeReviewTool implements IMcpTool
      * @param projectName the reviewed project
      * @param modulePath the requested single-module scope, or {@code null} for whole-project
      * @param srcRoot the project's {@code src} directory (to relativize paths to {@code Module path})
-     * @param targetAbsPath when scoped to one module, its normalized absolute path (findings are
-     *            filtered to it); {@code null} for whole-project
+     * @param targetAbsPath when scoped to one module, its normalized absolute path (both the
+     *            summary counts and the displayed rows are narrowed to it, since the engine
+     *            analyzes the whole containing directory but the caller asked about one file);
+     *            {@code null} for whole-project
      * @param severityMin the minimum-severity filter name, or {@code null} for all
-     * @param rule the rule-substring filter, or {@code null} for all
+     * @param rule the rule-substring INCLUDE filter, or {@code null} for all
+     * @param excludeRule the rule-substring EXCLUDE filter (e.g. to drop rules already covered by
+     *            get_project_errors), or {@code null} to exclude none
      * @param limit the maximum number of rows to render
      * @return the Markdown result
      */
     static String render(BslLsReport report, String projectName, String modulePath, File srcRoot,
-        String targetAbsPath, String severityMin, String rule, int limit)
+        String targetAbsPath, String severityMin, String rule, String excludeRule, int limit)
     {
         int minRank = severityMin == null || severityMin.isEmpty() ? Integer.MIN_VALUE
             : rank(Severity.valueOf(severityMin.toUpperCase(Locale.ROOT)));
         String ruleNeedle = rule == null ? null : rule.toLowerCase(Locale.ROOT);
+        String excludeNeedle = excludeRule == null || excludeRule.isEmpty() ? null : excludeRule.toLowerCase(Locale.ROOT);
 
-        List<Finding> filtered = new ArrayList<>();
+        // Module scope FIRST: when modulePath narrows to one file, the engine still analyzed the
+        // whole containing directory (its unit of analysis), so report.findings() carries every
+        // sibling's diagnostics too. "scoped" is what the requested review is actually ABOUT — the
+        // summary counts below are computed from it (not the raw, unfiltered report) so a
+        // single-module review's totals never include issues from files the caller never asked
+        // about. severity/rule stay pure DISPLAY filters on top of that (independent of the totals,
+        // same as the `limit` cap — see the class guide).
+        List<Finding> scoped = new ArrayList<>();
         for (Finding f : report.findings())
         {
             if (targetAbsPath != null && !targetAbsPath.equals(normalize(f.path())))
             {
                 continue;
             }
+            scoped.add(f);
+        }
+
+        List<Finding> filtered = new ArrayList<>();
+        for (Finding f : scoped)
+        {
             if (rank(f.severity()) < minRank)
             {
                 continue;
             }
             if (ruleNeedle != null && (f.code() == null || !f.code().toLowerCase(Locale.ROOT).contains(ruleNeedle)))
+            {
+                continue;
+            }
+            if (excludeNeedle != null && f.code() != null && f.code().toLowerCase(Locale.ROOT).contains(excludeNeedle))
             {
                 continue;
             }
@@ -244,13 +298,13 @@ public class CodeReviewTool implements IMcpTool
         String scope = modulePath == null || modulePath.isEmpty() ? projectName : projectName + " / " + modulePath; //$NON-NLS-1$
         md.append("# Code review — ").append(MarkdownUtils.escapeForTable(scope)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        md.append("**").append(report.total()).append("** finding(s): ") //$NON-NLS-1$ //$NON-NLS-2$
-            .append(report.count(Severity.ERROR)).append(" error, ") //$NON-NLS-1$
-            .append(report.count(Severity.WARNING)).append(" warning, ") //$NON-NLS-1$
-            .append(report.count(Severity.INFORMATION)).append(" information, ") //$NON-NLS-1$
-            .append(report.count(Severity.HINT)).append(" hint.\n\n"); //$NON-NLS-1$
+        md.append("**").append(scoped.size()).append("** finding(s): ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(countBySeverity(scoped, Severity.ERROR)).append(" error, ") //$NON-NLS-1$
+            .append(countBySeverity(scoped, Severity.WARNING)).append(" warning, ") //$NON-NLS-1$
+            .append(countBySeverity(scoped, Severity.INFORMATION)).append(" information, ") //$NON-NLS-1$
+            .append(countBySeverity(scoped, Severity.HINT)).append(" hint.\n\n"); //$NON-NLS-1$
 
-        if (report.total() == 0)
+        if (scoped.isEmpty())
         {
             md.append("No BSL code-quality issues found. "); //$NON-NLS-1$
             md.append("(If you expected findings, confirm the engine jar and configuration — see get_tool_guide('code_review').)\n"); //$NON-NLS-1$
@@ -287,6 +341,55 @@ public class CodeReviewTool implements IMcpTool
             md.append('\n').append(Pagination.limitReachedNotice(limit));
         }
         return md.toString();
+    }
+
+    /**
+     * @param findings the findings to count over (already scoped to what the summary should
+     *            reflect — see the module-scope note in {@link #render})
+     * @param severity the severity to count
+     * @return how many entries of {@code findings} carry that severity
+     */
+    private static int countBySeverity(List<Finding> findings, Severity severity)
+    {
+        int n = 0;
+        for (Finding f : findings)
+        {
+            if (f.severity() == severity)
+            {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Guards {@code modulePath} resolution: {@link BslModuleUtils#resolveModuleFile} accepts
+     * both a {@code src/}-relative path AND an absolute path (resolved against the WHOLE
+     * Eclipse workspace, not just this project), and a relative path can carry {@code ..}
+     * segments. Without this check a caller could point {@code modulePath} outside the
+     * requested project's own {@code src/} (a sibling project, or any workspace-visible
+     * location) and have it silently analyzed instead of rejected as out of scope.
+     *
+     * @param srcRoot the requested project's own {@code src} directory
+     * @param candidate the resolved module file's on-disk location
+     * @return {@code true} when {@code candidate} is {@code srcRoot} itself or a descendant of it
+     */
+    static boolean isWithinSrc(File srcRoot, File candidate)
+    {
+        if (srcRoot == null || candidate == null)
+        {
+            return false;
+        }
+        try
+        {
+            Path root = srcRoot.toPath().toAbsolutePath().normalize();
+            Path c = candidate.toPath().toAbsolutePath().normalize();
+            return c.startsWith(root);
+        }
+        catch (RuntimeException e)
+        {
+            return false;
+        }
     }
 
     /** Severity importance rank; higher is more severe (Error highest, Hint lowest). */
