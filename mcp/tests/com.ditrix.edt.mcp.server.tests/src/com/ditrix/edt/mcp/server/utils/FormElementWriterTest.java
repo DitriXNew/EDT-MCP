@@ -2588,6 +2588,12 @@ public class FormElementWriterTest
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
 
             pkg.getEClassifiers().add(form);
+            // The owner that holds several forms: the level the orphan-item scan must NOT climb to,
+            // or it would see a sibling form's items (issue #295 review).
+            EClass formOwner = f.createEClass();
+            formOwner.setName("FormOwner"); //$NON-NLS-1$
+            formOwner.getEStructuralFeatures().add(containment(f, "forms", form, true)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(formOwner);
             pkg.getEClassifiers().add(table);
             pkg.getEClassifiers().add(buttonType);
             pkg.getEClassifiers().add(placementArea);
@@ -3104,6 +3110,42 @@ public class FormElementWriterTest
         assertEquals("the item bound below the COLUMN must be found from the form root", //$NON-NLS-1$
             Collections.singletonList("DeepField"), //$NON-NLS-1$
             FormElementWriter.itemsBoundBelowAttribute(column));
+    }
+
+    @Test
+    public void testTheOrphanScanStopsAtItsOwnForm()
+    {
+        // getRootContainer climbed PAST the content form (a Form is contained by its BasicForm) into
+        // the owner, so the scan reached the owner's OTHER forms: a field named 'Object.Number' on a
+        // neighbouring form refused a retype here (issue #295 review). Both forms are put under one
+        // container, the way an owner holds them.
+        EObject owner = newObject(modelClass("FormOwner")); //$NON-NLS-1$
+        EObject thisForm = newForm();
+        EObject otherForm = newForm();
+        addTo(owner, "forms", thisForm); //$NON-NLS-1$
+        addTo(owner, "forms", otherForm); //$NON-NLS-1$
+
+        EObject attr = newObject(MODEL.formAttribute);
+        attr.eSet(feature(attr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        attr.eSet(feature(attr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(thisForm, "attributes", attr); //$NON-NLS-1$
+
+        // The NEIGHBOUR carries the very path the guard looks for.
+        EObject strangerAttr = newObject(MODEL.formAttribute);
+        strangerAttr.eSet(feature(strangerAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        strangerAttr.eSet(feature(strangerAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(otherForm, "attributes", strangerAttr); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(otherForm, Kind.FIELD, "StrangerField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+
+        assertTrue("a field on a NEIGHBOURING form must not block this retype", //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(attr).isEmpty());
+
+        // ...and the same path on THIS form still does.
+        assertNull(FormElementWriter.createMember(thisForm, Kind.FIELD, "OwnField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("OwnField"), //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(attr));
     }
 
     @Test

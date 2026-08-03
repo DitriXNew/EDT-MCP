@@ -1654,12 +1654,33 @@ public class ModifyMetadataToolTest
     }
 
     @Test
+    public void testAnUnbuildableDynamicListTypeIsRefusedBeforeThePrompt()
+    {
+        // The conversion sets the ext-info classifier and THEN builds the value type, so a version
+        // whose DynamicList type cannot be built refuses after a half-write; the version used to be
+        // resolved only inside the write callback (issue #295 review). A null version cannot produce
+        // the type, which is exactly the condition being lifted.
+        //
+        // Scope, stated because the comment here claimed more: this pins the VERDICT. That
+        // configureDynamicListQuery hands this verdict to gateFormRetype as its pre-check is one
+        // production line that a headless test cannot reach (it needs a resolved FormEditContext).
+        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, null, formSupportingLists(),
+            collectionAttribute(), null);
+
+        assertNotNull("an unbuildable DynamicList type must be refused before the prompt", verdict); //$NON-NLS-1$
+        assertTrue("the caller must get the type error, not a consent denial: " + verdict, //$NON-NLS-1$
+            verdict.contains("DynamicList value type")); //$NON-NLS-1$
+        assertTrue("...and be told nothing changed: " + verdict, //$NON-NLS-1$
+            verdict.contains("Nothing")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheDynamicListPreflightRefusesAnUnresolvableMainTable()
     {
         // The main table used to be resolved only inside the write callback, so a nonexistent one
         // raised the conversion prompt FIRST and answered the resolution failure only after ALLOW.
-        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, formSupportingLists(),
-            collectionAttribute(), "Catalog.NoSuchObject"); //$NON-NLS-1$
+        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, Version.LATEST,
+            formSupportingLists(), collectionAttribute(), "Catalog.NoSuchObject"); //$NON-NLS-1$
 
         assertNotNull("an unresolvable main table must be refused before the prompt", verdict); //$NON-NLS-1$
         assertTrue("the refusal must be the main-table one, not a consent denial", //$NON-NLS-1$
@@ -1672,7 +1693,7 @@ public class ModifyMetadataToolTest
     {
         // The last deterministic refusal that still lived below the gate: a form metamodel with no
         // DynamicListExtInfo classifier cannot be converted whatever the user answers.
-        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, formWithoutLists(),
+        String verdict = ModifyMetadataTool.dynamicListRetypeVerdict(null, Version.LATEST, formWithoutLists(),
             collectionAttribute(), null);
 
         assertNotNull("a form that cannot hold a list must be refused before the prompt", verdict); //$NON-NLS-1$
@@ -1681,13 +1702,15 @@ public class ModifyMetadataToolTest
     }
 
     @Test
-    public void testTheDynamicListPreflightAsksForAConversionThatCanHappen()
+    public void testAnAbsentAttributeIsNotPromptedForAConversion()
     {
-        assertNull("a real conversion must reach the gate", //$NON-NLS-1$
-            ModifyMetadataTool.dynamicListRetypeVerdict(null, formSupportingLists(),
-                collectionAttribute(), null));
         assertEquals("an absent attribute must not prompt", "", //$NON-NLS-1$ //$NON-NLS-2$
-            ModifyMetadataTool.dynamicListRetypeVerdict(null, formSupportingLists(), null, null));
+            ModifyMetadataTool.dynamicListRetypeVerdict(null, Version.LATEST, formSupportingLists(),
+                null, null));
+        // The "reach the gate" case cannot be produced headlessly: the LAST pre-check builds the
+        // DynamicList value type, and a unit test has no platform type provider (the limit
+        // MetadataTypeBuilderTest documents), so a convertible attribute always stops on that check -
+        // which is itself asserted by testAnUnbuildableDynamicListTypeIsRefusedBeforeThePrompt.
     }
 
     /** A form model whose metamodel CAN represent a dynamic list. */

@@ -455,6 +455,14 @@ public final class FormElementWriter
     /** DerevoZnachenij - the Russian platform name of ValueTree. */
     private static final String RU_TYPE_VALUE_TREE = cp(0x0414, 0x0435, 0x0440, 0x0435, 0x0432, 0x043e,
         0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439);
+    /** Stroka - the Russian platform name of String. */
+    private static final String RU_TYPE_STRING = cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430);
+    /** Chislo - the Russian platform name of Number. */
+    private static final String RU_TYPE_NUMBER = cp(0x0427, 0x0438, 0x0441, 0x043b, 0x043e);
+    /** Bulevo - the Russian platform name of Boolean. */
+    private static final String RU_TYPE_BOOLEAN = cp(0x0411, 0x0443, 0x043b, 0x0435, 0x0432, 0x043e);
+    /** Data - the Russian platform name of Date. */
+    private static final String RU_TYPE_DATE = cp(0x0414, 0x0430, 0x0442, 0x0430);
     private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
     // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
     // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
@@ -603,10 +611,17 @@ public final class FormElementWriter
         {
             return broken;
         }
-        // The ROOT container, not eContainer(): an attribute's container is the form, but a COLUMN's
-        // is its owning attribute, and starting there would scan a subtree that holds no items at all
-        // - the guard would then pass every column retype by finding nothing (issue #295 review).
-        EObject formModel = EcoreUtil.getRootContainer(attribute);
+        // The nearest ancestor that IS the content form - not eContainer() and not the EMF root.
+        // eContainer() is the owning ATTRIBUTE for a column, so the scan found nothing and passed
+        // every column retype; getRootContainer climbs PAST the content form (a Form is contained by
+        // its BasicForm) into the owner, so the scan reached the owner's OTHER forms and a field named
+        // 'Rows.Price' on a neighbouring form refused a retype here. Both were this guard, in
+        // opposite directions (issue #295 review).
+        EObject formModel = contentFormOf(attribute);
+        if (formModel == null)
+        {
+            return broken;
+        }
         List<String> columns = attributeColumnNames(attribute);
         // eAllContents, not a hand-rolled recursion: it visits the WHOLE form without a depth budget
         // that could silently stop before the item that would have blocked the retype, and without a
@@ -622,6 +637,29 @@ public final class FormElementWriter
             }
         }
         return broken;
+    }
+
+    /**
+     * The CONTENT form {@code member} lives in: the nearest ancestor that owns both the {@code items}
+     * tree and the {@code attributes} list. A group owns {@code items} but no attributes, and the
+     * form's own container (its {@code BasicForm}, the owner object, the configuration) owns neither -
+     * so this stops at exactly one level, and a scan started here cannot reach a sibling form.
+     *
+     * @param member a form attribute or one of its columns
+     * @return the content form, or {@code null} when the member is detached
+     */
+    private static EObject contentFormOf(EObject member)
+    {
+        for (EObject candidate = member.eContainer(); candidate != null;
+            candidate = candidate.eContainer())
+        {
+            if (candidate.eClass().getEStructuralFeature(FEATURE_ITEMS) instanceof EReference
+                && candidate.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) instanceof EReference)
+            {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**
@@ -2177,7 +2215,8 @@ public final class FormElementWriter
             // would refuse working forms. Recorded as a gap rather than closed by a heuristic.
             EObject head = findByName(referenceList(formModel, FEATURE_ATTRIBUTES),
                 dataPath.substring(0, dot));
-            if (head != null && (hasCollectionValueType(head) || isDynamicListAttribute(head)))
+            if (head != null && (hasCollectionValueType(head) || isDynamicListAttribute(head)
+                || hasPrimitiveValueType(head)))
             {
                 return TableBinding.NESTED_IN_ATTRIBUTE;
             }
@@ -2269,6 +2308,57 @@ public final class FormElementWriter
             }
         }
         return false;
+    }
+
+    /**
+     * Whether the attribute's value type is a PRIMITIVE (String / Number / Boolean / Date) - a value
+     * with no sub-structure at all, so a dotted path through it names nothing. This is the half of
+     * "not an object-typed attribute" that IS decidable in the form model: an object-typed attribute
+     * ({@code DocumentObject.SalesOrder}) does have tabular sections, and a form may bind a table to
+     * one of them through a NON-main attribute - so the test is "is it provably primitive", never
+     * "is it the main attribute" (issue #295 review).
+     *
+     * @param attribute the form attribute to inspect
+     * @return {@code true} only when every declared type is a known primitive
+     */
+    private static boolean hasPrimitiveValueType(EObject attribute)
+    {
+        EStructuralFeature feature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (feature == null || !(attribute.eGet(feature) instanceof EObject))
+        {
+            return false;
+        }
+        List<EObject> types = referenceList((EObject)attribute.eGet(feature), "types"); //$NON-NLS-1$
+        if (types.isEmpty())
+        {
+            return false;
+        }
+        for (EObject type : types)
+        {
+            if (!(type instanceof TypeItem))
+            {
+                return false;
+            }
+            String typeName = McoreUtil.getTypeName((TypeItem)type);
+            if (typeName == null || typeName.isEmpty())
+            {
+                typeName = McoreUtil.getTypeNameRu((TypeItem)type);
+            }
+            if (!isPrimitiveTypeName(typeName))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Whether {@code typeName} is a platform PRIMITIVE, in either language. */
+    private static boolean isPrimitiveTypeName(String typeName)
+    {
+        return "String".equals(typeName) || "Number".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
+            || "Boolean".equals(typeName) || "Date".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
+            || RU_TYPE_STRING.equals(typeName) || RU_TYPE_NUMBER.equals(typeName)
+            || RU_TYPE_BOOLEAN.equals(typeName) || RU_TYPE_DATE.equals(typeName);
     }
 
     /**
@@ -2378,13 +2468,9 @@ public final class FormElementWriter
         {
             // Refuse rather than half-convert: the ext-info classifier is already set, so returning
             // here would leave an attribute that carries a DynamicListExtInfo while its value type is
-            // still the old one - a list and a collection at once, exactly the state the retype guard
-            // refuses to create from the other direction. The transaction rolls back (issue #295
-            // review).
-            throw new FormValidationException(ToolResult.error(
-                "Cannot build the DynamicList value type for this platform version, so the attribute " //$NON-NLS-1$
-                    + "would be left half-converted (a dynamic-list ext-info on its old type). " //$NON-NLS-1$
-                    + "Nothing was changed.").toJson());
+            // still the old one. The caller answers this from dynamicListTypeUnavailableError BEFORE
+            // the consent gate; reaching it here rolls the transaction back (issue #295 review).
+            throw new FormValidationException(dynamicListTypeUnavailableJson());
         }
         attribute.eSet(valueTypeFeature, dynamicListType);
         setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
@@ -2461,6 +2547,41 @@ public final class FormElementWriter
     /** Single wording: the form metamodel cannot represent a dynamic list at all. */
     private static final String ERR_NO_DYNAMIC_LIST_CLASSIFIER =
         "The form model does not expose a DynamicListExtInfo classifier."; //$NON-NLS-1$
+
+    /**
+     * The refusal for a platform version whose {@code DynamicList} value type cannot be built, or
+     * {@code null} when it can. The conversion would otherwise set the ext-info classifier and then
+     * fail on the value type - and it fails identically whatever the user answers, so the caller runs
+     * this BEFORE the consent gate. {@link #convertPlainAttributeToDynamicList} raises the same
+     * wording from inside the write (issue #295 review).
+     *
+     * @param version the platform version the type is built for, may be {@code null}
+     * @return a ready JSON error, or {@code null} when the type resolves
+     */
+    public static String dynamicListTypeUnavailableError(Version version)
+    {
+        try
+        {
+            return MetadataTypeBuilder.dynamicListType(version) != null ? null
+                : dynamicListTypeUnavailableJson();
+        }
+        catch (RuntimeException e) // NOSONAR createProxy THROWS for a name the provider does not know
+        {
+            // Documented behaviour of the platform provider (issue #262): an unknown type name raises
+            // instead of answering null. A probe that propagated it would replace the deterministic
+            // refusal with a generic failure - the very masking this pre-check exists to prevent.
+            return dynamicListTypeUnavailableJson();
+        }
+    }
+
+    /** Single wording of an unbuildable DynamicList value type, as a ready JSON error. */
+    private static String dynamicListTypeUnavailableJson()
+    {
+        return ToolResult.error(
+            "Cannot build the DynamicList value type for this platform version, so the attribute " //$NON-NLS-1$
+                + "would be left half-converted (a dynamic-list ext-info on its old type). Nothing " //$NON-NLS-1$
+                + "was changed.").toJson(); //$NON-NLS-1$
+    }
 
     /** The single wording of an unresolvable dynamic-list main table, as a ready JSON error. */
     private static String mainTableNotResolvedJson(String mainTableFqn)
@@ -3022,7 +3143,13 @@ public final class FormElementWriter
         }
         if (dot > 0)
         {
-            String columnName = attrName.substring(dot + 1);
+            // Only the FIRST tail segment is checked - it is the column. Anything deeper walks INTO
+            // that column's own type ('Rows.Product.Description' through a reference column), which
+            // this model cannot resolve; taking the whole tail as one column name refused those paths
+            // outright (issue #295 review).
+            String tail = attrName.substring(dot + 1);
+            int nextDot = tail.indexOf('.');
+            String columnName = nextDot > 0 ? tail.substring(0, nextDot) : tail;
             if (hasCollectionValueType(boundAttribute))
             {
                 if (findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName) == null)

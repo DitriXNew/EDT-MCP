@@ -3949,9 +3949,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // valueType, exactly like the `type` property does - and that path asks the consent gate.
             // The order is resolve -> read/validate -> ask -> write (see gateFormRetype); the gate may
             // block on a dialog, so it never runs inside a transaction (issue #295 review).
+            // Resolved BEFORE the gate: the conversion needs the DynamicList value type for this
+            // version, and failing to build it refuses the write whatever the user answers.
+            final Version version = platformVersionOf(ctx);
             return gateFormRetype(dynamicListRetypePreview(normFqn),
-                () -> dynamicListRetypePreflight(fctx, ctx.config, ref, qt, mt),
-                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx));
+                () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
+                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
         }
         catch (Exception e)
         {
@@ -3984,9 +3987,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String applyDynamicListQuery(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         FormElementWriter.FormMemberRef ref, String qt, Boolean cq, String mt,
-        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx)
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
     {
-        final Version version = platformVersionOf(ctx);
         final List<String> applied = new ArrayList<>();
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
             (formModel, tx) ->
@@ -3999,8 +4001,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
                 }
                 // This branch retypes the attribute to DynamicList without going through the
-                // property path, so it needs the SAME stranded-columns guard (issue #295 review).
-                String orphanErr = orphanColumnsError(member);
+                // property path, so it needs the SAME stranded-columns guard (issue #295 review) -
+                // but ONLY when a conversion is actually on the table. A customQuery-only request
+                // converts nothing, and answering it with "delete the columns first" hid the real
+                // problem ("provide a queryText"), which the writer raises just below.
+                boolean converts = (qt != null && !qt.isEmpty()) || (mt != null && !mt.isEmpty());
+                String orphanErr = converts ? orphanColumnsError(member) : null;
                 if (orphanErr != null)
                 {
                     throw new FormValidationException(orphanErr);
@@ -4350,8 +4356,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @return a ready JSON error to return as-is, {@code ""} to write without prompting, or
      *         {@code null} to ask
      */
-    private static String dynamicListRetypePreflight(FormElementWriter.FormEditContext fctx,
-        Configuration config, FormElementWriter.FormMemberRef ref, String queryText, String mainTable)
+    private static String dynamicListRetypePreflight(FormElementWriter.FormEditContext fctx, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        Configuration config, Version version, FormElementWriter.FormMemberRef ref, String queryText,
+        String mainTable)
     {
         boolean couldConvert = (queryText != null && !queryText.isEmpty())
             || (mainTable != null && !mainTable.isEmpty());
@@ -4360,7 +4367,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
-            (formModel, tx) -> dynamicListRetypeVerdict(config, formModel,
+            (formModel, tx) -> dynamicListRetypeVerdict(config, version, formModel,
                 FormElementWriter.resolveFormMember(formModel, ref), mainTable));
     }
 
@@ -4376,8 +4383,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param mainTable the requested main-table FQN, or {@code null}
      * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
      */
-    static String dynamicListRetypeVerdict(Configuration config, EObject formModel, EObject member,
-        String mainTable)
+    static String dynamicListRetypeVerdict(Configuration config, Version version, EObject formModel, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        EObject member, String mainTable)
     {
         if (member == null)
         {
@@ -4403,7 +4410,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ""; //$NON-NLS-1$
         }
         String orphan = orphanColumnsError(member);
-        return orphan != null ? orphan : null;
+        if (orphan != null)
+        {
+            return orphan;
+        }
+        // LAST, because it only matters once a conversion is really going to happen: the value type
+        // the conversion must build. Unbuildable = the write refuses whatever the user answers, and it
+        // refuses only AFTER having set the ext-info classifier - so this belongs above the gate, and
+        // the version is resolved before it (issue #295 review).
+        return FormElementWriter.dynamicListTypeUnavailableError(version);
     }
 
     /**

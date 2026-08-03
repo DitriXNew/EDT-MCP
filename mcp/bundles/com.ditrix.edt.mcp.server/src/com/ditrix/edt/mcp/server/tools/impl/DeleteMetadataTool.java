@@ -740,6 +740,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
             "Removes the form and its content" //$NON-NLS-1$
                 + (content.isEmpty() ? "" : " (" + content.describe() + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + content.truncationNote()
                 + " from the owner, clearing any default-form setting " //$NON-NLS-1$
                 + "that pointed at it. Call confirm=false first to see the details.", //$NON-NLS-1$
             1 + content.total(), Collections.singletonList(normFqn)), write);
@@ -791,16 +792,41 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param formModel the tx-bound form model
      * @return the counts
      */
+    /**
+     * Test seam for {@link #summarizeFormContent}: the same summary feeds BOTH the consent prompt's
+     * counts and the {@code confirm=false} preview's item list, so what it collects is asserted
+     * directly.
+     *
+     * @param formModel the form content model
+     * @return the summary
+     */
+    static FormContentSummary summarizeFormContentForTest(EObject formModel)
+    {
+        return summarizeFormContent(formModel);
+    }
+
     private static FormContentSummary summarizeFormContent(EObject formModel)
     {
         FormContentSummary summary = new FormContentSummary();
-        summary.items = countFormItems(formModel);
+        summary.items = countFormItems(formModel, summary);
         for (EObject attribute : FormStructureReader.getReferenceList(formModel, KEY_ATTRIBUTES))
         {
             summary.attributes++;
-            summary.columns += FormStructureReader.getReferenceList(attribute, KEY_COLUMNS).size();
+            summary.elements.add(formItem(FormStructureReader.nameOf(attribute),
+                attribute.eClass().getName()));
+            for (EObject column : FormStructureReader.getReferenceList(attribute, KEY_COLUMNS))
+            {
+                summary.columns++;
+                summary.elements.add(formItem(FormStructureReader.nameOf(column),
+                    column.eClass().getName()));
+            }
         }
-        summary.commands = FormStructureReader.getReferenceList(formModel, KEY_FORM_COMMANDS).size();
+        for (EObject command : FormStructureReader.getReferenceList(formModel, KEY_FORM_COMMANDS))
+        {
+            summary.commands++;
+            summary.elements.add(formItem(FormStructureReader.nameOf(command),
+                command.eClass().getName()));
+        }
         return summary;
     }
 
@@ -820,7 +846,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param formModel the tx-bound form model
      * @return the number of contained form items
      */
-    private static int countFormItems(EObject formModel)
+    private static int countFormItems(EObject formModel, FormContentSummary summary)
     {
         EClassifier formItem = formModel.eClass().getEPackage() == null ? null
             : formModel.eClass().getEPackage().getEClassifier("FormItem"); //$NON-NLS-1$
@@ -832,13 +858,20 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // The bound counts VISITS, not matches: bounding matches would let a form full of non-item
         // objects walk unboundedly while the javadoc claimed a cap.
         int visits = FormStructureReader.MAX_NODES;
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext() && visits > 0; visits--)
+        TreeIterator<EObject> it = formModel.eAllContents();
+        for (; it.hasNext() && visits > 0; visits--)
         {
-            if (((EClass)formItem).isInstance(it.next()))
+            EObject candidate = it.next();
+            if (((EClass)formItem).isInstance(candidate))
             {
                 counted++;
+                summary.elements.add(
+                    formItem(FormStructureReader.nameOf(candidate), candidate.eClass().getName()));
             }
         }
+        // A cut walk is FLAGGED, not padded with a pseudo-element: adding a marker to the list
+        // would make it disagree with the counters that summarize the very same elements.
+        summary.truncated = it.hasNext();
         return counted;
     }
 
@@ -976,6 +1009,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         if (!confirm)
         {
+            // The SAME content read the consent prompt uses, so the two phases cannot disagree: the
+            // prompt counted the content and told the caller to run confirm=false for the details,
+            // while this branch still answered with the BasicForm alone (issue #295 review).
+            FormContentSummary content = readFormObjectContent(project, mdForm);
+            List<Map<String, Object>> removed = new ArrayList<>();
+            removed.add(formItem(ref.formName, mdForm.eClass().getName()));
+            removed.addAll(content.elements);
             // blocking is hardcoded false: an owned form is removed by cascade (not through the
             // md-refactoring service), so unlike top-object previews NO incoming-reference scan
             // runs here — the message says so to keep the preview honest (deep scan is follow-up).
@@ -983,11 +1023,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .put(McpKeys.ACTION, VAL_PREVIEW)
                 .put("fqn", normFqn) //$NON-NLS-1$
                 .put(KEY_REFACTORING_TITLE, "Delete form " + ref.formName) //$NON-NLS-1$
-                .put(KEY_ITEMS, Collections.singletonList(formItem(ref.formName, mdForm.eClass().getName())))
+                .put(KEY_ITEMS, removed)
                 .put(KEY_BLOCKING, false);
             return putBlockingReferences(preview, Collections.emptyList())
                 .put(McpKeys.MESSAGE, "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
-                    + " would remove the form and its content Form.form. Cross-references to it " //$NON-NLS-1$
+                    + " would remove the form and its content Form.form" //$NON-NLS-1$
+                    + (content.isEmpty() ? "" : " (" + content.describe() + ", listed above)") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + content.truncationNote()
+                    + ". Cross-references to it " //$NON-NLS-1$
                     + "(a default-form setting) are cleared on the owner. Note: incoming references " //$NON-NLS-1$
                     + "from OTHER top objects (e.g. BSL code opening this form by name) are NOT " //$NON-NLS-1$
                     + "checked for owned forms — verify with find_references if unsure. " //$NON-NLS-1$
@@ -2218,6 +2261,29 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         int attributes;
         int columns;
         int commands;
+
+        /**
+         * The same elements the counters above summarize, as {name, type} entries - so the
+         * {@code confirm=false} preview can LIST exactly what the consent prompt COUNTS. The prompt
+         * told the caller to run the preview for details while the preview still answered with the
+         * form alone (issue #295 review).
+         */
+        final List<Map<String, Object>> elements = new ArrayList<>();
+
+        /**
+         * Whether the walk hit its node bound and stopped: the counts and the list then describe a
+         * PREFIX of what the delete removes, and both phases must say so rather than present a cut
+         * list as complete.
+         */
+        boolean truncated;
+
+        /** The "and there is more" note for the message, or {@code ""} when the walk finished. */
+        String truncationNote()
+        {
+            return truncated
+                ? " (first " + FormStructureReader.MAX_NODES + " nodes only - the form is larger)" //$NON-NLS-1$ //$NON-NLS-2$
+                : ""; //$NON-NLS-1$
+        }
 
         /** @return every element the content form carries */
         int total()

@@ -371,6 +371,11 @@ def test_delete_form_object_preview_then_confirm():
     assert form in names, "preview items must list the form: %r" % (pv.structured,)
     assert_contains(pv.structured.get("message", ""), "confirm=true",
                     "preview must instruct re-calling with confirm=true")
+    # The prompt counts the form's CONTENT and points the caller here for the details, so the preview
+    # has to list that content too - it used to answer with the BasicForm alone (issue #295 review).
+    # A fresh form already carries its auto command bar.
+    assert len(names) > 1, \
+        "the preview must list the form's content, not the form alone: %r" % (pv.structured,)
     # The form must still render after a preview (not mutated).
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
     assert_ok(d, "the form must still resolve after a preview")

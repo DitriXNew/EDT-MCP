@@ -1057,6 +1057,99 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    public void testTheContentSummaryListsWhatItCounts()
+    {
+        // One summary feeds both phases: the prompt's counters and the confirm=false preview's item
+        // list. The prompt told the caller to run the preview for details while the preview answered
+        // with the BasicForm alone (issue #295 review), so the elements are asserted here and the
+        // preview's USE of them by the e2e (a wire output).
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/contentsummary"); //$NON-NLS-1$
+        // A separate 'name' attribute per EClass: an EStructuralFeature belongs to ONE class, so
+        // sharing the instance re-parents it and the first class silently loses the feature.
+        EClass formItem = factory.createEClass();
+        formItem.setName("FormItem"); //$NON-NLS-1$
+        formItem.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass columnClass = factory.createEClass();
+        columnClass.setName("FormAttributeColumn"); //$NON-NLS-1$
+        columnClass.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass commandClass = factory.createEClass();
+        commandClass.setName("FormCommand"); //$NON-NLS-1$
+        commandClass.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass attributeClass = factory.createEClass();
+        attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+        attributeClass.getEStructuralFeatures().add(nameAttribute(factory));
+        attributeClass.getEStructuralFeatures().add(manyContainment(factory, "columns", columnClass)); //$NON-NLS-1$
+        EClass form = factory.createEClass();
+        form.setName("Form"); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(manyContainment(factory, "items", formItem)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(manyContainment(factory, "attributes", attributeClass)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(
+            manyContainment(factory, "formCommands", commandClass)); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formItem);
+        pkg.getEClassifiers().add(columnClass);
+        pkg.getEClassifiers().add(commandClass);
+        pkg.getEClassifiers().add(attributeClass);
+        pkg.getEClassifiers().add(form);
+
+        EObject model = new DynamicEObjectImpl(form);
+        EObject field = new DynamicEObjectImpl(formItem);
+        field.eSet(formItem.getEStructuralFeature("name"), "PriceField"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("items"))).add(field); //$NON-NLS-1$
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(attributeClass.getEStructuralFeature("name"), "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = new DynamicEObjectImpl(columnClass);
+        column.eSet(columnClass.getEStructuralFeature("name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)attribute.eGet(attributeClass.getEStructuralFeature("columns"))).add(column); //$NON-NLS-1$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("attributes"))).add(attribute); //$NON-NLS-1$
+        EObject command = new DynamicEObjectImpl(commandClass);
+        command.eSet(commandClass.getEStructuralFeature("name"), "Post"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("formCommands"))).add(command); //$NON-NLS-1$
+
+        DeleteMetadataTool.FormContentSummary summary =
+            DeleteMetadataTool.summarizeFormContentForTest(model);
+
+        assertEquals("the counters and the listed elements must agree", //$NON-NLS-1$
+            summary.total(), summary.elements.size());
+        // EVERY kind the counters cover must be listed, with its type - dropping any of them (or the
+        // 'type' field) has to fail here, or the preview could stop promising what it promises.
+        List<Object> names = new ArrayList<>();
+        for (java.util.Map<String, Object> entry : summary.elements)
+        {
+            names.add(entry.get("name")); //$NON-NLS-1$
+            assertNotNull("every listed element needs its type: " + entry, //$NON-NLS-1$
+                entry.get("type")); //$NON-NLS-1$
+        }
+        assertTrue("the item must be listed: " + names, names.contains("PriceField")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the attribute must be listed: " + names, names.contains("Rows")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the COLUMN must be listed: " + names, names.contains("Price")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the COMMAND must be listed: " + names, names.contains("Post")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A fresh {@code name} string attribute (one instance per owning EClass - see above). */
+    private static EAttribute nameAttribute(EcoreFactory factory)
+    {
+        EAttribute attribute = factory.createEAttribute();
+        attribute.setName("name"); //$NON-NLS-1$
+        attribute.setEType(EcorePackage.Literals.ESTRING);
+        return attribute;
+    }
+
+    /** A many-valued containment reference named {@code name} holding {@code type}. */
+    private static EReference manyContainment(EcoreFactory factory, String name, EClass type)
+    {
+        EReference reference = factory.createEReference();
+        reference.setName(name);
+        reference.setEType(type);
+        reference.setContainment(true);
+        reference.setUpperBound(-1);
+        return reference;
+    }
+
+    @Test
     public void testTheFormPromptCountsTheContentItRemoves()
     {
         // A form delete takes the whole content Form.form with it, so a constant "1" asked the user to
