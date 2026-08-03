@@ -2432,19 +2432,116 @@ public final class FormElementWriter
      */
     private static boolean hasTerminalValueType(EObject attribute)
     {
-        List<String> typeNames = valueTypeNames(attribute);
+        return nestedAddressingOf(attribute) == NestedAddressing.NO_MEMBERS;
+    }
+
+    /**
+     * What a dotted data path may address BELOW a form member. The outcomes are NAMED, exhaustive and
+     * mutually exclusive, because the subject is three-valued while the guard that asked it used to be
+     * two-valued: it split "terminal, refuse" from "not terminal, pass", and everything not terminal
+     * fell into "pass" - including a value whose members exist in principle but have nowhere in this
+     * model to be declared (issue #295 review). Each outcome is answered explicitly by
+     * {@link #nestedAddressingError}, so no case can fall through into another's behaviour.
+     */
+    enum NestedAddressing
+    {
+        /**
+         * Every declared type is memberless (String / Number / Boolean / Date / UUID / ValueStorage):
+         * there is nothing for a tail to resolve against, whatever the model offers.
+         */
+        NO_MEMBERS,
+        /**
+         * The members the declared types imply are COLUMNS, and this member's EClass owns no
+         * {@code columns} containment to hold them. A {@code FormAttributeColumn} is exactly that: the
+         * form metamodel puts {@code columns} on {@code FormAttribute} only, so a column of collection
+         * type holds a nested table whose columns can never be declared - and therefore never
+         * addressed. The value is rich; the address space under it is empty.
+         */
+        MEMBERS_HAVE_NO_HOME,
+        /**
+         * At least one declared type could carry the tail - a reference (its members live in the
+         * metadata this writer cannot read), a collection on a member that DOES own columns, or a type
+         * not yet set at all. Unknown counts as addressable on purpose: refusing here would break the
+         * legitimate {@code Rows.Product.Description}.
+         */
+        MEMBERS_OUTSIDE_THIS_MODEL
+    }
+
+    /**
+     * Classifies what a dotted tail could address below {@code member}, by asking the MODEL two
+     * separate questions per declared type - does the type carry members at all, and does this member
+     * have somewhere to put them - instead of the single "is it terminal" the guard used to ask.
+     *
+     * <p>A member answers {@link NestedAddressing#MEMBERS_OUTSIDE_THIS_MODEL} as soon as ONE declared
+     * type could carry the tail, so a composite {@code {CatalogRef.X, ValueTable}} stays addressable
+     * through its reference half - the refusals below fire only when EVERY declared type is provably
+     * dead, which is the same "refuse only what is provably impossible" bar the rest of this validation
+     * keeps.</p>
+     *
+     * @param member the form attribute or column the path would continue past
+     * @return the outcome, never {@code null}
+     */
+    static NestedAddressing nestedAddressingOf(EObject member)
+    {
+        List<String> typeNames = valueTypeNames(member);
         if (typeNames.isEmpty())
         {
-            return false;
+            return NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL;
         }
+        // Asked of the metamodel, not of the member's class NAME: whoever gains a `columns`
+        // containment gains an address space under it, and this follows without an edit here.
+        boolean ownsColumns =
+            member.eClass().getEStructuralFeature(FEATURE_COLUMNS) instanceof EReference;
+        boolean everyTypeMemberless = true;
         for (String typeName : typeNames)
         {
-            if (!MetadataTypeBuilder.isMemberlessType(typeName))
+            if (MetadataTypeBuilder.isMemberlessType(typeName))
             {
-                return false;
+                continue;
+            }
+            everyTypeMemberless = false;
+            if (!MetadataTypeBuilder.isCollectionKind(typeName) || ownsColumns)
+            {
+                return NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL;
             }
         }
-        return true;
+        return everyTypeMemberless ? NestedAddressing.NO_MEMBERS : NestedAddressing.MEMBERS_HAVE_NO_HOME;
+    }
+
+    /**
+     * The refusal for a path that continues past a column it can never resolve through, or
+     * {@code null} when the continuation is addressable. Every {@link NestedAddressing} constant is
+     * answered here explicitly - an unhandled one raises rather than silently reading as "allowed",
+     * which is what a two-valued rule did to the third case.
+     *
+     * @param addressing what the column's value can be addressed through
+     * @param attrName the whole requested data path, for the message
+     * @param headAttr the head form attribute's name
+     * @param columnName the column the path continues past
+     * @return an actionable refusal, or {@code null} to allow the path
+     */
+    static String nestedAddressingError(NestedAddressing addressing, String attrName, String headAttr,
+        String columnName)
+    {
+        switch (addressing)
+        {
+            case NO_MEMBERS:
+                return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', but that column's type has no nested members. " //$NON-NLS-1$
+                    + "Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
+                    + "." + columnName + "'})."; //$NON-NLS-1$ //$NON-NLS-2$
+            case MEMBERS_HAVE_NO_HOME:
+                return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', which holds an in-memory collection - but only a form ATTRIBUTE owns " //$NON-NLS-1$
+                    + "columns, a column owns none, so nothing can be declared (or addressed) under " //$NON-NLS-1$
+                    + "it. Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
+                    + "." + columnName + "'}), or give the nested table its own form attribute " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "('...Attribute.<Name>' with a ValueTable type) and bind to ITS column."; //$NON-NLS-1$
+            case MEMBERS_OUTSIDE_THIS_MODEL:
+                return null;
+            default:
+                throw new IllegalStateException("unhandled nested addressing: " + addressing); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -3240,7 +3337,8 @@ public final class FormElementWriter
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
         // head form attribute, and WHICH head it is decides what the tail may name:
         //   - a COLLECTION attribute (ValueTable / ValueTree, e.g. "Rows.Price"): the tail must name // NOSONAR explanatory prose, not commented-out code
-        //     one of ITS columns - the only sub-name such an attribute has, so it is checkable here; // NOSONAR explanatory prose, not commented-out code
+        //     one of ITS columns - the only sub-name such an attribute has, so it is checkable here, // NOSONAR explanatory prose, not commented-out code
+        //     and so is what may follow that column (see NestedAddressing); // NOSONAR explanatory prose, not commented-out code
         //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields // NOSONAR explanatory prose, not commented-out code
         //     (auto-filled by EDT - not a model attribute), so it is NOT checkable here; // NOSONAR explanatory prose, not commented-out code
         //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of // NOSONAR explanatory prose, not commented-out code
@@ -3270,19 +3368,23 @@ public final class FormElementWriter
             {
                 EObject column = findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName);
                 // A path that CONTINUES past the column ('Rows.Price.Amount') walks into the column's
-                // own type. Refused only when the column is PROVABLY memberless - a String, a Number,
-                // a UUID, a ValueStorage carries nothing a tail could resolve against. A reference /
-                // composite / not-yet-typed column is accepted: its members live in metadata this
-                // writer cannot read, and refusing on "unknown" would break the legitimate
-                // 'Rows.Product.Description'. The third option - accepting a path that is provably
-                // impossible - is the silent success this branch has been closing all along (issue
-                // #295 review).
-                if (column != null && nextDot > 0 && hasTerminalValueType(column))
+                // own type, and what it may find there is THREE-valued, not two - which is why the
+                // decision is delegated to NestedAddressing rather than to one predicate here:
+                //   - the type carries no members at all (String, UUID, ...): nothing to resolve; // NOSONAR explanatory prose, not commented-out code
+                //   - the type is an in-memory COLLECTION: its members would be columns, and the form // NOSONAR explanatory prose, not commented-out code
+                //     metamodel gives a COLUMN no `columns` of its own, so they can never be declared; // NOSONAR explanatory prose, not commented-out code
+                //   - anything else (a reference, a composite carrying one, a not-yet-typed column): // NOSONAR explanatory prose, not commented-out code
+                //     its members live in metadata this writer cannot read, so the path is allowed. // NOSONAR explanatory prose, not commented-out code
+                // Reading "not terminal" as "allowed" collapsed the middle case into the last one and
+                // accepted 'Rows.Nested.Price' whenever the column existed (issue #295 review).
+                if (column != null && nextDot > 0)
                 {
-                    return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
-                        + "', but that column's type has no nested members. " //$NON-NLS-1$
-                        + "Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
-                        + "." + columnName + "'})."; //$NON-NLS-1$ //$NON-NLS-2$
+                    String nestedErr = nestedAddressingError(nestedAddressingOf(column), attrName,
+                        headAttr, columnName);
+                    if (nestedErr != null)
+                    {
+                        return nestedErr;
+                    }
                 }
                 if (column == null)
                 {

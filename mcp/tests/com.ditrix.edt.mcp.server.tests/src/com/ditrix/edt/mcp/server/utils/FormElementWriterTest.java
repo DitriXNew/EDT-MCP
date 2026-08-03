@@ -3271,9 +3271,10 @@ public class FormElementWriterTest
     @Test
     public void testAFieldMayWalkPastANonPrimitiveColumn()
     {
-        // The other direction: a column whose type is NOT provably primitive (a reference, or not yet
-        // typed) keeps accepting a deeper path - its members live in metadata this writer cannot read,
-        // so refusing on "unknown" would break a legitimate 'Rows.Product.Description'.
+        // OUTCOME 3 of NestedAddressing (MEMBERS_OUTSIDE_THIS_MODEL): a column whose type could carry
+        // the tail keeps accepting a deeper path - its members live in metadata this writer cannot
+        // read, so refusing on "unknown" would break a legitimate 'Rows.Product.Description'. Both
+        // shapes that reach this outcome are asserted: a not-yet-typed column and a REFERENCE one.
         EObject form = newForm();
         newCollectionAttribute(form, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -3281,6 +3282,109 @@ public class FormElementWriterTest
             FormElementWriter.createMember(form, Kind.FIELD, "DeepOnRef", null, //$NON-NLS-1$
                 "Rows.Product.Description", null, null, false, null)); //$NON-NLS-1$
         assertNotNull(FormElementWriter.findFormItem(form, "DeepOnRef")); //$NON-NLS-1$
+
+        EObject typedForm = newForm();
+        EObject typedRows = newCollectionAttribute(typedForm, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject product = (EObject)((List<?>)typedRows.eGet(feature(typedRows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformType(product, "CatalogRef.Catalog"); //$NON-NLS-1$
+        assertNull("a REFERENCE column must not block a deeper path either", //$NON-NLS-1$
+            FormElementWriter.createMember(typedForm, Kind.FIELD, "DeepOnTypedRef", null, //$NON-NLS-1$
+                "Rows.Product.Description", null, null, false, null)); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(typedForm, "DeepOnTypedRef")); //$NON-NLS-1$
+        assertEquals(FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL,
+            FormElementWriter.nestedAddressingOf(product));
+    }
+
+    @Test
+    public void testAFieldCannotWalkPastACollectionColumnBecauseAColumnOwnsNoColumns()
+    {
+        // OUTCOME 2 of NestedAddressing (MEMBERS_HAVE_NO_HOME) - the case a two-valued rule had no
+        // room for. A ValueTable column is NOT terminal, so "not terminal => pass" accepted
+        // 'Rows.Nested.Price' as soon as the column existed. But the members such a value implies are
+        // COLUMNS, and the form metamodel puts `columns` on FormAttribute only - a FormAttributeColumn
+        // owns none - so 'Price' can never be declared under 'Nested', and the binding is dead on
+        // arrival (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Nested"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject nested = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformType(nested, "ValueTable"); //$NON-NLS-1$
+
+        assertEquals("a collection COLUMN has members with nowhere to live", //$NON-NLS-1$
+            FormElementWriter.NestedAddressing.MEMBERS_HAVE_NO_HOME,
+            FormElementWriter.nestedAddressingOf(nested));
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnNested", null, //$NON-NLS-1$
+            "Rows.Nested.Price", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a path past a collection column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the column: " + err, err.contains("'Nested'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and say WHY nothing can live under it: " + err, //$NON-NLS-1$
+            err.contains("owns no") || err.contains("owns none")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "DeepOnNested")); //$NON-NLS-1$
+
+        // The OTHER side: the collection column as the FINAL segment stays addressable - the refusal
+        // is about continuing PAST it, never about binding to it.
+        assertNull("a field bound to the collection column itself must still be created", //$NON-NLS-1$
+            FormElementWriter.createMember(form, Kind.FIELD, "NestedCell", null, //$NON-NLS-1$
+                "Rows.Nested", null, null, false, null)); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "NestedCell")); //$NON-NLS-1$
+
+        // ...and the same ValueTable type on an ATTRIBUTE, which DOES own columns, keeps its address
+        // space: the outcome is decided by the metamodel, not by the type name.
+        assertEquals("a collection ATTRIBUTE owns columns, so members can be declared under it", //$NON-NLS-1$
+            FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL,
+            FormElementWriter.nestedAddressingOf(rows));
+    }
+
+    @Test
+    public void testACompositeColumnStaysAddressableThroughItsReferenceHalf()
+    {
+        // The refusals fire only when EVERY declared type is provably dead. A column typed
+        // {ValueTable, CatalogRef.Catalog} can still resolve 'Description' through its reference half,
+        // so widening the guard to "any collection type" would have been a false refusal - the exact
+        // inversion this branch has had to undo four times.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Mixed"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject mixed = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformTypes(mixed, "ValueTable", "CatalogRef.Catalog"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL,
+            FormElementWriter.nestedAddressingOf(mixed));
+        assertNull("a composite carrying a reference must keep the deeper path", //$NON-NLS-1$
+            FormElementWriter.createMember(form, Kind.FIELD, "DeepOnMixed", null, //$NON-NLS-1$
+                "Rows.Mixed.Description", null, null, false, null)); //$NON-NLS-1$
+
+        // ...while {ValueTable, String} - both halves dead - is refused, and as the COLLECTION case,
+        // because "no members at all" is only true when EVERY type is memberless.
+        EObject deadRows = newCollectionAttribute(form, "Dead", "Both"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject both = (EObject)((List<?>)deadRows.eGet(feature(deadRows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformTypes(both, "ValueTable", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(FormElementWriter.NestedAddressing.MEMBERS_HAVE_NO_HOME,
+            FormElementWriter.nestedAddressingOf(both));
+    }
+
+    @Test
+    public void testEveryNestedAddressingOutcomeIsDecidedExplicitly()
+    {
+        // The point of naming the outcomes: there is no third default left. Walking values() means a
+        // constant added later and not answered raises here instead of silently reading as "allowed",
+        // which is exactly how the collection case slipped through the two-valued rule.
+        int refusals = 0;
+        for (FormElementWriter.NestedAddressing addressing : FormElementWriter.NestedAddressing.values())
+        {
+            String message = FormElementWriter.nestedAddressingError(addressing,
+                "Rows.Col.Tail", "Rows", "Col"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            if (addressing == FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL)
+            {
+                assertNull("an addressable continuation must not be refused", message); //$NON-NLS-1$
+                continue;
+            }
+            refusals++;
+            assertNotNull("outcome " + addressing + " must answer with a refusal", message); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the refusal must name the column (" + addressing + "): " + message, //$NON-NLS-1$ //$NON-NLS-2$
+                message.contains("'Col'")); //$NON-NLS-1$
+            assertTrue("the refusal must be actionable (" + addressing + "): " + message, //$NON-NLS-1$ //$NON-NLS-2$
+                message.contains("dataPath")); //$NON-NLS-1$
+        }
+        assertEquals("exactly two of the three outcomes refuse", 2, refusals); //$NON-NLS-1$
     }
 
     @Test
@@ -3351,13 +3455,23 @@ public class FormElementWriterTest
     }
 
     /** Gives {@code member} a value type of the named platform type (primitive or no-qualifier). */
-    @SuppressWarnings("unchecked")
     private static void setPlatformType(EObject member, String typeName)
     {
+        setPlatformTypes(member, typeName);
+    }
+
+    /** Gives {@code member} a COMPOSITE value type of the named platform types, in order. */
+    @SuppressWarnings("unchecked")
+    private static void setPlatformTypes(EObject member, String... typeNames)
+    {
         EObject typeDescription = newObject(modelClass("TypeDescription")); //$NON-NLS-1$
-        com._1c.g5.v8.dt.mcore.Type type = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
-        type.setName(typeName);
-        ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(type); //$NON-NLS-1$
+        for (String typeName : typeNames)
+        {
+            com._1c.g5.v8.dt.mcore.Type type =
+                com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(type); //$NON-NLS-1$
+        }
         member.eSet(feature(member, "valueType"), typeDescription); //$NON-NLS-1$
     }
 

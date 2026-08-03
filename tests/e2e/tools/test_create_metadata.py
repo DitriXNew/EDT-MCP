@@ -1214,6 +1214,40 @@ def test_a_field_cannot_walk_past_a_memberless_column():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_cannot_walk_past_a_collection_column():
+    # A COLLECTION column is not terminal, so a two-valued "terminal refuses / else passes" rule let
+    # 'Rows.Nested.Price' through as soon as the column existed. But the members such a value implies
+    # are COLUMNS, and the form metamodel puts `columns` on FormAttribute only - a column owns none -
+    # so 'Price' can never be declared under 'Nested' (issue #295 review). Asserted live, because the
+    # verdict is read off the real metamodel, not the synthetic one a unit test builds.
+    attr, col = "E2ENestedOwner", "Nested"
+    _seed_collection_attribute(attr)
+    base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
+    assert_ok(c, "seed the column")
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": base + ".Column." + col,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "type the column as a ValueTable")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DeepOnNested",
+        "properties": [{"name": "dataPath", "value": "%s.%s.Price" % (attr, col)}]})
+    e = assert_error(r, "a path past a collection column must be refused")
+    assert_error_quality(e, names=[col], suggests=["dataPath", "ATTRIBUTE"],
+                         ctx="the refusal must name the column, say only an attribute owns columns, "
+                             "and give the two ways out")
+
+    # The OTHER side: the collection column as the FINAL segment stays addressable.
+    ok = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NestedCell",
+        "properties": [{"name": "dataPath", "value": "%s.%s" % (attr, col)}]})
+    assert_ok(ok, "a field bound to the collection column ITSELF must still be created")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_column_on_non_collection_attribute_is_error():
     # Only a ValueTable / ValueTree attribute owns columns. EDT would not flag a column hung off a
     # String attribute, so the tool has to - and it must say how to fix it (issue #295).
