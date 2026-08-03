@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -971,6 +971,26 @@ public final class PredefinedWriter
     public static PredefinedItem findByName(EObject owner, String name)
     {
         Located l = locateYo(owner, name);
+        return l != null ? l.item : null;
+    }
+
+    /**
+     * Finds a predefined item by an EXACT name match, with NO yo tolerance.
+     *
+     * <p>{@link #findByName} is deliberately lenient: on a miss it retries the yo-normalized
+     * spelling, so a probe written {@code M[yo]d} answers for an item stored {@code M[ye]d}. That is
+     * right for a read/modify/delete, which only needs to reach the object. It is WRONG for a caller
+     * that enumerates the spellings itself and treats the first hit as the stored one: the lenient
+     * answer makes the as-typed probe succeed for a DIFFERENTLY spelled item, the enumeration stops
+     * there, and every other item that address can mean is never looked for.</p>
+     *
+     * @param owner the owner object
+     * @param name the item's programmatic Name, taken literally
+     * @return the found item, or {@code null}
+     */
+    public static PredefinedItem findByNameExact(EObject owner, String name)
+    {
+        Located l = locate(owner, name);
         return l != null ? l.item : null;
     }
 

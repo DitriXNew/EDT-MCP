@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT - Tests
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -98,6 +98,103 @@ public class FormElementWriterTest
         // tablica -> TABLE
         assertEquals(Kind.TABLE, FormElementWriter.kindForToken(
             fromCp(0x0442, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430)));
+    }
+
+    @Test
+    public void testMatchesRequestedKindRejectsAWrongKindTokenOnAnExistingName()
+    {
+        // resolveFormMember finds an ITEM by NAME alone, so every kind token resolves to the same
+        // element. A consumer that only asks "is it non-null" therefore accepts 'Button.Price' for
+        // the FIELD Price - and then filters markers by a kind segment no location carries.
+        EObject form = newFormWithPriceAttribute();
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "Price", null, //$NON-NLS-1$
+            "PriceAttr", null, null, false, new String[1])); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "Price"); //$NON-NLS-1$
+        assertNotNull(field);
+        assertEquals("FormField", field.eClass().getName()); //$NON-NLS-1$
+
+        assertTrue("the requested kind IS the element's kind", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Field", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a FIELD must not answer to a Button address", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Button", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor to a Group / Decoration / Table address", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Group", "Price")) //$NON-NLS-1$
+                || FormElementWriter.matchesRequestedKind(field, ref("Decoration", "Price")) //$NON-NLS-1$ //$NON-NLS-2$
+                || FormElementWriter.matchesRequestedKind(field, ref("Table", "Price"))); //$NON-NLS-1$
+        // pole / knopka - the same verdicts through the Russian tokens.
+        assertTrue(FormElementWriter.matchesRequestedKind(field,
+            ref(fromCp(0x043f, 0x043e, 0x043b, 0x0435), "Price"))); //$NON-NLS-1$
+        assertFalse(FormElementWriter.matchesRequestedKind(field,
+            ref(fromCp(0x043a, 0x043d, 0x043e, 0x043f, 0x043a, 0x0430), "Price"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMatchesRequestedKindRejectsAnUnrecognizedKindToken()
+    {
+        // 'Fielld' denotes no kind at all, and resolveFormMember falls back to the by-name search
+        // for ANY token - so without this check a misspelt token resolves to the real element.
+        EObject form = newFormWithPriceAttribute();
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "Price", null, //$NON-NLS-1$
+            "PriceAttr", null, null, false, new String[1])); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "Price"); //$NON-NLS-1$
+        assertFalse("an unrecognized kind token can be the kind of nothing", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(field, ref("Fielld", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a missing element never matches", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(null, ref("Field", "Price"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMatchesRequestedKindAcceptsEveryOwnKindAndTheTokenlessElements()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "PrintButton", null, //$NON-NLS-1$
+            "Print", null, null, false, new String[1])); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.GROUP, "Main", null, null, //$NON-NLS-1$
+            null, null, false, new String[1]));
+        assertNull(FormElementWriter.createMember(form, Kind.DECORATION, "Hint", null, null, //$NON-NLS-1$
+            null, null, false, new String[1]));
+        assertNull(FormElementWriter.createMember(form, Kind.TABLE, "Lines", null, //$NON-NLS-1$
+            "Object.Lines", null, null, false, new String[1])); //$NON-NLS-1$
+
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "PrintButton"), ref("Button", "PrintButton"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "Main"), ref("Group", "Main"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "Hint"), ref("Decoration", "Hint"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormItem(form, "Lines"), ref("Table", "Lines"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // An ATTRIBUTE / COMMAND is resolved from its OWN containment, so its kind is already
+        // guaranteed by the lookup and must not be second-guessed here.
+        assertTrue(FormElementWriter.matchesRequestedKind(
+            FormElementWriter.findFormCommand(form, "Print"), ref("Command", "Print"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // The auto command bar is an element NO kind token denotes: it stays addressable by name,
+        // exactly as before, so the check must not narrow the supported addresses.
+        EObject bar = FormElementWriter.findFormItem(form, "FormCommandBar"); //$NON-NLS-1$
+        assertNotNull(bar);
+        assertTrue("an element no kind token denotes must stay addressable", //$NON-NLS-1$
+            FormElementWriter.matchesRequestedKind(bar, ref("Group", "FormCommandBar"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A form carrying one form attribute, so a bound FIELD can be created on it. */
+    private static EObject newFormWithPriceAttribute()
+    {
+        EObject form = newForm();
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "PriceAttr"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return form;
+    }
+
+    /** A form-member ref for the fixture form, addressed with the given kind token / leaf name. */
+    private static FormMemberRef ref(String kindToken, String name)
+    {
+        FormMemberRef parsed =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm." + kindToken + "." + name); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("the probe FQN must parse as a form member", parsed); //$NON-NLS-1$
+        return parsed;
     }
 
     @Test
@@ -3299,5 +3396,69 @@ public class FormElementWriterTest
             commonForm.eGet(MdClassPackage.Literals.BASIC_FORM__FORM));
         org.mockito.Mockito.verify(tx, org.mockito.Mockito.never())
             .attachTopObject(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    public void testPluralKindTokensAreAcceptedInBothLanguages()
+    {
+        // The bilingual alias catalogue the object filter advertises (MetadataTypeUtils' nested
+        // kinds) accepts the SINGULAR and the PLURAL of every form kind, in both languages. This
+        // parser accepted only a subset, so an advertised address like
+        // '...Form.ItemForm.Fields.Price' resolved the element by NAME and was then rejected on its
+        // KIND - a real field reported as objectsNotFound. Every advertised spelling must parse.
+        assertEquals(Kind.ATTRIBUTE, FormElementWriter.kindForToken("attributes")); //$NON-NLS-1$
+        assertEquals(Kind.ATTRIBUTE, FormElementWriter.kindForToken("\u0440\u0435\u043A\u0432\u0438\u0437\u0438\u0442\u044B")); //$NON-NLS-1$
+        assertEquals(Kind.COMMAND, FormElementWriter.kindForToken("commands")); //$NON-NLS-1$
+        assertEquals(Kind.COMMAND, FormElementWriter.kindForToken("\u043A\u043E\u043C\u0430\u043D\u0434\u044B")); //$NON-NLS-1$
+        assertEquals(Kind.GROUP, FormElementWriter.kindForToken("groups")); //$NON-NLS-1$
+        assertEquals(Kind.GROUP, FormElementWriter.kindForToken("\u0433\u0440\u0443\u043F\u043F\u044B")); //$NON-NLS-1$
+        assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("decorations")); //$NON-NLS-1$
+        assertEquals(Kind.DECORATION, FormElementWriter.kindForToken("\u0434\u0435\u043A\u043E\u0440\u0430\u0446\u0438\u0438")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("fields")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("\u043F\u043E\u043B\u044F")); //$NON-NLS-1$
+        assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("buttons")); //$NON-NLS-1$
+        assertEquals(Kind.BUTTON, FormElementWriter.kindForToken("\u043A\u043D\u043E\u043F\u043A\u0438")); //$NON-NLS-1$
+        assertEquals(Kind.TABLE, FormElementWriter.kindForToken("tables")); //$NON-NLS-1$
+        assertEquals(Kind.TABLE, FormElementWriter.kindForToken("\u0442\u0430\u0431\u043B\u0438\u0446\u044B")); //$NON-NLS-1$
+        // Case must not matter either - a location renders these capitalized.
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("Fields")); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken("\u041F\u043E\u043B\u044F")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHandlerAndFormTokensAcceptBothNumbersAndBothLanguages()
+    {
+        // Same defect as the visual kinds' plurals, one token over: the alias catalogue publishes
+        // Handler/Handlers and both Russian numbers, but this predicate carried its own two
+        // literals. So '...Form.F.Handlers.OnCreateAtServer' was not parsed as a handler at all -
+        // it fell through to an ordinary member, and a real handler was reported missing.
+        assertTrue(FormElementWriter.isHandlerToken("Handler")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken("handlers")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken("\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken("\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A\u0438")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isHandlerToken("Handlerz")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isHandlerToken(null));
+
+        // The FORM token has the same shape and the same failure mode, so it is pinned here too.
+        assertTrue(FormElementWriter.isFormToken("Form")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("Forms")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("\u0444\u043E\u0440\u043C\u0430")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isFormToken("\u0444\u043E\u0440\u043C\u044B")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isFormToken("Formz")); //$NON-NLS-1$
+
+        // And the parse path really uses them: a handler addressed with the PLURAL token must come
+        // back as a handler reference, at form level and at item level alike.
+        FormElementWriter.FormMemberRef formLevel =
+            FormElementWriter.parse("Catalog.C.Forms.ItemForm.Handlers.OnCreateAtServer"); //$NON-NLS-1$
+        assertNotNull("a plural handler token must still parse", formLevel); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isHandlerToken(formLevel.kindToken));
+        assertEquals("OnCreateAtServer", formLevel.name); //$NON-NLS-1$
+
+        FormElementWriter.FormMemberRef itemLevel =
+            FormElementWriter.parse("Catalog.C.Forms.ItemForm.Fields.Code.Handlers.OnChange"); //$NON-NLS-1$
+        assertNotNull("an item-level plural handler token must parse as item-level", itemLevel); //$NON-NLS-1$
+        assertTrue(itemLevel.isItemLevel());
+        assertEquals("Code", itemLevel.itemName); //$NON-NLS-1$
+        assertEquals(Kind.FIELD, FormElementWriter.kindForToken(itemLevel.itemKindToken));
     }
 }
