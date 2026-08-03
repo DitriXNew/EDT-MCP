@@ -1110,10 +1110,10 @@ public class MetadataTypeUtilsTest
         // nested kind (a DocumentJournal column) and Handler routes to its own branch.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Column")); //$NON-NLS-1$
         assertNotNull(MetadataTypeUtils.resolveNestedKind(
-            "Колонка")); //$NON-NLS-1$
+            "\u041A\u043E\u043B\u043E\u043D\u043A\u0430")); //$NON-NLS-1$
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Handler")); //$NON-NLS-1$
         assertTrue(FormElementWriter.isHandlerToken(
-            "обработчик")); //$NON-NLS-1$
+            "\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
     }
 
     /** Whether {@code token} is written in Cyrillic (its first letter decides). */
