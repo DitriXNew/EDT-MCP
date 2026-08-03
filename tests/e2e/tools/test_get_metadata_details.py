@@ -87,6 +87,37 @@ def test_full_mode_emits_more_than_basic():
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
+def test_include_help_renders_authored_help():
+    # includeHelp:true appends the object's authored "Reference information" help, read from
+    # <ObjectDir>/Help/<lang>.html and rendered to Markdown. Catalog.Catalog carries a committed
+    # Help/en.html fixture. The distinctive help text (and the "## Help (en)" heading) must appear
+    # ONLY with includeHelp:true -- a no-op flag, or reading the wrong file, fails this.
+    common = {"projectName": PROJECT, "objectFqns": ["Catalog.Catalog"]}
+    help_marker = "reference catalog used by the e2e suite"
+    r_off = call("get_metadata_details", dict(common))
+    r_on = call("get_metadata_details", dict(common, includeHelp=True))
+    assert_ok(r_off, "get_metadata_details Catalog.Catalog (no help)")
+    assert_ok(r_on, "get_metadata_details Catalog.Catalog (includeHelp)")
+    assert_not_contains(r_off.text, help_marker, "help must be ABSENT without includeHelp")
+    assert_not_contains(r_off.text, "## Help", "no help heading without includeHelp")
+    assert_contains(r_on.text, "## Help (en)", "the authored help heading must render with includeHelp")
+    assert_contains(r_on.text, help_marker, "the authored help text must be rendered from Help/en.html")
+    assert_no_diff("includeHelp read must not change the project")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_include_help_notes_absent_help():
+    # includeHelp:true on an object with NO authored help (a CommonModule has no Help/ dir) emits a
+    # clean "none authored" note rather than nothing or an error -- so the caller knows help was
+    # checked. Proves the reader distinguishes "no help" from a failure.
+    r = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["CommonModule.Calc"], "includeHelp": True})
+    assert_ok(r, "get_metadata_details CommonModule.Calc (includeHelp, no help authored)")
+    assert_contains(r.text, "none authored", "an object without help must note that help is absent")
+    assert_no_diff("includeHelp read must not change the project")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
 def test_russian_type_token_resolves_to_same_object():
     # The FQN type token is bilingual: "Справочник" (Russian for Catalog) must
     # resolve to the SAME object as "Catalog" (the object Name itself is never

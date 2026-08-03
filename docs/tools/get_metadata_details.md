@@ -11,6 +11,7 @@ Get detailed properties of one or more 1C metadata objects (basic info by defaul
 | roleObjectOffset | — | integer | For a ROLE FQN only: 0-based object offset into the rights matrix, for paging past the first 100 authored objects in the default (non-full) view (default: 0; ignored when 'full: true', which renders every object up to 1000). Use it (or 'full: true') to read a role that authors more than 100 objects. |
 | assignable | — | boolean | Instead of the details view, return the ASSIGNABLE-property schema (default false): per property its value kind, current value and ALLOWED values (enum literals). This is what modify_metadata can set; FQNs may address members (e.g. 'Catalog.Products.Attribute.Weight'), but NOT a predefined item ('...Predefined.<Item>' is not resolvable in this mode - its settable surface is FIXED and depends on the OWNER: description / code everywhere; isFolder on a Catalog / ChartOfCharacteristicTypes; valueType (alias 'type') on a ChartOfCharacteristicTypes; accountType / offBalance / order / accountingFlags / extDimensionTypes on a ChartOfAccounts; base / displaced / leading / actionPeriodIsBase on a ChartOfCalculationTypes; and 'parent' at CREATE time only (Catalog / ChartOfCharacteristicTypes / ChartOfAccounts). modify_metadata names the same set in its own description, and its guide says which owner each belongs to). |
 | language | — | string | Synonym language code, e.g. 'en'/'ru' (default: configuration default) |
+| includeHelp | — | boolean | Also include the object's authored HELP - the 'Reference information' HTML a configuration author fills in for an object, rendered to Markdown per language (default false). This is the object's OWN help, not the platform documentation (for that use get_platform_documentation). Omitted when the object has no authored help. |
 
 ## Guide
 Return the detailed properties of one or more 1C metadata objects. By default you get a compact basic view; with `full: true` every reflected section (attributes, tabular sections, forms, commands, and other reflected properties) is rendered.
@@ -33,6 +34,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 
 ## Output
 - Markdown, one section per resolved object, separated by `---`.
+- With `includeHelp: true`, each object section is followed by its authored help (a `## Help (<lang>)` block per language) or a `**Help:** none authored` note.
 - A form FQN renders the enriched form structure instead of an mdclass object section: an Items outline (each item with its visibility, bound `dataPath` and per-kind extras), an Attributes table (with the `Main`/`SavedData` columns), a Commands table and an Event handlers section.
 - A template FQN whose content is a Data Composition Schema renders the schema's structure (see above) instead of an mdclass object section, headed `# Data Composition Schema: <fqn>`.
 - Type-specific properties are appended for a few kinds whose behaviour the basic view otherwise hid: a **ScheduledJob** gets a Properties table (methodName, use, predefined, restartCountOnFailure / restartIntervalOnFailure, key, and whether a Schedule is set), a **CommonModule** gets its context-availability flags (server / serverCall / clientManagedApplication / clientOrdinaryApplication / externalConnection / global / privileged) and returnValuesReuse, a **Catalog** / **ChartOfCharacteristicTypes** / **ChartOfCalculationTypes** / **ChartOfAccounts** gets its "Predefined items" table (see above), and an **InformationRegister**'s Dimensions additionally show their `Indexing`. These render in both the default and `full: true` views.
@@ -43,6 +45,7 @@ Return the detailed properties of one or more 1C metadata objects. By default yo
 - Basic, one object: `{projectName: "MyProject", objectFqns: ["Catalog.Products"]}`.
 - Full details, several objects: `{projectName: "MyProject", objectFqns: ["Catalog.Products", "Document.SalesOrder"], full: true}`.
 - Russian type token + Russian synonyms: `{projectName: "MyProject", objectFqns: ["Справочник.Products"], language: "ru"}`.
+- With the object's authored help: `{projectName: "MyProject", objectFqns: ["Catalog.Products"], includeHelp: true}`.
 - A report's Data Composition Schema template: `{projectName: "MyProject", objectFqns: ["Report.Sales.Template.ОсновнаяСхемаКомпоновкиДанных"]}`.
 - A predefined item: `{projectName: "MyProject", objectFqns: ["Catalog.Products.Predefined.Service"]}`.
 - A chart of accounts with its predefined accounts: `{projectName: "MyProject", objectFqns: ["ChartOfAccounts.Main"]}`.

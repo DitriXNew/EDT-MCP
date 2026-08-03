@@ -43,10 +43,9 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.HtmlToMarkdown;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
-
-import io.github.furstenheim.CopyDown;
 
 /**
  * Tool to get content assist (code completion) proposals at a specific position in a BSL file.
@@ -733,7 +732,7 @@ public class GetContentAssistTool implements IMcpTool
             if (additionalInfo != null && !additionalInfo.isEmpty())
             {
                 // Strip HTML tags and CSS styles for cleaner output
-                String cleanInfo = cleanHtmlContent(additionalInfo);
+                String cleanInfo = HtmlToMarkdown.convert(additionalInfo);
                 if (!cleanInfo.isEmpty())
                 {
                     proposalObj.put("documentation", cleanInfo); //$NON-NLS-1$
@@ -763,40 +762,5 @@ public class GetContentAssistTool implements IMcpTool
             return info != null ? info.toString() : null;
         }
         return proposal.getAdditionalProposalInfo();
-    }
-
-    /**
-     * Converts HTML content to Markdown format using CopyDown library.
-     * 
-     * @param html the HTML content
-     * @return cleaned text in Markdown format
-     */
-    private static String cleanHtmlContent(String html)
-    {
-        if (html == null || html.isEmpty())
-        {
-            return ""; //$NON-NLS-1$
-        }
-        
-        try
-        {
-            // Remove <style> blocks before conversion (CopyDown doesn't handle CSS well)
-            String cleaned = html.replaceAll("(?s)<style[^>]*>.*?</style>", ""); //$NON-NLS-1$ //$NON-NLS-2$
-            
-            // Convert HTML to Markdown using CopyDown library
-            CopyDown converter = new CopyDown();
-            String markdown = converter.convert(cleaned);
-            
-            // Normalize excessive line breaks
-            markdown = markdown.replaceAll("\n{3,}", "\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            
-            return markdown.trim();
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error converting HTML to Markdown", e); //$NON-NLS-1$
-            // Fallback: just strip tags
-            return html.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        }
     }
 }
