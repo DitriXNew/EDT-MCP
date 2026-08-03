@@ -4436,6 +4436,25 @@ public final class FormElementWriter
     }
 
     /**
+     * The element KIND {@code element} can be addressed by, or {@code null} when its class carries no
+     * addressable kind token at all (today only {@code Addition}, a table's search-string /
+     * view-status / search-control child).
+     *
+     * <p>The element-level view of {@link #addressableKindOf}, for a caller that must tell "this
+     * element is a Button" from "this element answers to no kind token" - the exact marker filter of
+     * {@code get_project_errors}. There is exactly ONE classifier behind it and behind
+     * {@link #matchesKindToken}, so the strict filter and the write tools cannot disagree about what
+     * an address names: since issue #343 the resolvers refuse a foreign kind themselves.</p>
+     *
+     * @param element the form element (may be {@code null})
+     * @return the addressable kind, or {@code null} when the class has none
+     */
+    public static Kind addressableKind(EObject element)
+    {
+        return element == null ? null : addressableKindOf(element.eClass());
+    }
+
+    /**
      * The {@link Kind} whose token addresses an element of this form-model EClass, or {@code null} for
      * an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which is deliberately
      * limited to the kinds that carry PLACEMENT rules.
@@ -4470,25 +4489,6 @@ public final class FormElementWriter
      * @param eClass the EClass of a resolved form element, may be {@code null}
      * @return the addressing kind, or {@code null} when no kind token denotes this EClass
      */
-    /**
-     * The element KIND {@code element} can be addressed by, or {@code null} when its class carries no
-     * addressable kind token at all (today only {@code Addition}, a table's search-string /
-     * view-status / search-control child).
-     *
-     * <p>The element-level view of {@link #addressableKindOf}, for a caller that must tell "this
-     * element is a Button" from "this element answers to no kind token" - the exact marker filter of
-     * {@code get_project_errors}. There is exactly ONE classifier behind it and behind
-     * {@link #matchesKindToken}, so the strict filter and the write tools cannot disagree about what
-     * an address names: since issue #343 the resolvers refuse a foreign kind themselves.</p>
-     *
-     * @param element the form element (may be {@code null})
-     * @return the addressable kind, or {@code null} when the class has none
-     */
-    public static Kind addressableKind(EObject element)
-    {
-        return element == null ? null : addressableKindOf(element.eClass());
-    }
-
     private static Kind addressableKindOf(EClass eClass)
     {
         if (eClass == null)
@@ -4810,22 +4810,22 @@ public final class FormElementWriter
 
     /**
      * Whether {@code member} - the element {@link #resolveFormMember} returned for {@code ref} -
-     * really is of the KIND the FQN asked for.
+     * really is of the KIND the FQN asked for. The ref-level form of {@link #matchesKindToken}, and
+     * the SAME verdict: there is one strict answer to "does this address name this element", shared
+     * by the write tools and by the exact marker filter.
      *
-     * <p>{@link #resolveFormMember} routes only ATTRIBUTE and COMMAND into their own containment;
-     * EVERY other kind token falls through to the by-NAME item search. So
-     * {@code ...Form.F.Button.Price} "resolves" to the FIELD named {@code Price}, and an
-     * unrecognized token ({@code Fielld.Price}) resolves to whatever bears the name. Both are a
-     * caller's typo, so a consumer whose whole answer IS "does this address exist" - it has no
-     * later kind-specific step that would trip over the mismatch - must ask this too.</p>
+     * <p>Since issue #343 {@link #resolveFormMember} applies this check ITSELF - a foreign kind
+     * ({@code ...Form.F.Button.Price} for the FIELD {@code Price}) and an unrecognized one
+     * ({@code Fielld.Price}) resolve to {@code null} rather than to whatever bears the name. Asking
+     * again here is therefore a re-statement, not a second gate: it is kept for a caller that holds
+     * an already-resolved member and a ref, and must decide without re-resolving.</p>
      *
      * @param member the resolved member, may be {@code null}
      * @param ref the parsed member reference {@code member} was resolved from, may be {@code null}
-     * @return {@code true} when the member exists and its concrete EClass denotes exactly the
-     *     requested kind, or denotes no addressable kind at all (an auto command bar / context menu
-     *     / extended tooltip and the attribute-and-command containments are reached by name or by
-     *     containment, so their token contradicts nothing); {@code false} for a wrong or
-     *     unrecognized kind token
+     * @return {@code true} only when the member exists and its EClass denotes exactly the requested
+     *     kind (see {@link #addressableKindOf}: a token denotes an EClass and addresses its
+     *     subclasses, so an {@code AutoCommandBar} answers to {@code Group}); {@code false} for a
+     *     wrong or unrecognized kind token, and for a class no token denotes at all
      */
     public static boolean matchesRequestedKind(EObject member, FormMemberRef ref)
     {
