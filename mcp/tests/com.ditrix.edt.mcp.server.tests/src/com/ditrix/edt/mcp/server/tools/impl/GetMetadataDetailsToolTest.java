@@ -42,6 +42,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.ObjectHelpReader;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.google.gson.JsonPrimitive;
 
@@ -786,8 +787,8 @@ public class GetMetadataDetailsToolTest
         props.descriptionSet = true;
         PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
 
-        GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0); //$NON-NLS-1$
+        GetMetadataDetailsTool.RenderContext ctx = new GetMetadataDetailsTool.RenderContext(null, config, null,
+            "en", false, false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Catalog.Colors.Predefined.Blue"); //$NON-NLS-1$
@@ -807,8 +808,8 @@ public class GetMetadataDetailsToolTest
     public void testSinglePredefinedItemFqnUnsupportedOwnerTypeReportsFailure()
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
-        GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0); //$NON-NLS-1$
+        GetMetadataDetailsTool.RenderContext ctx = new GetMetadataDetailsTool.RenderContext(null, config, null,
+            "en", false, false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref = PredefinedWriter.parseRef("Document.Order.Predefined.X"); //$NON-NLS-1$
@@ -826,8 +827,8 @@ public class GetMetadataDetailsToolTest
     public void testSinglePredefinedItemFqnOwnerNotFoundReportsFailure()
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
-        GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(config, null, "en", false, false, false, false, 0); //$NON-NLS-1$
+        GetMetadataDetailsTool.RenderContext ctx = new GetMetadataDetailsTool.RenderContext(null, config, null,
+            "en", false, false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
         PredefinedWriter.PredefinedRef ref =
@@ -839,5 +840,61 @@ public class GetMetadataDetailsToolTest
         assertNull(md);
         assertEquals(1, failures.size());
         assertTrue(failures.get(0)[1].contains("Owner object not found")); //$NON-NLS-1$
+    }
+
+    // ---- formatHelpPages: language-filtered help rendering (pure) --------------------------------
+
+    @Test
+    public void testFormatHelpPagesNoPagesReportsNoneAuthored()
+    {
+        String md = GetMetadataDetailsTool.formatHelpPages(List.of(), "en"); //$NON-NLS-1$
+        assertTrue(md.contains("none authored for this object")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatHelpPagesShowsOnlyTheRequestedLanguage()
+    {
+        ObjectHelpReader.HelpPage en = new ObjectHelpReader.HelpPage("en", "English help"); //$NON-NLS-1$ //$NON-NLS-2$
+        ObjectHelpReader.HelpPage ru = new ObjectHelpReader.HelpPage("ru", "Russian help"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String md = GetMetadataDetailsTool.formatHelpPages(List.of(en, ru), "en"); //$NON-NLS-1$
+
+        assertTrue("the requested language's page must be shown", md.contains("English help")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a page for a DIFFERENT language must not be stacked in too", //$NON-NLS-1$
+            md.contains("Russian help")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatHelpPagesRequestedLanguageMatchIsCaseInsensitive()
+    {
+        ObjectHelpReader.HelpPage en = new ObjectHelpReader.HelpPage("EN", "English help"); //$NON-NLS-1$ //$NON-NLS-2$
+        String md = GetMetadataDetailsTool.formatHelpPages(List.of(en), "en"); //$NON-NLS-1$
+        assertTrue(md.contains("English help")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormatHelpPagesMissingRequestedLanguageNamesTheAvailableOnes()
+    {
+        ObjectHelpReader.HelpPage ru = new ObjectHelpReader.HelpPage("ru", "Russian help"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String md = GetMetadataDetailsTool.formatHelpPages(List.of(ru), "en"); //$NON-NLS-1$
+
+        assertFalse("must not silently show nothing useful", md.contains("Russian help")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must name the language that IS authored", md.contains("ru")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("must name the language that was requested but missing", md.contains("en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFormatHelpPagesNullLanguageShowsEveryAuthoredPage()
+    {
+        // A configuration with no configured languages resolves effectiveLanguage to null - there is
+        // no language to filter by, so every authored page is shown (the pre-fix behaviour).
+        ObjectHelpReader.HelpPage en = new ObjectHelpReader.HelpPage("en", "English help"); //$NON-NLS-1$ //$NON-NLS-2$
+        ObjectHelpReader.HelpPage ru = new ObjectHelpReader.HelpPage("ru", "Russian help"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String md = GetMetadataDetailsTool.formatHelpPages(List.of(en, ru), null);
+
+        assertTrue(md.contains("English help")); //$NON-NLS-1$
+        assertTrue(md.contains("Russian help")); //$NON-NLS-1$
     }
 }

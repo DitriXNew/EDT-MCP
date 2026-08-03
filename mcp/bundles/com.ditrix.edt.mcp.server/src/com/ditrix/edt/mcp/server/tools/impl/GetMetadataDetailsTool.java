@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -55,6 +56,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.ObjectHelpReader;
+import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -135,9 +137,12 @@ public class GetMetadataDetailsTool implements IMcpTool
             .booleanProperty("includeHelp", //$NON-NLS-1$
                 "Also include the object's authored HELP - the 'Reference information' HTML a " + //$NON-NLS-1$
                 "configuration author fills in for an object (Configuration / Catalog / Document / " + //$NON-NLS-1$
-                "Report / ...), rendered to Markdown per language (default false). This is the object's " + //$NON-NLS-1$
-                "OWN help, not the platform documentation (for that use get_platform_documentation). " + //$NON-NLS-1$
-                "Omitted when the object has no authored help.") //$NON-NLS-1$
+                "Report / ...), rendered to Markdown (default false). When help is authored in more " + //$NON-NLS-1$
+                "than one language, only the page for 'language' (above) is shown - not every " + //$NON-NLS-1$
+                "language stacked together; if that language has no page, the ones that DO exist are " + //$NON-NLS-1$
+                "named. This is the object's OWN help, not the platform documentation (for that use " + //$NON-NLS-1$
+                "get_platform_documentation). A short note is shown, not omitted, when the object has " + //$NON-NLS-1$
+                "no authored help at all.") //$NON-NLS-1$
             .build();
     }
 
@@ -255,7 +260,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         List<String[]> failures = new ArrayList<>();
 
         // Per-request render context, constant across every FQN in the loop.
-        RenderContext ctx = new RenderContext(config, bmModel, effectiveLanguage, full, assignable,
+        RenderContext ctx = new RenderContext(project, config, bmModel, effectiveLanguage, full, assignable,
             isExtensionProject, includeHelp, roleObjectOffset);
 
         // Process each FQN
@@ -295,8 +300,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         String formPath = FormElementWriter.parseFormPath(MetadataTypeUtils.normalizeFqn(fqn));
         if (formPath != null)
         {
-            String formStructure =
-                renderFormStructure(ctx.config, ctx.bmModel, formPath, ctx.effectiveLanguage, ctx.includeHelp);
+            String formStructure = renderFormStructure(ctx.project, ctx.config, ctx.bmModel, formPath,
+                ctx.effectiveLanguage, ctx.includeHelp);
             if (formStructure == null)
             {
                 failures.add(new String[] { fqn, "the form has no editable content model (it may " //$NON-NLS-1$
@@ -381,7 +386,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             .append("\n"); //$NON-NLS-1$
         if (ctx.includeHelp)
         {
-            sb.append(formatHelp(mdObject));
+            sb.append(formatHelp(mdObject, ctx.effectiveLanguage));
         }
         sb.append(SECTION_SEPARATOR);
     }
@@ -390,21 +395,76 @@ public class GetMetadataDetailsTool implements IMcpTool
      * Renders the object's authored help (its "Reference information" HTML pages, one per language)
      * as a Markdown section, or a short "no help" note when the object has none. Read from disk via
      * {@link ObjectHelpReader} (each cell of the rendered help is prose, already escaped by CopyDown).
+     * Used by every mdclass FQN branch that honors {@code includeHelp} - the generic object branch
+     * AND the Role branch (a Role's rights view has its own render path but shares this same
+     * disk-based help lookup, since a Role's own {@code .mdo} - unlike an owned form's - resolves
+     * correctly through the generic {@link IResourceLookup} hop {@link ObjectHelpReader#read} uses).
+     *
+     * @param languageCode the request's resolved language code (the same one governing synonyms /
+     *     labels elsewhere in the render); filters which authored page is shown - see
+     *     {@link #formatHelpPages}
      */
-    private static String formatHelp(MdObject mdObject)
+    private static String formatHelp(MdObject mdObject, String languageCode)
     {
-        List<ObjectHelpReader.HelpPage> pages = ObjectHelpReader.read(mdObject);
+        return formatHelpPages(ObjectHelpReader.read(mdObject), languageCode);
+    }
+
+    /**
+     * Renders a set of already-resolved help pages as a Markdown section, or a short "no help" note
+     * when there are none. Shared by {@link #formatHelp(MdObject, String)} (the generic mdclass / Role
+     * lookup) and {@link #formatFormHelp(IProject, String, String)} (the form's-own-folder lookup) so
+     * both paths render identically once the pages are resolved.
+     * <p>
+     * When help is authored in MORE THAN ONE language, only the page matching {@code languageCode}
+     * (the same language governing synonyms / labels elsewhere in the render) is shown - stacking
+     * every language under one FQN was noisy and did not respect the request's language. When
+     * {@code languageCode} is {@code null} (a configuration with no configured languages) every
+     * authored page is shown, since there is no language to filter by. When help exists but NOT for
+     * the requested language, the languages that ARE authored are named instead of silently showing
+     * nothing, so the caller can retry with one of those.
+     * <p>
+     * Package-visible (not {@code private}) so this pure rendering decision is unit-testable without
+     * an EDT runtime.
+     */
+    static String formatHelpPages(List<ObjectHelpReader.HelpPage> pages, String languageCode)
+    {
         if (pages.isEmpty())
         {
             return "\n**Help:** _none authored for this object._\n"; //$NON-NLS-1$
         }
+        if (languageCode != null)
+        {
+            for (ObjectHelpReader.HelpPage page : pages)
+            {
+                if (languageCode.equalsIgnoreCase(page.lang))
+                {
+                    return renderHelpPage(page);
+                }
+            }
+            StringBuilder available = new StringBuilder();
+            for (int i = 0; i < pages.size(); i++)
+            {
+                if (i > 0)
+                {
+                    available.append(", "); //$NON-NLS-1$
+                }
+                available.append(pages.get(i).lang);
+            }
+            return "\n**Help:** _none authored for language '" + languageCode //$NON-NLS-1$
+                + "'. Available: " + available + "._\n"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
         StringBuilder sb = new StringBuilder();
         for (ObjectHelpReader.HelpPage page : pages)
         {
-            sb.append("\n## Help (").append(page.lang).append(")\n\n") //$NON-NLS-1$ //$NON-NLS-2$
-                .append(page.markdown).append("\n"); //$NON-NLS-1$
+            sb.append(renderHelpPage(page));
         }
         return sb.toString();
+    }
+
+    /** Renders a single authored help page as its own "## Help (lang)" Markdown section. */
+    private static String renderHelpPage(ObjectHelpReader.HelpPage page)
+    {
+        return "\n## Help (" + page.lang + ")\n\n" + page.markdown + "\n"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**
@@ -469,6 +529,14 @@ public class GetMetadataDetailsTool implements IMcpTool
         sb.append("\n**Origin:** ") //$NON-NLS-1$
             .append(ExtensionOriginUtils.originLabel(role.getObjectBelonging(), ctx.isExtensionProject))
             .append("\n"); //$NON-NLS-1$
+        // A Role's OWN Help/<lang>.html (1C Roles support authored help on disk like any other mdclass
+        // object) was silently skipped here: the Role branch returns before reaching the generic
+        // mdclass branch's includeHelp check below, so includeHelp was honored for every OTHER metadata
+        // kind but not for a Role FQN. Honor it here too, the same way the generic branch does.
+        if (ctx.includeHelp)
+        {
+            sb.append(formatHelp(role, ctx.effectiveLanguage));
+        }
         sb.append(SECTION_SEPARATOR);
     }
 
@@ -654,6 +722,7 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     static final class RenderContext
     {
+        final IProject project;
         final Configuration config;
         final IBmModel bmModel;
         final String effectiveLanguage;
@@ -664,10 +733,11 @@ public class GetMetadataDetailsTool implements IMcpTool
         /** 0-based object offset for a Role FQN's paginated rights matrix (ignored in {@code full} mode). */
         final int roleObjectOffset;
 
-        RenderContext(Configuration config, IBmModel bmModel, String effectiveLanguage,
+        RenderContext(IProject project, Configuration config, IBmModel bmModel, String effectiveLanguage,
             boolean full, boolean assignable, boolean isExtensionProject, boolean includeHelp,
             int roleObjectOffset)
         {
+            this.project = project;
             this.config = config;
             this.bmModel = bmModel;
             this.effectiveLanguage = effectiveLanguage;
@@ -1019,8 +1089,8 @@ public class GetMetadataDetailsTool implements IMcpTool
      * EObjects must not escape the read task). Returns {@code null} when the form has no editable
      * content model (empty / legacy / not built) or the BM model is unavailable.
      */
-    private static String renderFormStructure(Configuration config, IBmModel bmModel, String formPath,
-        String language, boolean includeHelp)
+    private static String renderFormStructure(IProject project, Configuration config, IBmModel bmModel,
+        String formPath, String language, boolean includeHelp)
     {
         if (bmModel == null)
         {
@@ -1047,14 +1117,37 @@ public class GetMetadataDetailsTool implements IMcpTool
             }
             return FormStructureReader.render(normalized, formModel, language);
         });
-        // The form itself (the BasicForm mdo, resolved above OUTSIDE the transaction) can carry its own
-        // authored Help/<lang>.html, distinct from its owner's - read it the same disk-based way the
-        // generic mdclass branch does, so includeHelp is honored for a form FQN too.
+        // The form itself can carry its own authored Help/<lang>.html, distinct from its owner's. For an
+        // OWNED form (Type.Object.Forms.FormName), the generic IResourceLookup hop ObjectHelpReader.read
+        // uses resolves to the OWNER's .mdo (the catalog/document/etc.), NOT the form's own
+        // Forms/<FormName>/ folder - reading help "for the form" that way would silently read (or miss)
+        // the WRONG object's Help/ directory. Resolve the form's OWN folder instead, via the same
+        // path resolver create_metadata/screenshot tools use for a form FQN, and read from that folder
+        // directly.
         if (structure != null && includeHelp)
         {
-            structure += formatHelp(mdForm);
+            structure += formatFormHelp(project, formPath, language);
         }
         return structure;
+    }
+
+    /**
+     * Renders a FORM's own authored help (Finding: "Read owned-form help from the form folder"). Resolves
+     * the form's OWN on-disk folder via {@link MetadataPathResolver#resolveFormFolderPath} (handles both
+     * an owned form, e.g. {@code Catalog.Foo.Forms.Bar} &rarr; {@code src/Catalogs/Foo/Forms/Bar}, and a
+     * common form, e.g. {@code CommonForm.Bar} &rarr; {@code src/CommonForms/Bar}) rather than the
+     * owner-object resource {@link ObjectHelpReader#read(EObject)} would resolve to for an owned form.
+     * A form path the resolver cannot map yields the same "no help authored" note as an object with no
+     * help pages.
+     *
+     * @param languageCode the request's resolved language code; see {@link #formatHelpPages}
+     */
+    private static String formatFormHelp(IProject project, String formPath, String languageCode)
+    {
+        String folderPath = MetadataPathResolver.resolveFormFolderPath(MetadataTypeUtils.normalizeFqn(formPath));
+        List<ObjectHelpReader.HelpPage> pages =
+            folderPath != null ? ObjectHelpReader.readFromFolder(project, folderPath) : Collections.emptyList();
+        return formatHelpPages(pages, languageCode);
     }
 
     /**
