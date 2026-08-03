@@ -1018,16 +1018,19 @@ public class MetadataTypeUtilsTest
         Collections.emptyMap();
 
     @Test
-    public void testEveryFormKindAliasAgreesWithTheFormParser()
+    public void testEveryFormKindIsSpelledInBothLanguagesAndPairedConsistently()
     {
-        // Two token tables describe the same form kinds: this one (for FILTER variants) and
-        // FormElementWriter's (for FQN parsing). They are separate on purpose - the parser maps a
-        // token to an EMF feature, this map to a bilingual canon - so pin them against each other.
+        // SCOPE - read this before adding to it. Token-SET parity between the catalogue and the form
+        // parser (both directions), and that every alias reads back as its kind, are owned by
+        // testEveryPublishedNestedKindTokenIsAcceptedByItsExactResolver. Duplicating them here is
+        // what left one invariant split across two methods.
         //
-        // The pin walks Kind.values() and every token the parser ACCEPTS for each kind (exported by
-        // tokensForKind) instead of a hand-written list of pairs: a hand-written list keeps passing
-        // when a kind is added to one table only, which is the very drift this test claims to
-        // prevent. Adding a Kind now REQUIRES its bilingual alias here, or this test fails.
+        // What is NOT covered there, and is the only reason this test still exists:
+        //   - BILINGUAL COVERAGE: a kind must have at least one Latin AND one Cyrillic spelling.
+        //     Set equality cannot see this - two catalogues can agree on a purely English set.
+        //   - The RUSSIAN half of the canonical pair: set equality compares tokens, never that all
+        //     spellings of a kind carry the same canonical Russian.
+        //   - Standalone aliases that belong to no form Kind (Column, Handler).
         for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
         {
             if (KINDS_NOT_ADDRESSED_AS_FQN_SEGMENT.containsKey(kind))
@@ -1042,6 +1045,10 @@ public class MetadataTypeUtilsTest
             boolean sawCyrillic = false;
             for (String token : tokens)
             {
+                // Kept, NOT delegated: absorption of this one is UNPROVEN. The mutation meant to
+                // test it was invalid (it referenced a map before its declaration, so it never
+                // compiled), and a mutation that cannot run proves nothing. Deleting an assertion
+                // on an unproven absorption is exactly how a guarantee is lost.
                 assertEquals("the form parser must read '" + token + "' as " + kind, //$NON-NLS-1$ //$NON-NLS-2$
                     kind, FormElementWriter.kindForToken(token));
                 MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
@@ -1051,10 +1058,10 @@ public class MetadataTypeUtilsTest
                 {
                     canon = info;
                 }
+                // The RUSSIAN half of the pair - the part token-set equality cannot check.
                 assertEquals("every accepted spelling of " + kind //$NON-NLS-1$
-                    + " must resolve to the SAME canonical pair", //$NON-NLS-1$
-                    canon.getEnglish(), info.getEnglish());
-                assertEquals(canon.getRussian(), info.getRussian());
+                    + " must resolve to the SAME canonical Russian", //$NON-NLS-1$
+                    canon.getRussian(), info.getRussian());
                 if (isCyrillic(token))
                 {
                     sawCyrillic = true;
@@ -1066,34 +1073,15 @@ public class MetadataTypeUtilsTest
             }
             assertTrue("the form parser must accept an English spelling of " + kind, sawLatin); //$NON-NLS-1$
             assertTrue("the form parser must accept a Russian spelling of " + kind, sawCyrillic); //$NON-NLS-1$
-            // Both canonical spellings must be readable back by the parser as the same kind, so an
-            // address translated through this map stays addressable.
-            assertEquals(kind, FormElementWriter.kindForToken(canon.getEnglish()));
-            assertEquals(kind, FormElementWriter.kindForToken(canon.getRussian()));
-
-            // THE REVERSE DIRECTION. Walking only the parser's own tokens proves that what it
-            // ACCEPTS is translatable here - never that everything this catalogue ADVERTISES is
-            // accepted there. That gap let the PLURAL spellings (Fields.Price and its Russian twin)
-            // be advertised by the filter and rejected by the form parser on the KIND check, so a
-            // real field came back as objectsNotFound. Every alias this map publishes for the kind
-            // must therefore be readable by the parser as that same kind.
-            for (String alias : MetadataTypeUtils.nestedKindAliases(canon.getEnglish()))
-            {
-                assertEquals("this map advertises '" + alias + "' for " + kind //$NON-NLS-1$ //$NON-NLS-2$
-                    + ", so the form parser must accept it too", //$NON-NLS-1$
-                    kind, FormElementWriter.kindForToken(alias));
-            }
         }
-        // Column is a nested kind of the MDCLASS model (a DocumentJournal column), which this map
-        // must translate; whether the form parser knows it is decided by the loop above, so this
-        // only pins that the alias itself never disappears.
+        // Aliases belonging to no form Kind, so no loop above can pin them: Column is a mdclass
+        // nested kind (a DocumentJournal column) and Handler routes to its own branch.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Column")); //$NON-NLS-1$
         assertNotNull(MetadataTypeUtils.resolveNestedKind(
-            "\u041A\u043E\u043B\u043E\u043D\u043A\u0430")); //$NON-NLS-1$
-        // Handler is not a Kind (it routes to its own branch), but it IS a structural segment.
+            "Колонка")); //$NON-NLS-1$
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Handler")); //$NON-NLS-1$
         assertTrue(FormElementWriter.isHandlerToken(
-            "\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$
+            "обработчик")); //$NON-NLS-1$
     }
 
     /** Whether {@code token} is written in Cyrillic (its first letter decides). */
