@@ -942,11 +942,24 @@ public class GetProjectErrorsTool implements IMcpTool
         final Set<String> owners = new LinkedHashSet<>();
         /** Names of the projects that could not be consulted about it. */
         final Set<String> unknown = new LinkedHashSet<>();
+        /**
+         * The address was decided WITHOUT any model - its shape belongs to no supported grammar, so
+         * no configuration anywhere could hold it.
+         *
+         * <p>A TERMINAL verdict, and that is the point of storing it here rather than re-deriving it
+         * at each site. This same ordering - knowledge that needs no model outranks the state of the
+         * inspection - was got wrong three times in a row, each time in a different place that had
+         * to remember it: the project classification, the withholding from projects, and the two
+         * inspection guards. As a property of the verdict it cannot be forgotten: every predicate
+         * below already accounts for it, so a new consumer inherits the rule instead of re-stating
+         * it.</p>
+         */
+        boolean settledWithoutModel;
 
         /** The address exists somewhere we could look. */
         boolean isFound()
         {
-            return !owners.isEmpty();
+            return !settledWithoutModel && !owners.isEmpty();
         }
 
         /**
@@ -955,13 +968,13 @@ public class GetProjectErrorsTool implements IMcpTool
          */
         boolean isUndecided()
         {
-            return owners.isEmpty() && !unknown.isEmpty();
+            return !settledWithoutModel && owners.isEmpty() && !unknown.isEmpty();
         }
 
         /** Proven absent: every project in the universe was consulted and none holds it. */
         boolean isAbsent()
         {
-            return owners.isEmpty() && unknown.isEmpty();
+            return settledWithoutModel || (owners.isEmpty() && unknown.isEmpty());
         }
 
         /**
@@ -971,7 +984,7 @@ public class GetProjectErrorsTool implements IMcpTool
          */
         boolean isIncomplete()
         {
-            return !owners.isEmpty() && !unknown.isEmpty();
+            return !settledWithoutModel && !owners.isEmpty() && !unknown.isEmpty();
         }
     }
 
@@ -995,7 +1008,11 @@ public class GetProjectErrorsTool implements IMcpTool
         Map<String, AddressKnowledge> knowledge = new LinkedHashMap<>();
         for (String fqn : candidates)
         {
-            knowledge.put(fqn, new AddressKnowledge());
+            AddressKnowledge known = new AddressKnowledge();
+            // Settled by shape alone - see classifyRequestedAddresses. Recorded ONCE, here, and
+            // honoured by every predicate from now on.
+            known.settledWithoutModel = !resolvable.contains(fqn);
+            knowledge.put(fqn, known);
         }
 
         boolean inspectedAny = false;
@@ -1032,7 +1049,7 @@ public class GetProjectErrorsTool implements IMcpTool
             resolution.scopeByProject.put(decided.projectName, projectScope);
         }
 
-        applyWireContract(resolution, candidates, resolvable, knowledge, inspectedAny);
+        applyWireContract(resolution, candidates, knowledge, inspectedAny);
     }
 
     /**
@@ -1054,14 +1071,17 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param inspectedAny whether ANY project completed a resolve pass
      */
     private static void applyWireContract(AddressResolution resolution, List<String> candidates,
-        List<String> resolvable, Map<String, AddressKnowledge> knowledge, boolean inspectedAny)
+        Map<String, AddressKnowledge> knowledge, boolean inspectedAny)
     {
         // Both guards below are about what INSPECTION could not settle, so neither may speak for an
-        // address that never needed one. An address of impossible SHAPE was decided before any
-        // project was consulted (see classifyRequestedAddresses); letting a guard fire on its behalf
-        // is the same inversion as before - a verdict we already hold, overridden by the state of
-        // the inspection. So when nothing resolvable was asked at all, there is nothing to refuse.
-        boolean anythingNeededAModel = !resolvable.isEmpty();
+        // address that never needed one. They ask the VERDICT rather than re-deriving the rule:
+        // an address settled without a model is neither found nor undecided by construction
+        // (AddressKnowledge), so it can no longer be swept up by a guard that forgot about it.
+        boolean anythingNeededAModel = false;
+        for (String fqn : candidates)
+        {
+            anythingNeededAModel |= !knowledge.get(fqn).settledWithoutModel;
+        }
         if (!inspectedAny && anythingNeededAModel)
         {
             resolution.error = ToolResult.error("Cannot resolve " + PARAM_OBJECT_FQNS //$NON-NLS-1$
@@ -1078,7 +1098,7 @@ public class GetProjectErrorsTool implements IMcpTool
         // could look. Reporting it as objectsNotFound is the false verdict this input exists to
         // prevent, so the call is refused instead, exactly as an entirely uninspectable scope is.
         List<String> undecidedMisses = new ArrayList<>();
-        for (String fqn : resolvable)
+        for (String fqn : candidates)
         {
             if (knowledge.get(fqn).isUndecided())
             {
@@ -1516,6 +1536,16 @@ public class GetProjectErrorsTool implements IMcpTool
      * token, an unrecognized nested KIND and an odd segment count are impossible whatever any
      * project contains, and no amount of reading a model could turn them into a hit.</p>
      *
+     * <p>Each grammar is asked in its STRICT form. Several of the parsers below are deliberately
+     * lenient for their own callers - they answer "close enough to report on" rather than "could
+     * exist" - and a lenient answer HERE is a false gap: the address gets carried into the model as
+     * if a project might hold it, and an impossible string ends up undecided instead of absent.</p>
+     *
+     * <p>Each grammar is asked in its STRICT form. Several of the parsers below are deliberately
+     * lenient for their own callers - they answer "close enough to report on" rather than "could
+     * exist" - and a lenient answer HERE is a false gap: the address gets carried into the model as
+     * if a project might hold it, and an impossible string ends up undecided instead of absent.</p>
+     *
      * <p>Single source for the shape question: the enumeration gate above asks it too, so the two
      * cannot drift into disagreeing about what a supported address looks like.</p>
      *
@@ -1533,7 +1563,9 @@ public class GetProjectErrorsTool implements IMcpTool
         return SubsystemUtils.parseSubsystemPath(normFqn) != null
             || PredefinedWriter.parseRef(normFqn) != null
             || FormElementWriter.parseFormPath(normFqn) != null
-            || FormElementWriter.parse(normFqn) != null
+            // The STRICT form question, not the lenient parse: parse accepts any Kind.Name tail, so
+            // asking it would call a misspelled kind a shape some configuration might hold.
+            || FormElementWriter.addressesKnownKinds(FormElementWriter.parse(normFqn))
             || isMdclassChain(normFqn);
     }
 
@@ -1543,7 +1575,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * addresses nothing, so it never earns an enumeration.
      *
      * @param normFqn the type-normalized, canonical address
-     * @return {@code true} when every structural segment is a known type / nested kind
+     * @return {@code true} when every structural segment is a known type / navigable nested kind
      */
     private static boolean isMdclassChain(String normFqn)
     {
@@ -1555,7 +1587,13 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         for (int i = 2; i < parts.length; i += 2)
         {
-            if (MetadataTypeUtils.resolveNestedKind(parts[i]) == null)
+            // The NAVIGABLE-child catalogue, not the segment-alias one. The alias catalogue also
+            // holds kinds that exist only INSIDE a form (Field, Group, Button, ...), so asking it
+            // let 'Catalog.Products.Field.Code' - a form kind hung directly off a mdclass object -
+            // pass as a shape some configuration might hold. Nothing can: the mdclass metamodel has
+            // no such containment. Form / Handler are absent here on purpose; they lead out of the
+            // mdclass model and the two form grammars above own them.
+            if (MetadataNodeResolver.featureNameForKind(parts[i]) == null)
             {
                 return false;
             }
@@ -1699,12 +1737,14 @@ public class GetProjectErrorsTool implements IMcpTool
      * other supported family is.
      *
      * <p>The STORED spelling is returned, not the probed one, because it is what scopes the marker
-     * scan. Only {@code Predefined} can differ: {@link PredefinedWriter#findByName} carries its own
-     * yo (U+0451) fallback, so a probe written {@code ...Predefined.M[yo]d} matches an item stored
-     * as {@code M[ye]d} - and scoping the scan by the probe would then filter out every problem on
-     * the very item that was just proven to exist. Every other family matches the name literally
-     * (case aside, which the lowercased filter variants already absorb), so its probe IS the stored
-     * spelling.</p>
+     * scan. Every family here is asked EXACTLY, so the probe IS the stored spelling (case aside,
+     * which the lowercased filter variants already absorb) - except a Subsystem chain, whose own
+     * resolver reports the stored names of every level it walked.</p>
+     *
+     * <p>Yo (U+0451) tolerance belongs to the CALLER, which enumerates the spellings and probes each
+     * one exactly. A resolver that retried internally would answer the as-typed probe with a
+     * differently spelled node; the caller would stop enumerating on that hit, scope the scan by a
+     * name the model does not store, and never look for the other nodes the address can mean.</p>
      *
      * <p>Call inside a BM read transaction bound to this configuration's model.</p>
      *
@@ -1738,12 +1778,12 @@ public class GetProjectErrorsTool implements IMcpTool
             {
                 return Collections.emptySet();
             }
-            PredefinedItem item = PredefinedWriter.findByName(owner.object, predefined.itemName);
-            // The item's OWN stored Name replaces the requested leaf: findByName's yo fallback can
-            // have matched a differently spelled item, and the markers carry the stored spelling.
+            // EXACT: the lenient findByName would answer the as-typed probe for an item stored
+            // under the other yo spelling, ending the caller's enumeration on the first owner and
+            // hiding the problems of every other item that address can mean.
+            PredefinedItem item = PredefinedWriter.findByNameExact(owner.object, predefined.itemName);
             return item == null ? Collections.<String> emptySet()
-                : Collections.singleton(
-                    normFqn.substring(0, normFqn.lastIndexOf('.') + 1) + item.getName());
+                : Collections.singleton(normFqn);
         }
         // A FORM object: the mdclass metamodel deliberately does not lead into the form package, so
         // the shared node resolver cannot navigate the Form kind - the form reader can.

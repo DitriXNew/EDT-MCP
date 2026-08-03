@@ -1411,10 +1411,11 @@ public class GetProjectErrorsToolTest
     @Test
     public void testAPredefinedItemIsScopedByItsStoredNameNotTheRequestedYoSpelling()
     {
-        // PredefinedWriter.findByName carries its OWN yo (U+0451) fallback, so a probe written
-        // "...Predefined.M[yo]d" matches an item stored as "M[ye]d" and returns true. Recording the
-        // REQUESTED spelling as the scan scope would then filter out every problem on the very item
-        // that was just proven to exist - objectsResolved next to a clean report.
+        // Yo (U+0451) tolerance is the CALLER's: the requested "...Predefined.M[yo]d" is enumerated
+        // into its spellings and each is probed EXACTLY, so the probe that hits is the one the model
+        // really stores. Recording the REQUESTED spelling as the scan scope would filter out every
+        // problem on the very item that was just proven to exist - objectsResolved next to a clean
+        // report.
         String ye = fromCp(0x041c, 0x0435, 0x0434); // Med
         String yo = fromCp(0x041c, 0x0451, 0x0434); // M[yo]d
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
@@ -1427,13 +1428,46 @@ public class GetProjectErrorsToolTest
         String requested = "Catalog.C.Predefined." + yo; //$NON-NLS-1$
         Set<String> scope = resolvedIn(config, requested).get(requested);
 
-        assertNotNull("the yo spelling must resolve through the writer's own fallback", scope); //$NON-NLS-1$
+        assertNotNull("the yo spelling must resolve through the caller's enumeration", scope); //$NON-NLS-1$
         assertTrue("the scan must be scoped by the STORED name, not the requested one", //$NON-NLS-1$
             scope.contains("Catalog.C.Predefined." + ye)); //$NON-NLS-1$
         assertFalse("the requested yo spelling must not scope the scan", //$NON-NLS-1$
             scope.contains(requested));
         // The owner is in the scope as well - that is where EDT reports a predefined item's problem.
         assertTrue(scope.contains("Catalog.C")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryOwnerAPredefinedAddressCanMeanIsScoped()
+    {
+        // Both spellings of the owner AND of the item exist, in the crossed arrangement: M[yo]d
+        // stores V[ye]s while M[ye]d stores V[yo]s. The address means BOTH items, so both must scope
+        // the scan. A lookup that carries its own yo fallback answers the as-typed probe with the
+        // FIRST owner's differently spelled item, the caller stops enumerating on that hit, and every
+        // problem on the second owner's item is reported as if the item were clean.
+        String yoOwner = fromCp(0x041c, 0x0451, 0x0434);  // M[yo]d
+        String yeOwner = fromCp(0x041c, 0x0435, 0x0434);  // M[ye]d
+        String yoItem = fromCp(0x0412, 0x0451, 0x0441);   // V[yo]s
+        String yeItem = fromCp(0x0412, 0x0435, 0x0441);   // V[ye]s
+
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog first = MdClassFactory.eINSTANCE.createCatalog();
+        first.setName(yoOwner);
+        assertFalse(PredefinedWriter.create(first, yeItem, new PredefinedWriter.ItemProps(), false).isError());
+        Catalog second = MdClassFactory.eINSTANCE.createCatalog();
+        second.setName(yeOwner);
+        assertFalse(PredefinedWriter.create(second, yoItem, new PredefinedWriter.ItemProps(), false).isError());
+        config.getCatalogs().add(first);
+        config.getCatalogs().add(second);
+
+        String requested = "Catalog." + yoOwner + ".Predefined." + yoItem; //$NON-NLS-1$ //$NON-NLS-2$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertNotNull("the address names real items and must resolve", scope); //$NON-NLS-1$
+        assertTrue("the first owner's item must scope the scan", //$NON-NLS-1$
+            scope.contains("Catalog." + yoOwner + ".Predefined." + yeItem)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the SECOND owner's item must scope the scan too", //$NON-NLS-1$
+            scope.contains("Catalog." + yeOwner + ".Predefined." + yoItem)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
 
@@ -2183,6 +2217,8 @@ public class GetProjectErrorsToolTest
             ".",                                    // nothing but a separator //$NON-NLS-1$
             "NoSuchType_e2e.X",                     // unknown leading TYPE token //$NON-NLS-1$
             "Catalog.Products.Fom.ItemForm",        // misspelt nested KIND //$NON-NLS-1$
+            "Catalog.Products.Field.Code",          // form-only kind on a mdclass object //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm.Fielld.Code", // misspelt form-element KIND //$NON-NLS-1$
             "Catalog.Products.Module"})             // odd arity: no grammar has it //$NON-NLS-1$
         {
             assertFalse("must be impossible by shape alone: " + impossible, //$NON-NLS-1$
@@ -2198,6 +2234,8 @@ public class GetProjectErrorsToolTest
             "CommonForm.Settings", //$NON-NLS-1$
             "CommonForm.Settings.Field.Code", //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Field.Code.Handler.OnChange", //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm.Handler.OnOpen", // form-LEVEL handler //$NON-NLS-1$
+            "DocumentJournal.Sales.Column.Number", // a real mdclass Column //$NON-NLS-1$
             "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
             "Catalog.Products.Predefined.Sample", //$NON-NLS-1$
             "XDTOPackage.Exchange"}) //$NON-NLS-1$

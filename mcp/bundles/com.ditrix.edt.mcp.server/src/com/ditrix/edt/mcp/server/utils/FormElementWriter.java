@@ -298,6 +298,31 @@ public final class FormElementWriter
     }
 
     /**
+     * Whether every KIND token in {@code ref} names a form element kind this writer really
+     * addresses - the STRICT question, as opposed to what {@link #parse} accepts.
+     *
+     * <p>{@code parse} is lenient about the leaf on purpose: it accepts any {@code Kind.Name} tail so
+     * a caller holds a parsed shape to report on. A caller deciding whether an address could name
+     * ANYTHING in ANY configuration needs the strict question instead - {@code Form.ItemForm.Fielld.
+     * Code} parses, but {@code Fielld} is a kind nothing has, so no model needs to be read to answer.
+     * Asking here keeps the strictness in the class that OWNS the kind catalogue, so a new kind is
+     * accepted by both questions at once.</p>
+     *
+     * @param ref a parsed form-member reference, or {@code null}
+     * @return {@code true} when the leaf kind - and, for an item-level handler, the owning item's
+     *     kind too - is recognized
+     */
+    public static boolean addressesKnownKinds(FormMemberRef ref)
+    {
+        if (ref == null)
+        {
+            return false;
+        }
+        boolean leafKnown = kindForToken(ref.kindToken) != null || isHandlerToken(ref.kindToken);
+        return ref.isItemLevel() ? leafKnown && kindForToken(ref.itemKindToken) != null : leafKnown;
+    }
+
+    /**
      * Builds the canonical owned-form path {@code Type.Object.forms.FormName} — THE shape
      * {@code FormStructureReader.resolveMdForm} / {@code MetadataPathResolver} expect. Single
      * owner of the literal so the parse helpers here and external callers (e.g. the delete

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT - Tests
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -454,6 +454,25 @@ public class PredefinedWriterTest
         assertFalse("a yo/ye spelling variant must NOT be treated as a duplicate", second.isError()); //$NON-NLS-1$
         assertNotNull(PredefinedWriter.findByName(catalog, yo));
         assertNotNull(PredefinedWriter.findByName(catalog, ye));
+    }
+
+    @Test
+    public void testFindByNameExactDoesNotFallBackToTheOtherYoSpelling()
+    {
+        // The lenient findByName exists so a read can reach the object whichever way it is spelled.
+        // findByNameExact is the primitive for a caller that enumerates spellings ITSELF: it must
+        // answer only for the literal name, or that caller stops on the wrong item.
+        Catalog catalog = newCatalog("Foods"); //$NON-NLS-1$
+        String yo = fromCp(0x041c, 0x0451, 0x0434); // Мёд
+        String ye = fromCp(0x041c, 0x0435, 0x0434); // Мед
+        PredefinedWriter.create(catalog, ye, new PredefinedWriter.ItemProps(), false);
+
+        assertNotNull("the lenient lookup still reaches the stored item", //$NON-NLS-1$
+            PredefinedWriter.findByName(catalog, yo));
+        assertNull("the exact lookup must not answer for the other yo spelling", //$NON-NLS-1$
+            PredefinedWriter.findByNameExact(catalog, yo));
+        assertNotNull("the exact lookup still finds the name as stored", //$NON-NLS-1$
+            PredefinedWriter.findByNameExact(catalog, ye));
     }
 
     @Test
