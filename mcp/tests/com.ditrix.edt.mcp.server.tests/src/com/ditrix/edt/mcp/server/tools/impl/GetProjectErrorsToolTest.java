@@ -1447,62 +1447,6 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
-    public void testEveryCatalogueKindMatchesItsConsumersEXACTLY()
-    {
-        // Three rounds running, the pin was weaker than claimed for the SAME reason: it asked
-        // whether a token EXISTS somewhere rather than whether the sets are EQUAL. "Some consumer
-        // accepts this kind" let the first matching consumer fill the slot, so an alias published by
-        // the catalogue and accepted by the form writer - but unknown to the mdclass resolver - was
-        // invisible. Equality per consumer is the only shape that cannot hide that.
-
-        // 1. Resolver group -> catalogue: every canonical kind the resolver knows must accept
-        //    EXACTLY the catalogue's aliases for it, and all of them must mean ONE feature.
-        Map<String, Set<String>> tokensByCanonical = new LinkedHashMap<>();
-        Map<String, Set<String>> featuresByCanonical = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : MetadataNodeResolver.childFeatureByToken().entrySet())
-        {
-            MetadataTypeUtils.NestedKindInfo info =
-                MetadataTypeUtils.resolveNestedKind(entry.getKey());
-            assertNotNull("resolver token is not published by the catalogue: " + entry.getKey(), //$NON-NLS-1$
-                info);
-            tokensByCanonical.computeIfAbsent(info.getEnglish(), k -> new LinkedHashSet<>())
-                .add(entry.getKey());
-            featuresByCanonical.computeIfAbsent(info.getEnglish(), k -> new LinkedHashSet<>())
-                .add(entry.getValue());
-        }
-        for (Map.Entry<String, Set<String>> entry : tokensByCanonical.entrySet())
-        {
-            assertEquals("every alias of one kind must resolve to ONE feature: " + entry.getKey(), //$NON-NLS-1$
-                1, featuresByCanonical.get(entry.getKey()).size());
-            assertEquals("resolver and catalogue must accept EXACTLY the same tokens for " //$NON-NLS-1$
-                + entry.getKey(), lower(MetadataTypeUtils.nestedKindAliases(entry.getKey())),
-                lower(entry.getValue()));
-        }
-
-        // 2. Catalogue -> the FORM consumer, for every kind it publishes. Same equality, asked of
-        //    the other applicable consumer instead of whichever one answered first.
-        for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
-        {
-            List<String> tokens = FormElementWriter.tokensForKind(kind);
-            assertFalse("a form kind must publish tokens: " + kind, tokens.isEmpty()); //$NON-NLS-1$
-            String canonical = MetadataTypeUtils.resolveNestedKind(tokens.get(0)).getEnglish();
-            assertEquals("form writer and catalogue must accept EXACTLY the same tokens for " //$NON-NLS-1$
-                + kind, lower(MetadataTypeUtils.nestedKindAliases(canonical)), lower(tokens));
-        }
-    }
-
-    /** Lowercased set, so a spelling difference in case never reads as a set difference. */
-    private static Set<String> lower(Collection<String> tokens)
-    {
-        Set<String> out = new TreeSet<>();
-        for (String token : tokens)
-        {
-            out.add(token.toLowerCase(Locale.ROOT));
-        }
-        return out;
-    }
-
-    @Test
     public void testEveryValidFirstStepIsAContainmentAndStaysPossible()
     {
         // Walks THE grammar the gate resolves against - MetadataNodeResolver's own token -> feature

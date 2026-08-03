@@ -10,6 +10,10 @@ import static org.junit.Assert.*;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.TreeSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -663,7 +667,11 @@ public class MetadataTypeUtilsTest
     @Test
     public void testEveryPublishedNestedKindTokenIsAcceptedByItsExactResolver()
     {
-        Map<String, Predicate<String>> owners = new LinkedHashMap<>();
+        // EVERY applicable consumer, not one. A single-owner map let the FIRST consumer fill the
+        // slot: for Attribute and Command that was the form parser, so the catalogue ->
+        // MetadataNodeResolver direction went unchecked for them and an alias published here and
+        // accepted by the form writer, but unknown to the resolver, passed green.
+        Map<String, List<Predicate<String>>> owners = new LinkedHashMap<>();
         // Form-content kinds: the form parser resolves the element and then checks the KIND token.
         for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
         {
@@ -676,13 +684,23 @@ public class MetadataTypeUtilsTest
                 MetadataTypeUtils.resolveNestedKind(tokens.get(0));
             assertNotNull("the form parser accepts '" + tokens.get(0) + "' but this map does not",
                 info);
-            owners.put(info.getEnglish(), t -> FormElementWriter.kindForToken(t) == kind);
+            owners.computeIfAbsent(info.getEnglish(), k -> new ArrayList<>())
+                .add(t -> FormElementWriter.kindForToken(t) == kind);
         }
         // The structural tokens that route an address to a branch rather than to an element kind.
-        owners.put("Form", FormElementWriter::isFormToken);
-        owners.put("Handler", FormElementWriter::isHandlerToken);
-        owners.put("Subsystem", SubsystemUtils::isSubsystemTypeToken);
-        owners.put("Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+        addOwner(owners, "Form", FormElementWriter::isFormToken);
+        addOwner(owners, "Handler", FormElementWriter::isHandlerToken);
+        addOwner(owners, "Subsystem", SubsystemUtils::isSubsystemTypeToken);
+        addOwner(owners, "Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+        // The mdclass resolver is an owner of EVERY kind it maps - including ones a form consumer
+        // also claims. This is the line whose absence made the guarantee false.
+        for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
+        {
+            if (MetadataNodeResolver.featureNameForKind(canonical) != null)
+            {
+                addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
+            }
+        }
 
         // Every OTHER kind is an mdclass member, and its exact resolver is MetadataNodeResolver:
         // it maps the kind token to the EMF child feature. That is a real owner, not an excuse -
@@ -698,27 +716,60 @@ public class MetadataTypeUtilsTest
 
         for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
         {
-            Predicate<String> owner = owners.get(canonical);
-            if (owner == null && !notAddressed.containsKey(canonical))
+            List<Predicate<String>> applicable = owners.get(canonical);
+            if (applicable == null)
             {
-                // An mdclass member kind: its exact resolver is the child-feature mapping.
-                owner = t -> MetadataNodeResolver.featureNameForKind(t) != null;
-            }
-            if (owner == null)
-            {
-                continue; // a documented content-only segment
+                assertTrue("a published kind must declare an owner or be documented as content-only: "
+                    + canonical, notAddressed.containsKey(canonical));
+                continue;
             }
             Set<String> aliases = MetadataTypeUtils.nestedKindAliases(canonical);
             assertFalse("a published kind must have spellings: " + canonical, aliases.isEmpty());
-            for (String alias : aliases)
+            for (Predicate<String> owner : applicable)
             {
-                assertTrue("the catalogue advertises '" + alias + "' for " + canonical
-                    + ", so the exact resolver must accept it", owner.test(alias));
-                // ...and case must not matter: a marker location renders these capitalized.
-                assertTrue("case must not matter for '" + alias + "'",
-                    owner.test(alias.substring(0, 1).toUpperCase() + alias.substring(1)));
+                for (String alias : aliases)
+                {
+                    assertTrue("the catalogue advertises '" + alias + "' for " + canonical
+                        + ", so the exact resolver must accept it", owner.test(alias));
+                    // ...and case must not matter: a marker location renders these capitalized.
+                    assertTrue("case must not matter for '" + alias + "'",
+                        owner.test(alias.substring(0, 1).toUpperCase() + alias.substring(1)));
+                }
+            }
+            // ...and the reverse direction for the mdclass resolver: its token group for this kind
+            // must equal the catalogue's aliases EXACTLY, and all of them must mean one feature.
+            if (MetadataNodeResolver.featureNameForKind(canonical) != null)
+            {
+                Set<String> resolverTokens = new TreeSet<>();
+                Set<String> features = new LinkedHashSet<>();
+                for (Map.Entry<String, String> e : MetadataNodeResolver.childFeatureByToken().entrySet())
+                {
+                    MetadataTypeUtils.NestedKindInfo i = MetadataTypeUtils.resolveNestedKind(e.getKey());
+                    assertNotNull("resolver token is not published by the catalogue: " + e.getKey(), i);
+                    if (canonical.equals(i.getEnglish()))
+                    {
+                        resolverTokens.add(e.getKey().toLowerCase(Locale.ROOT));
+                        features.add(e.getValue());
+                    }
+                }
+                Set<String> published = new TreeSet<>();
+                for (String alias : aliases)
+                {
+                    published.add(alias.toLowerCase(Locale.ROOT));
+                }
+                assertEquals("resolver and catalogue must accept EXACTLY the same tokens for "
+                    + canonical, published, resolverTokens);
+                assertEquals("every alias of one kind must resolve to ONE feature: " + canonical,
+                    1, features.size());
             }
         }
+    }
+
+    /** Registers one more applicable consumer for a canonical kind. */
+    private static void addOwner(Map<String, List<Predicate<String>>> owners, String canonical,
+        Predicate<String> owner)
+    {
+        owners.computeIfAbsent(canonical, k -> new ArrayList<>()).add(owner);
     }
 
     /** The predefined-item token predicate, which is private to its writer - probed through parseRef. */
