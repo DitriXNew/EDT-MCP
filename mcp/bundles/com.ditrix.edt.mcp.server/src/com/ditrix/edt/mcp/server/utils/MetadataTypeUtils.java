@@ -18,6 +18,7 @@ import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -526,7 +527,11 @@ public final class MetadataTypeUtils
         {
             return true;
         }
-        return ((EClass)classifier).getEStructuralFeature(featureName) != null;
+        EStructuralFeature feature = ((EClass)classifier).getEStructuralFeature(featureName);
+        // A CONTAINMENT reference, as the contract says - not any feature. A scalar like
+        // Catalog.uuid is a real EStructuralFeature but can never be a step in an address,
+        // and answering yes for it wrote the contract wider than the truth.
+        return feature instanceof EReference && ((EReference)feature).isContainment();
     }
 
     /**

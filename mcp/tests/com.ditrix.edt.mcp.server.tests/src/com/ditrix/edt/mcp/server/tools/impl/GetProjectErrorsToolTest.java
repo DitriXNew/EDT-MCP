@@ -1441,54 +1441,55 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
-    public void testTheOwnerQuestionSeesFeaturesInHERITedFromABaseEClass()
+    public void testTheOwnerQuestionIsAboutCONTAINMENT()
+    {
+        // The contract says CONTAINMENT feature. A scalar such as Catalog.uuid is a real
+        // EStructuralFeature, so a plain getEStructuralFeature answered yes for it - a contract
+        // written wider than the truth, and an address step that can never exist.
+        assertFalse("a scalar feature must NOT satisfy the owner question", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "uuid")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // ...and every containment the gate really asks about must still answer yes, or the
+        // tightening would turn real addresses into false misses.
+        String[][] gateAsks = { {"Catalog", "attributes"}, {"Catalog", "tabularSections"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"Catalog", "forms"}, {"Catalog", "templates"}, {"Catalog", "commands"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            {"Catalog", "predefined"}, {"DocumentJournal", "columns"} }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String[] pair : gateAsks)
+        {
+            EClass owner = (EClass)MdClassPackage.eINSTANCE.getEClassifier(pair[0]);
+            assertNotNull("the metamodel must model " + pair[0], owner); //$NON-NLS-1$
+            EStructuralFeature feature = owner.getEStructuralFeature(pair[1]);
+            assertTrue("the gate asks about it, so it must be a CONTAINMENT reference: " //$NON-NLS-1$
+                + pair[0] + "." + pair[1], //$NON-NLS-1$
+                feature instanceof EReference && ((EReference)feature).isContainment());
+            assertTrue("a real gate containment must still answer yes: " //$NON-NLS-1$
+                + pair[0] + "." + pair[1], //$NON-NLS-1$
+                MetadataTypeUtils.typeCanContain(pair[0], pair[1]));
+        }
+    }
+
+    @Test
+    public void testTheOwnerQuestionSeesAnInheritedCONTAINMENT()
     {
         // The whole owner gate rests on one unstated assumption: that asking an EClass for a feature
-        // finds features declared on its ANCESTORS too, not only its own. Nothing tested it. If it
-        // were false, every type that inherits 'forms' or 'attributes' from a base class would be
-        // judged unable to hold them, and real addresses would be reported as not found.
-        // Which of the gate's features is inherited is the metamodel's business, not ours, so the
-        // control DISCOVERS one instead of assuming. Written the other way round it passed
-        // vacuously: 'forms' turns out to be declared on Catalog itself.
-        // Measured 2026-08-03: EVERY containment the gate currently asks about (attributes,
-        // tabularSections, forms, templates, commands, columns, predefined) is declared on the
-        // owner's own EClass, so no pair among them can exercise inheritance. The assumption still
-        // has to hold for the next feature that isn't, so the control tests the MECHANISM: find any
-        // type token the gate can be asked about whose feature is inherited, and prove it is seen.
-        String[] tokens = {"Catalog", "Document", "DocumentJournal", "ChartOfAccounts", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "InformationRegister", "AccumulationRegister", "Report", "DataProcessor", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "BusinessProcess", "Task", "Enum", "ExchangePlan"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        String inheritedType = null;
-        String inheritedFeature = null;
-        for (String token : tokens)
-        {
-            EClass owner = (EClass)MdClassPackage.eINSTANCE.getEClassifier(token);
-            if (owner == null)
-            {
-                continue;
-            }
-            for (EStructuralFeature feature : owner.getEAllStructuralFeatures())
-            {
-                if (feature.getEContainingClass() != owner)
-                {
-                    inheritedType = token;
-                    inheritedFeature = feature.getName();
-                    break;
-                }
-            }
-            if (inheritedFeature != null)
-            {
-                break;
-            }
-        }
-        // Self-check: if the metamodel ever declares every one of these locally, this control stops
-        // testing inheritance - and says so, instead of passing on nothing.
-        assertNotNull("the metamodel has no inherited feature on any gate-addressable type - control is vacuous", //$NON-NLS-1$
-            inheritedFeature);
+        // reaches containments declared on its ANCESTORS, not only its own. The MdClass metamodel
+        // does have such pairs on gate-addressable types (measured 2026-08-03: Catalog.
+        // standardAttributes, Catalog.characteristics, ChartOfAccounts.tabularParts and others), so
+        // this control is built on a real one - no synthetic hierarchy and, deliberately, no scalar
+        // stand-in: a scalar would prove the opposite of the contract.
+        EClass catalog = (EClass)MdClassPackage.eINSTANCE.getEClassifier("Catalog"); //$NON-NLS-1$
+        assertNotNull("the metamodel must model Catalog", catalog); //$NON-NLS-1$
+        EStructuralFeature inherited = catalog.getEStructuralFeature("standardAttributes"); //$NON-NLS-1$
+        assertNotNull("Catalog must reach 'standardAttributes' at all", inherited); //$NON-NLS-1$
+        // Self-checks: the control means nothing unless the feature really is BOTH inherited and a
+        // containment. If the metamodel ever moves or re-kinds it, these say so instead of passing.
+        assertNotSame("'standardAttributes' must be INHERITED for this control to test anything", //$NON-NLS-1$
+            catalog, inherited.getEContainingClass());
+        assertTrue("'standardAttributes' must be a CONTAINMENT reference", //$NON-NLS-1$
+            inherited instanceof EReference && ((EReference)inherited).isContainment());
 
-        assertTrue("an inherited feature must satisfy the owner question: " //$NON-NLS-1$
-            + inheritedType + "." + inheritedFeature, //$NON-NLS-1$
-            MetadataTypeUtils.typeCanContain(inheritedType, inheritedFeature));
+        assertTrue("an inherited containment must satisfy the owner question", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "standardAttributes")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
