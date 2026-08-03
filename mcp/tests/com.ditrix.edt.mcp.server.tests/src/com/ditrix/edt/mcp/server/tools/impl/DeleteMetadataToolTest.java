@@ -948,7 +948,7 @@ public class DeleteMetadataToolTest
         data.type = "FormAttribute"; //$NON-NLS-1$
         for (int i = 0; i < count; i++)
         {
-            data.descendants.add(java.util.Collections.singletonMap("name", "Col" + i)); //$NON-NLS-1$ //$NON-NLS-2$
+            data.descendants.add(descendant("Col" + i, "FormAttributeColumn")); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return data;
     }
@@ -1054,6 +1054,116 @@ public class DeleteMetadataToolTest
         assertEquals("the singular contained element must be listed, the data path must not", //$NON-NLS-1$
             1, out.size());
         assertEquals("GoodsCommandBar", out.get(0).get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testThePreviewListsTheHandlerBindingsADeleteTakesToo()
+    {
+        // The walk named the features it followed - `items`, `columns`, and the singular containments
+        // holding a FormItem - so the two containments that hold something ELSE were invisible: an
+        // element's `handlers` list and a command's `action`. EcoreUtil.remove takes both, so deleting
+        // a field, a button or a command was authorized and previewed as "one member" while it
+        // silently carried off the procedure binding (issue #295 review). The radius now follows the
+        // CONTAINMENT structure, and reports whatever in it carries its own name.
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/deleteradius"); //$NON-NLS-1$
+
+        // An EventHandler is NOT a FormItem and lives in a MANY containment - the shape the walk missed.
+        EClass eventHandler = factory.createEClass();
+        eventHandler.setName("EventHandler"); //$NON-NLS-1$
+        eventHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        // A command's action: an UNNAMED container holding the named CommandHandler - so the walk has
+        // to descend THROUGH something it does not report.
+        EClass commandHandler = factory.createEClass();
+        commandHandler.setName("CommandHandler"); //$NON-NLS-1$
+        commandHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass actionContainer = factory.createEClass();
+        actionContainer.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
+        EReference handlerRef = factory.createEReference();
+        handlerRef.setName("handler"); //$NON-NLS-1$
+        handlerRef.setEType(commandHandler);
+        handlerRef.setContainment(true);
+        actionContainer.getEStructuralFeatures().add(handlerRef);
+
+        EClass field = factory.createEClass();
+        field.setName("FormField"); //$NON-NLS-1$
+        field.getEStructuralFeatures().add(nameAttribute(factory));
+        field.getEStructuralFeatures().add(manyContainment(factory, "handlers", eventHandler)); //$NON-NLS-1$
+        EReference action = factory.createEReference();
+        action.setName("action"); //$NON-NLS-1$
+        action.setEType(actionContainer);
+        action.setContainment(true);
+        field.getEStructuralFeatures().add(action);
+        pkg.getEClassifiers().add(eventHandler);
+        pkg.getEClassifiers().add(commandHandler);
+        pkg.getEClassifiers().add(actionContainer);
+        pkg.getEClassifiers().add(field);
+
+        EObject target = new DynamicEObjectImpl(field);
+        target.eSet(field.getEStructuralFeature("name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject bound = new DynamicEObjectImpl(eventHandler);
+        bound.eSet(eventHandler.getEStructuralFeature("name"), "PriceOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)target.eGet(field.getEStructuralFeature("handlers"))).add(bound); //$NON-NLS-1$
+        EObject container = new DynamicEObjectImpl(actionContainer);
+        EObject command = new DynamicEObjectImpl(commandHandler);
+        command.eSet(commandHandler.getEStructuralFeature("name"), "PriceRun"); //$NON-NLS-1$ //$NON-NLS-2$
+        container.eSet(handlerRef, command);
+        target.eSet(action, container);
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        DeleteMetadataTool.collectDescendantsForTest(target, out);
+
+        List<Object> names = new ArrayList<>();
+        for (Map<String, Object> entry : out)
+        {
+            names.add(entry.get("name")); //$NON-NLS-1$
+        }
+        assertTrue("the bound event handler must be in the delete radius: " + names, //$NON-NLS-1$
+            names.contains("PriceOnChange")); //$NON-NLS-1$
+        assertTrue("the command action's handler must be in the delete radius: " + names, //$NON-NLS-1$
+            names.contains("PriceRun")); //$NON-NLS-1$
+        assertEquals("the unnamed action container is descended through, not reported: " + names, //$NON-NLS-1$
+            2, out.size());
+    }
+
+    @Test
+    public void testThePromptBreakdownIsReadOffTheDescendantsItCounts()
+    {
+        // The prompt spelled out the kinds the old walk followed ("nested items, attribute columns")
+        // while the event handler it now finds went unmentioned - a fixed phrase can only describe the
+        // walk it was written for. The wording is grouped from the entries themselves, so it cannot
+        // name a category the walk does not produce, nor omit one it does (issue #295 review).
+        DeleteMetadataTool.FormDeletePreview data = new DeleteMetadataTool.FormDeletePreview();
+        data.found = true;
+        data.type = "FormField"; //$NON-NLS-1$
+        data.descendants.add(descendant("Menu", "FormGroup")); //$NON-NLS-1$ //$NON-NLS-2$
+        data.descendants.add(descendant("PriceOnChange", "EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String[] seenSubtitle = {null};
+        new DeleteMetadataTool((name, preview) -> {
+            seenSubtitle[0] = preview.getSubtitle();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Field.Price", //$NON-NLS-1$
+            columnRef(), false, data, new RecordingWrite());
+
+        assertTrue("the prompt must name what it actually found: " + seenSubtitle[0], //$NON-NLS-1$
+            seenSubtitle[0].contains("1 FormGroup") && seenSubtitle[0].contains("1 EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("...and must not recite categories it never walked: " + seenSubtitle[0], //$NON-NLS-1$
+            seenSubtitle[0].contains("attribute columns")); //$NON-NLS-1$
+        assertEquals("nothing contained describes as nothing", "", //$NON-NLS-1$ //$NON-NLS-2$
+            new DeleteMetadataTool.FormDeletePreview().describeDescendants());
+    }
+
+    private static Map<String, Object> descendant(String name, String type)
+    {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("name", name); //$NON-NLS-1$
+        entry.put("type", type); //$NON-NLS-1$
+        return entry;
     }
 
     @Test

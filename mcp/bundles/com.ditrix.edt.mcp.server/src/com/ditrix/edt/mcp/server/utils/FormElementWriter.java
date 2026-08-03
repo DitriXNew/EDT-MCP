@@ -449,20 +449,9 @@ public final class FormElementWriter
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
     private static final String RU_COLUMN = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430); // kolonka
     private static final String RU_COLUMNS = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438); // kolonki
-    /** TablicaZnachenij - the Russian platform name of ValueTable. */
-    private static final String RU_TYPE_VALUE_TABLE = cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430,
-        0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439);
-    /** DerevoZnachenij - the Russian platform name of ValueTree. */
-    private static final String RU_TYPE_VALUE_TREE = cp(0x0414, 0x0435, 0x0440, 0x0435, 0x0432, 0x043e,
-        0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439);
-    /** Stroka - the Russian platform name of String. */
-    private static final String RU_TYPE_STRING = cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430);
-    /** Chislo - the Russian platform name of Number. */
-    private static final String RU_TYPE_NUMBER = cp(0x0427, 0x0438, 0x0441, 0x043b, 0x043e);
-    /** Bulevo - the Russian platform name of Boolean. */
-    private static final String RU_TYPE_BOOLEAN = cp(0x0411, 0x0443, 0x043b, 0x0435, 0x0432, 0x043e);
-    /** Data - the Russian platform name of Date. */
-    private static final String RU_TYPE_DATE = cp(0x0414, 0x0430, 0x0442, 0x0430);
+    // The Russian platform NAMES of the value types this writer classifies are not repeated here: the
+    // classification is asked of MetadataTypeBuilder, whose bilingual kind maps are the same ones the
+    // type builder resolves a spec with (issue #295 review).
     private static final String RU_ACTION = cp(0x0434, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435); // dejstvie
     // Auto-child name suffixes, localized by the configuration SCRIPT VARIANT the way the designer's
     // FormObjectDefaultNameProvider localizes them (RasshirennayaPodskazka / KontekstnoeMenyu).
@@ -2248,13 +2237,14 @@ public final class FormElementWriter
             // What IS decidable here is the opposite: an attribute whose own value already holds rows
             // (a collection, a dynamic list) has no nested row source at all - its sub-names are
             // columns and query fields - so a dotted path through it addresses something a table
-            // cannot bind to. A SCALAR head is left alone deliberately: telling "String" from
-            // "DocumentObject.SalesOrder" needs the metadata this writer does not see, and guessing
-            // would refuse working forms. Recorded as a gap rather than closed by a heuristic.
+            // cannot bind to. A head of UNKNOWN type is left alone deliberately: telling an
+            // unidentified type from "DocumentObject.SalesOrder" needs the metadata this writer does
+            // not see, and guessing would refuse working forms. Recorded as a gap rather than closed
+            // by a heuristic.
             EObject head = findByName(referenceList(formModel, FEATURE_ATTRIBUTES),
                 dataPath.substring(0, dot));
             if (head != null && (hasCollectionValueType(head) || isDynamicListAttribute(head)
-                || hasPrimitiveValueType(head)))
+                || hasTerminalValueType(head)))
             {
                 return TableBinding.NESTED_IN_ATTRIBUTE;
             }
@@ -2312,23 +2302,87 @@ public final class FormElementWriter
 
     /**
      * Whether the form attribute's value type is an IN-MEMORY collection - the only shape that owns
-     * columns. Read reflectively off the {@code valueType -> types -> name} chain, so an attribute whose
-     * type is unset (a fresh attribute) or primitive answers {@code false}. Issue #295.
+     * columns. Read reflectively off the {@code valueType -> types -> name} chain and classified by
+     * {@link MetadataTypeBuilder#isCollectionKind}, the same bilingual map the type builder resolves a
+     * collection spec with, so an attribute whose type is unset (a fresh attribute) or terminal answers
+     * {@code false}. Issue #295.
      *
      * @param attribute the form attribute to inspect
      * @return {@code true} when a ValueTable / ValueTree is among its types
      */
     private static boolean hasCollectionValueType(EObject attribute)
     {
-        EStructuralFeature feature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
-        if (feature == null || !(attribute.eGet(feature) instanceof EObject))
+        for (String typeName : valueTypeNames(attribute))
+        {
+            if (MetadataTypeBuilder.isCollectionKind(typeName))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the attribute's value type is TERMINAL - every declared type owns no addressable member,
+     * so a dotted path through it names nothing. This is the half of "not an object-typed attribute"
+     * that IS decidable in the form model: an object-typed attribute
+     * ({@code DocumentObject.SalesOrder}) does have tabular sections, and a form may bind a table to
+     * one of them through a NON-main attribute - so the test is "is it provably memberless", never
+     * "is it the main attribute" (issue #295 review).
+     *
+     * <p>Terminality is asked of {@link MetadataTypeBuilder#isMemberlessType}, the place that decides
+     * which platform types this tool builds at all, so the two cannot disagree. Asking it here by name
+     * instead left the check behind the builder: it knew the four primitives while the builder had
+     * grown ValueStorage and UUID, and a path past a UUID column was accepted because the column
+     * existed (issue #295 review).</p>
+     *
+     * @param attribute the form attribute (or column) to inspect
+     * @return {@code true} only when it declares at least one type and every one of them is memberless
+     */
+    private static boolean hasTerminalValueType(EObject attribute)
+    {
+        List<String> typeNames = valueTypeNames(attribute);
+        if (typeNames.isEmpty())
         {
             return false;
         }
-        for (EObject type : referenceList((EObject)attribute.eGet(feature), "types")) //$NON-NLS-1$
+        for (String typeName : typeNames)
+        {
+            if (!MetadataTypeBuilder.isMemberlessType(typeName))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The RESOLVED platform type names of the member's {@code valueType}, in whichever language the
+     * platform answers, or an EMPTY list when it declares no value type at all. One reader for both
+     * questions asked of a value type, so "is it a collection" and "is it terminal" can never be
+     * answered off different chains.
+     *
+     * <p>A declared type that is not a {@code TypeItem} contributes an EMPTY name rather than being
+     * skipped: it is a type the reader cannot identify, which must count as "not memberless" for the
+     * caller that requires EVERY type to answer, and as "not a collection" for the one that requires
+     * any.</p>
+     *
+     * @param member the form attribute or column to read
+     * @return one entry per declared type, never {@code null} entries
+     */
+    private static List<String> valueTypeNames(EObject member)
+    {
+        List<String> names = new ArrayList<>();
+        EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (feature == null || !(member.eGet(feature) instanceof EObject))
+        {
+            return names;
+        }
+        for (EObject type : referenceList((EObject)member.eGet(feature), "types")) //$NON-NLS-1$
         {
             if (!(type instanceof TypeItem))
             {
+                names.add(""); //$NON-NLS-1$
                 continue;
             }
             // The types of an attribute just retyped through MCP are platform PROXIES created by
@@ -2340,76 +2394,9 @@ public final class FormElementWriter
             {
                 typeName = McoreUtil.getTypeNameRu((TypeItem)type);
             }
-            if (isCollectionTypeName(typeName))
-            {
-                return true;
-            }
+            names.add(typeName == null ? "" : typeName); //$NON-NLS-1$
         }
-        return false;
-    }
-
-    /**
-     * Whether the attribute's value type is a PRIMITIVE (String / Number / Boolean / Date) - a value
-     * with no sub-structure at all, so a dotted path through it names nothing. This is the half of
-     * "not an object-typed attribute" that IS decidable in the form model: an object-typed attribute
-     * ({@code DocumentObject.SalesOrder}) does have tabular sections, and a form may bind a table to
-     * one of them through a NON-main attribute - so the test is "is it provably primitive", never
-     * "is it the main attribute" (issue #295 review).
-     *
-     * @param attribute the form attribute to inspect
-     * @return {@code true} only when every declared type is a known primitive
-     */
-    private static boolean hasPrimitiveValueType(EObject attribute)
-    {
-        EStructuralFeature feature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
-        if (feature == null || !(attribute.eGet(feature) instanceof EObject))
-        {
-            return false;
-        }
-        List<EObject> types = referenceList((EObject)attribute.eGet(feature), "types"); //$NON-NLS-1$
-        if (types.isEmpty())
-        {
-            return false;
-        }
-        for (EObject type : types)
-        {
-            if (!(type instanceof TypeItem))
-            {
-                return false;
-            }
-            String typeName = McoreUtil.getTypeName((TypeItem)type);
-            if (typeName == null || typeName.isEmpty())
-            {
-                typeName = McoreUtil.getTypeNameRu((TypeItem)type);
-            }
-            if (!isPrimitiveTypeName(typeName))
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /** Whether {@code typeName} is a platform PRIMITIVE, in either language. */
-    private static boolean isPrimitiveTypeName(String typeName)
-    {
-        return "String".equals(typeName) || "Number".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
-            || "Boolean".equals(typeName) || "Date".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
-            || RU_TYPE_STRING.equals(typeName) || RU_TYPE_NUMBER.equals(typeName)
-            || RU_TYPE_BOOLEAN.equals(typeName) || RU_TYPE_DATE.equals(typeName);
-    }
-
-    /**
-     * Whether {@code typeName} is an in-memory collection's platform type name, in either language
-     * (the RU accessor answers with the Russian name when the English one is empty). Issue #295.
-     *
-     * @param typeName the resolved platform type name, possibly {@code null}
-     * @return {@code true} for ValueTable / ValueTree in either language
-     */
-    private static boolean isCollectionTypeName(String typeName)
-    {
-        return "ValueTable".equals(typeName) || "ValueTree".equals(typeName) //$NON-NLS-1$ //$NON-NLS-2$
-            || RU_TYPE_VALUE_TABLE.equals(typeName) || RU_TYPE_VALUE_TREE.equals(typeName);
+        return names;
     }
 
     /**
@@ -3192,16 +3179,17 @@ public final class FormElementWriter
             {
                 EObject column = findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName);
                 // A path that CONTINUES past the column ('Rows.Price.Amount') walks into the column's
-                // own type. Refused only when the column is PROVABLY primitive - a String or a Number
-                // has no members, so no tail can resolve. A reference / composite / not-yet-typed
-                // column is accepted: its members live in metadata this writer cannot read, and
-                // refusing on "unknown" would break the legitimate 'Rows.Product.Description'. The
-                // third option - accepting a path that is provably impossible - is the silent success
-                // this branch has been closing all along (issue #295 review).
-                if (column != null && nextDot > 0 && hasPrimitiveValueType(column))
+                // own type. Refused only when the column is PROVABLY memberless - a String, a Number,
+                // a UUID, a ValueStorage carries nothing a tail could resolve against. A reference /
+                // composite / not-yet-typed column is accepted: its members live in metadata this
+                // writer cannot read, and refusing on "unknown" would break the legitimate
+                // 'Rows.Product.Description'. The third option - accepting a path that is provably
+                // impossible - is the silent success this branch has been closing all along (issue
+                // #295 review).
+                if (column != null && nextDot > 0 && hasTerminalValueType(column))
                 {
                     return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
-                        + "', but that column holds a primitive value, which has no nested members. " //$NON-NLS-1$
+                        + "', but that column's type has no nested members. " //$NON-NLS-1$
                         + "Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
                         + "." + columnName + "'})."; //$NON-NLS-1$ //$NON-NLS-2$
                 }

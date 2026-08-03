@@ -56,6 +56,20 @@ import com.google.gson.JsonObject;
  */
 public final class MetadataTypeBuilder
 {
+    /**
+     * The RUSSIAN platform names of the primitives, parallel to {@link #EN_PRIMITIVE_NAMES}. Read-side
+     * only: a resolved type answers its name in the configuration's language, while a spec always
+     * spells its {@code kind} the way {@link #normalizePrimitive} maps it.
+     */
+    private static final String[] RU_PRIMITIVE_NAMES = {
+        MetadataLanguageUtils.cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430), // Stroka
+        MetadataLanguageUtils.cp(0x0427, 0x0438, 0x0441, 0x043b, 0x043e), // Chislo
+        MetadataLanguageUtils.cp(0x0411, 0x0443, 0x043b, 0x0435, 0x0432, 0x043e), // Bulevo
+        MetadataLanguageUtils.cp(0x0414, 0x0430, 0x0442, 0x0430) }; // Data
+
+    /** The canonical ENGLISH platform names of the primitives, parallel to {@link #RU_PRIMITIVE_NAMES}. */
+    private static final String[] EN_PRIMITIVE_NAMES = {"String", "Number", "Boolean", "Date"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
     /** The build outcome: exactly one of {@link #typeDescription} / {@link #error} is non-null. */
     public static final class Result
     {
@@ -646,6 +660,73 @@ public final class MetadataTypeBuilder
         String[] candidates = platformSimpleTypeCandidates(kind);
         return candidates.length > 0
             && ("ValueTable".equals(candidates[0]) || "ValueTree".equals(candidates[0])); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Whether {@code kindOrTypeName} names a platform type that owns NO addressable member - nothing a
+     * dotted path can continue into. Answered for the spec vocabulary (a {@code kind} token) and for a
+     * RESOLVED platform type name alike: the two coincide for every type this builder produces without
+     * a reference, and the Russian names ARE the Russian kind aliases.
+     *
+     * <p>The classification is DERIVED from the maps a spec is resolved with -
+     * {@link #platformSimpleTypeCandidates} for the no-qualifier platform types and
+     * {@link #normalizePrimitive} for the qualified primitives - minus the collections
+     * ({@link #isCollectionKind}), which own their {@code columns}. A kind added to the builder is
+     * therefore classified here by construction, instead of being re-listed by every caller that needs
+     * to know whether a path may continue: the caller-side list knew String / Number / Boolean / Date
+     * and had silently fallen behind ValueStorage and UUID (issue #295 review).</p>
+     *
+     * <p>Not asked of the platform type system, on purpose. The query does exist
+     * ({@code Type.getContextDef().allProperties()}), but the types on a form attribute are
+     * {@link IEObjectProvider} PROXIES - which is why the readers go through {@code McoreUtil}, whose
+     * accessors are proxy-aware - and a raw feature read of an unresolved proxy answers "no
+     * properties", which is exactly the answer that REFUSES a path. A predicate whose failure mode is
+     * indistinguishable from its refusal verdict cannot be used to refuse. Reference kinds answer
+     * {@code false}: their members live in the metadata, which this classification deliberately does
+     * not read.</p>
+     *
+     * @param kindOrTypeName a spec {@code kind} token or a resolved platform type name, either language
+     * @return {@code true} only for a type this builder knows to own no addressable member
+     */
+    public static boolean isMemberlessType(String kindOrTypeName)
+    {
+        if (kindOrTypeName == null || kindOrTypeName.isEmpty())
+        {
+            return false;
+        }
+        if (platformSimpleTypeCandidates(kindOrTypeName).length > 0)
+        {
+            // ValueStorage / UUID hold one opaque value; ValueTable / ValueTree own their columns.
+            return !isCollectionKind(kindOrTypeName);
+        }
+        return normalizePrimitiveTypeName(kindOrTypeName) != null;
+    }
+
+    /**
+     * The canonical platform name of a PRIMITIVE, accepting a resolved Russian type name as well as
+     * every EN {@code kind} token {@link #normalizePrimitive} maps. Kept beside it so the primitive
+     * vocabulary lives in one place; the Russian names are read-side only (a spec still spells its
+     * kinds the way the tool documents them).
+     *
+     * @param typeName a {@code kind} token or a resolved platform type name
+     * @return the canonical EN name, or {@code null} when it names no primitive
+     */
+    private static String normalizePrimitiveTypeName(String typeName)
+    {
+        String canonical = normalizePrimitive(typeName);
+        if (canonical != null)
+        {
+            return canonical;
+        }
+        String trimmed = typeName.trim();
+        for (int i = 0; i < RU_PRIMITIVE_NAMES.length; i++)
+        {
+            if (RU_PRIMITIVE_NAMES[i].equalsIgnoreCase(trimmed))
+            {
+                return EN_PRIMITIVE_NAMES[i];
+            }
+        }
+        return null;
     }
 
     /** Parses the date-fractions name; defaults to date+time. */

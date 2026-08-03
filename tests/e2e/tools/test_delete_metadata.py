@@ -294,6 +294,40 @@ def test_delete_form_group_cascades_subtree():
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_field_preview_lists_the_handler_it_takes():
+    # A field's event handler lives in a `handlers` containment - not in `items`, not a FormItem - so
+    # the walk that named the features it followed never saw it, while EcoreUtil.remove takes it with
+    # the field. The delete was authorized and previewed as "one member" and carried the procedure
+    # binding off silently (issue #295 review). The radius now follows the CONTAINMENT structure.
+    _seed_form_attribute("DHAttr")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DHField",
+        "properties": [{"name": "dataPath", "value": "DHAttr"}]})
+    assert_ok(r, "seed bound field")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.DHField.Handler.OnChange",
+        "properties": [{"name": "procedure", "value": "DHFieldOnChange_zz"}]})
+    assert_ok(r, "seed the field's OnChange handler")
+    wait_for_project_ready()
+
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.DHField"
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the field delete")
+    names = [it.get("name") for it in (pv.structured.get("items") or [])]
+    assert "DHFieldOnChange_zz" in names, \
+        "the preview must list the handler the delete takes with the field: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""), "EventHandler",
+                    "the message must break the radius down by what it actually found")
+
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the field (confirm)")
+    poll_disk_lacks(_FORM, "DHFieldOnChange_zz",
+                    ctx="the handler binding must be gone from the .form with its field")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_delete_form_handler_confirm():
     # Seed a form-level OnOpen handler with a distinctive proc name, then delete it by event FQN.
     r = call("create_metadata", {

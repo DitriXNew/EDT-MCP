@@ -3125,7 +3125,7 @@ public class FormElementWriterTest
         EObject form = newForm();
         EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
         EObject price = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
-        setPrimitiveType(price, "Number"); //$NON-NLS-1$
+        setPlatformType(price, "Number"); //$NON-NLS-1$
 
         String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnPrimitive", null, //$NON-NLS-1$
             "Rows.Price.Amount", null, null, false, null); //$NON-NLS-1$
@@ -3136,6 +3136,39 @@ public class FormElementWriterTest
         // The column ITSELF still binds - the refusal is about continuing past it.
         assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceCell2", null, //$NON-NLS-1$
             "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFieldCannotWalkPastAColumnOfAnyMemberlessPlatformType()
+    {
+        // Terminality used to be a hand-written list of the four primitives, while the type builder had
+        // grown ValueStorage and UUID: 'Rows.Id.Part' on a UUID column was accepted merely because the
+        // column existed, and the field was written with a binding that resolves to nothing (issue #295
+        // review). The question now goes to MetadataTypeBuilder - the place that decides which platform
+        // types this tool builds at all - so the two cannot drift apart again. Both languages, because
+        // the platform answers the type name in the configuration's own.
+        String[] memberless = {"UUID", "ValueStorage", //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataLanguageUtils.cp(0x0423, 0x043d, 0x0438, 0x043a, 0x0430, 0x043b, 0x044c, 0x043d, 0x044b,
+                0x0439, 0x0418, 0x0434, 0x0435, 0x043d, 0x0442, 0x0438, 0x0444, 0x0438, 0x043a, 0x0430,
+                0x0442, 0x043e, 0x0440), // UnikalnyjIdentifikator
+            MetadataLanguageUtils.cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430)}; // Stroka
+        for (String typeName : memberless)
+        {
+            EObject form = newForm();
+            EObject rows = newCollectionAttribute(form, "Rows", "Id"); //$NON-NLS-1$ //$NON-NLS-2$
+            EObject id = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+            setPlatformType(id, typeName);
+
+            String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnOpaque", null, //$NON-NLS-1$
+                "Rows.Id.Part", null, null, false, null); //$NON-NLS-1$
+            assertNotNull("a path past a " + typeName + " column must be refused", err); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the refusal must name the column: " + err, err.contains("'Id'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull(FormElementWriter.findFormItem(form, "DeepOnOpaque")); //$NON-NLS-1$
+
+            // The column ITSELF still binds - the refusal is about continuing past it.
+            assertNull(FormElementWriter.createMember(form, Kind.FIELD, "IdCell", null, //$NON-NLS-1$
+                "Rows.Id", null, null, false, null)); //$NON-NLS-1$
+        }
     }
 
     @Test
@@ -3220,9 +3253,9 @@ public class FormElementWriterTest
             FormElementWriter.rowConsumersBoundToAttribute(column));
     }
 
-    /** Gives {@code member} a value type of the named platform PRIMITIVE. */
+    /** Gives {@code member} a value type of the named platform type (primitive or no-qualifier). */
     @SuppressWarnings("unchecked")
-    private static void setPrimitiveType(EObject member, String typeName)
+    private static void setPlatformType(EObject member, String typeName)
     {
         EObject typeDescription = newObject(modelClass("TypeDescription")); //$NON-NLS-1$
         com._1c.g5.v8.dt.mcore.Type type = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();

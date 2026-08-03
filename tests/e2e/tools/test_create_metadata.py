@@ -1179,6 +1179,41 @@ def test_create_attribute_column_russian_token():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_cannot_walk_past_a_memberless_column():
+    # A column typed UUID / ValueStorage holds one opaque value, so no tail can resolve against it and
+    # EDT does not flag the binding. The terminality check knew only the four primitives while the
+    # type builder had grown these two, so 'Rows.Id.Part' was accepted merely because the 'Id' column
+    # existed and the tool reported success for a dead binding (issue #295 review). Asserted LIVE
+    # because a real form's types are platform PROXIES, not the in-memory Types a unit test builds.
+    attr = "E2EOpaqueOwner"
+    _seed_collection_attribute(attr)
+    base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    for col, kind in (("OpaqueId", "UUID"), ("OpaqueBlob", "ValueStorage")):
+        c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
+        assert_ok(c, "seed column " + col)
+        wait_for_project_ready()
+        t = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": base + ".Column." + col,
+            "properties": [{"name": "type", "value": {"types": [{"kind": kind}]}}]})
+        assert_ok(t, "type the column as " + kind)
+        wait_for_project_ready()
+
+        r = call("create_metadata", {
+            "projectName": PROJECT,
+            "fqn": "Catalog.Catalog.Form.ItemForm.Field.Deep" + col,
+            "properties": [{"name": "dataPath", "value": "%s.%s.Part" % (attr, col)}]})
+        e = assert_error(r, "a path past a %s column must be refused" % kind)
+        assert_error_quality(e, names=[col], suggests=["dataPath"],
+                             ctx="the refusal must name the column and how to bind to it instead")
+
+    # ...and the column ITSELF still binds - the guard is about continuing past it, not about the type.
+    ok = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.OpaqueCell",
+        "properties": [{"name": "dataPath", "value": attr + ".OpaqueId"}]})
+    assert_ok(ok, "a field bound to the opaque column itself must still be created")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_column_on_non_collection_attribute_is_error():
     # Only a ValueTable / ValueTree attribute owns columns. EDT would not flag a column hung off a
     # String attribute, so the tool has to - and it must say how to fix it (issue #295).

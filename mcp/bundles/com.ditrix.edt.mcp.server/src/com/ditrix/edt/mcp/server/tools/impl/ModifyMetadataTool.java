@@ -4427,6 +4427,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * cannot own them - the very shape {@code create_metadata} refuses to build - and EDT does not
      * flag it. Collection-to-collection (ValueTable to ValueTree) stays allowed. Issue #295.
      *
+     * <p>The three things a retype can strand are refused on DIFFERENT conditions, because they break
+     * for different reasons: columns and a table's row source need the attribute to keep holding ROWS,
+     * so any non-collection type strands them; an item bound BELOW the attribute only breaks when the
+     * new type has no members to resolve against, which is asked of
+     * {@link #requestsOnlyMemberlessTypes} (issue #295 review).</p>
+     *
      * @param member the form member being modified
      * @param normProp the normalized property (its name already aliased to {@code valueType})
      * @return a ready JSON error, or {@code null} when the change strands nothing
@@ -4460,8 +4466,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "them with delete_metadata (or re-point them with modify_metadata 'dataPath') " //$NON-NLS-1$
                 + "first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
         }
-        // ...and the same for items bound BELOW it: a field on 'Rows.Price' survives the retype and
-        // keeps pointing at a name the new scalar type does not have.
+        // ...and the same for items bound BELOW it - but ONLY when the requested type is terminal: a
+        // field on 'Rows.Price' survives the retype and keeps pointing at a name a String does not
+        // have, while a REFERENCE type carries its members in the metadata, so 'Rows.Product.
+        // Description' keeps resolving and createField deliberately builds exactly that. Firing on the
+        // mere presence of a tail made this tool refuse a retype it was happy to create - creation
+        // allowed, editing forbade (issue #295 review). The verdict is the requested TYPE's, asked of
+        // the same MetadataTypeBuilder that decides what the retype will build.
+        if (!requestsOnlyMemberlessTypes(normProp))
+        {
+            return null;
+        }
         List<String> below = FormElementWriter.itemsBoundBelowAttribute(member);
         if (!below.isEmpty())
         {
@@ -4483,25 +4498,72 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private static boolean requestsCollectionType(JsonObject normProp)
     {
-        JsonElement spec = normProp.get(KEY_VALUE);
-        if (spec == null || !spec.isJsonObject())
+        for (String kind : requestedTypeKinds(normProp))
         {
-            return false;
-        }
-        JsonElement types = spec.getAsJsonObject().get("types"); //$NON-NLS-1$
-        if (types == null || !types.isJsonArray())
-        {
-            return false;
-        }
-        for (JsonElement item : types.getAsJsonArray())
-        {
-            if (item.isJsonObject()
-                && MetadataTypeBuilder.isCollectionKind(asString(item.getAsJsonObject().get("kind")))) //$NON-NLS-1$
+            if (MetadataTypeBuilder.isCollectionKind(kind))
             {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Whether a {@code valueType} spec asks for types that ALL own no addressable member - the only
+     * shape that really strands a data path running through the attribute. The twin of
+     * {@link #requestsCollectionType}: both answer a question about the REQUESTED type, and both put
+     * it to {@link MetadataTypeBuilder}, the place that decides what the retype will actually build.
+     *
+     * <p>An unrecognizable spec (no {@code types} array, an empty one, a kind this tool cannot build)
+     * answers {@code false}: the guard refuses only what is PROVABLY stranded, and the payload's own
+     * validation answers the malformed case with a type error.</p>
+     *
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return {@code true} when at least one type is requested and every one of them is memberless
+     */
+    private static boolean requestsOnlyMemberlessTypes(JsonObject normProp)
+    {
+        List<String> kinds = requestedTypeKinds(normProp);
+        if (kinds.isEmpty())
+        {
+            return false;
+        }
+        for (String kind : kinds)
+        {
+            if (!MetadataTypeBuilder.isMemberlessType(kind))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The {@code kind} tokens a {@code valueType} spec asks for, in spec order, or an EMPTY list when
+     * the spec carries no {@code types} array. One reader for every guard that turns on WHAT the
+     * caller asked for, so they cannot read the payload differently.
+     *
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return the requested kinds; an entry is {@code null} when the item declares none
+     */
+    private static List<String> requestedTypeKinds(JsonObject normProp)
+    {
+        List<String> kinds = new ArrayList<>();
+        JsonElement spec = normProp.get(KEY_VALUE);
+        if (spec == null || !spec.isJsonObject())
+        {
+            return kinds;
+        }
+        JsonElement types = spec.getAsJsonObject().get("types"); //$NON-NLS-1$
+        if (types == null || !types.isJsonArray())
+        {
+            return kinds;
+        }
+        for (JsonElement item : types.getAsJsonArray())
+        {
+            kinds.add(item.isJsonObject() ? asString(item.getAsJsonObject().get("kind")) : null); //$NON-NLS-1$
+        }
+        return kinds;
     }
 
     /**

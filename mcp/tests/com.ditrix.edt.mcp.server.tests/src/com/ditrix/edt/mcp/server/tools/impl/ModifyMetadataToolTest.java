@@ -1653,6 +1653,69 @@ public class ModifyMetadataToolTest
             verdict.contains("delete_metadata") || verdict.contains("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testARetypeToAReferenceKeepsItemsBoundBelowTheAttribute()
+    {
+        // The orphan scan fired on the mere PRESENCE of a tail, so ANY non-collection retype was
+        // refused once something was bound below the attribute - including a retype to a REFERENCE
+        // type, whose members live in the metadata and whose dotted paths createField deliberately
+        // builds. The tool was refusing to edit a form into a shape it is happy to create (issue #295
+        // review). The verdict is now the requested TYPE's.
+        String verdict = neverAsking().formRetypeVerdict(null, null, attributeWithAnItemBoundBelowIt(),
+            Collections.singletonList(retypeToRefProperty()), report());
+
+        assertFalse("a retype to a reference must not be refused as orphaning: " + verdict, //$NON-NLS-1$
+            verdict != null && verdict.contains("NumberField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARetypeToAMemberlessTypeStillRefusesItemsBoundBelowTheAttribute()
+    {
+        // The other side of the same gate, so relaxing it cannot quietly disable the guard: a type
+        // with NO addressable members really does strand the path. Both the primitive the scan always
+        // knew and the platform type it did not (UUID), because the terminality question now comes
+        // from MetadataTypeBuilder instead of a list kept here.
+        for (JsonObject retype : new JsonObject[] {retypeToStringProperty(), retypeToUuidProperty()})
+        {
+            String verdict = neverAsking().formRetypeVerdict(null, null,
+                attributeWithAnItemBoundBelowIt(), Collections.singletonList(retype), report());
+
+            assertNotNull("a retype to a memberless type must still be refused", verdict); //$NON-NLS-1$
+            assertTrue("the refusal must name the stranded item: " + verdict, //$NON-NLS-1$
+                verdict.contains("NumberField")); //$NON-NLS-1$
+        }
+    }
+
+    /** {name:'type', value:{types:[{kind:'Ref', ref:'Catalog.Products'}]}} - a type that HAS members. */
+    private static JsonObject retypeToRefProperty()
+    {
+        JsonObject kind = new JsonObject();
+        kind.addProperty("kind", "Ref"); //$NON-NLS-1$ //$NON-NLS-2$
+        kind.addProperty("ref", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        return typeProperty(kind);
+    }
+
+    /** {name:'type', value:{types:[{kind:'UUID'}]}} - a platform type with no members at all. */
+    private static JsonObject retypeToUuidProperty()
+    {
+        JsonObject kind = new JsonObject();
+        kind.addProperty("kind", "UUID"); //$NON-NLS-1$ //$NON-NLS-2$
+        return typeProperty(kind);
+    }
+
+    /** Wraps one type item into a {name:'type', value:{types:[item]}} property. */
+    private static JsonObject typeProperty(JsonObject typeItem)
+    {
+        JsonArray types = new JsonArray();
+        types.add(typeItem);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.add("value", spec); //$NON-NLS-1$
+        return prop;
+    }
+
     /**
      * A form attribute {@code Object} living on a form that also holds a field bound to
      * {@code Object.Number} - the shape a retype to a collection would leave pointing at nothing.

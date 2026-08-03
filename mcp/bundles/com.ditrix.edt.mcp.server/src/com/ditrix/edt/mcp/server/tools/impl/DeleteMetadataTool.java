@@ -18,6 +18,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.TreeIterator;
+import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EObject;
@@ -711,12 +712,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     String gateFormMemberDelete(String normFqn, FormElementWriter.FormMemberRef ref, boolean handler,
         FormDeletePreview data, java.util.function.Supplier<String> write)
     {
+        // The breakdown is DERIVED from what the walk actually found, not a fixed phrase naming the
+        // kinds the walk used to follow: the prompt named "nested items, attribute columns" while an
+        // event handler and a command's action went along unmentioned (issue #295 review).
         ConsentPreview preview = new ConsentPreview(
             handler ? "Delete form event handler" : "Delete form member", //$NON-NLS-1$ //$NON-NLS-2$
             data.descendants.isEmpty()
                 ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
                 : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
-                    + " contained element(s) (nested items, attribute columns) from " //$NON-NLS-1$
+                    + " contained member(s) (" + data.describeDescendants() + ") from " //$NON-NLS-1$ //$NON-NLS-2$
                     + ref.formPath + '.',
             1 + data.descendants.size(), Collections.singletonList(normFqn));
         return deleteWithConsent(preview, write);
@@ -938,7 +942,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + ref.formPath + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
                     ? "the " + memberWord + " itself." //$NON-NLS-1$ //$NON-NLS-2$
-                    : "it and its " + data.descendants.size() + " contained item(s).") //$NON-NLS-1$ //$NON-NLS-2$
+                    : "it and its " + data.descendants.size() + " contained member(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+                        + data.describeDescendants() + ").") //$NON-NLS-1$
                 + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
                 + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
                 + "to apply.") //$NON-NLS-1$
@@ -2160,18 +2165,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Walks the item's contained descendants depth-first, appending each as a {name, type} map (the
-     * same {@code getReferenceList} / {@code nameOf} accessors the form reader uses), so the preview
-     * lists what a container delete cascades. The item ITSELF is not added.
-     *
-     * <p>Covers the {@code items} subtree, a collection attribute's {@code columns}, AND the SINGULAR
-     * containments an element owns - its auto command bar, context menu, extended tooltip and a
-     * table's three additions. Every one of them is a real addressable element that
-     * {@code EcoreUtil.remove} takes with its owner: deleting a Table removed its command bar and
-     * additions while the preview promised only the table, which is the same understatement the
-     * columns were added to fix (issue #295 review).</p>
-     */
-    /**
      * Test seam for {@link #collectItemDescendants}: the walk decides what a destructive preview
      * promises, so it is verified directly instead of through a live form.
      *
@@ -2183,64 +2176,93 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         collectItemDescendants(item, out);
     }
 
+    /**
+     * Walks what a delete of {@code item} takes with it, appending each removed member as a
+     * {name, type} map, so the preview and the consent prompt describe the real blast radius. The item
+     * ITSELF is not added.
+     *
+     * <p>The radius is DERIVED, not listed: {@code EcoreUtil.remove} takes the whole containment
+     * subtree, so every containment reference of the object's EClass is followed - many-valued and
+     * single-valued alike. Naming the features to follow ({@code items}, {@code columns}, plus the
+     * singular containments that hold a {@code FormItem}) left out the two containments that hold
+     * something else: an element's {@code handlers} list and a command's {@code action}. Both go with
+     * their owner, so deleting a field, a button or a command was authorized and previewed as "one
+     * member" while it silently carried off the procedure binding (issue #295 review).</p>
+     *
+     * <p>What gets REPORTED is likewise a property, not a list: a contained object that carries its
+     * own non-empty {@code name} is a member the caller can address and therefore loses (a nested
+     * item, an attribute column, an event handler, a command's action handler); one that carries none
+     * is a property holder of its owner (a data path, a title, an extInfo, a type description) and is
+     * descended THROUGH, not listed - which is how a command's action, an unnamed container, still
+     * yields the named {@code CommandHandler} inside it.</p>
+     *
+     * @param item the element to descend from
+     * @param out receives one {name, type} entry per removed member, depth-first in metamodel order
+     */
     private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
     {
-        for (EObject column : FormStructureReader.getReferenceList(item, KEY_COLUMNS))
-        {
-            Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("name", FormStructureReader.nameOf(column)); //$NON-NLS-1$
-            entry.put("type", column.eClass().getName()); //$NON-NLS-1$
-            out.add(entry);
-        }
-        for (EObject satellite : singularElementsOf(item))
-        {
-            Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("name", FormStructureReader.nameOf(satellite)); //$NON-NLS-1$
-            entry.put("type", satellite.eClass().getName()); //$NON-NLS-1$
-            out.add(entry);
-            collectItemDescendants(satellite, out);
-        }
-        for (EObject child : FormStructureReader.getReferenceList(item, KEY_ITEMS))
-        {
-            Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("name", FormStructureReader.nameOf(child)); //$NON-NLS-1$
-            entry.put("type", child.eClass().getName()); //$NON-NLS-1$
-            out.add(entry);
-            collectItemDescendants(child, out);
-        }
-    }
-
-    /**
-     * The SINGLE-valued containments of {@code item} that hold a form ELEMENT - asked of the
-     * metamodel, not listed by hand, so a model that grows another one cannot slip past the preview.
-     * A containment holding something that is not an item (a data path, a type description) is not an
-     * element and is skipped.
-     *
-     * @param item the element to inspect
-     * @return its singular contained elements, in metamodel order
-     */
-    private static List<EObject> singularElementsOf(EObject item)
-    {
-        List<EObject> found = new ArrayList<>();
-        EClassifier formItem = item.eClass().getEPackage() == null ? null
-            : item.eClass().getEPackage().getEClassifier("FormItem"); //$NON-NLS-1$
-        if (!(formItem instanceof EClass))
-        {
-            return found;
-        }
         for (EReference reference : item.eClass().getEAllReferences())
         {
-            if (!reference.isContainment() || reference.isMany())
+            if (!reference.isContainment())
             {
                 continue;
             }
             Object value = item.eGet(reference);
-            if (value instanceof EObject && ((EClass)formItem).isInstance(value))
+            if (value instanceof List<?>)
             {
-                found.add((EObject)value);
+                for (Object child : (List<?>)value)
+                {
+                    collectRemovedMember(child, out);
+                }
+            }
+            else
+            {
+                collectRemovedMember(value, out);
             }
         }
-        return found;
+    }
+
+    /**
+     * Appends {@code child} to {@code out} when it is a NAMED member (see
+     * {@link #collectItemDescendants}), then descends into it either way.
+     *
+     * @param child the contained value, or {@code null} / a non-{@code EObject} for an unset containment
+     * @param out receives the {name, type} entries
+     */
+    private static void collectRemovedMember(Object child, List<Map<String, Object>> out)
+    {
+        if (!(child instanceof EObject))
+        {
+            return;
+        }
+        String name = ownNameOf((EObject)child);
+        if (name != null)
+        {
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("name", name); //$NON-NLS-1$
+            entry.put("type", ((EObject)child).eClass().getName()); //$NON-NLS-1$
+            out.add(entry);
+        }
+        collectItemDescendants((EObject)child, out);
+    }
+
+    /**
+     * The object's OWN name, asked of its EClass, or {@code null} when it carries none. Deliberately
+     * NOT {@link FormStructureReader#nameOf}: that one answers {@code "(unnamed)"} so a renderer never
+     * prints a blank cell, which here would turn every property holder into a reported member.
+     *
+     * @param object the contained object to inspect
+     * @return its non-empty {@code name}, or {@code null}
+     */
+    private static String ownNameOf(EObject object)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+        if (!(feature instanceof EAttribute))
+        {
+            return null;
+        }
+        Object value = object.eGet(feature);
+        return (value instanceof String && !((String)value).isEmpty()) ? (String)value : null;
     }
 
     /** Mutable carrier for the form-delete preview read task so tx-bound EObjects never escape. */
@@ -2249,6 +2271,29 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         boolean found;
         String type;
         final List<Map<String, Object>> descendants = new ArrayList<>();
+
+        /**
+         * The descendants grouped by their model type, e.g. {@code "2 FormField, 1 EventHandler"} -
+         * read off the entries the walk produced, so the prompt cannot name a category the walk does
+         * not actually follow (issue #295 review).
+         *
+         * @return the breakdown, or {@code ""} when nothing is contained
+         */
+        String describeDescendants()
+        {
+            Map<String, Integer> byType = new java.util.LinkedHashMap<>();
+            for (Map<String, Object> descendant : descendants)
+            {
+                String type = String.valueOf(descendant.get("type")); //$NON-NLS-1$
+                byType.merge(type, Integer.valueOf(1), (a, b) -> Integer.valueOf(a.intValue() + 1));
+            }
+            List<String> parts = new ArrayList<>();
+            for (Map.Entry<String, Integer> entry : byType.entrySet())
+            {
+                parts.add(entry.getValue() + " " + entry.getKey()); //$NON-NLS-1$
+            }
+            return String.join(", ", parts); //$NON-NLS-1$
+        }
     }
 
     /**

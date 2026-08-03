@@ -687,6 +687,46 @@ def test_retype_is_refused_while_columns_exist():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_of_a_column_carrying_a_nested_binding_follows_the_requested_type():
+    # The orphan scan fired on the mere PRESENCE of a tail, so a column with 'Rows.Product.Description'
+    # under it refused EVERY non-collection retype - including one to a REFERENCE type, whose members
+    # live in the metadata and whose deeper paths createField deliberately builds. The tool was
+    # stricter about editing a form than about creating one (issue #295 review). The verdict now
+    # follows the REQUESTED type: memberless refuses, member-owning proceeds.
+    attr, col = "MFRefCol", "Product"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.%s.Column.%s" % (attr, col)})
+    assert_ok(c, "add the column")
+    wait_for_project_ready()
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.MFRefDeep",
+        "properties": [{"name": "dataPath", "value": "%s.%s.Description" % (attr, col)}]})
+    assert_ok(f, "bind a field BELOW the column (createField allows this through an untyped column)")
+    wait_for_project_ready()
+
+    column_fqn = "Catalog.Catalog.Form.ItemForm.Attribute.%s.Column.%s" % (attr, col)
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "Catalog.Catalog"}]}}]})
+    assert_ok(ok, "a retype to a REFERENCE keeps the nested binding resolving and must be allowed")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "String", "length": 10}]}}]})
+    e = assert_error(r, "a retype to a MEMBERLESS type must still be refused")
+    assert_error_quality(e, names=["MFRefDeep"], suggests=["delete_metadata", "dataPath"],
+                         ctx="the refusal must name the item it would strand and the two ways out")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_dynamic_list_conversion_is_refused_while_columns_exist():
     # The dynamic-list branch retypes the attribute to DynamicList WITHOUT building a TypeDescription,
     # so it bypassed the ordinary property path's guard and stranded the columns just the same
