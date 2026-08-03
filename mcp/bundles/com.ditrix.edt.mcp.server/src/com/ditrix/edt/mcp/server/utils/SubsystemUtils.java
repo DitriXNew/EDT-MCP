@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2026 Diversus (https://github.com/Diversus23)
  * Licensed under AGPL-3.0-or-later
@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.eclipse.emf.common.util.EMap;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -108,35 +110,81 @@ public final class SubsystemUtils
         {
             return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
         }
-        String[] stored = new String[names.length];
-        Iterable<Subsystem> level = config.getSubsystems();
-        for (int i = 0; i < names.length; i++)
-        {
-            Subsystem child = findChildWithYoFallback(level, names[i]);
-            if (child == null)
-            {
-                return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
-            }
-            stored[i] = child.getName();
-            level = child.getSubsystems();
-        }
-        return stored;
+        // EXACT-FIRST for the WHOLE chain: the address exactly as typed wins outright, exactly as
+        // MetadataNodeResolver.resolveExistingWithYoFallback treats a single name. Only when the
+        // fully-as-typed chain fails end to end is a yo reading of any level considered.
+        String[] exact = descend(config.getSubsystems(), names, 0, false);
+        return exact != null ? exact : descend(config.getSubsystems(), names, 0, true);
     }
 
     /**
-     * {@link #findChild} first, then the yo-normalized spelling of {@code name} - the same retry the
-     * write/delete paths use, applied to ONE level so the levels stay independent.
+     * Depth-first descent with BACKTRACKING, matching {@code names[index]} against the subsystems
+     * that actually exist at this level.
+     *
+     * <p>The previous walk committed to the first child that matched, so a chain whose typed parent
+     * exists but is a DEAD END never got to try the parent's yo twin: with {@code Subsystem.M[yo]d}
+     * childless and {@code Subsystem.M[ye]d} holding {@code V[ye]s}, the address
+     * {@code Subsystem.M[yo]d.Subsystem.V[yo]s} stopped at the parent and came back missing.</p>
+     *
+     * <p>Backtracking here is NOT the subset enumeration this replaced. That built 2^n strings from
+     * the ADDRESS before touching the model; this walks the model, and a level offers at most the
+     * one or two children that really carry the name - a branch that matches nothing is cut on the
+     * spot. The work is therefore bounded by the configuration's own subsystem tree, not by the
+     * length of the address.</p>
+     *
+     * @param level the subsystems available at this depth
+     * @param names the requested chain
+     * @param index the depth being matched
+     * @param allowYo whether a yo reading of the name may be tried in addition to the exact one
+     * @return the STORED names along a complete matching path, or {@code null} when none exists
      */
-    private static Subsystem findChildWithYoFallback(Iterable<Subsystem> children, String name)
+    private static String[] descend(Iterable<Subsystem> level, String[] names, int index,
+        boolean allowYo)
     {
-        Subsystem exact = findChild(children, name);
+        for (Subsystem candidate : candidatesAt(level, names[index], allowYo))
+        {
+            if (index == names.length - 1)
+            {
+                String[] chain = new String[names.length];
+                chain[index] = candidate.getName();
+                return chain;
+            }
+            String[] deeper = descend(candidate.getSubsystems(), names, index + 1, allowYo);
+            if (deeper != null)
+            {
+                deeper[index] = candidate.getName();
+                return deeper;
+            }
+        }
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+    }
+
+    /**
+     * The subsystems at this level that {@code name} can mean: the exact match first, then - only
+     * when {@code allowYo} - the yo-normalized one, and only if it really exists and is a different
+     * object. At most two, and never a name the model does not carry.
+     */
+    private static List<Subsystem> candidatesAt(Iterable<Subsystem> level, String name,
+        boolean allowYo)
+    {
+        List<Subsystem> candidates = new ArrayList<>(2);
+        Subsystem exact = findChild(level, name);
         if (exact != null)
         {
-            return exact;
+            candidates.add(exact);
         }
-        String retry = MetadataNodeResolver.yoRetryFqn(name);
-        return retry == null ? null : findChild(children, retry);
+        if (allowYo)
+        {
+            String retry = MetadataNodeResolver.yoRetryFqn(name);
+            Subsystem viaYo = retry == null ? null : findChild(level, retry);
+            if (viaYo != null && viaYo != exact)
+            {
+                candidates.add(viaYo);
+            }
+        }
+        return candidates;
     }
+
 
     /**
      * Parses a subsystem FQN into the ordered list of subsystem names along the

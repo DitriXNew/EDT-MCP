@@ -1983,6 +1983,50 @@ public class GetProjectErrorsToolTest
         assertEquals(singleton(asTypedFqn), masked.undecided);
     }
 
+
+    @Test
+    public void testADeadEndTypedParentDoesNotBlockTheYoTwinOfThatParent()
+    {
+        // The per-level walk committed to the first child that matched, so a chain whose typed
+        // parent EXISTS but is a dead end never got to try that parent's yo twin. Here
+        // 'Subsystem.M[yo]d' exists and is childless, while 'Subsystem.M[ye]d' holds 'V[ye]s': the
+        // address 'Subsystem.M[yo]d.Subsystem.V[yo]s' must resolve through the fallback, and the
+        // greedy descent stopped at the parent and answered objectsNotFound.
+        String ye = fromCp(0x0435);
+        String yo = fromCp(0x0451);
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+
+        Subsystem deadEnd = MdClassFactory.eINSTANCE.createSubsystem();
+        deadEnd.setName("M" + yo + "d"); //$NON-NLS-1$ //$NON-NLS-2$
+        config.getSubsystems().add(deadEnd);
+
+        Subsystem alive = MdClassFactory.eINSTANCE.createSubsystem();
+        alive.setName("M" + ye + "d"); //$NON-NLS-1$ //$NON-NLS-2$
+        Subsystem child = MdClassFactory.eINSTANCE.createSubsystem();
+        child.setName("V" + ye + "s"); //$NON-NLS-1$ //$NON-NLS-2$
+        alive.getSubsystems().add(child);
+        config.getSubsystems().add(alive);
+
+        String requested = "Subsystem.M" + yo + "d.Subsystem.V" + yo + "s"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertNotNull("a dead-end typed parent must not end the search", scope); //$NON-NLS-1$
+        assertTrue("the scan must be scoped by the STORED chain reached by backtracking", //$NON-NLS-1$
+            scope.contains("Subsystem.M" + ye + "d.Subsystem.V" + ye + "s")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        // EXACT-FIRST still wins as a WHOLE chain: when the typed chain resolves end to end, the
+        // yo twin is never consulted, even though it exists and also carries a matching child.
+        Subsystem typedChild = MdClassFactory.eINSTANCE.createSubsystem();
+        typedChild.setName("V" + yo + "s"); //$NON-NLS-1$ //$NON-NLS-2$
+        deadEnd.getSubsystems().add(typedChild);
+        assertEquals("a fully typed chain must scope exactly itself", //$NON-NLS-1$
+            singleton(requested), resolvedIn(config, requested).get(requested));
+
+        // And a chain that exists nowhere is still an honest miss.
+        assertNull(resolvedIn(config, "Subsystem.M" + yo + "d.Subsystem.NoSuch") //$NON-NLS-1$ //$NON-NLS-2$
+            .get("Subsystem.M" + yo + "d.Subsystem.NoSuch")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ========== helpers ==========
     /**
      * An OPEN project whose description carries exactly {@code natureIds} - the shape
