@@ -1322,6 +1322,24 @@ public class FormElementWriterTest
         assertFalse("a non-parseable address must not be quoted back: " + junk, //$NON-NLS-1$
             junk.contains("Use '")); //$NON-NLS-1$
         assertTrue(junk, junk.contains("Address it with the 'Field' kind")); //$NON-NLS-1$
+
+        // THE combination case, the mirror of the command-owner one: correcting only the owner KIND
+        // of '...Command.AdvFld.Handler.Action' (AdvFld is a FIELD) yields
+        // '...Field.AdvFld.Handler.Action' - which parses, and which can never work, because Action
+        // is a form command's own event. Nothing may be quoted, and the reason must be said.
+        String actionFqn = "CommonForm.F.Command.AdvFld.Handler.Action"; //$NON-NLS-1$
+        String actionAdvice = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
+            FormElementWriter.parse(actionFqn), actionFqn);
+        assertTrue(actionAdvice, actionAdvice.contains("but it is a Field")); //$NON-NLS-1$
+        assertFalse("an event the corrected owner cannot carry must not be quoted as an address: " //$NON-NLS-1$
+            + actionAdvice, actionAdvice.contains("Use '")); //$NON-NLS-1$
+        assertTrue(actionAdvice, actionAdvice.contains("'Action' is a form command's own event")); //$NON-NLS-1$
+        // ... and the address that was NOT quoted really is unusable, judged by the binder itself.
+        EObject wrongOwner = FormElementWriter.resolveHandlerContainer(form,
+            FormElementWriter.parse("CommonForm.F.Field.AdvFld.Handler.Action")); //$NON-NLS-1$
+        assertNotNull(wrongOwner);
+        assertNull("a FIELD has no Action handler slot", //$NON-NLS-1$
+            FormElementWriter.findFormHandler(wrongOwner, "Action")); //$NON-NLS-1$
     }
 
     /** The FQN an advice quotes between single quotes, or {@code null} when it quotes none. */
