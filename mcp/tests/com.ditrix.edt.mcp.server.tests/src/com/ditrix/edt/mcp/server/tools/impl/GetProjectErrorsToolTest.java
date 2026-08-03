@@ -1113,7 +1113,7 @@ public class GetProjectErrorsToolTest
         // So the request-level verdict must be a REFUSAL naming the address, never "not found".
         GetProjectErrorsTool.AddressResolution resolution =
             new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(resolution, Collections.singletonList(member),
+        GetProjectErrorsTool.foldProjectDecisions(resolution, Collections.singletonList(member), Collections.singletonList(member),
             Arrays.asList(undecided, complete));
 
         assertNotNull("an address nobody could decide must refuse the call", resolution.error); //$NON-NLS-1$
@@ -1127,7 +1127,7 @@ public class GetProjectErrorsToolTest
         resolvedSomewhere.passCompleted = true;
         resolvedSomewhere.resolved.put(member, singleton(member));
         GetProjectErrorsTool.AddressResolution ok = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(ok, Collections.singletonList(member),
+        GetProjectErrorsTool.foldProjectDecisions(ok, Collections.singletonList(member), Collections.singletonList(member),
             Arrays.asList(undecided, resolvedSomewhere));
         assertNull("a resolution elsewhere settles the address", ok.error); //$NON-NLS-1$
         assertEquals(Collections.singletonList(member), ok.resolved);
@@ -1167,7 +1167,7 @@ public class GetProjectErrorsToolTest
             candidates);
         GetProjectErrorsTool.AddressResolution withNonEdt =
             new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(withNonEdt, candidates,
+        GetProjectErrorsTool.foldProjectDecisions(withNonEdt, candidates, candidates,
             Collections.singletonList(readable));
         assertNull("a non-EDT project must not mute the missing-address report", //$NON-NLS-1$
             withNonEdt.error);
@@ -1176,7 +1176,7 @@ public class GetProjectErrorsToolTest
         // ...while the same query with an INDEXING EDT project alongside must not claim absence.
         GetProjectErrorsTool.AddressResolution withLoading =
             new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(withLoading, candidates,
+        GetProjectErrorsTool.foldProjectDecisions(withLoading, candidates, candidates,
             Arrays.asList(readable, loading));
         assertNotNull("an unreadable EDT project must stop the absence claim", withLoading.error); //$NON-NLS-1$
         assertTrue("the refusal must name the address", //$NON-NLS-1$
@@ -1213,7 +1213,7 @@ public class GetProjectErrorsToolTest
             project("open"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
             candidates);
         GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(r, candidates, Arrays.asList(readable, closed));
+        GetProjectErrorsTool.foldProjectDecisions(r, candidates, candidates, Arrays.asList(readable, closed));
 
         assertNotNull("a closed project makes the absence claim unprovable", r.error); //$NON-NLS-1$
         assertTrue(r.error.contains("Catalog.Nope")); //$NON-NLS-1$
@@ -1236,7 +1236,7 @@ public class GetProjectErrorsToolTest
             project("B", true), null, null, candidates); //$NON-NLS-1$
 
         GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(r, candidates, Arrays.asList(owner, unreadable));
+        GetProjectErrorsTool.foldProjectDecisions(r, candidates, candidates, Arrays.asList(owner, unreadable));
 
         // Existence is settled - no refusal, no "missing".
         assertNull("an owner settles existence", r.error); //$NON-NLS-1$
@@ -1259,7 +1259,7 @@ public class GetProjectErrorsToolTest
             project("B"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), candidates); //$NON-NLS-1$
         GetProjectErrorsTool.AddressResolution complete =
             new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(complete, candidates,
+        GetProjectErrorsTool.foldProjectDecisions(complete, candidates, candidates,
             Arrays.asList(owner, absentHere));
         assertTrue("a fully consulted universe is not partial", complete.incompleteFor.isEmpty()); //$NON-NLS-1$
         assertEquals(Collections.singletonList(fqn), complete.resolved);
@@ -1289,6 +1289,7 @@ public class GetProjectErrorsToolTest
         GetProjectErrorsTool.AddressResolution resolution =
             new GetProjectErrorsTool.AddressResolution();
         GetProjectErrorsTool.foldProjectDecisions(resolution,
+            Collections.singletonList(requested),
             Collections.singletonList(requested), Arrays.asList(a, b, c));
 
         assertEquals("each project must scope by the spelling IT stores", //$NON-NLS-1$
@@ -1570,14 +1571,14 @@ public class GetProjectErrorsToolTest
             project("cfg"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
             candidates);
         GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(r, candidates, Arrays.asList(readable, external));
+        GetProjectErrorsTool.foldProjectDecisions(r, candidates, candidates, Arrays.asList(readable, external));
         assertNull("an external-objects project must not refuse the call", r.error); //$NON-NLS-1$
         assertEquals(candidates, r.notFound);
         assertTrue("nor make the answer partial", r.incompleteFor.isEmpty()); //$NON-NLS-1$
 
         // ...and it is ALONE enough to answer: no readable configuration project is required.
         GetProjectErrorsTool.AddressResolution alone = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(alone, candidates,
+        GetProjectErrorsTool.foldProjectDecisions(alone, candidates, candidates,
             Collections.singletonList(external));
         assertNull("an external-objects project is an inspection in its own right", alone.error); //$NON-NLS-1$
         assertEquals(candidates, alone.notFound);
@@ -2161,7 +2162,7 @@ public class GetProjectErrorsToolTest
         // the end here - only individual spellings were undecidable.)
         decided.passCompleted = true;
         GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(r, Collections.singletonList(requested),
+        GetProjectErrorsTool.foldProjectDecisions(r, Collections.singletonList(requested), Collections.singletonList(requested),
             Collections.singletonList(decided));
         assertEquals(Collections.singletonList(requested), r.resolved);
         assertEquals("the partial answer must name the project that could not decide", //$NON-NLS-1$
@@ -2225,7 +2226,7 @@ public class GetProjectErrorsToolTest
             closedProject("archived"), null, null, Collections.singletonList(possible)); //$NON-NLS-1$
 
         GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
-        GetProjectErrorsTool.foldProjectDecisions(r, asked, Arrays.asList(readable, unreadable));
+        GetProjectErrorsTool.foldProjectDecisions(r, asked, asked, Arrays.asList(readable, unreadable));
 
         // The POSSIBLE address is still undecided - nobody could rule it out.
         assertNotNull("a possible address must stay undecided beside an unreadable project", //$NON-NLS-1$
@@ -2239,6 +2240,7 @@ public class GetProjectErrorsToolTest
         GetProjectErrorsTool.AddressResolution onlyImpossible =
             new GetProjectErrorsTool.AddressResolution();
         GetProjectErrorsTool.foldProjectDecisions(onlyImpossible,
+            Collections.singletonList(impossible),
             Collections.singletonList(impossible),
             Arrays.asList(readable, GetProjectErrorsTool.projectDecision(
                 closedProject("archived"), null, null, Collections.<String> emptyList()))); //$NON-NLS-1$
@@ -2270,6 +2272,43 @@ public class GetProjectErrorsToolTest
             Collections.singletonList("Catalog.Products"), resolvable); //$NON-NLS-1$
         assertEquals("the XDTO member is a family verdict, not a candidate", //$NON-NLS-1$
             1, r.unsupported.size());
+    }
+
+
+    @Test
+    public void testImpossibleAddressesAnswerEvenWhenNoProjectCouldBeInspected()
+    {
+        // The guard for "nothing could be inspected" fired before the verdict was published, so a
+        // workspace whose every project is closed / indexing / non-EDT refused the whole call even
+        // when the only addresses asked were impossible by SHAPE - decided long before any project
+        // mattered. Same inversion as before: knowledge that needs no model, overridden by the state
+        // of the inspection.
+        List<String> impossible = Arrays.asList("NoSuchType_e2e.X", "Catalog.Products."); //$NON-NLS-1$ //$NON-NLS-2$
+
+        GetProjectErrorsTool.AddressResolution none = new GetProjectErrorsTool.AddressResolution();
+        List<String> candidates = new ArrayList<>();
+        List<String> resolvable = GetProjectErrorsTool.classifyRequestedAddresses(impossible, none,
+            candidates);
+        assertTrue("the premise: nothing here needs a model", resolvable.isEmpty()); //$NON-NLS-1$
+
+        // No project completed a pass - there was none to complete.
+        GetProjectErrorsTool.foldProjectDecisions(none, candidates, resolvable,
+            Collections.<GetProjectErrorsTool.ProjectResolution> emptyList());
+        assertNull("an impossible address must not be refused for want of an inspection", //$NON-NLS-1$
+            none.error);
+        assertEquals(impossible, none.notFound);
+
+        // The pair: add ONE address of possible shape to the same workspace, and the call is
+        // refused again - that one genuinely could not be decided.
+        GetProjectErrorsTool.AddressResolution mixed = new GetProjectErrorsTool.AddressResolution();
+        List<String> mixedCandidates = new ArrayList<>();
+        List<String> mixedResolvable = GetProjectErrorsTool.classifyRequestedAddresses(
+            Arrays.asList("NoSuchType_e2e.X", "Catalog.Products"), mixed, mixedCandidates); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Collections.singletonList("Catalog.Products"), mixedResolvable); //$NON-NLS-1$
+        GetProjectErrorsTool.foldProjectDecisions(mixed, mixedCandidates, mixedResolvable,
+            Collections.<GetProjectErrorsTool.ProjectResolution> emptyList());
+        assertNotNull("a possible address with no inspection must still refuse", mixed.error); //$NON-NLS-1$
+        assertTrue("nothing may be declared missing in that case", mixed.notFound.isEmpty()); //$NON-NLS-1$
     }
 
     // ========== helpers ==========

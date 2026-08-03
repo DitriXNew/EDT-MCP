@@ -737,7 +737,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 perProject.add(decided);
             }
         }
-        foldProjectDecisions(resolution, candidates, perProject);
+        foldProjectDecisions(resolution, candidates, resolvable, perProject);
         return resolution;
     }
 
@@ -990,7 +990,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param perProject what each project in the universe decided, in scope order
      */
     static void foldProjectDecisions(AddressResolution resolution, List<String> candidates,
-        List<ProjectResolution> perProject)
+        List<String> resolvable, List<ProjectResolution> perProject)
     {
         Map<String, AddressKnowledge> knowledge = new LinkedHashMap<>();
         for (String fqn : candidates)
@@ -1032,7 +1032,7 @@ public class GetProjectErrorsTool implements IMcpTool
             resolution.scopeByProject.put(decided.projectName, projectScope);
         }
 
-        applyWireContract(resolution, candidates, knowledge, inspectedAny);
+        applyWireContract(resolution, candidates, resolvable, knowledge, inspectedAny);
     }
 
     /**
@@ -1054,9 +1054,15 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param inspectedAny whether ANY project completed a resolve pass
      */
     private static void applyWireContract(AddressResolution resolution, List<String> candidates,
-        Map<String, AddressKnowledge> knowledge, boolean inspectedAny)
+        List<String> resolvable, Map<String, AddressKnowledge> knowledge, boolean inspectedAny)
     {
-        if (!inspectedAny)
+        // Both guards below are about what INSPECTION could not settle, so neither may speak for an
+        // address that never needed one. An address of impossible SHAPE was decided before any
+        // project was consulted (see classifyRequestedAddresses); letting a guard fire on its behalf
+        // is the same inversion as before - a verdict we already hold, overridden by the state of
+        // the inspection. So when nothing resolvable was asked at all, there is nothing to refuse.
+        boolean anythingNeededAModel = !resolvable.isEmpty();
+        if (!inspectedAny && anythingNeededAModel)
         {
             resolution.error = ToolResult.error("Cannot resolve " + PARAM_OBJECT_FQNS //$NON-NLS-1$
                 + ": no project in scope could answer - its metadata model is not readable" //$NON-NLS-1$
@@ -1072,7 +1078,7 @@ public class GetProjectErrorsTool implements IMcpTool
         // could look. Reporting it as objectsNotFound is the false verdict this input exists to
         // prevent, so the call is refused instead, exactly as an entirely uninspectable scope is.
         List<String> undecidedMisses = new ArrayList<>();
-        for (String fqn : candidates)
+        for (String fqn : resolvable)
         {
             if (knowledge.get(fqn).isUndecided())
             {
