@@ -873,9 +873,48 @@ public final class MetadataTypeUtils
         }
 
         String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
-        variants.add(translateStructuralSegments(segments, true).toLowerCase());
-        variants.add(translateStructuralSegments(segments, false).toLowerCase());
+        variants.add(translateStructuralSegments(segments, true, 0).toLowerCase());
+        variants.add(translateStructuralSegments(segments, false, 0).toLowerCase());
 
+        return variants;
+    }
+
+    /**
+     * As {@link #getAllFqnVariants}, but for a loose FRAGMENT, whose OFFSET into the location is
+     * unknown.
+     *
+     * <p>A full address always starts on a structural segment, so its parity is known. A fragment
+     * may start anywhere: on the type ({@code Catalog.Products}), on a nested kind
+     * ({@code Form.ItemForm}) - or on a NAME ({@code ItemForm.Form}), and then the structural
+     * segments sit on the ODD indexes. Assuming one parity left the other silently untranslated, so
+     * the fragment matched nothing and - because a loose entry reports no miss - the caller got an
+     * empty report. That is the same false all-clear, found three times in a row at three different
+     * offsets.</p>
+     *
+     * <p>So BOTH parities are emitted rather than one being guessed, and that is why there is no
+     * fourth case: a fragment's structural segments are either all on even indexes or all on odd
+     * ones - there is no third offset. The count is bounded and LINEAR, not combinatorial: the
+     * original plus (2 parities x 2 languages) = at most 5 variants, deduplicated, whatever the
+     * fragment's depth.</p>
+     *
+     * <p>The price is deliberate and belongs to the loose filter alone: under the odd parity a NAME
+     * that literally spells a kind token is translated, so an over-short fragment can over-match -
+     * which {@code objects} already documents, and which it never turns into a claim about
+     * existence. The EXACT filter keeps {@link #getAllFqnVariants}, where the offset is known.</p>
+     *
+     * @param fqn the fragment (may be {@code null})
+     * @return the deduplicated, lowercased variants (never {@code null})
+     */
+    public static Set<String> getAllFragmentVariants(String fqn)
+    {
+        Set<String> variants = getAllFqnVariants(fqn);
+        if (fqn == null || fqn.indexOf('.') <= 0)
+        {
+            return variants;
+        }
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        variants.add(translateStructuralSegments(segments, true, 1).toLowerCase());
+        variants.add(translateStructuralSegments(segments, false, 1).toLowerCase());
         return variants;
     }
 
@@ -886,9 +925,13 @@ public final class MetadataTypeUtils
      * @param segments the dot-split FQN segments
      * @param toEnglish {@code true} to render the structural segments in English, {@code false}
      *     to render them in Russian
+     * @param structuralOffset the index of the FIRST structural segment: {@code 0} for a full
+     *     address (and for a fragment that starts on a type or a kind), {@code 1} for a fragment
+     *     that starts on a programmatic NAME. Segments of the other parity are copied verbatim.
      * @return the rebuilt FQN (never {@code null})
      */
-    private static String translateStructuralSegments(String[] segments, boolean toEnglish)
+    private static String translateStructuralSegments(String[] segments, boolean toEnglish,
+        int structuralOffset)
     {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < segments.length; i++)
@@ -897,9 +940,9 @@ public final class MetadataTypeUtils
             {
                 sb.append('.');
             }
-            // Even index = structural token (0 = top-level type, 2/4/... = nested kind);
-            // odd index = programmatic Name, which is never translated.
-            sb.append(i % 2 == 0
+            // Structural token every other segment from the offset (the first one may be a
+            // top-level type); the alternating segments are programmatic Names, never translated.
+            sb.append(i % 2 == structuralOffset % 2
                 ? translateStructuralSegment(segments[i], i == 0, toEnglish)
                 : segments[i]);
         }

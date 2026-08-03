@@ -313,7 +313,8 @@ public class GetProjectErrorsTool implements IMcpTool
                 return projectNotFound;
             }
 
-            final Set<String> finalObjects = buildObjectFilterVariants(objects);
+            // The LOOSE filter: entries are fragments whose offset into the location is unknown.
+            final Set<String> finalObjects = buildObjectFilterVariants(objects, true);
 
             Map<IProject, List<Marker>> markersByProject = groupMarkersByProject(markerManager, projectName);
 
@@ -391,12 +392,32 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     private static Set<String> buildObjectFilterVariants(Collection<String> objects)
     {
+        return buildObjectFilterVariants(objects, false);
+    }
+
+    /**
+     * As {@link #buildObjectFilterVariants(Collection)}, but stating whether the entries are loose
+     * FRAGMENTS or full addresses.
+     *
+     * <p>A fragment's OFFSET into the location is unknown, so both segment parities are expanded
+     * (see {@link MetadataTypeUtils#getAllFragmentVariants}). A full address always begins on a
+     * structural segment, so the exact filter keeps the single known parity - expanding the other
+     * one there would let a NAME that spells a kind token widen an EXACT scope.</p>
+     *
+     * @param objects the requested entries, may be {@code null}
+     * @param fragments {@code true} for the loose {@code objects} filter
+     * @return the deduplicated, lowercased variants (never {@code null})
+     */
+    private static Set<String> buildObjectFilterVariants(Collection<String> objects,
+        boolean fragments)
+    {
         final Set<String> finalObjects = new HashSet<>();
         if (objects != null)
         {
             for (String fqn : objects)
             {
-                finalObjects.addAll(MetadataTypeUtils.getAllFqnVariants(fqn));
+                finalObjects.addAll(fragments ? MetadataTypeUtils.getAllFragmentVariants(fqn)
+                    : MetadataTypeUtils.getAllFqnVariants(fqn));
             }
         }
         return finalObjects;
@@ -1259,15 +1280,16 @@ public class GetProjectErrorsTool implements IMcpTool
                 yoSegments.add(i);
             }
         }
-        if (yoSegments.isEmpty())
+        if (yoSegments.isEmpty() || SubsystemUtils.parseSubsystemPath(normFqn) != null)
         {
+            // A Subsystem chain is resolved LEVEL BY LEVEL instead (see resolvedSpelling): it is the
+            // only family whose depth is unbounded, and the per-level walk is linear where probing
+            // spellings would be exponential. Capping the enumeration by depth - which is what this
+            // branch used to do - silently restored the whole-address retry for deep chains, i.e.
+            // the very bug the per-segment probes were introduced to fix. Every remaining family is
+            // bounded by its grammar to at most four NAME segments (owner, tabular section,
+            // attribute; or owner, form, item, event), so the enumeration below cannot exceed 16.
             return Collections.singletonList(normFqn);
-        }
-        if (yoSegments.size() > MAX_YO_SEGMENTS)
-        {
-            // Pathological depth: fall back to the two whole-address spellings rather than build
-            // 2^n probes. Both are still tried, so nothing that used to resolve stops resolving.
-            return Arrays.asList(normFqn, MetadataNodeResolver.yoRetryFqn(normFqn));
         }
 
         // One probe per SUBSET of the yo-bearing name segments, "as typed" first. Normalizing the
@@ -1297,12 +1319,6 @@ public class GetProjectErrorsTool implements IMcpTool
         return probes;
     }
 
-    /**
-     * How many yo-bearing name segments still get the exhaustive per-segment retry. Four segments
-     * are 16 probes; beyond that the address is deep enough that the two whole-address spellings are
-     * the sane trade.
-     */
-    private static final int MAX_YO_SEGMENTS = 4;
 
     /**
      * {@code fqn} with each segment trimmed, or {@code null} when it is not a well-formed address.
@@ -1447,10 +1463,13 @@ public class GetProjectErrorsTool implements IMcpTool
     static String resolvedSpelling(Configuration config, String normFqn)
     {
         // A Subsystem chain nests the same kind token repeatedly, which the generic child-feature
-        // navigation does not model - SubsystemUtils owns that grammar.
+        // navigation does not model - SubsystemUtils owns that grammar. It is also the only family
+        // whose depth is UNBOUNDED, so its yo fallback is applied level by level (linear, and it
+        // never builds a combination) rather than by probing whole-address spellings.
         if (SubsystemUtils.parseSubsystemPath(normFqn) != null)
         {
-            return SubsystemUtils.resolveByFqn(config, normFqn) != null ? normFqn : null;
+            String[] stored = SubsystemUtils.resolveStoredChain(config, normFqn);
+            return stored == null ? null : storedSubsystemFqn(normFqn, stored);
         }
         // A predefined item is not an mdclass child either: it lives in the owner's predefined tree.
         PredefinedWriter.PredefinedRef predefined = PredefinedWriter.parseRef(normFqn);
@@ -1476,6 +1495,24 @@ public class GetProjectErrorsTool implements IMcpTool
             return FormStructureReader.resolveMdForm(config, formPath) != null ? normFqn : null;
         }
         return MetadataNodeResolver.resolveExisting(config, normFqn) != null ? normFqn : null;
+    }
+
+    /**
+     * Rebuilds a subsystem chain address with the STORED names, keeping the caller's own kind tokens
+     * (the bilingual expansion translates those later anyway).
+     *
+     * @param normFqn the requested chain address
+     * @param storedNames the names as the model really stores them, one per level
+     * @return the address with every name replaced by its stored spelling
+     */
+    private static String storedSubsystemFqn(String normFqn, String[] storedNames)
+    {
+        String[] segments = normFqn.split("\\.", -1); //$NON-NLS-1$
+        for (int level = 0; level < storedNames.length; level++)
+        {
+            segments[level * 2 + 1] = storedNames[level];
+        }
+        return String.join(".", segments); //$NON-NLS-1$
     }
 
     /**
@@ -1565,8 +1602,8 @@ public class GetProjectErrorsTool implements IMcpTool
         FormElementWriter.FormMemberRef ref = member.ref;
         if (!FormElementWriter.isHandlerToken(ref.kindToken))
         {
-            return FormElementWriter.matchesRequestedKind(
-                FormElementWriter.resolveFormMember(formModel, ref), ref)
+            return addressesTheRequestedKind(
+                FormElementWriter.resolveFormMember(formModel, ref), ref.kindToken)
                     ? scopedByOwningForm(member, Collections.singletonList(member.probeFqn))
                     : Collections.<String> emptyList();
         }
@@ -1577,8 +1614,7 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         // The OWNER's kind token is part of an item-level handler address. Command is a legal owner
         // and is routed by kind already (resolveHandlerContainer), so it passes this check too.
-        if (ref.isItemLevel()
-            && !FormElementWriter.matchesKindToken(container, ref.itemKindToken))
+        if (ref.isItemLevel() && !addressesTheRequestedKind(container, ref.itemKindToken))
         {
             return Collections.emptyList();
         }
@@ -1589,6 +1625,43 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         return scopedByOwningForm(member, handlerScopeSpellings(member.probeFqn,
             FormElementWriter.handlerEventSpellings(container, handler)));
+    }
+
+    /**
+     * Whether {@code element} really is of the kind {@code kindToken} names - the EXACT filter's
+     * stricter reading of {@link FormElementWriter#matchesKindToken}.
+     *
+     * <p>The shared predicate accepts ANY requested kind for an element whose class carries no
+     * addressable kind token, so that such elements stay reachable for the write tools. For an ITEM
+     * kind that is a hole: {@code findFormItem} finds a form's root {@code AutoCommandBar} by name,
+     * and {@code ...Button.FormCommandBar} was therefore reported as a resolved address - the scan
+     * then filtered by a kind segment no location carries, handing back a clean report for an
+     * address that does not exist. So an item kind must match EXACTLY here.</p>
+     *
+     * <p>{@code Attribute} and {@code Command} keep the lenient reading on purpose: they are not
+     * item kinds at all. {@link FormElementWriter#resolveFormMember} routes them into their own
+     * containment ({@code FormAttribute} / {@code FormCommand}), whose classes carry no item kind
+     * either - demanding one would make every attribute and command address unresolvable.</p>
+     *
+     * <p>Scoped to this tool deliberately: what a tokenless class SHOULD answer to in general (and
+     * how {@code AutoCommandBar} / {@code ContextMenu} / {@code ExtendedTooltip} stay addressable
+     * for delete/modify) is being settled in issue #343, which reworks the shared resolver. Fixing
+     * it here too would give one question two different answers.</p>
+     *
+     * @param element the resolved element (may be {@code null})
+     * @param kindToken the kind token the caller addressed it with
+     * @return {@code true} when the element answers to that kind
+     */
+    private static boolean addressesTheRequestedKind(EObject element, String kindToken)
+    {
+        FormElementWriter.Kind requested = FormElementWriter.kindForToken(kindToken);
+        if (requested == FormElementWriter.Kind.ATTRIBUTE
+            || requested == FormElementWriter.Kind.COMMAND)
+        {
+            return FormElementWriter.matchesKindToken(element, kindToken);
+        }
+        return element != null && requested != null
+            && requested == FormElementWriter.addressableKind(element);
     }
 
     /**

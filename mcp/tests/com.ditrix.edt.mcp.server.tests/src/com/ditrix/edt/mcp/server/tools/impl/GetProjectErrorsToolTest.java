@@ -47,6 +47,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
@@ -1601,6 +1602,97 @@ public class GetProjectErrorsToolTest
             singleton("Catalog.Nope"), unknowable.undecided); //$NON-NLS-1$
     }
 
+
+    @Test
+    public void testADeepSubsystemChainResolvesWithYoMixedPerLevel()
+    {
+        // The depth cap that used to guard the per-segment probes silently restored the WHOLE-address
+        // retry for deep chains - exactly the bug those probes were introduced to fix, just switched
+        // on by depth. A five-level chain whose names were created with different normalizeYo
+        // settings matches neither "as typed" nor "fully normalized".
+        //
+        // A subsystem chain is the only family whose depth is unbounded, so it is resolved LEVEL BY
+        // LEVEL instead: linear in depth, and no combination is ever built.
+        String[] stored = {"A" + fromCp(0x0435), "B" + fromCp(0x0451), "C" + fromCp(0x0435), "D" + fromCp(0x0451), "E" + fromCp(0x0435)};
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Subsystem parent = null;
+        for (String name : stored)
+        {
+            Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+            subsystem.setName(name);
+            if (parent == null)
+            {
+                config.getSubsystems().add(subsystem);
+            }
+            else
+            {
+                parent.getSubsystems().add(subsystem);
+            }
+            parent = subsystem;
+        }
+
+        // The caller types yo at EVERY level - matching the stored spelling at only two of them.
+        StringBuilder requested = new StringBuilder();
+        for (String name : stored)
+        {
+            requested.append(requested.length() == 0 ? "Subsystem." : ".Subsystem.");
+            requested.append(name.replace(fromCp(0x0435), fromCp(0x0451)));
+        }
+        String address = requested.toString();
+
+        Set<String> scope = resolvedIn(config, address).get(address);
+        assertNotNull("a deep chain with per-level yo spellings must resolve", scope);
+        StringBuilder expected = new StringBuilder();
+        for (String name : stored)
+        {
+            expected.append(expected.length() == 0 ? "Subsystem." : ".Subsystem.");
+            expected.append(name);
+        }
+        assertTrue("the scan must be scoped by the STORED chain, level by level",
+            scope.contains(expected.toString()));
+
+        // And the probe list stays a SINGLE entry: no 2^depth enumeration for this family.
+        assertEquals("a subsystem chain must not enumerate spellings",
+            1, GetProjectErrorsTool.addressProbes(address).size());
+    }
+
+
+    @Test
+    public void testAnItemWithNoAddressableKindDoesNotAnswerToAForeignKind()
+    {
+        // findFormItem finds an element by NAME, and matchesKindToken accepts ANY requested kind for
+        // a class that carries no addressable kind token (AutoCommandBar, ContextMenu,
+        // ExtendedTooltip) so that such elements stay reachable for the write tools. For the EXACT
+        // filter that is a hole: '...Button.<AutoCommandBar name>' was reported as a resolved
+        // address, and the scan then filtered by a kind segment no location carries - a clean report
+        // for an address that does not exist. This is the remaining actual == null success path.
+        FormModel form = newFormModel();
+
+        assertTrue("the fixture must expose a tokenless item by name", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form.root, TOKENLESS_ITEM) != null);
+        assertNull("...and it must carry no addressable kind", //$NON-NLS-1$
+            FormElementWriter.addressableKind(
+                FormElementWriter.findFormItem(form.root, TOKENLESS_ITEM)));
+
+        for (String kind : new String[] {"Button", "Field", "Group", "Decoration", "Table"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            assertTrue("a tokenless item must not answer to " + kind, //$NON-NLS-1$
+                scopeSpellings(form, FORM_FQN + "." + kind + "." + TOKENLESS_ITEM).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // The leniency that HAS to stay: Attribute and Command are not item kinds at all - they are
+        // routed into their own containment, whose classes carry no item kind either, so demanding
+        // one would make every attribute and command address unresolvable.
+        assertFalse("a form ATTRIBUTE address must still resolve", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Attribute." + FORM_ATTRIBUTE).isEmpty()); //$NON-NLS-1$
+        assertFalse("a form COMMAND address must still resolve", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Command.Save").isEmpty()); //$NON-NLS-1$
+
+        // And a real item still resolves through its OWN kind, and only through it.
+        assertFalse(scopeSpellings(form, FORM_FQN + ".Field.Price").isEmpty()); //$NON-NLS-1$
+        assertTrue(scopeSpellings(form, FORM_FQN + ".Button.Price").isEmpty()); //$NON-NLS-1$
+    }
+
     // ========== helpers ==========
     /**
      * An OPEN project whose description carries exactly {@code natureIds} - the shape
@@ -1671,6 +1763,12 @@ public class GetProjectErrorsToolTest
     /** The owning form of the synthetic form model, as an FQN prefix. */
     private static final String FORM_FQN = "Catalog.C.Form.ItemForm"; //$NON-NLS-1$
 
+    /** The synthetic model's item whose class carries NO addressable kind token. */
+    private static final String TOKENLESS_ITEM = "FormCommandBar"; //$NON-NLS-1$
+
+    /** The synthetic model's form ATTRIBUTE (reached by its own containment, not by an item kind). */
+    private static final String FORM_ATTRIBUTE = "Object"; //$NON-NLS-1$
+
     /** The English address of the handler bound on the synthetic model's FIELD. */
     private static final String HANDLER_ON_FIELD = FORM_FQN + ".Field.Price.Handler.OnChange"; //$NON-NLS-1$
 
@@ -1736,6 +1834,15 @@ public class GetProjectErrorsToolTest
         EClass formField = subclass("FormField", formItem); //$NON-NLS-1$
         pkg.getEClassifiers().add(formField);
         pkg.getEClassifiers().add(subclass("Button", formItem)); //$NON-NLS-1$
+        // An item whose class carries NO addressable kind token - the real form metamodel has three
+        // (AutoCommandBar, ContextMenu, ExtendedTooltip) and findFormItem returns them by name.
+        EClass autoCommandBar = subclass("AutoCommandBar", formItem); //$NON-NLS-1$
+        pkg.getEClassifiers().add(autoCommandBar);
+
+        EClass formAttribute = f.createEClass();
+        formAttribute.setName("FormAttribute"); //$NON-NLS-1$
+        formAttribute.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formAttribute);
 
         EClass action = f.createEClass();
         action.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
@@ -1751,6 +1858,7 @@ public class GetProjectErrorsToolTest
         form.setName("Form"); //$NON-NLS-1$
         form.getEStructuralFeatures().add(containment("items", formItem, true)); //$NON-NLS-1$
         form.getEStructuralFeatures().add(containment("formCommands", formCommand, true)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(containment("attributes", formAttribute, true)); //$NON-NLS-1$
         pkg.getEClassifiers().add(form);
 
         FormModel model = new FormModel();
@@ -1774,6 +1882,14 @@ public class GetProjectErrorsToolTest
         command.eSet(command.eClass().getEStructuralFeature("action"), //$NON-NLS-1$
             pkg.getEFactoryInstance().create(action));
         list(model.root, "formCommands").add(command); //$NON-NLS-1$
+
+        EObject commandBar = pkg.getEFactoryInstance().create(autoCommandBar);
+        setString(commandBar, "name", TOKENLESS_ITEM); //$NON-NLS-1$
+        list(model.root, "items").add(commandBar); //$NON-NLS-1$
+
+        EObject attribute = pkg.getEFactoryInstance().create(formAttribute);
+        setString(attribute, "name", FORM_ATTRIBUTE); //$NON-NLS-1$
+        list(model.root, "attributes").add(attribute); //$NON-NLS-1$
 
         return model;
     }

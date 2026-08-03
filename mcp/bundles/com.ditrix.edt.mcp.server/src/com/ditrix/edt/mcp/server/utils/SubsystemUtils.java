@@ -80,6 +80,65 @@ public final class SubsystemUtils
     }
 
     /**
+     * Resolves a subsystem chain SEGMENT BY SEGMENT, tolerating the yo (U+0451) spelling at each
+     * level independently, and returns the chain of STORED names.
+     *
+     * <p>{@code create_metadata} normalizes yo to ye per NAME by default, so a five-level chain can
+     * legitimately mix spellings level by level. Trying whole-address spellings cannot express that:
+     * the address as typed and its fully normalized twin are two points in a space of 2^depth, and
+     * enumerating that space is not an option either. Walking the tree is: each level is matched
+     * among the ACTUAL children of the level already resolved, so the cost is linear in depth and no
+     * combination is ever built.</p>
+     *
+     * <p>The STORED names are returned rather than the requested ones because the caller scopes a
+     * marker scan with them - a marker carries what EDT stored, not what the caller typed.</p>
+     *
+     * @param config the configuration to resolve against
+     * @param fqn the subsystem chain FQN
+     * @return the resolved chain's stored names, or {@code null} when it resolves to nothing
+     */
+    public static String[] resolveStoredChain(Configuration config, String fqn)
+    {
+        if (config == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String[] names = parseSubsystemPath(fqn);
+        if (names == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        String[] stored = new String[names.length];
+        Iterable<Subsystem> level = config.getSubsystems();
+        for (int i = 0; i < names.length; i++)
+        {
+            Subsystem child = findChildWithYoFallback(level, names[i]);
+            if (child == null)
+            {
+                return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            }
+            stored[i] = child.getName();
+            level = child.getSubsystems();
+        }
+        return stored;
+    }
+
+    /**
+     * {@link #findChild} first, then the yo-normalized spelling of {@code name} - the same retry the
+     * write/delete paths use, applied to ONE level so the levels stay independent.
+     */
+    private static Subsystem findChildWithYoFallback(Iterable<Subsystem> children, String name)
+    {
+        Subsystem exact = findChild(children, name);
+        if (exact != null)
+        {
+            return exact;
+        }
+        String retry = MetadataNodeResolver.yoRetryFqn(name);
+        return retry == null ? null : findChild(children, retry);
+    }
+
+    /**
      * Parses a subsystem FQN into the ordered list of subsystem names along the
      * containment path. Returns {@code null} when the FQN is malformed (wrong
      * arity, unknown type token).

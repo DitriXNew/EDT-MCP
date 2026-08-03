@@ -727,6 +727,59 @@ public class MetadataTypeUtilsTest
         return PredefinedWriter.parseRef("Catalog.Products." + token + ".Sample") != null;
     }
 
+
+    @Test
+    public void testALooseFragmentIsTranslatedAtBOTHSegmentParities()
+    {
+        // A fragment's OFFSET into the location is unknown. It may start on the type
+        // (Catalog.Products), on a nested kind (Form.ItemForm) - or on a NAME (ItemForm.Form), and
+        // then the structural segments sit on the ODD indexes. Assuming one parity left the other
+        // untranslated, so the fragment matched nothing; and because a loose entry reports no miss,
+        // the caller just got an empty report. Three findings in a row, one per offset - so BOTH
+        // parities are emitted rather than one being guessed.
+        //
+        // 'ItemForm.<Forma>' is a real substring of the English location
+        // 'Catalog.C.Form.ItemForm.Form' once the Russian kind is translated, and it starts on a
+        // NAME.
+        Set<String> nameLeading = MetadataTypeUtils.getAllFragmentVariants("ItemForm." + RU_FORM);
+        assertTrue("the fragment as typed must stay",
+            nameLeading.contains("itemform." + RU_FORM_LOWER));
+        assertTrue("a NAME-leading fragment must translate its structural segment too",
+            nameLeading.contains("itemform.form"));
+
+        // The other parity still works - this is an addition, not a replacement.
+        Set<String> kindLeading = MetadataTypeUtils.getAllFragmentVariants(RU_FORM + ".ItemForm");
+        assertTrue(kindLeading.contains("form.itemform"));
+        Set<String> typeLeading = MetadataTypeUtils.getAllFragmentVariants("Document.Meeting");
+        assertTrue(typeLeading.contains(RU_DOCUMENT_LOWER + ".meeting"));
+
+        // Deeper, mixed: both readings of 'Products.Attribute.Weight' are produced.
+        Set<String> deep = MetadataTypeUtils.getAllFragmentVariants("Products.Attribute.Weight");
+        assertTrue("the odd parity must translate the nested kind",
+            deep.contains("products." + RU_ATTRIBUTE_LOWER + ".weight"));
+
+        // LINEAR, not combinatorial: original + 2 parities x 2 languages, deduplicated.
+        assertTrue("a fragment must never explode: got " + deep.size(), deep.size() <= 5);
+        Set<String> deeper = MetadataTypeUtils.getAllFragmentVariants(
+            "Products.Attribute.Weight.Form.ItemForm.Field.Code");
+        assertTrue("depth must not change the bound: got " + deeper.size(), deeper.size() <= 5);
+    }
+
+    @Test
+    public void testTheExactFilterKeepsTheSingleKnownParity()
+    {
+        // The dual parity belongs to the LOOSE filter alone. A full address always begins on a
+        // structural segment, so its parity is known - expanding the other one there would let a
+        // NAME that literally spells a kind token widen an EXACT scope onto unrelated objects.
+        Set<String> exact = MetadataTypeUtils.getAllFqnVariants("Catalog." + RU_FORM);
+        assertTrue(exact.contains("catalog." + RU_FORM_LOWER));
+        assertFalse("a NAME must never be translated on the exact path",
+            exact.contains("catalog.form"));
+        // ...while the same string read as a FRAGMENT does get the second reading.
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants("Catalog." + RU_FORM)
+            .contains("catalog.form"));
+    }
+
     // ========== resolveNestedKind ==========
 
     @Test

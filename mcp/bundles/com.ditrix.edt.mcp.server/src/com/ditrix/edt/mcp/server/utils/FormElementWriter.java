@@ -4361,6 +4361,26 @@ public final class FormElementWriter
      * @param eClassName the concrete EClass simple name of a resolved form element
      * @return the addressing kind, or {@code null} when no kind token denotes this EClass
      */
+    /**
+     * The element KIND {@code element} can be addressed by, or {@code null} when its class carries
+     * no addressable kind token at all ({@code AutoCommandBar}, {@code ContextMenu},
+     * {@code ExtendedTooltip}, and the non-item members {@code FormAttribute} / {@code FormCommand},
+     * which are reached through their own containment rather than by an item kind).
+     *
+     * <p>Exposed so a caller that must be STRICT can tell "this element is a Button" from "this
+     * element answers to no kind token", which {@link #matchesKindToken} deliberately blurs: it
+     * accepts any requested kind for a tokenless class so that such elements stay reachable at all.
+     * That leniency is right for the write tools and wrong for an EXACT filter, which would
+     * otherwise call {@code ...Button.FormCommandBar} a resolved address.</p>
+     *
+     * @param element the form element (may be {@code null})
+     * @return the addressable kind, or {@code null} when the class has none
+     */
+    public static Kind addressableKind(EObject element)
+    {
+        return element == null ? null : addressableKindOf(element.eClass().getName());
+    }
+
     private static Kind addressableKindOf(String eClassName)
     {
         if (ELEM_BUTTON.equals(eClassName))
