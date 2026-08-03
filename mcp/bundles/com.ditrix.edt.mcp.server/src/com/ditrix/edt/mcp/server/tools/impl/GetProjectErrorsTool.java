@@ -77,7 +77,7 @@ public class GetProjectErrorsTool implements IMcpTool
         return "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. " + //$NON-NLS-1$
                "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
                "Object FQN filters accept English or Russian type names (e.g. 'Catalog.Products'). " + //$NON-NLS-1$
-               "A 'Fix' column flags rows whose check has an official EDT auto-fix; pass that row's Check code (+ Module path + Line) to apply_quick_fix to apply it. " + //$NON-NLS-1$
+               "A 'Fix registered' column flags rows whose CHECK TYPE has an official EDT auto-fix registered (not a promise this exact marker will produce an applicable fix - apply_quick_fix may still report none available for it); pass that row's Check code (+ Module path + Line) to apply_quick_fix to try applying it. " + //$NON-NLS-1$
                "Use this for the detailed marker list; for severity totals only call get_problem_summary. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
@@ -505,12 +505,12 @@ public class GetProjectErrorsTool implements IMcpTool
         if (detailed)
         {
             md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                "Module path", "Line", "Check code", "Fix", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "Module path", "Line", "Check code", "Fix registered", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         }
         else
         {
             md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                "Module path", "Line", "Check code", "Fix")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "Module path", "Line", "Check code", "Fix registered")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         }
     }
 
@@ -533,8 +533,13 @@ public class GetProjectErrorsTool implements IMcpTool
         String checkCell = "`" + (displayCheckId != null ? displayCheckId : "") + "`"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         String modulePathCell = error.modulePath != null ? error.modulePath : ""; //$NON-NLS-1$
         String lineCell = error.line != null ? error.line.toString() : ""; //$NON-NLS-1$
-        // Fix flag: "yes" when this check has a registered EDT auto-fix (feed the Marker id to
-        // apply_quick_fix); blank otherwise. Plain ASCII so the Tycho build stays encoding-safe.
+        // "Fix registered" flag: "yes" when this CHECK TYPE has a fix registered with
+        // IFixRepository - NOT a promise that THIS specific marker will actually produce an
+        // applicable fix. apply_quick_fix's own context-specific filtering (prepareFix ->
+        // getApplicableFixVariants) can still yield zero variants for an individual marker even
+        // when its check type is registered here; try apply_quick_fix and read its error if a
+        // registered check turns out not to be applicable to this particular occurrence. Plain
+        // ASCII so the Tycho build stays encoding-safe.
         String fixCell = error.hasQuickFix ? "yes" : ""; //$NON-NLS-1$ //$NON-NLS-2$
 
         if (detailed)

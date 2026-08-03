@@ -6,8 +6,10 @@ through `IFixManager` (prepare → list applicable variants → select → execu
 is exactly what the IDE would produce.
 
 ## When to use
-- After `get_project_errors` flags a problem whose **Fix** column says `yes` — apply the official fix
-  instead of hand-editing the source.
+- After `get_project_errors` flags a problem whose **Fix registered** column says `yes` — apply the
+  official fix instead of hand-editing the source. That column means the CHECK TYPE has a fix
+  registered, not a promise this exact marker will produce one — this tool's own context-specific
+  filtering can still report "no quick-fix available" for a particular occurrence; just try it.
 - Iterating a clean-up loop: `get_project_errors` (responseFormat=detailed) → `apply_quick_fix` →
   re-run `get_project_errors` to confirm the marker is gone (and pick up any follow-up markers).
 
@@ -47,9 +49,10 @@ A JSON result:
 
 ## Notes & gotchas
 - **Not every check has a fix.** Many validations are advisory (style/structure) with no registered
-  auto-fix; the **Fix** column in `get_project_errors` tells you up front which are fixable, and this
-  tool returns a clear "no quick-fix is available …" error for the rest — fix those by hand via
-  `write_module_source` / `modify_metadata`.
+  auto-fix; the **Fix registered** column in `get_project_errors` tells you up front which check TYPES
+  have one. That is a type-level flag, not a per-marker guarantee — even a registered check can still
+  turn out inapplicable to a particular occurrence, and this tool returns the same clear "no quick-fix
+  is available …" error for both cases — fix those by hand via `write_module_source` / `modify_metadata`.
 - **No match** → "No marker matches check '…'": the locator hit nothing. Re-read `get_project_errors`
   (responseFormat=detailed); line numbers and the marker set change after each edit/rebuild.
 - The fix **mutates the source** through the platform's own change processor; re-validate afterwards to
