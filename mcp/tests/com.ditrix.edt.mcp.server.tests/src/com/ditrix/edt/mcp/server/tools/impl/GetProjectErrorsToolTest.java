@@ -17,6 +17,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -56,6 +57,7 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 
 /**
@@ -1691,6 +1693,294 @@ public class GetProjectErrorsToolTest
         // And a real item still resolves through its OWN kind, and only through it.
         assertFalse(scopeSpellings(form, FORM_FQN + ".Field.Price").isEmpty()); //$NON-NLS-1$
         assertTrue(scopeSpellings(form, FORM_FQN + ".Button.Price").isEmpty()); //$NON-NLS-1$
+    }
+
+
+    @Test
+    public void testTheYoEnumerationIsGatedByShapeBeforeAnyProbeIsBuilt()
+    {
+        // The enumeration used to materialize one probe per SUBSET before the family parse could
+        // reject the shape, so external garbage with ~25-30 yo-bearing segments meant millions of
+        // strings and 31+ overflowed `1 << n`. The shape is judged FIRST now.
+        StringBuilder garbage = new StringBuilder("Catalog");
+        for (int i = 0; i < 40; i++)
+        {
+            // Alternating unknown kind / yo-bearing name: 40 yo segments, and not a real grammar.
+            garbage.append(".N").append(fromCp(0x0451)).append(i).append(".NoSuchKind");
+        }
+        List<String> probes = GetProjectErrorsTool.addressProbes(garbage.toString());
+        assertEquals("garbage must never enumerate: it is not a supported shape",
+            1, probes.size());
+        assertEquals(garbage.toString(), probes.get(0));
+
+        // Even a WELL-FORMED-looking chain that is deeper than any real 1C address stays at one
+        // probe - and, unlike the depth cap this replaces, the single probe is the address AS
+        // TYPED, never a whole-address retry that would resolve a DIFFERENT node.
+        StringBuilder deep = new StringBuilder("Catalog.C" + fromCp(0x0451));
+        for (int i = 0; i < 8; i++)
+        {
+            deep.append(".Attribute.A").append(fromCp(0x0451)).append(i);
+        }
+        List<String> deepProbes = GetProjectErrorsTool.addressProbes(deep.toString());
+        assertEquals(1, deepProbes.size());
+        assertEquals("the single probe must be the address as typed",
+            deep.toString(), deepProbes.get(0));
+
+        // The supported grammars still enumerate, and stay within the structural bound of 2^4.
+        String yo = fromCp(0x0451);
+        for (String supported : new String[] {
+            "Catalog.M" + yo + "d",
+            "Catalog.M" + yo + "d.Attribute.V" + yo + "s",
+            "Catalog.M" + yo + "d.TabularSection.G" + yo + ".Attribute.P" + yo,
+            "Catalog.M" + yo + "d.Form.F" + yo + ".Field.C" + yo + ".Handler.E" + yo,
+            "Catalog.M" + yo + "d.Predefined.It" + yo + "m"})
+        {
+            List<String> p = GetProjectErrorsTool.addressProbes(supported);
+            assertTrue("a supported shape must enumerate: " + supported, p.size() > 1);
+            assertTrue("and stay bounded (got " + p.size() + "): " + supported, p.size() <= 16);
+            assertEquals("as typed must always be first", supported, p.get(0));
+        }
+    }
+
+
+    @Test
+    public void testAnExactScopeCallDoesNotGetTheFragmentParity()
+    {
+        // validate_xdto_package reaches the same collector with exactScope=true, and the fragment
+        // reading was hardcoded there. 'XDTOPackage.Package' - a package literally named 'Package' -
+        // then also produced the odd-parity variant 'xdtopackage.<Paket>', which matches the markers
+        // of a DIFFERENT package named '<Paket>': exact validation reporting a sibling's problems.
+        //
+        // The distinction is in the SIGNATURE now, so this is checked at the boundary the caller
+        // actually crosses rather than trusted to a convention.
+        String ruPackage = fromCp(0x041F, 0x0430, 0x043A, 0x0435, 0x0442); // Paket
+        String address = "XDTOPackage.Package"; //$NON-NLS-1$
+
+        // Entered through the SEAM the caller really crosses, so this pins the WIRING and not just
+        // the catalogue: reading the variants straight out of MetadataTypeUtils would stay green
+        // with exactScope ignored at the call site, which is exactly where the bug lived.
+        Set<String> exact = GetProjectErrorsTool.scanFilterVariants(
+            Collections.singletonList(address), true);
+        Set<String> loose = GetProjectErrorsTool.scanFilterVariants(
+            Collections.singletonList(address), false);
+
+        assertTrue("the address itself must scope the scan", //$NON-NLS-1$
+            exact.contains("xdtopackage.package")); //$NON-NLS-1$
+        // NB: the Russian TYPE token of XDTOPackage legitimately contains that word, so the claim
+        // is about the NAME segment specifically - the odd-parity variant must not exist.
+        assertFalse("an EXACT scope must not translate the NAME segment", //$NON-NLS-1$
+            exact.contains("xdtopackage." + ruPackage.toLowerCase())); //$NON-NLS-1$
+        assertTrue("...while the LOOSE reading is where that second parity belongs", //$NON-NLS-1$
+            loose.contains("xdtopackage." + ruPackage.toLowerCase())); //$NON-NLS-1$
+
+        // And the scan really is scoped that narrowly: the sibling package's marker is excluded.
+        int[] filteredOut = {0};
+        assertTrue("a sibling package's marker must NOT pass an exact scope", //$NON-NLS-1$
+            GetProjectErrorsTool.excludedByObjectsFilter(exact, true,
+                "XDTOPackage." + ruPackage + ".Package", filteredOut, true)); //$NON-NLS-1$
+        assertFalse("...while the package's own marker still does", //$NON-NLS-1$
+            GetProjectErrorsTool.excludedByObjectsFilter(exact, true,
+                "XDTOPackage.Package.Package", filteredOut, true)); //$NON-NLS-1$
+    }
+
+
+    @Test
+    public void testRepeatedAddressesCostOneFormReadEachNotOnePerEntry()
+    {
+        // The array comes off the wire. A form member that resolves to nothing is never recorded in
+        // `resolved`, so every copy of the same missing address used to open its own content-model
+        // read transaction - unbounded work chosen by the caller. Deduplicating the ENTRIES would
+        // have been the wrong fix twice over: it changes a list the caller gets echoed back, and it
+        // misses the real case anyway, since two differently spaced spellings of one address are
+        // distinct strings. The bound belongs on the PROBE, which is already canonical.
+        List<GetProjectErrorsTool.DeferredMember> deferred = new ArrayList<>();
+        String probe = "Catalog.C.Form.ItemForm.Field.Missing"; //$NON-NLS-1$
+        FormElementWriter.FormMemberRef ref = FormElementWriter.parse(probe);
+        assertNotNull(ref);
+        for (int i = 0; i < 500; i++)
+        {
+            // Same canonical PROBE, different raw spellings - what the caller may really send.
+            String raw = "Catalog." + repeat(" ", i) + "C.Form.ItemForm.Field.Missing"; //$NON-NLS-1$ //$NON-NLS-2$
+            deferred.add(new GetProjectErrorsTool.DeferredMember(raw, probe, ref));
+        }
+
+        int[] reads = {0};
+        GetProjectErrorsTool.ProjectResolution decided =
+            new GetProjectErrorsTool.ProjectResolution("P"); //$NON-NLS-1$
+        GetProjectErrorsTool.resolveDeferredMembers(deferred, decided, member -> {
+            reads[0]++;
+            return null; // the content model could not be read
+        });
+
+        assertEquals("500 entries naming ONE address must cost ONE content-model read", //$NON-NLS-1$
+            1, reads[0]);
+        assertEquals("...and every entry still gets its own verdict", //$NON-NLS-1$
+            500, decided.undecided.size());
+
+        // Two DISTINCT addresses still cost two reads - the memo bounds work, it does not skip it.
+        String other = "Catalog.C.Form.ItemForm.Field.Other"; //$NON-NLS-1$
+        deferred.add(new GetProjectErrorsTool.DeferredMember(other, other,
+            FormElementWriter.parse(other)));
+        int[] reads2 = {0};
+        GetProjectErrorsTool.resolveDeferredMembers(deferred,
+            new GetProjectErrorsTool.ProjectResolution("P"), member -> { //$NON-NLS-1$
+                reads2[0]++;
+                return null;
+            });
+        assertEquals(2, reads2[0]);
+
+        // CASING is not a distinction either: the member lookup matches names case-insensitively,
+        // so four casings of one attribute are one node. Keying the memo on the raw probe let
+        // external input multiply the reads just by varying the case.
+        List<GetProjectErrorsTool.DeferredMember> casings = new ArrayList<>();
+        for (String cased : new String[] {
+            "Catalog.C.Form.ItemForm.Attribute.alpha", //$NON-NLS-1$
+            "Catalog.C.Form.ItemForm.Attribute.Alpha", //$NON-NLS-1$
+            "Catalog.C.Form.ItemForm.Attribute.aLpHa", //$NON-NLS-1$
+            "Catalog.C.Form.ItemForm.Attribute.ALPHA"}) //$NON-NLS-1$
+        {
+            casings.add(new GetProjectErrorsTool.DeferredMember(cased, cased,
+                FormElementWriter.parse(cased)));
+        }
+        int[] casedReads = {0};
+        GetProjectErrorsTool.resolveDeferredMembers(casings,
+            new GetProjectErrorsTool.ProjectResolution("P"), member -> { //$NON-NLS-1$
+                casedReads[0]++;
+                return null;
+            });
+        assertEquals("four casings of ONE address must cost ONE content-model read", //$NON-NLS-1$
+            1, casedReads[0]);
+    }
+
+    /** Java 8-friendly String.repeat. */
+    private static String repeat(String unit, int times)
+    {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < times; i++)
+        {
+            sb.append(unit);
+        }
+        return sb.toString();
+    }
+
+
+    @Test
+    public void testAmbiguousYoAddressScopesEveryNodeItCouldMean()
+    {
+        // With yo the request can be genuinely ambiguous. Given BOTH 'Catalog.M[yo]d' (holding
+        // attribute 'V[ye]s') and 'Catalog.M[ye]d' (holding 'V[yo]s'), the address
+        // 'Catalog.M[yo]d.Attribute.V[yo]s' matches both under the fallback - one by normalizing the
+        // ancestor, the other the leaf. Returning at whichever probe came first scoped the scan to
+        // one of them and reported the other's problems as absent: a false clean decided by probe
+        // ORDER. Every probe that resolves must contribute.
+        String ye = fromCp(0x0435);
+        String yo = fromCp(0x0451);
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+
+        Catalog withYo = MdClassFactory.eINSTANCE.createCatalog();
+        withYo.setName("M" + yo + "d"); //$NON-NLS-1$ //$NON-NLS-2$
+        withYo.getAttributes().add(attribute("V" + ye + "s")); //$NON-NLS-1$ //$NON-NLS-2$
+        config.getCatalogs().add(withYo);
+
+        Catalog withYe = MdClassFactory.eINSTANCE.createCatalog();
+        withYe.setName("M" + ye + "d"); //$NON-NLS-1$ //$NON-NLS-2$
+        withYe.getAttributes().add(attribute("V" + yo + "s")); //$NON-NLS-1$ //$NON-NLS-2$
+        config.getCatalogs().add(withYe);
+
+        String requested = "Catalog.M" + yo + "d.Attribute.V" + yo + "s"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertNotNull("the ambiguous address must resolve", scope); //$NON-NLS-1$
+        assertTrue("the node reached by normalizing the ANCESTOR must scope the scan", //$NON-NLS-1$
+            scope.contains("Catalog.M" + ye + "d.Attribute.V" + yo + "s")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("and so must the node reached by normalizing the LEAF", //$NON-NLS-1$
+            scope.contains("Catalog.M" + yo + "d.Attribute.V" + ye + "s")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+
+    @Test
+    public void testAnAddressThatResolvesAsTypedIsNotWidenedToItsYoSibling()
+    {
+        // The counterpart to the ambiguous case, and the limit of it. When BOTH spellings exist as
+        // separate objects and the caller typed one of them EXACTLY, that one is the answer:
+        // accumulating every resolving probe scoped the scan onto a sibling the caller never asked
+        // about, and an exact address promises ONE model node. This is the same exact-first rule the
+        // write/delete resolver uses (MetadataNodeResolver.resolveExistingWithYoFallback).
+        String ye = fromCp(0x0435);
+        String yo = fromCp(0x0451);
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        for (String name : new String[] {"M" + yo + "d", "M" + ye + "d"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+            catalog.setName(name);
+            config.getCatalogs().add(catalog);
+        }
+
+        String requested = "Catalog.M" + yo + "d"; //$NON-NLS-1$ //$NON-NLS-2$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertEquals("an address that resolves AS TYPED must scope exactly itself", //$NON-NLS-1$
+            singleton(requested), scope);
+        assertFalse("the yo sibling must not be scanned", //$NON-NLS-1$
+            scope.contains("Catalog.M" + ye + "d")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // ...and the fallback still works when the typed spelling does NOT exist.
+        Configuration onlyYe = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog stored = MdClassFactory.eINSTANCE.createCatalog();
+        stored.setName("M" + ye + "d"); //$NON-NLS-1$ //$NON-NLS-2$
+        onlyYe.getCatalogs().add(stored);
+        assertEquals(singleton("Catalog.M" + ye + "d"), //$NON-NLS-1$ //$NON-NLS-2$
+            resolvedIn(onlyYe, requested).get(requested));
+    }
+
+
+    @Test
+    public void testTheDeferredPathHonoursExactFirstAndNeverMasksAnUndecidedExactProbe()
+    {
+        // The mdclass ambiguity test never touches DeferredMember, so the same rules are pinned here
+        // on the form-member path, through the injected resolver.
+        String ye = fromCp(0x0435);
+        String yo = fromCp(0x0451);
+        String asTypedFqn = "Catalog.M" + yo + "d.Form.F.Field.Code"; //$NON-NLS-1$ //$NON-NLS-2$
+        String yoReading = "Catalog.M" + ye + "d.Form.F.Field.Code"; //$NON-NLS-1$ //$NON-NLS-2$
+
+        // 1) As typed it resolves -> that alone scopes the scan; the yo reading is never consulted.
+        List<GetProjectErrorsTool.DeferredMember> exactFirst = Arrays.asList(
+            new GetProjectErrorsTool.DeferredMember(asTypedFqn, asTypedFqn,
+                FormElementWriter.parse(asTypedFqn), true),
+            new GetProjectErrorsTool.DeferredMember(asTypedFqn, yoReading,
+                FormElementWriter.parse(yoReading), false));
+        GetProjectErrorsTool.ProjectResolution exact =
+            new GetProjectErrorsTool.ProjectResolution("P"); //$NON-NLS-1$
+        GetProjectErrorsTool.resolveDeferredMembers(exactFirst, exact,
+            member -> Collections.singletonList(member.probeFqn));
+        assertEquals("an as-typed hit must scope exactly itself", //$NON-NLS-1$
+            singleton(asTypedFqn), exact.resolved.get(asTypedFqn));
+
+        // 2) As typed it is ABSENT while two yo readings are real -> both scope the scan.
+        List<GetProjectErrorsTool.DeferredMember> ambiguous = Arrays.asList(
+            new GetProjectErrorsTool.DeferredMember(asTypedFqn, asTypedFqn,
+                FormElementWriter.parse(asTypedFqn), true),
+            new GetProjectErrorsTool.DeferredMember(asTypedFqn, yoReading,
+                FormElementWriter.parse(yoReading), false));
+        GetProjectErrorsTool.ProjectResolution ambig =
+            new GetProjectErrorsTool.ProjectResolution("P"); //$NON-NLS-1$
+        GetProjectErrorsTool.resolveDeferredMembers(ambiguous, ambig,
+            member -> member.asTyped ? Collections.<String> emptyList()
+                : Collections.singletonList(member.probeFqn));
+        assertEquals("the yo reading must scope the scan when as typed is absent", //$NON-NLS-1$
+            singleton(yoReading), ambig.resolved.get(asTypedFqn));
+
+        // 3) As typed it is UNDECIDED (content unreadable) while a yo reading resolves -> the
+        //    address stays UNDECIDED. Answering about the sibling would report on a node the caller
+        //    did not name while the one they did name was never looked at.
+        GetProjectErrorsTool.ProjectResolution masked =
+            new GetProjectErrorsTool.ProjectResolution("P"); //$NON-NLS-1$
+        GetProjectErrorsTool.resolveDeferredMembers(ambiguous, masked,
+            member -> member.asTyped ? null : Collections.singletonList(member.probeFqn));
+        assertTrue("an undecided EXACT probe must not be masked by a yo reading", //$NON-NLS-1$
+            masked.resolved.isEmpty());
+        assertEquals(singleton(asTypedFqn), masked.undecided);
     }
 
     // ========== helpers ==========

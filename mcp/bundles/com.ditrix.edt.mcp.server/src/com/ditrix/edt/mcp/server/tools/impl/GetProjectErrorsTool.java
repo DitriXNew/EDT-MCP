@@ -10,10 +10,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -126,7 +128,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 "ERRORS", "BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL", "NONE") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty(PARAM_OBJECTS, "LOOSE filter: case-insensitive SUBSTRING match of each entry against the reported object location, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian type/kind tokens accepted throughout an mdclass, form, Subsystem or Predefined address (the XDTO grammar is English-only). Deliberate fragments are supported, so an entry that matches nothing is NOT reported back - use objectFqns when you need that. Mutually exclusive with objectFqns (optional)") //$NON-NLS-1$
-            .stringArrayProperty(PARAM_OBJECT_FQNS, "EXACT filter: each entry must be the full address of one model node (top object, member, Subsystem chain, Predefined item, form, form member) and is resolved against the model; problems INSIDE the resolved node are reported. A MEMBER address reports its owner's problems (EDT indexes a marker on the owning object - an attribute's problem on 'Catalog.Products', a form item's on 'Catalog.Products.Form.ItemForm.Form' - never on the member), so the answer is wider than the address, never silently empty. Entries that resolve to nothing come back in objectsNotFound and entries this filter cannot scope (XDTO members) in objectsUnsupported, both in structuredContent. Mutually exclusive with objects (optional)") //$NON-NLS-1$
+            .stringArrayProperty(PARAM_OBJECT_FQNS, "EXACT filter: each entry must be the full address of one model node (top object, member, Subsystem chain, Predefined item, form, form member) and is resolved against the model; problems INSIDE the resolved node are reported. An address that resolves AS TYPED scopes exactly that node; only when it resolves to nothing is the yo (e/yo) reading tried, and if several such readings are real the scan covers all of them rather than guessing one. A MEMBER address reports its owner's problems (EDT indexes a marker on the owning object - an attribute's problem on 'Catalog.Products', a form item's on 'Catalog.Products.Form.ItemForm.Form' - never on the member), so the answer is wider than the address, never silently empty. Entries that resolve to nothing come back in objectsNotFound and entries this filter cannot scope (XDTO members) in objectsUnsupported, both in structuredContent. Mutually exclusive with objects (optional)") //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$
@@ -147,7 +149,7 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /** The cleaned {@code objectFqns} entries of a call (never {@code null}). */
-    private static List<String> exactAddressesOf(Map<String, String> params)
+    static List<String> exactAddressesOf(Map<String, String> params)
     {
         return cleanedEntries(JsonUtils.extractArrayArgument(params, PARAM_OBJECT_FQNS));
     }
@@ -161,6 +163,11 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     private static List<String> cleanedEntries(List<String> raw)
     {
+        // Entries are NOT deduplicated here: the verdict lists echo the caller's entries back, so
+        // collapsing them would change an externally visible list - and it would miss the real case
+        // anyway, since two differently spaced spellings of one address are distinct strings. The
+        // expensive work is bounded where it is actually done instead (see resolveInProject: one
+        // form-content read per DISTINCT probe, however many entries ask for it).
         List<String> cleaned = new ArrayList<>();
         if (raw != null)
         {
@@ -313,8 +320,7 @@ public class GetProjectErrorsTool implements IMcpTool
                 return projectNotFound;
             }
 
-            // The LOOSE filter: entries are fragments whose offset into the location is unknown.
-            final Set<String> finalObjects = buildObjectFilterVariants(objects, true);
+            final Set<String> finalObjects = scanFilterVariants(objects, exactScope);
 
             Map<IProject, List<Marker>> markersByProject = groupMarkersByProject(markerManager, projectName);
 
@@ -382,42 +388,31 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Normalizes the input object FQNs to support both English and Russian metadata type names.
-     * For each input FQN, generates all variants (original + English + Russian, lowercased) so
-     * markers can be matched regardless of the configuration language. A {@link Set} is used to
-     * deduplicate the variants. A {@code null} input yields an empty set.
+     * The variants ONE marker scan compares against, derived from {@code exactScope}.
      *
-     * @param objects the requested object FQN filters, may be {@code null}
-     * @return the deduplicated, lowercased FQN variants (never {@code null})
-     */
-    private static Set<String> buildObjectFilterVariants(Collection<String> objects)
-    {
-        return buildObjectFilterVariants(objects, false);
-    }
-
-    /**
-     * As {@link #buildObjectFilterVariants(Collection)}, but stating whether the entries are loose
-     * FRAGMENTS or full addresses.
-     *
-     * <p>A fragment's OFFSET into the location is unknown, so both segment parities are expanded
-     * (see {@link MetadataTypeUtils#getAllFragmentVariants}). A full address always begins on a
-     * structural segment, so the exact filter keeps the single known parity - expanding the other
-     * one there would let a NAME that spells a kind token widen an EXACT scope.</p>
+     * <p>THE single producer of filter variants - there is deliberately no second helper and no
+     * defaulting overload. A caller that asked for segment-boundary matching gave a full ADDRESS,
+     * whose offset is known, so only the one parity may be expanded; a loose entry is a FRAGMENT
+     * whose offset is unknown, so both are. {@code validate_xdto_package} is an exact caller, and
+     * when this choice was a hardcoded literal at the call site it gave {@code XDTOPackage.Package}
+     * the variant {@code xdtopackage.<Paket>}, which matches the markers of a DIFFERENT package
+     * named {@code <Paket>} - exact validation reporting a sibling's problems. Taking
+     * {@code exactScope} itself, rather than an inverted "fragments" flag, is what keeps a caller
+     * from picking the wrong polarity.</p>
      *
      * @param objects the requested entries, may be {@code null}
-     * @param fragments {@code true} for the loose {@code objects} filter
+     * @param exactScope whether the caller asked for segment-boundary matching (a full address)
      * @return the deduplicated, lowercased variants (never {@code null})
      */
-    private static Set<String> buildObjectFilterVariants(Collection<String> objects,
-        boolean fragments)
+    static Set<String> scanFilterVariants(Collection<String> objects, boolean exactScope)
     {
         final Set<String> finalObjects = new HashSet<>();
         if (objects != null)
         {
             for (String fqn : objects)
             {
-                finalObjects.addAll(fragments ? MetadataTypeUtils.getAllFragmentVariants(fqn)
-                    : MetadataTypeUtils.getAllFqnVariants(fqn));
+                finalObjects.addAll(exactScope ? MetadataTypeUtils.getAllFqnVariants(fqn)
+                    : MetadataTypeUtils.getAllFragmentVariants(fqn));
             }
         }
         return finalObjects;
@@ -593,7 +588,8 @@ public class GetProjectErrorsTool implements IMcpTool
         Map<String, Set<String>> variants = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> entry : scopeByProject.entrySet())
         {
-            variants.put(entry.getKey(), buildObjectFilterVariants(entry.getValue()));
+            // Full ADDRESSES: these spellings came back from a resolver, so the parity is known.
+            variants.put(entry.getKey(), scanFilterVariants(entry.getValue(), true));
         }
         return variants;
     }
@@ -1106,26 +1102,84 @@ public class GetProjectErrorsTool implements IMcpTool
 
         // Addresses whose ONLY attempt failed to read the form content model. They are undecided,
         // exactly like the addresses of a pass that threw - never "not found".
+        resolveDeferredMembers(deferred, decided,
+            member -> formMemberScopeSpellings(project, config, member));
+        decided.passCompleted = true;
+        return decided;
+    }
+
+    /**
+     * Decides the deferred form-MEMBER probes, running the resolver ONCE per distinct probe.
+     *
+     * <p>The array comes off the wire, and a form member that resolves to nothing is never recorded
+     * in {@code resolved}, so without the memo N entries naming the same missing member opened N
+     * content-model read transactions - and N differently spaced spellings of one address still
+     * would, because they are distinct strings until canonicalization. The memo is keyed on the
+     * PROBE, which is already canonical and type-normalized, so the work is bounded by the number of
+     * real addresses asked about while the verdict lists still echo every entry the caller sent.</p>
+     *
+     * <p>The resolver is injected so a test can COUNT the reads: the bound is the whole point of
+     * this method, and a test that could not see the call count would be pinning nothing.</p>
+     *
+     * @param deferred the member probes to decide, in encounter order
+     * @param decided this project's accumulating decision
+     * @param resolver decides one probe: the scoping spellings, an empty list for a proven absence,
+     *     or {@code null} when the content model could not be read at all
+     */
+    static void resolveDeferredMembers(List<DeferredMember> deferred, ProjectResolution decided,
+        java.util.function.Function<DeferredMember, List<String>> resolver)
+    {
+        Map<String, List<String>> decidedProbes = new HashMap<>();
+        Set<String> asTypedResolved = new HashSet<>();
+        Set<String> asTypedUndecided = new HashSet<>();
         for (DeferredMember member : deferred)
         {
-            if (decided.resolved.containsKey(member.requestFqn))
+            if (asTypedResolved.contains(member.requestFqn))
             {
+                // Settled EXACTLY - later yo readings are irrelevant.
                 continue;
             }
-            List<String> spellings = formMemberScopeSpellings(project, config, member);
+            // The memo key is case-INSENSITIVE because the member lookup is: four casings of one
+            // attribute name are one node, and keying on the raw probe let external input multiply
+            // the reads just by varying the case.
+            // Locale-INDEPENDENT folding: the member lookup uses equalsIgnoreCase, but
+            // toLowerCase() without a locale maps 'I' to a dotless i under tr-TR, so the memo key
+            // and the lookup would disagree exactly where they must not.
+            String memoKey = member.probeFqn.toLowerCase(Locale.ROOT);
+            List<String> spellings = decidedProbes.containsKey(memoKey)
+                ? decidedProbes.get(memoKey) : resolver.apply(member);
+            decidedProbes.put(memoKey, spellings);
             if (spellings == null)
             {
                 decided.undecided.add(member.requestFqn);
+                if (member.asTyped)
+                {
+                    // The address AS TYPED could not be DECIDED. A yo reading that happens to
+                    // resolve must not overwrite that: it would answer about a DIFFERENT node while
+                    // the one the caller named was never looked at, which is the false verdict this
+                    // whole input exists to prevent. Undecided wins, and the call is refused.
+                    asTypedUndecided.add(member.requestFqn);
+                }
             }
-            else if (!spellings.isEmpty())
+            else if (!spellings.isEmpty() && !asTypedUndecided.contains(member.requestFqn))
             {
-                // A later probe of the same address did decide it after all.
                 decided.undecided.remove(member.requestFqn);
-                decided.resolved.put(member.requestFqn, new LinkedHashSet<>(spellings));
+                if (member.asTyped)
+                {
+                    // EXACT-FIRST: as typed it exists, so no yo reading may widen the scope.
+                    decided.resolved.put(member.requestFqn, new LinkedHashSet<>(spellings));
+                    asTypedResolved.add(member.requestFqn);
+                }
+                else
+                {
+                    // Ambiguous: as typed it resolved to nothing, so EVERY yo reading that resolves
+                    // contributes. Stopping at the first scoped the scan to one of two real forms
+                    // and called the other's problems absent.
+                    decided.resolved.computeIfAbsent(member.requestFqn, k -> new LinkedHashSet<>())
+                        .addAll(spellings);
+                }
             }
         }
-        decided.passCompleted = true;
-        return decided;
     }
 
     /**
@@ -1155,20 +1209,41 @@ public class GetProjectErrorsTool implements IMcpTool
             // Malformed: it addresses nothing, and must not be repaired into a neighbouring node.
             return;
         }
-        for (String probe : addressProbes(MetadataTypeUtils.normalizeFqn(canonical)))
+        List<String> probes = addressProbes(MetadataTypeUtils.normalizeFqn(canonical));
+        for (int i = 0; i < probes.size(); i++)
         {
+            String probe = probes.get(i);
+            // addressProbes puts the address AS TYPED first; the rest are yo readings of it.
+            boolean asTyped = i == 0;
             FormElementWriter.FormMemberRef memberRef = formMemberRefOf(probe);
             if (memberRef != null)
             {
-                deferred.add(new DeferredMember(fqn, probe, memberRef));
+                deferred.add(new DeferredMember(fqn, probe, memberRef, asTyped));
             }
             else
             {
                 String stored = resolvedSpelling(config, probe);
                 if (stored != null)
                 {
-                    found.put(fqn, scopeSpellingsOf(stored));
-                    return;
+                    if (asTyped)
+                    {
+                        // EXACT-FIRST, exactly like the write/delete resolver
+                        // (MetadataNodeResolver.resolveExistingWithYoFallback): when the address AS
+                        // TYPED resolves, that IS the answer and no yo reading is considered.
+                        // Widening here scoped an unambiguous 'Catalog.M[yo]d' onto a sibling
+                        // 'Catalog.M[ye]d' the caller never asked about.
+                        found.put(fqn, scopeSpellingsOf(stored));
+                        return;
+                    }
+                    // As typed it resolved to NOTHING, so the yo readings are all that is left - and
+                    // more than one can be real: with both 'Catalog.M[yo]d' (holding 'V[ye]s') and
+                    // 'Catalog.M[ye]d' (holding 'V[yo]s'), 'Catalog.M[yo]d.Attribute.V[yo]s' matches
+                    // one by normalizing the ancestor and the other the leaf. Taking whichever came
+                    // first scoped the scan to one and called the other's problems absent - a false
+                    // clean decided by probe order. Where the input is genuinely ambiguous, every
+                    // reading counts.
+                    found.computeIfAbsent(fqn, k -> new LinkedHashSet<>())
+                        .addAll(scopeSpellingsOf(stored));
                 }
             }
         }
@@ -1280,15 +1355,16 @@ public class GetProjectErrorsTool implements IMcpTool
                 yoSegments.add(i);
             }
         }
-        if (yoSegments.isEmpty() || SubsystemUtils.parseSubsystemPath(normFqn) != null)
+        // THE GATE, and it comes BEFORE any enumeration on purpose. The input is external, so the
+        // shape must be judged before a single probe is materialized: this used to build 2^n strings
+        // first and let the family parse reject the shape afterwards, so ~25-30 yo-bearing segments
+        // meant millions of strings and 31+ overflowed `1 << n` outright.
+        //
+        // A Subsystem chain is excluded because it is resolved LEVEL BY LEVEL instead (see
+        // resolvedSpelling) - linear where probing spellings would be exponential.
+        if (yoSegments.isEmpty() || SubsystemUtils.parseSubsystemPath(normFqn) != null
+            || !enumerableAddressShape(normFqn, yoSegments.size()))
         {
-            // A Subsystem chain is resolved LEVEL BY LEVEL instead (see resolvedSpelling): it is the
-            // only family whose depth is unbounded, and the per-level walk is linear where probing
-            // spellings would be exponential. Capping the enumeration by depth - which is what this
-            // branch used to do - silently restored the whole-address retry for deep chains, i.e.
-            // the very bug the per-segment probes were introduced to fix. Every remaining family is
-            // bounded by its grammar to at most four NAME segments (owner, tabular section,
-            // attribute; or owner, form, item, event), so the enumeration below cannot exceed 16.
             return Collections.singletonList(normFqn);
         }
 
@@ -1319,6 +1395,73 @@ public class GetProjectErrorsTool implements IMcpTool
         return probes;
     }
 
+
+    /**
+     * The most yo-bearing NAME segments the subset enumeration will ever expand.
+     *
+     * <p>Four is the deepest a real 1C address goes: {@code Type.Name.TabularSection.Name.
+     * Attribute.Name} is three names, and an item-level form handler
+     * ({@code Type.Name.Form.Name.Field.Name.Handler.Event}) is four. So the enumeration below is
+     * bounded by 2^4 = 16 for every address the documented grammars can produce, and the bound is
+     * enforced BEFORE any string is built rather than asserted in a comment.</p>
+     */
+    private static final int MAX_ENUMERATED_YO_SEGMENTS = 4;
+
+    /**
+     * Whether {@code normFqn} is a shape whose yo spellings may be ENUMERATED at all.
+     *
+     * <p>Two conditions, both checked before a single probe exists. The address must parse as one of
+     * the supported grammars - garbage from the wire is rejected here instead of after 2^n strings
+     * were built - and its yo-bearing name count must be within
+     * {@link #MAX_ENUMERATED_YO_SEGMENTS}.</p>
+     *
+     * <p>When this says no, the caller probes the address AS TYPED and nothing else. That is a
+     * different thing from the depth cap this replaces: that one fell back to the whole-address
+     * retry, which resolves a DIFFERENT address and reported a node that exists as missing. Probing
+     * only what the caller wrote can never resolve the wrong node - it just adds no spelling, for an
+     * address no documented grammar can produce.</p>
+     *
+     * @param normFqn the type-normalized, canonical address
+     * @param yoSegmentCount how many of its NAME segments carry yo
+     * @return {@code true} when the subset enumeration may run
+     */
+    static boolean enumerableAddressShape(String normFqn, int yoSegmentCount)
+    {
+        if (yoSegmentCount > MAX_ENUMERATED_YO_SEGMENTS)
+        {
+            return false;
+        }
+        return PredefinedWriter.parseRef(normFqn) != null
+            || FormElementWriter.parseFormPath(normFqn) != null
+            || FormElementWriter.parse(normFqn) != null
+            || isMdclassChain(normFqn);
+    }
+
+    /**
+     * Whether {@code normFqn} has the {@code Type.Name(.Kind.Name)*} shape with EVERY structural
+     * token recognized - the generic mdclass grammar. An unrecognized token means the address
+     * addresses nothing, so it never earns an enumeration.
+     *
+     * @param normFqn the type-normalized, canonical address
+     * @return {@code true} when every structural segment is a known type / nested kind
+     */
+    private static boolean isMdclassChain(String normFqn)
+    {
+        String[] parts = normFqn.split("\\.", -1); //$NON-NLS-1$
+        if (parts.length < 2 || parts.length % 2 != 0
+            || MetadataTypeUtils.resolve(parts[0]) == null)
+        {
+            return false;
+        }
+        for (int i = 2; i < parts.length; i += 2)
+        {
+            if (MetadataTypeUtils.resolveNestedKind(parts[i]) == null)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /**
      * {@code fqn} with each segment trimmed, or {@code null} when it is not a well-formed address.
@@ -1389,12 +1532,21 @@ public class GetProjectErrorsTool implements IMcpTool
         final String probeFqn;
         /** The member reference parsed from {@link #probeFqn}. */
         final FormElementWriter.FormMemberRef ref;
+        /** Whether this probe is the address AS TYPED (exact) rather than a yo reading of it. */
+        final boolean asTyped;
 
         DeferredMember(String requestFqn, String probeFqn, FormElementWriter.FormMemberRef ref)
+        {
+            this(requestFqn, probeFqn, ref, true);
+        }
+
+        DeferredMember(String requestFqn, String probeFqn, FormElementWriter.FormMemberRef ref,
+            boolean asTyped)
         {
             this.requestFqn = requestFqn;
             this.probeFqn = probeFqn;
             this.ref = ref;
+            this.asTyped = asTyped;
         }
     }
 

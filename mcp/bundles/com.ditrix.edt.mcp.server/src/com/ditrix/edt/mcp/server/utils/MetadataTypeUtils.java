@@ -907,14 +907,44 @@ public final class MetadataTypeUtils
      */
     public static Set<String> getAllFragmentVariants(String fqn)
     {
-        Set<String> variants = getAllFqnVariants(fqn);
-        if (fqn == null || fqn.indexOf('.') <= 0)
+        Set<String> variants = new LinkedHashSet<>();
+        if (fqn == null || fqn.isEmpty())
         {
             return variants;
         }
+        variants.add(fqn.toLowerCase());
+        if (fqn.indexOf('.') < 0)
+        {
+            // A SINGLE token, i.e. NO separator at all. getAllFqnVariants returns it untranslated on
+            // purpose - with no separator there is no Type.Name shape, and a bare word must not be
+            // read as a type there. But a one-token FRAGMENT is a perfectly ordinary filter: in an
+            // English workspace '[Modul]' and '[Forma]' are valid substrings of
+            // 'CommonModule.Calc.Module' and '...Form.ItemForm.Form'. Leaving them untranslated
+            // matched nothing, and a loose entry reports no miss - the same false all-clear, reached
+            // by the early return rather than by the parity logic below.
+            //
+            // The test is `< 0`, NOT `<= 0`: a LEADING dot ('.Form.ItemForm') is a multi-token
+            // fragment - a real substring of 'Catalog.Products.Form.ItemForm.Form' - and lumping it
+            // in here left it untranslated, which is the very same early-return hole one character
+            // further along. It belongs to the parity expansion below, where its empty first segment
+            // simply shifts the structural tokens onto the odd indexes.
+            variants.add(translateStructuralSegment(fqn, true, true).toLowerCase());
+            variants.add(translateStructuralSegment(fqn, true, false).toLowerCase());
+            return variants;
+        }
+        // BOTH parities are produced HERE rather than by delegating the even one to
+        // getAllFqnVariants: that method bails on a LEADING dot (there is no Type.Name shape to
+        // translate for an exact address), so a fragment like '.Products.<Forma>' used to get only
+        // the odd parity and never the even one that actually matches
+        // 'Catalog.Products.Form.ItemForm.Form'. Owning both offsets here also makes the trailing
+        // dot, the doubled dot and the all-dots fragment behave identically - an empty segment is
+        // simply a segment that translates to itself.
         String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
-        variants.add(translateStructuralSegments(segments, true, 1).toLowerCase());
-        variants.add(translateStructuralSegments(segments, false, 1).toLowerCase());
+        for (int structuralOffset = 0; structuralOffset <= 1; structuralOffset++)
+        {
+            variants.add(translateStructuralSegments(segments, true, structuralOffset).toLowerCase());
+            variants.add(translateStructuralSegments(segments, false, structuralOffset).toLowerCase());
+        }
         return variants;
     }
 

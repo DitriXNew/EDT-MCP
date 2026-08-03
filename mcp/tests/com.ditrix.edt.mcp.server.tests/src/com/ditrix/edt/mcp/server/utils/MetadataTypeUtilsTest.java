@@ -780,6 +780,61 @@ public class MetadataTypeUtilsTest
             .contains("catalog.form"));
     }
 
+
+    @Test
+    public void testASingleTokenFragmentIsTranslatedToo()
+    {
+        // The early return for a dotless input skipped the catalogues entirely, so a one-token
+        // fragment came back as nothing but its own lowercase. In an English workspace the Russian
+        // MODULE and FORM tokens are valid substrings of 'CommonModule.Calc.Module' and
+        // '...Form.ItemForm.Form', so the filter selected nothing - and a loose entry reports no
+        // miss. Same false all-clear, reached by an early return rather than by the parity logic.
+        Set<String> module = MetadataTypeUtils.getAllFragmentVariants(RU_MODULE_LOWER);
+        assertTrue("the token as typed must stay", module.contains(RU_MODULE_LOWER));
+        assertTrue("a lone nested-kind token must reach its English spelling",
+            module.contains("module"));
+
+        Set<String> form = MetadataTypeUtils.getAllFragmentVariants(RU_FORM);
+        assertTrue(form.contains("form"));
+
+        // A lone TYPE token too, and symmetrically from English into Russian.
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants(RU_DOCUMENT).contains("document"));
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants("Module").contains(RU_MODULE_LOWER));
+
+        // A bare word that is NOT a structural token stays exactly as typed - the early return's
+        // original point, which must survive: it must never be read as a type.
+        Set<String> plain = MetadataTypeUtils.getAllFragmentVariants("MethodName");
+        assertEquals(1, plain.size());
+        assertTrue(plain.contains("methodname"));
+
+        // And the EXACT path keeps the old behaviour: a lone token is not an address at all.
+        assertEquals(1, MetadataTypeUtils.getAllFqnVariants(RU_MODULE_LOWER).size());
+
+        // A LEADING dot is NOT a single token - it is a multi-token fragment, and a real substring
+        // of 'Catalog.Products.Form.ItemForm.Form'. Treating indexOf('.') <= 0 as "one token" left
+        // it untranslated: the very same early-return hole, one character further along.
+        Set<String> leadingDot = MetadataTypeUtils.getAllFragmentVariants("." + RU_FORM + ".ItemForm");
+        assertTrue("a leading-dot fragment must still translate its structural token",
+            leadingDot.contains(".form.itemform"));
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants(".Form.ItemForm")
+            .contains("." + RU_FORM_LOWER + ".itemform"));
+
+        // ...and BOTH parities, not just the odd one. With a leading dot the structural tokens can
+        // sit on EITHER side of the empty first segment, and delegating the even parity to
+        // getAllFqnVariants lost it - that method bails on a leading dot by design.
+        Set<String> bothWays = MetadataTypeUtils.getAllFragmentVariants(".Products." + RU_FORM);
+        assertTrue("the EVEN parity must be produced for a leading-dot fragment too",
+            bothWays.contains(".products.form"));
+
+        // A trailing dot, a doubled dot and an all-dots fragment behave the same way: an empty
+        // segment is simply a segment that translates to itself.
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants(RU_FORM + ".ItemForm.")
+            .contains("form.itemform."));
+        assertTrue(MetadataTypeUtils.getAllFragmentVariants("Products.." + RU_FORM)
+            .contains("products..form"));
+        assertFalse(MetadataTypeUtils.getAllFragmentVariants("..").isEmpty());
+    }
+
     // ========== resolveNestedKind ==========
 
     @Test
