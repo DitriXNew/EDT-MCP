@@ -2027,7 +2027,159 @@ public class GetProjectErrorsToolTest
             .get("Subsystem.M" + yo + "d.Subsystem.NoSuch")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+
+    @Test
+    public void testTheAssembledReportReallyCarriesEveryCaveat()
+    {
+        // A revert sweep caught this: dropping the partial-answer warning from the report reddened
+        // NOTHING, because the only test called the renderer by hand. The report is assembled here,
+        // so this pins that each caveat is actually EMITTED - the human channel is the only place a
+        // partial answer is currently visible at all.
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        r.resolved.add("Catalog.Products"); //$NON-NLS-1$
+        r.notFound.add("Catalog.Typo"); //$NON-NLS-1$
+        r.unsupported.add(unsupportedEntry("XDTOPackage.P.Property.N", "why")); //$NON-NLS-1$ //$NON-NLS-2$
+        r.incompleteFor.put("Catalog.Products", singleton("Archived")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String report = GetProjectErrorsTool.assembleAddressReport(
+            Collections.<ErrorInfo> emptyList(), "P", null, //$NON-NLS-1$
+            Arrays.asList("Catalog.Products", "Catalog.Typo"), 100, false, r, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {0}, new int[] {0});
+
+        assertTrue("the missing address must be named", report.contains("objectsNotFound")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the unsupported address must be named", //$NON-NLS-1$
+            report.contains("objectsUnsupported")); //$NON-NLS-1$
+        assertTrue("the PARTIAL answer must be named, with the project that could not answer", //$NON-NLS-1$
+            report.contains("Partial answer for") && report.contains("Archived")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // ...and a complete answer carries no such caveat.
+        GetProjectErrorsTool.AddressResolution complete =
+            new GetProjectErrorsTool.AddressResolution();
+        complete.resolved.add("Catalog.Products"); //$NON-NLS-1$
+        String clean = GetProjectErrorsTool.assembleAddressReport(
+            Collections.<ErrorInfo> emptyList(), "P", null, //$NON-NLS-1$
+            Collections.singletonList("Catalog.Products"), 100, false, complete, //$NON-NLS-1$
+            new int[] {0}, new int[] {0});
+        assertFalse(clean.contains("Partial answer for")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryResolvingYoReadingOfADeferredMemberAccumulates()
+    {
+        // The guard that lets the deferred path ACCUMULATE was not covered: with only one yo reading
+        // in play, keying on "already resolved" and keying on "resolved AS TYPED" behave alike. Two
+        // real yo readings tell them apart - and dropping either one is the false clean this branch
+        // exists to remove.
+        String base = "Catalog.C.Form.ItemForm.Field."; //$NON-NLS-1$
+        String requested = base + "A"; //$NON-NLS-1$
+        List<GetProjectErrorsTool.DeferredMember> deferred = Arrays.asList(
+            new GetProjectErrorsTool.DeferredMember(requested, requested,
+                FormElementWriter.parse(requested), true),
+            new GetProjectErrorsTool.DeferredMember(requested, base + "B", //$NON-NLS-1$
+                FormElementWriter.parse(base + "B"), false), //$NON-NLS-1$
+            new GetProjectErrorsTool.DeferredMember(requested, base + "C", //$NON-NLS-1$
+                FormElementWriter.parse(base + "C"), false)); //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution decided =
+            new GetProjectErrorsTool.ProjectResolution("P"); //$NON-NLS-1$
+        GetProjectErrorsTool.resolveDeferredMembers(deferred, decided,
+            member -> member.asTyped ? Collections.<String> emptyList()
+                : Collections.singletonList(member.probeFqn));
+
+        assertEquals("both resolving yo readings must scope the scan", //$NON-NLS-1$
+            new HashSet<>(Arrays.asList(base + "B", base + "C")), //$NON-NLS-1$ //$NON-NLS-2$
+            decided.resolved.get(requested));
+    }
+
+
+    @Test
+    public void testEveryRealSubsystemChainTheAddressCanMeanScopesTheScan()
+    {
+        // Exact-first was carried into the tree walk; ACCUMULATION was not. With both
+        // 'M[yo]d -> V[ye]s' and 'M[ye]d -> V[yo]s' present, the address
+        // 'Subsystem.M[yo]d.Subsystem.V[yo]s' matches BOTH chains through the fallback, and
+        // returning whichever the walk met first scoped the scan to one and hid the markers under
+        // the other.
+        String ye = fromCp(0x0435);
+        String yo = fromCp(0x0451);
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.getSubsystems().add(chain("M" + yo + "d", "V" + ye + "s")); //$NON-NLS-1$ //$NON-NLS-2$
+        config.getSubsystems().add(chain("M" + ye + "d", "V" + yo + "s")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String requested = "Subsystem.M" + yo + "d.Subsystem.V" + yo + "s"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Set<String> scope = resolvedIn(config, requested).get(requested);
+
+        assertNotNull("the ambiguous chain must resolve", scope); //$NON-NLS-1$
+        assertTrue("the chain reached through the LEAF fallback must scope the scan", //$NON-NLS-1$
+            scope.contains("Subsystem.M" + yo + "d.Subsystem.V" + ye + "s")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("and so must the chain reached through the ANCESTOR fallback", //$NON-NLS-1$
+            scope.contains("Subsystem.M" + ye + "d.Subsystem.V" + yo + "s")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        // EXACT-FIRST still wins whole: with the typed chain present, only it scopes the scan.
+        config.getSubsystems().add(chain("M" + yo + "d2", "V" + yo + "s")); //$NON-NLS-1$ //$NON-NLS-2$
+        String typed = "Subsystem.M" + yo + "d2.Subsystem.V" + yo + "s"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("a fully typed chain scopes exactly itself", //$NON-NLS-1$
+            singleton(typed), resolvedIn(config, typed).get(typed));
+    }
+
+    @Test
+    public void testOwningOneSpellingDoesNotEraseAnUndecidedOther()
+    {
+        // The completeness model is per (address, project) with THREE states, but at this seam a
+        // resolved spelling overwrote an undecided one INSIDE one project: the scan was scoped only
+        // by the readable spelling, the markers stored under the unreadable one vanished, and there
+        // was neither a partial-answer warning nor a refusal. Owning and being unable to decide must
+        // coexist.
+        String base = "Catalog.C.Form.ItemForm.Field."; //$NON-NLS-1$
+        String requested = base + "A"; //$NON-NLS-1$
+        List<GetProjectErrorsTool.DeferredMember> deferred = Arrays.asList(
+            new GetProjectErrorsTool.DeferredMember(requested, requested,
+                FormElementWriter.parse(requested), true),
+            new GetProjectErrorsTool.DeferredMember(requested, base + "B", //$NON-NLS-1$
+                FormElementWriter.parse(base + "B"), false), //$NON-NLS-1$
+            new GetProjectErrorsTool.DeferredMember(requested, base + "C", //$NON-NLS-1$
+                FormElementWriter.parse(base + "C"), false)); //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution decided =
+            new GetProjectErrorsTool.ProjectResolution("P"); //$NON-NLS-1$
+        // as typed: absent | B: content model unreadable | C: resolves
+        GetProjectErrorsTool.resolveDeferredMembers(deferred, decided, member -> {
+            if (member.asTyped)
+            {
+                return Collections.<String> emptyList();
+            }
+            return member.probeFqn.endsWith("B") ? null //$NON-NLS-1$
+                : Collections.singletonList(member.probeFqn);
+        });
+
+        assertTrue("the readable spelling still scopes the scan", //$NON-NLS-1$
+            decided.resolved.containsKey(requested));
+        assertTrue("...and the unreadable one must STILL be undecided", //$NON-NLS-1$
+            decided.undecided.contains(requested));
+
+        // The fold must then call the answer PARTIAL, not complete. (The read pass itself ran to
+        // the end here - only individual spellings were undecidable.)
+        decided.passCompleted = true;
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(r, Collections.singletonList(requested),
+            Collections.singletonList(decided));
+        assertEquals(Collections.singletonList(requested), r.resolved);
+        assertEquals("the partial answer must name the project that could not decide", //$NON-NLS-1$
+            singleton("P"), r.incompleteFor.get(requested)); //$NON-NLS-1$
+    }
+
     // ========== helpers ==========
+    /** A two-level subsystem chain: parent -> child. */
+    private static Subsystem chain(String parentName, String childName)
+    {
+        Subsystem parent = MdClassFactory.eINSTANCE.createSubsystem();
+        parent.setName(parentName);
+        Subsystem child = MdClassFactory.eINSTANCE.createSubsystem();
+        child.setName(childName);
+        parent.getSubsystems().add(child);
+        return parent;
+    }
+
     /**
      * An OPEN project whose description carries exactly {@code natureIds} - the shape
      * ProjectContext.naturesOf reads for an open project.

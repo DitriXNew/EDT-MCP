@@ -551,23 +551,9 @@ public class GetProjectErrorsTool implements IMcpTool
                     bmModelManager, collectContext);
             }
 
-            StringBuilder md = new StringBuilder();
-            if (errors.isEmpty())
-            {
-                appendNoErrorsSection(md, projectName, severity, objectFqns, PARAM_OBJECT_FQNS);
-            }
-            else
-            {
-                appendProblemsTable(md, errors, limit, detailed);
-            }
-            // Appended AFTER either branch on purpose: a PARTIAL miss (some addresses resolved,
-            // some did not) must be visible next to the results too, not only on an empty report.
-            appendObjectsNotFoundWarning(md, resolution.notFound);
-            appendObjectsUnsupportedWarning(md, resolution.unsupported);
-            appendIncompleteScopeWarning(md, resolution.incompleteFor);
-            appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
-
-            return addressPayload(md.toString(), errors.size(), resolution);
+            return addressPayload(assembleAddressReport(errors, projectName, severity, objectFqns,
+                limit, detailed, resolution, unresolvedShown, unresolvedFilteredOut),
+                errors.size(), resolution);
         }
         catch (Exception e)
         {
@@ -592,6 +578,49 @@ public class GetProjectErrorsTool implements IMcpTool
             variants.put(entry.getKey(), scanFilterVariants(entry.getValue(), true));
         }
         return variants;
+    }
+
+
+    /**
+     * Assembles the Markdown an {@code objectFqns} call returns: the table or the empty-report
+     * banner, then EVERY caveat that applies.
+     *
+     * <p>Extracted so a test can pin that each warning is really EMITTED, not merely that its
+     * renderer works when called by hand. A revert sweep found this gap the hard way: dropping the
+     * partial-answer warning from the report reddened nothing, because the only test called
+     * {@link #appendIncompleteScopeWarning} directly.</p>
+     *
+     * @param errors the collected problem rows
+     * @param projectName the project filter, may be {@code null}/empty
+     * @param severity the severity filter, may be {@code null}/empty
+     * @param objectFqns the requested addresses, echoed in the banner
+     * @param limit the result limit
+     * @param detailed whether to render the full table
+     * @param resolution the per-address verdicts, including the partial-answer map
+     * @param unresolvedShown out-counter of markers shown with a placeholder location
+     * @param unresolvedFilteredOut out-counter of markers excluded because their location was unknown
+     * @return the assembled Markdown
+     */
+    static String assembleAddressReport(List<ErrorInfo> errors, String projectName, String severity,
+        List<String> objectFqns, int limit, boolean detailed, AddressResolution resolution,
+        int[] unresolvedShown, int[] unresolvedFilteredOut)
+    {
+        StringBuilder md = new StringBuilder();
+        if (errors.isEmpty())
+        {
+            appendNoErrorsSection(md, projectName, severity, objectFqns, PARAM_OBJECT_FQNS);
+        }
+        else
+        {
+            appendProblemsTable(md, errors, limit, detailed);
+        }
+        // Appended AFTER either branch on purpose: a PARTIAL miss (some addresses resolved, some did
+        // not) must be visible next to the results too, not only on an empty report.
+        appendObjectsNotFoundWarning(md, resolution.notFound);
+        appendObjectsUnsupportedWarning(md, resolution.unsupported);
+        appendIncompleteScopeWarning(md, resolution.incompleteFor);
+        appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
+        return md.toString();
     }
 
     /**
@@ -945,11 +974,13 @@ public class GetProjectErrorsTool implements IMcpTool
             for (String fqn : candidates)
             {
                 AddressKnowledge known = knowledge.get(fqn);
+                // Independent, NOT else-if: owning and being unable to decide can hold at the
+                // same time in the same project, and the answer is then a PARTIAL one.
                 if (decided.resolved.containsKey(fqn))
                 {
                     known.owners.add(decided.projectName);
                 }
-                else if (decided.undecided.contains(fqn))
+                if (decided.undecided.contains(fqn))
                 {
                     known.unknown.add(decided.projectName);
                 }
@@ -1163,7 +1194,11 @@ public class GetProjectErrorsTool implements IMcpTool
             }
             else if (!spellings.isEmpty() && !asTypedUndecided.contains(member.requestFqn))
             {
-                decided.undecided.remove(member.requestFqn);
+                // NOT removed from `undecided`: within ONE project a requested address can be
+                // both OWNED (one spelling resolved) and UNDECIDED (another spelling's form content
+                // could not be read). Letting ownership erase that lost the third state at this
+                // seam - the scan was scoped only by the readable spelling, and the markers stored
+                // under the unreadable one vanished with no warning and no refusal.
                 if (member.asTyped)
                 {
                     // EXACT-FIRST: as typed it exists, so no yo reading may widen the scope.
@@ -1222,8 +1257,8 @@ public class GetProjectErrorsTool implements IMcpTool
             }
             else
             {
-                String stored = resolvedSpelling(config, probe);
-                if (stored != null)
+                Set<String> storedSet = resolvedSpellings(config, probe);
+                if (!storedSet.isEmpty())
                 {
                     if (asTyped)
                     {
@@ -1232,7 +1267,7 @@ public class GetProjectErrorsTool implements IMcpTool
                         // TYPED resolves, that IS the answer and no yo reading is considered.
                         // Widening here scoped an unambiguous 'Catalog.M[yo]d' onto a sibling
                         // 'Catalog.M[ye]d' the caller never asked about.
-                        found.put(fqn, scopeSpellingsOf(stored));
+                        found.put(fqn, scopeSpellingsOf(storedSet));
                         return;
                     }
                     // As typed it resolved to NOTHING, so the yo readings are all that is left - and
@@ -1243,7 +1278,7 @@ public class GetProjectErrorsTool implements IMcpTool
                     // clean decided by probe order. Where the input is genuinely ambiguous, every
                     // reading counts.
                     found.computeIfAbsent(fqn, k -> new LinkedHashSet<>())
-                        .addAll(scopeSpellingsOf(stored));
+                        .addAll(scopeSpellingsOf(storedSet));
                 }
             }
         }
@@ -1257,14 +1292,17 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param resolvedFqn the spelling that resolved
      * @return the spellings, in order, without duplicates
      */
-    private static Set<String> scopeSpellingsOf(String resolvedFqn)
+    private static Set<String> scopeSpellingsOf(Set<String> resolvedFqns)
     {
         Set<String> spellings = new LinkedHashSet<>();
-        spellings.add(resolvedFqn);
-        String owner = markerOwnerFqn(resolvedFqn);
-        if (owner != null)
+        for (String resolvedFqn : resolvedFqns)
         {
-            spellings.add(owner);
+            spellings.add(resolvedFqn);
+            String owner = markerOwnerFqn(resolvedFqn);
+            if (owner != null)
+            {
+                spellings.add(owner);
+            }
         }
         return spellings;
     }
@@ -1612,7 +1650,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param normFqn the type-normalized address
      * @return the resolved (stored) spelling, or {@code null} when the address resolves to nothing
      */
-    static String resolvedSpelling(Configuration config, String normFqn)
+    static Set<String> resolvedSpellings(Configuration config, String normFqn)
     {
         // A Subsystem chain nests the same kind token repeatedly, which the generic child-feature
         // navigation does not model - SubsystemUtils owns that grammar. It is also the only family
@@ -1620,8 +1658,13 @@ public class GetProjectErrorsTool implements IMcpTool
         // never builds a combination) rather than by probing whole-address spellings.
         if (SubsystemUtils.parseSubsystemPath(normFqn) != null)
         {
-            String[] stored = SubsystemUtils.resolveStoredChain(config, normFqn);
-            return stored == null ? null : storedSubsystemFqn(normFqn, stored);
+            Set<String> chains = new LinkedHashSet<>();
+            for (String[] stored : SubsystemUtils.resolveStoredChain(config, normFqn))
+            {
+                // EVERY real chain the address can mean scopes the scan (see resolveStoredChain).
+                chains.add(storedSubsystemFqn(normFqn, stored));
+            }
+            return chains;
         }
         // A predefined item is not an mdclass child either: it lives in the owner's predefined tree.
         PredefinedWriter.PredefinedRef predefined = PredefinedWriter.parseRef(normFqn);
@@ -1631,22 +1674,25 @@ public class GetProjectErrorsTool implements IMcpTool
                 MetadataNodeResolver.resolveExisting(config, predefined.ownerFqn());
             if (owner == null)
             {
-                return null;
+                return Collections.emptySet();
             }
             PredefinedItem item = PredefinedWriter.findByName(owner.object, predefined.itemName);
             // The item's OWN stored Name replaces the requested leaf: findByName's yo fallback can
             // have matched a differently spelled item, and the markers carry the stored spelling.
-            return item == null ? null
-                : normFqn.substring(0, normFqn.lastIndexOf('.') + 1) + item.getName();
+            return item == null ? Collections.<String> emptySet()
+                : Collections.singleton(
+                    normFqn.substring(0, normFqn.lastIndexOf('.') + 1) + item.getName());
         }
         // A FORM object: the mdclass metamodel deliberately does not lead into the form package, so
         // the shared node resolver cannot navigate the Form kind - the form reader can.
         String formPath = FormElementWriter.parseFormPath(normFqn);
         if (formPath != null)
         {
-            return FormStructureReader.resolveMdForm(config, formPath) != null ? normFqn : null;
+            return FormStructureReader.resolveMdForm(config, formPath) != null
+                ? Collections.singleton(normFqn) : Collections.<String> emptySet();
         }
-        return MetadataNodeResolver.resolveExisting(config, normFqn) != null ? normFqn : null;
+        return MetadataNodeResolver.resolveExisting(config, normFqn) != null
+            ? Collections.singleton(normFqn) : Collections.<String> emptySet();
     }
 
     /**

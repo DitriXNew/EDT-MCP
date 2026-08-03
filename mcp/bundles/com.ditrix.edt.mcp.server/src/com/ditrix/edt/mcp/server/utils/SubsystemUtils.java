@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import org.eclipse.emf.common.util.EMap;
 
@@ -99,22 +100,32 @@ public final class SubsystemUtils
      * @param fqn the subsystem chain FQN
      * @return the resolved chain's stored names, or {@code null} when it resolves to nothing
      */
-    public static String[] resolveStoredChain(Configuration config, String fqn)
+    public static List<String[]> resolveStoredChain(Configuration config, String fqn)
     {
         if (config == null)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return Collections.emptyList();
         }
         String[] names = parseSubsystemPath(fqn);
         if (names == null)
         {
-            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+            return Collections.emptyList();
         }
         // EXACT-FIRST for the WHOLE chain: the address exactly as typed wins outright, exactly as
-        // MetadataNodeResolver.resolveExistingWithYoFallback treats a single name. Only when the
-        // fully-as-typed chain fails end to end is a yo reading of any level considered.
-        String[] exact = descend(config.getSubsystems(), names, 0, false);
-        return exact != null ? exact : descend(config.getSubsystems(), names, 0, true);
+        // MetadataNodeResolver.resolveExistingWithYoFallback treats a single name.
+        List<String[]> exact = new ArrayList<>(1);
+        descend(config.getSubsystems(), names, 0, false, exact);
+        if (!exact.isEmpty())
+        {
+            return exact;
+        }
+        // ...and only on its COMPLETE failure do the yo readings apply - ALL of them. More than one
+        // real chain can match: 'Subsystem.M[yo]d.Subsystem.V[yo]s' fits both 'M[yo]d -> V[ye]s' and
+        // 'M[ye]d -> V[yo]s'. Returning whichever the walk met first scoped the scan to one and hid
+        // the markers under the other, which is the same false clean this branch exists to remove.
+        List<String[]> fallback = new ArrayList<>();
+        descend(config.getSubsystems(), names, 0, true, fallback);
+        return fallback;
     }
 
     /**
@@ -138,26 +149,41 @@ public final class SubsystemUtils
      * @param allowYo whether a yo reading of the name may be tried in addition to the exact one
      * @return the STORED names along a complete matching path, or {@code null} when none exists
      */
-    private static String[] descend(Iterable<Subsystem> level, String[] names, int index,
-        boolean allowYo)
+    private static void descend(Iterable<Subsystem> level, String[] names, int index,
+        boolean allowYo, List<String[]> out)
     {
+        if (out.size() >= MAX_MATCHING_CHAINS)
+        {
+            return;
+        }
         for (Subsystem candidate : candidatesAt(level, names[index], allowYo))
         {
             if (index == names.length - 1)
             {
                 String[] chain = new String[names.length];
                 chain[index] = candidate.getName();
-                return chain;
+                out.add(chain);
+                continue;
             }
-            String[] deeper = descend(candidate.getSubsystems(), names, index + 1, allowYo);
-            if (deeper != null)
+            int before = out.size();
+            descend(candidate.getSubsystems(), names, index + 1, allowYo, out);
+            for (int i = before; i < out.size(); i++)
             {
-                deeper[index] = candidate.getName();
-                return deeper;
+                out.get(i)[index] = candidate.getName();
             }
         }
-        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
     }
+
+    /**
+     * How many complete matching chains the yo pass will collect.
+     *
+     * <p>Not a limit on the ADDRESS: the walk is bounded by the tree, and a level offers at most the
+     * one or two subsystems that really carry the name, so reaching this would need a configuration
+     * with e/yo twin subsystems at half a dozen nested levels. It exists only so that a pathological
+     * model cannot turn one request into unbounded work; the scope it produces is still a superset
+     * of one real chain, so nothing is ever reported as absent that exists.</p>
+     */
+    private static final int MAX_MATCHING_CHAINS = 64;
 
     /**
      * The subsystems at this level that {@code name} can mean: the exact match first, then - only
