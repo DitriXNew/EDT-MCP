@@ -6,9 +6,11 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 
@@ -720,8 +722,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             data.descendants.isEmpty()
                 ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
                 : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
-                    + " contained member(s) (" + data.describeDescendants() + ") from " //$NON-NLS-1$ //$NON-NLS-2$
-                    + ref.formPath + '.',
+                    + " contained member(s) (" + data.describeDescendants() + ")" //$NON-NLS-1$ //$NON-NLS-2$
+                    + data.truncationNote() + " from " + ref.formPath + '.', //$NON-NLS-1$
             1 + data.descendants.size(), Collections.singletonList(normFqn));
         return deleteWithConsent(preview, write);
     }
@@ -782,19 +784,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Counts everything the delete removes with the form: the items TREE (including the singular
-     * containments a form carries - its auto command bar, and every element's context menu and
-     * extended tooltip), the attributes and their columns, and the commands.
-     *
-     * <p>The items walk is its own, not {@link #collectItemDescendants}: that one lists the
-     * {@code items} / {@code columns} the MEMBER preview reports on the wire, and a form ROOT also
-     * owns the singular containments above - a hand-placed button under the auto command bar is
-     * removed by the delete, so a prompt that ignored it understated its own destruction (issue #295
-     * review). Bounded by {@link FormStructureReader#MAX_NODES}, because this walks a whole form and
-     * a {@code StackOverflowError} is an {@link Error} no {@code catch (Exception)} would stop.</p>
+     * Everything a whole-form delete removes, read with {@link #collectRemovedMembers} - the SAME
+     * containment walk the member delete uses, for the same reason: the radius of
+     * {@code EcoreUtil.remove} is the containment closure, and any list of features to visit is a
+     * list that will fall behind it.
      *
      * @param formModel the tx-bound form model
-     * @return the counts
+     * @return the summary
      */
     /**
      * Test seam for {@link #summarizeFormContent}: the same summary feeds BOTH the consent prompt's
@@ -811,72 +807,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     private static FormContentSummary summarizeFormContent(EObject formModel)
     {
+        // THE SAME containment walk the member delete uses. Counting by feature name here - the items
+        // tree, `attributes`, their `columns`, `formCommands` - understated a whole-form delete in
+        // exactly the way it understated a member delete: EcoreUtil.remove also takes the named
+        // non-FormItem containments (the form's own `handlers`, every element's `handlers`, a
+        // command's `action`), and none of them was counted. Adding those three features would have
+        // left the next one to be found the same way (issue #295 review).
         FormContentSummary summary = new FormContentSummary();
-        summary.items = countFormItems(formModel, summary);
-        for (EObject attribute : FormStructureReader.getReferenceList(formModel, KEY_ATTRIBUTES))
-        {
-            summary.attributes++;
-            summary.elements.add(formItem(FormStructureReader.nameOf(attribute),
-                attribute.eClass().getName()));
-            for (EObject column : FormStructureReader.getReferenceList(attribute, KEY_COLUMNS))
-            {
-                summary.columns++;
-                summary.elements.add(formItem(FormStructureReader.nameOf(column),
-                    column.eClass().getName()));
-            }
-        }
-        for (EObject command : FormStructureReader.getReferenceList(formModel, KEY_FORM_COMMANDS))
-        {
-            summary.commands++;
-            summary.elements.add(formItem(FormStructureReader.nameOf(command),
-                command.eClass().getName()));
-        }
+        summary.truncated = collectRemovedMembers(formModel, summary.elements);
         return summary;
-    }
-
-    /**
-     * Counts every contained FORM ITEM under {@code formModel}, whichever containment holds it.
-     *
-     * <p>Walks {@code eAllContents} and keeps what IS a {@code FormItem} - deliberately not a
-     * hand-written list of features. The first version of this counter named
-     * {@code items}/{@code autoCommandBar}/{@code contextMenu}/{@code extendedTooltip} explicitly and
-     * therefore missed a table's three additions (search string, view status, search control) and
-     * whatever the next form model adds; those are addressable elements, and deleting the form
-     * removes them, so leaving them out understated the prompt. Asking the metamodel which objects are
-     * items cannot fall behind the metamodel. The iterator also removes the recursion, so no
-     * {@code StackOverflowError} (an {@link Error}, uncatchable by the callers) is possible; the
-     * {@link FormStructureReader#MAX_NODES} bound still caps a pathological form.</p>
-     *
-     * @param formModel the tx-bound form model
-     * @return the number of contained form items
-     */
-    private static int countFormItems(EObject formModel, FormContentSummary summary)
-    {
-        EClassifier formItem = formModel.eClass().getEPackage() == null ? null
-            : formModel.eClass().getEPackage().getEClassifier("FormItem"); //$NON-NLS-1$
-        if (!(formItem instanceof EClass))
-        {
-            return 0;
-        }
-        int counted = 0;
-        // The bound counts VISITS, not matches: bounding matches would let a form full of non-item
-        // objects walk unboundedly while the javadoc claimed a cap.
-        int visits = FormStructureReader.MAX_NODES;
-        TreeIterator<EObject> it = formModel.eAllContents();
-        for (; it.hasNext() && visits > 0; visits--)
-        {
-            EObject candidate = it.next();
-            if (((EClass)formItem).isInstance(candidate))
-            {
-                counted++;
-                summary.elements.add(
-                    formItem(FormStructureReader.nameOf(candidate), candidate.eClass().getName()));
-            }
-        }
-        // A cut walk is FLAGGED, not padded with a pseudo-element: adding a marker to the list
-        // would make it disagree with the counters that summarize the very same elements.
-        summary.truncated = it.hasNext();
-        return counted;
     }
 
     /**
@@ -907,7 +846,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 d.type = target.eClass().getName();
                 if (!handler)
                 {
-                    collectItemDescendants(target, d.descendants);
+                    d.truncated = collectRemovedMembers(target, d.descendants);
                 }
                 return d;
             });
@@ -943,7 +882,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + (data.descendants.isEmpty()
                     ? "the " + memberWord + " itself." //$NON-NLS-1$ //$NON-NLS-2$
                     : "it and its " + data.descendants.size() + " contained member(s) (" //$NON-NLS-1$ //$NON-NLS-2$
-                        + data.describeDescendants() + ").") //$NON-NLS-1$
+                        + data.describeDescendants() + ")" + data.truncationNote() + ".") //$NON-NLS-1$ //$NON-NLS-2$
                 + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
                 + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
                 + "to apply.") //$NON-NLS-1$
@@ -2165,7 +2104,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Test seam for {@link #collectItemDescendants}: the walk decides what a destructive preview
+     * Test seam for {@link #collectRemovedMembers}: the walk decides what a destructive preview
      * promises, so it is verified directly instead of through a live form.
      *
      * @param item the element to descend from
@@ -2173,7 +2112,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     static void collectDescendantsForTest(EObject item, List<Map<String, Object>> out)
     {
-        collectItemDescendants(item, out);
+        collectRemovedMembers(item, out);
     }
 
     /**
@@ -2196,54 +2135,82 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * descended THROUGH, not listed - which is how a command's action, an unnamed container, still
      * yields the named {@code CommandHandler} inside it.</p>
      *
-     * @param item the element to descend from
+     * <p>Only the PERSISTED containments are followed - a derived / transient one is skipped, again
+     * by asking EMF rather than by naming classes. It matters on the form ROOT: a content form also
+     * contains its DERIVED data (the form-data structure of every attribute, the BSL context with its
+     * types, properties, methods, parameters and events, the standard commands, the ChildItems
+     * views). None of that is authored, none of it is written to {@code Form.form}, and it is
+     * recomputed after any edit - counting it turned a 15-member form into a 450-entry prompt when
+     * this walk first replaced the old one. What a delete really costs the caller is what was
+     * persisted (found by the live probe of this round).</p>
+     *
+     * <p>The traversal is an explicit stack, not recursion: a {@code StackOverflowError} is an
+     * {@link Error} that no {@code catch (Exception)} above would stop. The
+     * {@link FormStructureReader#MAX_NODES} bound counts VISITS, not matches, so a subtree full of
+     * unnamed property holders cannot walk unboundedly while this claims a cap.</p>
+     *
+     * @param root the element (or the form root) to descend from; it is NOT itself added
      * @param out receives one {name, type} entry per removed member, depth-first in metamodel order
+     * @return {@code true} when the walk hit its bound and stopped, so {@code out} is a PREFIX
      */
-    private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
+    private static boolean collectRemovedMembers(EObject root, List<Map<String, Object>> out)
     {
-        for (EReference reference : item.eClass().getEAllReferences())
+        int visits = FormStructureReader.MAX_NODES;
+        Deque<EObject> pending = new ArrayDeque<>();
+        pushPersistedChildren(root, pending);
+        while (!pending.isEmpty() && visits > 0)
         {
-            if (!reference.isContainment())
+            visits--;
+            EObject child = pending.pop();
+            String name = ownNameOf(child);
+            if (name != null)
+            {
+                out.add(formItem(name, child.eClass().getName()));
+            }
+            pushPersistedChildren(child, pending);
+        }
+        // A cut walk is FLAGGED, not padded with a pseudo-element: adding a marker to the list would
+        // make it disagree with the count that summarizes the very same entries.
+        return !pending.isEmpty();
+    }
+
+    /**
+     * Pushes {@code parent}'s PERSISTED contained objects so they pop in metamodel order (so the walk
+     * above stays depth-first, left to right).
+     *
+     * @param parent the object whose containments to follow
+     * @param pending the traversal stack
+     */
+    private static void pushPersistedChildren(EObject parent, Deque<EObject> pending)
+    {
+        List<EObject> children = new ArrayList<>();
+        for (EReference reference : parent.eClass().getEAllReferences())
+        {
+            // Derived / transient BEFORE eGet: a derived feature can compute a whole model on read.
+            if (!reference.isContainment() || reference.isDerived() || reference.isTransient())
             {
                 continue;
             }
-            Object value = item.eGet(reference);
+            Object value = parent.eGet(reference);
             if (value instanceof List<?>)
             {
                 for (Object child : (List<?>)value)
                 {
-                    collectRemovedMember(child, out);
+                    if (child instanceof EObject)
+                    {
+                        children.add((EObject)child);
+                    }
                 }
             }
-            else
+            else if (value instanceof EObject)
             {
-                collectRemovedMember(value, out);
+                children.add((EObject)value);
             }
         }
-    }
-
-    /**
-     * Appends {@code child} to {@code out} when it is a NAMED member (see
-     * {@link #collectItemDescendants}), then descends into it either way.
-     *
-     * @param child the contained value, or {@code null} / a non-{@code EObject} for an unset containment
-     * @param out receives the {name, type} entries
-     */
-    private static void collectRemovedMember(Object child, List<Map<String, Object>> out)
-    {
-        if (!(child instanceof EObject))
+        for (int i = children.size() - 1; i >= 0; i--)
         {
-            return;
+            pending.push(children.get(i));
         }
-        String name = ownNameOf((EObject)child);
-        if (name != null)
-        {
-            Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("name", name); //$NON-NLS-1$
-            entry.put("type", ((EObject)child).eClass().getName()); //$NON-NLS-1$
-            out.add(entry);
-        }
-        collectItemDescendants((EObject)child, out);
     }
 
     /**
@@ -2273,6 +2240,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         final List<Map<String, Object>> descendants = new ArrayList<>();
 
         /**
+         * Whether the walk hit its node bound: {@code descendants} is then a PREFIX of what the
+         * delete removes, and the message says so rather than presenting a cut list as complete.
+         */
+        boolean truncated;
+
+        /**
          * The descendants grouped by their model type, e.g. {@code "2 FormField, 1 EventHandler"} -
          * read off the entries the walk produced, so the prompt cannot name a category the walk does
          * not actually follow (issue #295 review).
@@ -2281,19 +2254,46 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          */
         String describeDescendants()
         {
-            Map<String, Integer> byType = new java.util.LinkedHashMap<>();
-            for (Map<String, Object> descendant : descendants)
-            {
-                String type = String.valueOf(descendant.get("type")); //$NON-NLS-1$
-                byType.merge(type, Integer.valueOf(1), (a, b) -> Integer.valueOf(a.intValue() + 1));
-            }
-            List<String> parts = new ArrayList<>();
-            for (Map.Entry<String, Integer> entry : byType.entrySet())
-            {
-                parts.add(entry.getValue() + " " + entry.getKey()); //$NON-NLS-1$
-            }
-            return String.join(", ", parts); //$NON-NLS-1$
+            return describeByType(descendants);
         }
+
+        /** The "and there is more" note for the message, or {@code ""} when the walk finished. */
+        String truncationNote()
+        {
+            return truncationNoteFor(truncated);
+        }
+    }
+
+    /**
+     * Groups {@code entries} by their {@code type}, e.g. {@code "2 FormField, 1 EventHandler"}. ONE
+     * renderer for both delete previews, so the member prompt and the whole-form prompt cannot start
+     * describing the same walk differently.
+     *
+     * @param entries the {name, type} entries a removal walk produced
+     * @return the breakdown in first-seen order, or {@code ""} when there are none
+     */
+    private static String describeByType(List<Map<String, Object>> entries)
+    {
+        Map<String, Integer> byType = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> entry : entries)
+        {
+            String type = String.valueOf(entry.get("type")); //$NON-NLS-1$
+            byType.merge(type, Integer.valueOf(1), (a, b) -> Integer.valueOf(a.intValue() + 1));
+        }
+        List<String> parts = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : byType.entrySet())
+        {
+            parts.add(entry.getValue() + " " + entry.getKey()); //$NON-NLS-1$
+        }
+        return String.join(", ", parts); //$NON-NLS-1$
+    }
+
+    /** The shared "the walk was cut" note, so both previews word the same fact the same way. */
+    private static String truncationNoteFor(boolean truncated)
+    {
+        return truncated
+            ? " (first " + FormStructureReader.MAX_NODES + " nodes only - the form is larger)" //$NON-NLS-1$ //$NON-NLS-2$
+            : ""; //$NON-NLS-1$
     }
 
     /**
@@ -2302,21 +2302,21 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     static final class FormContentSummary
     {
-        int items;
-        int attributes;
-        int columns;
-        int commands;
-
         /**
-         * The same elements the counters above summarize, as {name, type} entries - so the
-         * {@code confirm=false} preview can LIST exactly what the consent prompt COUNTS. The prompt
-         * told the caller to run the preview for details while the preview still answered with the
-         * form alone (issue #295 review).
+         * Every named member the containment walk found under the form - the ONE source of both the
+         * consent prompt's count and the {@code confirm=false} preview's list, so the dialog cannot
+         * promise a number the preview does not itemize.
+         *
+         * <p>Deliberately no per-category counters any more: they were filled by walking a named list
+         * of features ({@code items} / {@code attributes} / {@code columns} / {@code formCommands}),
+         * which is exactly what left the form's own {@code handlers}, every element's
+         * {@code handlers} and a command's {@code action} uncounted - all removed with the form
+         * (issue #295 review). The breakdown is derived from the entries instead.</p>
          */
         final List<Map<String, Object>> elements = new ArrayList<>();
 
         /**
-         * Whether the walk hit its node bound and stopped: the counts and the list then describe a
+         * Whether the walk hit its node bound and stopped: the count and the list then describe a
          * PREFIX of what the delete removes, and both phases must say so rather than present a cut
          * list as complete.
          */
@@ -2325,40 +2325,25 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** The "and there is more" note for the message, or {@code ""} when the walk finished. */
         String truncationNote()
         {
-            return truncated
-                ? " (first " + FormStructureReader.MAX_NODES + " nodes only - the form is larger)" //$NON-NLS-1$ //$NON-NLS-2$
-                : ""; //$NON-NLS-1$
+            return truncationNoteFor(truncated);
         }
 
-        /** @return every element the content form carries */
+        /** @return every member the content form carries */
         int total()
         {
-            return items + attributes + columns + commands;
+            return elements.size();
         }
 
         /** @return whether the form's content holds nothing (or could not be read) */
         boolean isEmpty()
         {
-            return total() == 0;
+            return elements.isEmpty();
         }
 
-        /** @return the non-zero counts, e.g. {@code "4 item(s), 2 attribute(s), 3 column(s)"} */
+        /** @return the breakdown by model type, e.g. {@code "4 FormField, 2 FormAttribute"} */
         String describe()
         {
-            List<String> parts = new ArrayList<>();
-            appendCount(parts, items, "item(s)"); //$NON-NLS-1$
-            appendCount(parts, attributes, "attribute(s)"); //$NON-NLS-1$
-            appendCount(parts, columns, "column(s)"); //$NON-NLS-1$
-            appendCount(parts, commands, "command(s)"); //$NON-NLS-1$
-            return String.join(", ", parts); //$NON-NLS-1$
-        }
-
-        private static void appendCount(List<String> parts, int count, String word)
-        {
-            if (count > 0)
-            {
-                parts.add(count + " " + word); //$NON-NLS-1$
-            }
+            return describeByType(elements);
         }
     }
 }

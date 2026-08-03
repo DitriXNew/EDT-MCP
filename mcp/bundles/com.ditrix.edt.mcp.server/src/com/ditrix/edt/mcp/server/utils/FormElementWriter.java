@@ -152,6 +152,7 @@ public final class FormElementWriter
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_LABEL_DECORATION_EXT_INFO = "LabelDecorationExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_ATTRIBUTE_COLUMN = "FormAttributeColumn"; //$NON-NLS-1$
     private static final String ECLASS_AUTO_COMMAND_BAR = "AutoCommandBar"; //$NON-NLS-1$
     private static final String ECLASS_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
@@ -234,14 +235,25 @@ public final class FormElementWriter
          */
         public final String ownerAttributeName;
 
+        /**
+         * How many trailing FQN segments {@link #parse} consumed for this member - 2 for a form-level
+         * member or handler, 4 for an item-level handler AND for an attribute column. Carried rather
+         * than re-derived: a caller that needs the OWNING FORM cuts this many segments off the
+         * address, and re-deriving it from a boolean got the column shape wrong (it is not
+         * item-level, yet its tail is 4), which scoped a marker filter to the ATTRIBUTE instead of
+         * the form and answered a false all-clear (issue #295 review). Set where the shape is
+         * actually decided, so a shape added later cannot forget to declare its length.
+         */
+        public final int tailSegments;
+
         FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
-            String itemName)
+            String itemName, int tailSegments)
         {
-            this(formPath, kindToken, name, itemKindToken, itemName, null);
+            this(formPath, kindToken, name, itemKindToken, itemName, null, tailSegments);
         }
 
         FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
-            String itemName, String ownerAttributeName)
+            String itemName, String ownerAttributeName, int tailSegments)
         {
             this.formPath = formPath;
             this.kindToken = kindToken;
@@ -249,6 +261,7 @@ public final class FormElementWriter
             this.itemKindToken = itemKindToken;
             this.itemName = itemName;
             this.ownerAttributeName = ownerAttributeName;
+            this.tailSegments = tailSegments;
         }
 
         /** Whether the FQN addresses an event handler on a form ITEM (vs the form root). */
@@ -312,18 +325,18 @@ public final class FormElementWriter
         if (tail == 2)
         {
             // Form-level member or handler: Kind.Name.
-            return new FormMemberRef(formPath, p[rem], p[rem + 1], null, null);
+            return new FormMemberRef(formPath, p[rem], p[rem + 1], null, null, tail);
         }
         if (tail == 4 && isHandlerToken(p[rem + 2]))
         {
             // Item-level handler: ItemKind.ItemName.Handler.Event.
-            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1]);
+            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1], tail);
         }
         if (tail == 4 && isColumnToken(p[rem + 2]) && kindForToken(p[rem]) == Kind.ATTRIBUTE)
         {
             // Attribute column: Attribute.AttrName.Column.ColumnName (issue #295). Only an ATTRIBUTE
             // owns columns - a Field/Table column is part of the ITEM tree and is addressed as an item.
-            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], null, null, p[rem + 1]);
+            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], null, null, p[rem + 1], tail);
         }
         return null;
     }
@@ -5268,6 +5281,20 @@ public final class FormElementWriter
 
     private static Kind addressableKindOf(String eClassName)
     {
+        // A COLUMN is a DATA member, not an item, and it IS addressable - '...Attribute.T.Column.C'
+        // (issue #295). Answering "no kind" for it made the exact marker filter of get_project_errors
+        // call an existing column unresolved, because that filter reads a null as "this class answers
+        // to no token" (issue #295 review).
+        //
+        // NOTE for the #343/#345 merge: that branch reworks this classifier to be HIERARCHICAL
+        // (isOrInherits) and maps AbstractFormAttribute -> Kind.ATTRIBUTE. FormAttributeColumn
+        // INHERITS AbstractFormAttribute, so this arm must stay ABOVE that one there - most specific
+        // first, the ordering rule that branch already applies to the Group base. Without it a column
+        // would classify as ATTRIBUTE and the same false "not found" returns.
+        if (ECLASS_FORM_ATTRIBUTE_COLUMN.equals(eClassName))
+        {
+            return Kind.COLUMN;
+        }
         if (ELEM_BUTTON.equals(eClassName))
         {
             return Kind.BUTTON;

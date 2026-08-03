@@ -396,6 +396,14 @@ def test_delete_form_object_preview_then_confirm():
     cr = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
     assert_ok(cr, "seed form object to delete")
     wait_for_project_ready()
+    # A form-level event handler: it lives in the form's `handlers` containment, which is neither the
+    # items tree nor one of the three named features the old count walked - so a whole-form delete
+    # carried the procedure binding off unmentioned (issue #295 review).
+    h = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn + ".Handler.OnOpen",
+        "properties": [{"name": "procedure", "value": "ZDelFormOnOpen_zz"}]})
+    assert_ok(h, "seed a form-level handler")
+    wait_for_project_ready()
 
     # Preview (confirm omitted): the form is LISTED and nothing is removed.
     pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
@@ -405,6 +413,15 @@ def test_delete_form_object_preview_then_confirm():
     assert form in names, "preview items must list the form: %r" % (pv.structured,)
     assert_contains(pv.structured.get("message", ""), "confirm=true",
                     "preview must instruct re-calling with confirm=true")
+    assert "ZDelFormOnOpen_zz" in names, \
+        "the preview must list the handler the form delete takes with it: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""), "EventHandler",
+                    "the breakdown must name what the walk actually found")
+    # ...and it must NOT be padded with the form's DERIVED data (the form-data structure, the BSL
+    # context types/parameters/events, the standard commands): none of that is authored or persisted,
+    # and counting it turned a small form into a 450-entry prompt (found by this round's live probe).
+    assert len(names) < 60, \
+        "the preview must count authored content, not derived data: %d entries" % (len(names),)
     # The prompt counts the form's CONTENT and points the caller here for the details, so the preview
     # has to list that content too - it used to answer with the BasicForm alone (issue #295 review).
     # A fresh form already carries its auto command bar.

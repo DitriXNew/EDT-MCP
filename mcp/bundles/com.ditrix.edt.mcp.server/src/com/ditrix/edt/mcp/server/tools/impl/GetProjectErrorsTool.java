@@ -1981,8 +1981,13 @@ public class GetProjectErrorsTool implements IMcpTool
      * {@link FormElementWriter.FormMemberRef#formPath}: that field is normalized to the
      * {@code Type.Object.forms.FormName} shape {@code resolveMdForm} needs (plural, lowercase), while
      * a marker renders the singular {@code Form} - and the bilingual expansion would faithfully keep
-     * the plural, matching nothing. The member tail is 2 segments for a form-level member and 4 for
-     * an item-level handler, exactly as {@link FormElementWriter#parse} split it.</p>
+     * the plural, matching nothing. How many segments to cut is taken from
+     * {@link FormElementWriter.FormMemberRef#tailSegments}, i.e. from the shape {@code parse} actually
+     * recognized, not re-derived here: reading it off {@code isItemLevel()} answered 2 for an
+     * attribute COLUMN, whose tail is 4 ({@code Attribute.Rows.Column.Price}), so the scope became
+     * the ATTRIBUTE instead of the form. Since EDT publishes a form member's markers on the content
+     * FORM, that scope matches nothing and the caller gets a false "No Errors Found" - the very
+     * failure issue #312 exists to prevent (issue #295 review).</p>
      *
      * @param member the deferred member probe (its {@code probeFqn} carries the caller's own tokens)
      * @param spellings the member's own scoping spellings
@@ -1992,7 +1997,7 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         List<String> scoped = new ArrayList<>(spellings);
         String[] parts = member.probeFqn.split("\\."); //$NON-NLS-1$
-        int tail = member.ref.isItemLevel() ? 4 : 2;
+        int tail = member.ref.tailSegments;
         if (parts.length > tail)
         {
             String formPrefix = String.join(".", //$NON-NLS-1$

@@ -1193,21 +1193,52 @@ public class DeleteMetadataToolTest
         attributeClass.setName("FormAttribute"); //$NON-NLS-1$
         attributeClass.getEStructuralFeatures().add(nameAttribute(factory));
         attributeClass.getEStructuralFeatures().add(manyContainment(factory, "columns", columnClass)); //$NON-NLS-1$
+        // The named NON-FormItem containments a whole-form delete also takes: the form's own event
+        // handlers, an element's event handlers, and a command's action (an unnamed container holding
+        // a named CommandHandler). None of them is a FormItem, so a walk that counted the items tree
+        // plus three named features could not see them (issue #295 review).
+        EClass eventHandler = factory.createEClass();
+        eventHandler.setName("EventHandler"); //$NON-NLS-1$
+        eventHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass commandHandler = factory.createEClass();
+        commandHandler.setName("CommandHandler"); //$NON-NLS-1$
+        commandHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass actionContainer = factory.createEClass();
+        actionContainer.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
+        EReference actionHandler = factory.createEReference();
+        actionHandler.setName("handler"); //$NON-NLS-1$
+        actionHandler.setEType(commandHandler);
+        actionHandler.setContainment(true);
+        actionContainer.getEStructuralFeatures().add(actionHandler);
+        EReference commandAction = factory.createEReference();
+        commandAction.setName("action"); //$NON-NLS-1$
+        commandAction.setEType(actionContainer);
+        commandAction.setContainment(true);
+        commandClass.getEStructuralFeatures().add(commandAction);
+        formItem.getEStructuralFeatures().add(manyContainment(factory, "handlers", eventHandler)); //$NON-NLS-1$
+
         EClass form = factory.createEClass();
         form.setName("Form"); //$NON-NLS-1$
         form.getEStructuralFeatures().add(manyContainment(factory, "items", formItem)); //$NON-NLS-1$
         form.getEStructuralFeatures().add(manyContainment(factory, "attributes", attributeClass)); //$NON-NLS-1$
         form.getEStructuralFeatures().add(
             manyContainment(factory, "formCommands", commandClass)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(manyContainment(factory, "handlers", eventHandler)); //$NON-NLS-1$
         pkg.getEClassifiers().add(formItem);
         pkg.getEClassifiers().add(columnClass);
         pkg.getEClassifiers().add(commandClass);
         pkg.getEClassifiers().add(attributeClass);
+        pkg.getEClassifiers().add(eventHandler);
+        pkg.getEClassifiers().add(commandHandler);
+        pkg.getEClassifiers().add(actionContainer);
         pkg.getEClassifiers().add(form);
 
         EObject model = new DynamicEObjectImpl(form);
         EObject field = new DynamicEObjectImpl(formItem);
         field.eSet(formItem.getEStructuralFeature("name"), "PriceField"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject itemHandler = new DynamicEObjectImpl(eventHandler);
+        itemHandler.eSet(eventHandler.getEStructuralFeature("name"), "PriceOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)field.eGet(formItem.getEStructuralFeature("handlers"))).add(itemHandler); //$NON-NLS-1$
         ((List<EObject>)model.eGet(form.getEStructuralFeature("items"))).add(field); //$NON-NLS-1$
         EObject attribute = new DynamicEObjectImpl(attributeClass);
         attribute.eSet(attributeClass.getEStructuralFeature("name"), "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1217,14 +1248,20 @@ public class DeleteMetadataToolTest
         ((List<EObject>)model.eGet(form.getEStructuralFeature("attributes"))).add(attribute); //$NON-NLS-1$
         EObject command = new DynamicEObjectImpl(commandClass);
         command.eSet(commandClass.getEStructuralFeature("name"), "Post"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject action = new DynamicEObjectImpl(actionContainer);
+        EObject actionProc = new DynamicEObjectImpl(commandHandler);
+        actionProc.eSet(commandHandler.getEStructuralFeature("name"), "PostRun"); //$NON-NLS-1$ //$NON-NLS-2$
+        action.eSet(actionHandler, actionProc);
+        command.eSet(commandAction, action);
         ((List<EObject>)model.eGet(form.getEStructuralFeature("formCommands"))).add(command); //$NON-NLS-1$
+        EObject formHandler = new DynamicEObjectImpl(eventHandler);
+        formHandler.eSet(eventHandler.getEStructuralFeature("name"), "OnCreateAtServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("handlers"))).add(formHandler); //$NON-NLS-1$
 
         DeleteMetadataTool.FormContentSummary summary =
             DeleteMetadataTool.summarizeFormContentForTest(model);
 
-        assertEquals("the counters and the listed elements must agree", //$NON-NLS-1$
-            summary.total(), summary.elements.size());
-        // EVERY kind the counters cover must be listed, with its type - dropping any of them (or the
+        // EVERY member the prompt counts must be listed, with its type - dropping any of them (or the
         // 'type' field) has to fail here, or the preview could stop promising what it promises.
         List<Object> names = new ArrayList<>();
         for (java.util.Map<String, Object> entry : summary.elements)
@@ -1237,6 +1274,18 @@ public class DeleteMetadataToolTest
         assertTrue("the attribute must be listed: " + names, names.contains("Rows")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the COLUMN must be listed: " + names, names.contains("Price")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the COMMAND must be listed: " + names, names.contains("Post")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The three the feature-named walk could not reach.
+        assertTrue("the FORM-level handler must be listed: " + names, //$NON-NLS-1$
+            names.contains("OnCreateAtServer")); //$NON-NLS-1$
+        assertTrue("the ITEM's handler must be listed: " + names, //$NON-NLS-1$
+            names.contains("PriceOnChange")); //$NON-NLS-1$
+        assertTrue("the command's ACTION handler must be listed: " + names, //$NON-NLS-1$
+            names.contains("PostRun")); //$NON-NLS-1$
+        assertEquals("the unnamed action container is walked through, not listed: " + names, //$NON-NLS-1$
+            7, summary.total());
+        assertTrue("the breakdown is derived from what was found: " + summary.describe(), //$NON-NLS-1$
+            summary.describe().contains("EventHandler") //$NON-NLS-1$
+                && summary.describe().contains("CommandHandler")); //$NON-NLS-1$
     }
 
     /** A fresh {@code name} string attribute (one instance per owning EClass - see above). */
@@ -1267,10 +1316,11 @@ public class DeleteMetadataToolTest
         // understatement issue #331's acceptance criteria call out. The MEMBER branch has counted
         // honestly since the review; this is its twin.
         DeleteMetadataTool.FormContentSummary content = new DeleteMetadataTool.FormContentSummary();
-        content.items = 4;
-        content.attributes = 2;
-        content.columns = 3;
-        content.commands = 1;
+        content.elements.add(descendant("PriceField", "FormField")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("QtyField", "FormField")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("Rows", "FormAttribute")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("Price", "FormAttributeColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("OnCreateAtServer", "EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
 
         int[] seenCount = {0};
         String[] seenSubtitle = {null};
@@ -1280,10 +1330,13 @@ public class DeleteMetadataToolTest
             return DestructiveConsentGate.ConsentDecision.REJECT;
         }).gateFormObjectDelete("Catalog.Products.Form.ItemForm", content, new RecordingWrite()); //$NON-NLS-1$
 
-        assertEquals("the prompt counts the form plus everything its content holds", 11, seenCount[0]); //$NON-NLS-1$
+        assertEquals("the prompt counts the form plus everything its content holds", 6, seenCount[0]); //$NON-NLS-1$
+        // The breakdown is grouped from the entries, so it names the handler it really found instead
+        // of reciting the four categories the old feature walk knew (issue #295 review).
         assertTrue("the prompt must say what is inside: " + seenSubtitle[0], //$NON-NLS-1$
-            seenSubtitle[0].contains("4 item(s)") && seenSubtitle[0].contains("2 attribute(s)") //$NON-NLS-1$ //$NON-NLS-2$
-                && seenSubtitle[0].contains("3 column(s)") && seenSubtitle[0].contains("1 command(s)")); //$NON-NLS-1$ //$NON-NLS-2$
+            seenSubtitle[0].contains("2 FormField") && seenSubtitle[0].contains("1 FormAttribute") //$NON-NLS-1$ //$NON-NLS-2$
+                && seenSubtitle[0].contains("1 FormAttributeColumn") //$NON-NLS-1$
+                && seenSubtitle[0].contains("1 EventHandler")); //$NON-NLS-1$
     }
 
     @Test
