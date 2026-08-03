@@ -2539,8 +2539,15 @@ public class FormElementWriterTest
                 containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
             formAttribute.getEStructuralFeatures().add(
                 containment(f, "columns", formAttributeColumn, true)); //$NON-NLS-1$
+            // A dynamic list is an attribute carrying a DynamicListExtInfo - the shape the table
+            // binding classifies as DYNAMIC_LIST_ATTRIBUTE (issue #295 review).
+            EClass dynamicListExtInfo = f.createEClass();
+            dynamicListExtInfo.setName("DynamicListExtInfo"); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "extInfo", dynamicListExtInfo, false)); //$NON-NLS-1$
             pkg.getEClassifiers().add(typeDescription);
             pkg.getEClassifiers().add(formAttributeColumn);
+            pkg.getEClassifiers().add(dynamicListExtInfo);
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
@@ -2980,6 +2987,154 @@ public class FormElementWriterTest
         assertEquals(Arrays.asList("Rows", "Qty"), segmentsOf(form, "RowsTableQty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNull("a collection has no LineNumber field, so no column may address one", //$NON-NLS-1$
             FormElementWriter.findFormItem(form, "RowsTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableOnAScalarAttributeIsRefusedAndWritesNothing()
+    {
+        // The silent-success case: a bare dataPath naming an attribute that was never retyped to a
+        // collection fell through to the tabular-section branch and reported SUCCESS while writing a
+        // table whose only column addressed '<Attr>.LineNumber' - a field a form attribute does not
+        // have (issue #295 review).
+        EObject form = newForm();
+        EObject plain = newObject(MODEL.formAttribute);
+        plain.eSet(feature(plain, "name"), "Plain"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plain); //$NON-NLS-1$
+
+        String err = FormElementWriter.createTable(form, "PlainTable", null, "Plain", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]);
+
+        assertNotNull("a table on a non-collection attribute must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must say how to fix it", err.contains("ValueTable")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and name the tool that does it", err.contains("modify_metadata")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Nothing was written: neither the table nor the bogus LineNumber column.
+        assertNull("a refused table must leave no item behind", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form, "PlainTable")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findFormItem(form, "PlainTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableOnAnUnknownAttributeIsRefusedAndWritesNothing()
+    {
+        EObject form = newForm();
+        String err = FormElementWriter.createTable(form, "GhostTable", null, "NoSuchAttr", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]);
+
+        assertNotNull("a table on a nonexistent attribute must be refused", err); //$NON-NLS-1$
+        assertTrue(err.contains("NoSuchAttr")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findFormItem(form, "GhostTable")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableBoundInsideACollectionAttributeIsRefused()
+    {
+        // The dotted arm used to win for ANY dotted path, so 'Rows.Price' - a path INTO a collection -
+        // was treated as a tabular section and produced a table on a column with an invented
+        // 'Rows.Price.LineNumber' (issue #295 review, found by self-review before push).
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String err = FormElementWriter.createTable(form, "InsideTable", null, "Rows.Price", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]);
+
+        assertNotNull("a table bound inside a collection attribute must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must point at the row source itself", err.contains("'Rows'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "InsideTable")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findFormItem(form, "InsideTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATabularSectionTableIsStillBoundThroughTheMainObjectAttribute()
+    {
+        // The legitimate dotted shape: the head IS a form attribute (the main object one), and it must
+        // keep reaching the tabular-section arm.
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createTable(form, "Goods", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonList("Product"), null, null, false, new String[1])); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testItemsBoundBelowAnAttributeAreFound()
+    {
+        // What a retype to a collection would strand ABOVE the attribute: an existing field carrying
+        // 'Object.Number' when 'Number' is not (and will not be) a column.
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "NumberField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+
+        assertEquals("the field bound below the attribute must be reported", //$NON-NLS-1$
+            Collections.singletonList("NumberField"), //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(objectAttr));
+
+        // A field bound to the attribute ITSELF is untouched by a retype, so it is not reported.
+        EObject plain = newObject(MODEL.formAttribute);
+        plain.eSet(feature(plain, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plain); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField", null, //$NON-NLS-1$
+            "Price", null, null, false, null)); //$NON-NLS-1$
+        assertTrue(FormElementWriter.itemsBoundBelowAttribute(plain).isEmpty());
+    }
+
+    @Test
+    public void testItemsBoundBelowAColumnAreFoundFromTheFormRoot()
+    {
+        // A COLUMN's eContainer() is its owning ATTRIBUTE, not the form, so scanning from there found
+        // no items at all and every column retype passed the guard (issue #295 review). The scan now
+        // starts at the ROOT container.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        // A field bound two levels deep: Rows.Product.Description.
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "DeepField", null, //$NON-NLS-1$
+            "Rows.Product", null, null, false, null)); //$NON-NLS-1$
+        EObject deep = FormElementWriter.findFormItem(form, "DeepField"); //$NON-NLS-1$
+        EObject path = (EObject)deep.eGet(feature(deep, "dataPath")); //$NON-NLS-1$
+        ((List<String>)path.eGet(feature(path, "segments"))).add("Description"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the item bound below the COLUMN must be found from the form root", //$NON-NLS-1$
+            Collections.singletonList("DeepField"), //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(column));
+    }
+
+    @Test
+    public void testAnItemBoundToAnExistingColumnIsNotReported()
+    {
+        // Collection-to-collection: the column exists, so the field keeps resolving and must not block.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceCell", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+
+        assertTrue("an item bound to a real column is not orphaned", //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(rows).isEmpty());
+    }
+
+    @Test
+    public void testATableOnADynamicListGetsNoInventedColumns()
+    {
+        // A dynamic list's columns are its query fields (EDT fills them) and it has no LineNumber, so
+        // the table is created EMPTY instead of carrying a column that addresses nothing.
+        EObject form = newForm();
+        EObject list = newObject(MODEL.formAttribute);
+        list.eSet(feature(list, "name"), "List"); //$NON-NLS-1$ //$NON-NLS-2$
+        list.eSet(feature(list, "extInfo"), newObject(modelClass("DynamicListExtInfo"))); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", list); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createTable(form, "ListTable", null, "List", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+        assertNotNull(FormElementWriter.findFormItem(form, "ListTable")); //$NON-NLS-1$
+        assertNull("a dynamic list has no LineNumber field to bind a column to", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form, "ListTableLineNumber")); //$NON-NLS-1$
     }
 
     @Test

@@ -582,6 +582,125 @@ public final class FormElementWriter
         return names;
     }
 
+    /**
+     * The names of the form ITEMS that bind THROUGH {@code attribute} into a sub-name it does not own
+     * as a column - the elements a retype to a collection would leave pointing at nothing.
+     *
+     * <p>The mirror of {@link #attributeColumnNames}: that one answers "what would this retype strand
+     * BELOW the attribute", this one "what already points INTO it". Once the attribute holds rows, a
+     * dotted path under it addresses a COLUMN - which is why {@code createField} refuses to build one
+     * for a name that is not a column; an item that predates the retype must not be left in the exact
+     * shape the creator forbids (issue #295 review).</p>
+     *
+     * @param attribute the form attribute about to be retyped
+     * @return the offending item names, empty when nothing binds below it
+     */
+    public static List<String> itemsBoundBelowAttribute(EObject attribute)
+    {
+        List<String> broken = new ArrayList<>();
+        List<String> prefix = ownDataPath(attribute);
+        if (prefix.isEmpty())
+        {
+            return broken;
+        }
+        // The ROOT container, not eContainer(): an attribute's container is the form, but a COLUMN's
+        // is its owning attribute, and starting there would scan a subtree that holds no items at all
+        // - the guard would then pass every column retype by finding nothing (issue #295 review).
+        EObject formModel = EcoreUtil.getRootContainer(attribute);
+        List<String> columns = attributeColumnNames(attribute);
+        // eAllContents, not a hand-rolled recursion: it visits the WHOLE form without a depth budget
+        // that could silently stop before the item that would have blocked the retype, and without a
+        // StackOverflowError on a pathological tree.
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject item = it.next();
+            String[] segments = dataPathSegments(item);
+            if (segments.length > prefix.size() && startsWithIgnoreCase(segments, prefix)
+                && !containsIgnoreCase(columns, segments[prefix.size()]))
+            {
+                broken.add(stringFeature(item, FEATURE_NAME));
+            }
+        }
+        return broken;
+    }
+
+    /**
+     * The data-path PREFIX that addresses {@code member} itself: {@code [Rows]} for a form attribute,
+     * {@code [Rows, Price]} for one of its columns. An item is bound "below" the member when its path
+     * starts with this prefix and carries at least one more segment - matching on the leaf name alone
+     * would never fire for a column, whose name sits at the second segment.
+     *
+     * @param member a form attribute or one of its columns
+     * @return the prefix segments, empty when the member is unnamed
+     */
+    private static List<String> ownDataPath(EObject member)
+    {
+        List<String> path = new ArrayList<>();
+        String name = member == null ? null : stringFeature(member, FEATURE_NAME);
+        if (name == null || name.isEmpty())
+        {
+            return path;
+        }
+        EObject owner = member.eContainer();
+        String ownerName = owner == null ? null : stringFeature(owner, FEATURE_NAME);
+        // A column's owner is the attribute that holds it in `columns`; a form root has no name.
+        if (ownerName != null && !ownerName.isEmpty()
+            && owner.eClass().getEStructuralFeature(FEATURE_COLUMNS) instanceof EReference)
+        {
+            path.add(ownerName);
+        }
+        path.add(name);
+        return path;
+    }
+
+    /** Whether {@code segments} starts with {@code prefix}, compared the way {@code findByName} resolves. */
+    private static boolean startsWithIgnoreCase(String[] segments, List<String> prefix)
+    {
+        for (int i = 0; i < prefix.size(); i++)
+        {
+            if (!prefix.get(i).equalsIgnoreCase(segments[i]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Whether {@code names} holds {@code candidate}, compared the way {@code findByName} resolves. */
+    private static boolean containsIgnoreCase(List<String> names, String candidate)
+    {
+        for (String name : names)
+        {
+            if (name != null && name.equalsIgnoreCase(candidate))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The dot-split segments of an item's bound {@code dataPath}, or an empty array when unbound. */
+    private static String[] dataPathSegments(EObject item)
+    {
+        EObject dataPath = singleReference(item, "dataPath"); //$NON-NLS-1$
+        if (dataPath == null)
+        {
+            return new String[0];
+        }
+        EStructuralFeature segments = dataPath.eClass().getEStructuralFeature("segments"); //$NON-NLS-1$
+        if (segments == null || !(dataPath.eGet(segments) instanceof List<?>))
+        {
+            return new String[0];
+        }
+        List<?> values = (List<?>)dataPath.eGet(segments);
+        String[] parts = new String[values.size()];
+        for (int i = 0; i < values.size(); i++)
+        {
+            parts[i] = String.valueOf(values.get(i));
+        }
+        return parts;
+    }
+
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
     {
@@ -2006,23 +2125,112 @@ public final class FormElementWriter
     }
 
     /**
-     * The form COLLECTION attribute a table's {@code dataPath} addresses, or {@code null} when the
-     * path is not the bare name of a ValueTable / ValueTree form attribute. A table over such an
-     * attribute is bound by the attribute name alone ({@code Rows}), unlike a tabular-section table
-     * ({@code Object.Goods}). Issue #295.
+     * What a table's {@code dataPath} addresses. The cases are NAMED, exhaustive and mutually
+     * exclusive, and every one of them is handled explicitly - so a path can never "fall through"
+     * into the next case's behaviour. Three review findings in a row came from exactly that: a new
+     * case bolted onto a chain of ifs, where an earlier arm silently won (issue #295 review).
+     */
+    private enum TableBinding
+    {
+        /** A ValueTable / ValueTree form attribute: the table shows ITS columns. */
+        COLLECTION_ATTRIBUTE,
+        /** A dynamic-list attribute: EDT auto-fills the query fields, the model knows no columns. */
+        DYNAMIC_LIST_ATTRIBUTE,
+        /** A form attribute that is neither - it has no rows, so no table can bind to it. */
+        SCALAR_ATTRIBUTE,
+        /** A bare name that is no form attribute at all. */
+        UNKNOWN_ATTRIBUTE,
+        /** A dotted path into the metadata: the tabular section the caller resolved columns for. */
+        TABULAR_SECTION,
+        /**
+         * A dotted path INTO a form attribute that owns rows itself ({@code Rows.Price}) - a table
+         * binds to the collection, never to one of its columns.
+         */
+        NESTED_IN_ATTRIBUTE
+    }
+
+    /**
+     * Classifies a table's {@code dataPath} by the NATURE of what it names - not by a chain of
+     * refusals. A dotted path addresses metadata (a tabular section); a bare name addresses a form
+     * attribute, and then the attribute's own shape decides.
      *
      * @param formModel the tx-bound form model
      * @param dataPath the table's data path
-     * @return the collection attribute, or {@code null}
+     * @return the binding, never {@code null}
      */
-    private static EObject collectionAttributeFor(EObject formModel, String dataPath)
+    private static TableBinding tableBindingOf(EObject formModel, String dataPath)
     {
-        if (dataPath.indexOf('.') >= 0)
+        int dot = dataPath.indexOf('.');
+        if (dot > 0)
         {
-            return null;
+            // A dotted path is the tabular-section shape: the head is an OBJECT-typed form attribute
+            // and the tail names a section of that object type, which lives outside this model. The
+            // head does NOT have to be the main attribute - a form can carry a second object-typed
+            // attribute and bind a table to its sections, so keying this on isMainAttribute() would
+            // refuse a legitimate 'BackupOrder.Goods'.
+            //
+            // What IS decidable here is the opposite: an attribute whose own value already holds rows
+            // (a collection, a dynamic list) has no nested row source at all - its sub-names are
+            // columns and query fields - so a dotted path through it addresses something a table
+            // cannot bind to. A SCALAR head is left alone deliberately: telling "String" from
+            // "DocumentObject.SalesOrder" needs the metadata this writer does not see, and guessing
+            // would refuse working forms. Recorded as a gap rather than closed by a heuristic.
+            EObject head = findByName(referenceList(formModel, FEATURE_ATTRIBUTES),
+                dataPath.substring(0, dot));
+            if (head != null && (hasCollectionValueType(head) || isDynamicListAttribute(head)))
+            {
+                return TableBinding.NESTED_IN_ATTRIBUTE;
+            }
+            return TableBinding.TABULAR_SECTION;
         }
         EObject attribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), dataPath);
-        return attribute != null && hasCollectionValueType(attribute) ? attribute : null;
+        if (attribute == null)
+        {
+            return TableBinding.UNKNOWN_ATTRIBUTE;
+        }
+        if (hasCollectionValueType(attribute))
+        {
+            return TableBinding.COLLECTION_ATTRIBUTE;
+        }
+        return isDynamicListAttribute(attribute) ? TableBinding.DYNAMIC_LIST_ATTRIBUTE
+            : TableBinding.SCALAR_ATTRIBUTE;
+    }
+
+    /**
+     * The refusal for a {@code dataPath} no table can bind to, or {@code null} when the binding is
+     * buildable. Answered BEFORE anything is created, so a refused table leaves no trace: the
+     * scalar-attribute case used to fall into the tabular-section branch and report SUCCESS while
+     * writing a table whose only column addressed a {@code <Attr>.LineNumber} that does not exist
+     * (issue #295 review).
+     *
+     * @param binding the classified binding
+     * @param dataPath the table's data path, for the message
+     * @return an actionable refusal, or {@code null}
+     */
+    private static String tableBindingError(TableBinding binding, String dataPath)
+    {
+        if (binding == TableBinding.SCALAR_ATTRIBUTE)
+        {
+            return "Form attribute '" + dataPath + "' is neither a collection nor a dynamic list, so " //$NON-NLS-1$ //$NON-NLS-2$
+                + "a table has no rows to show for it. Set its type first with modify_metadata " //$NON-NLS-1$
+                + "({name:'type', value:{types:[{kind:'ValueTable'}]}}, or ValueTree), or bind the " //$NON-NLS-1$
+                + "table to a tabular section with a dotted dataPath (e.g. 'Object.Goods')."; //$NON-NLS-1$
+        }
+        if (binding == TableBinding.UNKNOWN_ATTRIBUTE)
+        {
+            return "Form attribute '" + dataPath + "' not found - create it and give it a collection " //$NON-NLS-1$ //$NON-NLS-2$
+                + "type (ValueTable / ValueTree) first, or bind the table to a tabular section with a " //$NON-NLS-1$
+                + "dotted dataPath (e.g. 'Object.Goods')."; //$NON-NLS-1$
+        }
+        if (binding == TableBinding.NESTED_IN_ATTRIBUTE)
+        {
+            String head = dataPath.substring(0, dataPath.indexOf('.'));
+            return "'" + dataPath + "' addresses something INSIDE the form attribute '" + head //$NON-NLS-1$ //$NON-NLS-2$
+                + "', but a table binds to the row source itself: use {name:'dataPath', value:'" //$NON-NLS-1$
+                + head + "'}. Its columns are generated from the attribute (or, for a dynamic list, " //$NON-NLS-1$
+                + "added as fields with a dotted dataPath)."; //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**
@@ -2166,10 +2374,19 @@ public final class FormElementWriter
         }
         EObject dynamicListType = MetadataTypeBuilder.dynamicListType(version);
         EStructuralFeature valueTypeFeature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
-        if (dynamicListType != null && valueTypeFeature instanceof EReference)
+        if (dynamicListType == null || !(valueTypeFeature instanceof EReference))
         {
-            attribute.eSet(valueTypeFeature, dynamicListType);
+            // Refuse rather than half-convert: the ext-info classifier is already set, so returning
+            // here would leave an attribute that carries a DynamicListExtInfo while its value type is
+            // still the old one - a list and a collection at once, exactly the state the retype guard
+            // refuses to create from the other direction. The transaction rolls back (issue #295
+            // review).
+            throw new FormValidationException(ToolResult.error(
+                "Cannot build the DynamicList value type for this platform version, so the attribute " //$NON-NLS-1$
+                    + "would be left half-converted (a dynamic-list ext-info on its old type). " //$NON-NLS-1$
+                    + "Nothing was changed.").toJson());
         }
+        attribute.eSet(valueTypeFeature, dynamicListType);
         setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
         // The designer turns on "dynamic data reading" for a new dynamic list (the model default is
         // false); mirror it so an MCP-created list matches a designer-created one.
@@ -2899,6 +3116,14 @@ public final class FormElementWriter
             return "A table needs a 'dataPath' property naming the tabular section it shows " //$NON-NLS-1$
                 + "(e.g. {name:'dataPath', value:'Object.Goods'})."; //$NON-NLS-1$
         }
+        // Classify the binding FIRST and refuse an unbuildable one before anything is created, so a
+        // refused table leaves nothing behind (issue #295 review).
+        TableBinding binding = tableBindingOf(formModel, dataPath);
+        String bindingErr = tableBindingError(binding, dataPath);
+        if (bindingErr != null)
+        {
+            return bindingErr;
+        }
         if (findItem(formModel, name) != null)
         {
             return ERR_ITEM_EXISTS + name;
@@ -2943,39 +3168,48 @@ public final class FormElementWriter
         addTableAddition(formModel, table, FEATURE_SEARCH_CONTROL_ADDITION,
             russianAutoNames ? RU_SUFFIX_SEARCH_CONTROL : SUFFIX_SEARCH_CONTROL,
             "SearchControlAddition", "SearchControlAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
-        // Auto-columns. A table over a COLLECTION form attribute (ValueTable / ValueTree) takes its
-        // columns from the ATTRIBUTE's own columns - the form model knows them, and the metadata-aware
-        // caller cannot: there is no tabular section behind such a table. It also gets NO LineNumber
-        // column, because an in-memory collection has no such field and the path would resolve to
-        // nothing (issue #295).
-        EObject collectionAttribute = collectionAttributeFor(formModel, dataPath);
-        if (collectionAttribute != null)
+        // Auto-columns, dispatched on the SAME named binding the refusal above used - every case is
+        // handled, so none can inherit another's behaviour.
+        switch (binding)
         {
-            for (EObject column : referenceList(collectionAttribute, FEATURE_COLUMNS))
-            {
-                String columnName = stringFeature(column, FEATURE_NAME);
-                if (columnName != null && !columnName.isEmpty())
+            case COLLECTION_ATTRIBUTE:
+                // The columns come from the ATTRIBUTE itself: the form model knows them and the
+                // metadata-aware caller cannot, since no tabular section stands behind such a table.
+                // No LineNumber either - an in-memory collection has no such field, so the path would
+                // resolve to nothing (issue #295).
+                for (EObject column : referenceList(
+                    findByName(referenceList(formModel, FEATURE_ATTRIBUTES), dataPath), FEATURE_COLUMNS))
                 {
-                    buildColumnField(formModel, table, name + columnName,
-                        dataPath + "." + columnName, russianAutoNames); //$NON-NLS-1$
+                    String columnName = stringFeature(column, FEATURE_NAME);
+                    if (columnName != null && !columnName.isEmpty())
+                    {
+                        buildColumnField(formModel, table, name + columnName,
+                            dataPath + "." + columnName, russianAutoNames); //$NON-NLS-1$
+                    }
                 }
-            }
-        }
-        else
-        {
-            // A tabular-section table: the standard LineNumber column, then one column per TS
-            // attribute (all input fields, like the designer's table output).
-            String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
-            buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, //$NON-NLS-1$
-                russianAutoNames);
-            if (columnAttributeNames != null)
-            {
-                for (String attr : columnAttributeNames)
+                break;
+            case DYNAMIC_LIST_ATTRIBUTE:
+                // A dynamic list's columns are its QUERY fields, which EDT auto-fills - the form model
+                // knows none of them, and a list has no LineNumber field either. So the table is
+                // created empty and the caller outputs the fields it wants with a dotted dataPath
+                // ('List.Ref'). Generating a LineNumber here wrote a column addressing nothing.
+                break;
+            case TABULAR_SECTION:
+            default:
+                // The designer's tabular-section table: the standard LineNumber column, then one input
+                // column per TS attribute the metadata-aware caller resolved.
+                String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
+                buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, //$NON-NLS-1$
+                    russianAutoNames);
+                if (columnAttributeNames != null)
                 {
-                    buildColumnField(formModel, table, name + attr, dataPath + "." + attr, //$NON-NLS-1$
-                        russianAutoNames);
+                    for (String attr : columnAttributeNames)
+                    {
+                        buildColumnField(formModel, table, name + attr, dataPath + "." + attr, //$NON-NLS-1$
+                            russianAutoNames);
+                    }
                 }
-            }
+                break;
         }
         recordKind(table, createdKind);
         return null;

@@ -23,7 +23,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EPackage;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EcoreFactory;
+import org.eclipse.emf.ecore.EcorePackage;
+import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
 import com.google.gson.JsonObject;
@@ -954,8 +961,14 @@ public class DeleteMetadataToolTest
     @Test
     public void testFormMemberBranchRunsItsWriteOnlyWhenConsentIsGranted()
     {
-        // Drives the MEMBER branch's own dispatch (the Column shape), not just the shared helper: a
-        // branch re-routed straight to its write would fail here.
+        // Pins the MEMBER branch's authorization step (the Column shape): given ITS preview and ITS
+        // write, the write runs only on ALLOW.
+        //
+        // What this does NOT prove, stated plainly because the comment here used to claim it did: it
+        // calls gateFormMemberDelete directly, so re-routing deleteFormMember() straight to
+        // performFormDelete() would leave this test green. Driving the real dispatch needs a resolved
+        // project + BM services, which a headless unit test has none of; the production call site is
+        // one line (see deleteFormMember) and is what a reviewer must read.
         for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
             DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
         {
@@ -979,6 +992,7 @@ public class DeleteMetadataToolTest
     @Test
     public void testFormObjectBranchRunsItsWriteOnlyWhenConsentIsGranted()
     {
+        // Same scope as its twin above: the authorization STEP, not the branch's wiring to it.
         for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
             DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
         {
@@ -995,6 +1009,51 @@ public class DeleteMetadataToolTest
             "Catalog.Products.Form.ItemForm", new DeleteMetadataTool.FormContentSummary(), allowed); //$NON-NLS-1$
         assertEquals("an allowed form-object delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
         assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePreviewListsTheSingularElementsADeleteTakesToo()
+    {
+        // A Table owns its command bar, context menu, tooltip and three additions through SINGULAR
+        // containments - real addressable elements that EcoreUtil.remove takes with it. The walk
+        // covered only `items` and `columns`, so the preview promised the table alone (issue #295
+        // review). The features are not listed by hand: anything single-valued that IS a FormItem.
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/deletepreview"); //$NON-NLS-1$
+        EClass formItem = factory.createEClass();
+        formItem.setName("FormItem"); //$NON-NLS-1$
+        EAttribute itemName = factory.createEAttribute();
+        itemName.setName("name"); //$NON-NLS-1$
+        itemName.setEType(EcorePackage.Literals.ESTRING);
+        formItem.getEStructuralFeatures().add(itemName);
+        EReference bar = factory.createEReference();
+        bar.setName("autoCommandBar"); //$NON-NLS-1$
+        bar.setEType(formItem);
+        bar.setContainment(true);
+        formItem.getEStructuralFeatures().add(bar);
+        EReference dataPath = factory.createEReference();
+        dataPath.setName("dataPath"); //$NON-NLS-1$
+        dataPath.setEType(EcorePackage.Literals.EOBJECT);
+        dataPath.setContainment(true);
+        formItem.getEStructuralFeatures().add(dataPath);
+        pkg.getEClassifiers().add(formItem);
+
+        EObject table = new DynamicEObjectImpl(formItem);
+        EObject commandBar = new DynamicEObjectImpl(formItem);
+        commandBar.eSet(itemName, "GoodsCommandBar"); //$NON-NLS-1$
+        table.eSet(bar, commandBar);
+        // A non-element containment must NOT be counted as a removed element.
+        table.eSet(dataPath, EcoreFactory.eINSTANCE.createEObject());
+
+        List<java.util.Map<String, Object>> out = new java.util.ArrayList<>();
+        DeleteMetadataTool.collectDescendantsForTest(table, out);
+
+        assertEquals("the singular contained element must be listed, the data path must not", //$NON-NLS-1$
+            1, out.size());
+        assertEquals("GoodsCommandBar", out.get(0).get("name")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

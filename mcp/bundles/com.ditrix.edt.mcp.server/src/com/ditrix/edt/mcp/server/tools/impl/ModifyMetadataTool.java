@@ -4294,6 +4294,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             throw new FormValidationException(listErr);
         }
+        String boundItemsErr = refuseRetypeThatOrphansItems(member, normProp);
+        if (boundItemsErr != null)
+        {
+            throw new FormValidationException(boundItemsErr);
+        }
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
         // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
@@ -4453,6 +4458,38 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return false;
+    }
+
+    /**
+     * Refuses a retype to a collection that would leave EXISTING form items bound below the attribute
+     * to a name it will not own as a column. The mirror of
+     * {@link #refuseRetypeThatOrphansColumns}: that one guards what hangs BELOW the attribute, this
+     * one what already points INTO it. Once the attribute holds rows a dotted path under it names a
+     * COLUMN, so a field carrying {@code Object.Number} across a retype of {@code Object} to
+     * ValueTable ends up in exactly the shape {@code createField} refuses to build - silently, since
+     * nothing revalidates existing items (issue #295 review).
+     *
+     * @param member the form member being modified
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return a ready JSON error naming the items, or {@code null}
+     */
+    private static String refuseRetypeThatOrphansItems(EObject member, JsonObject normProp)
+    {
+        if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name"))) //$NON-NLS-1$
+            || !requestsCollectionType(normProp))
+        {
+            return null;
+        }
+        List<String> bound = FormElementWriter.itemsBoundBelowAttribute(member);
+        if (bound.isEmpty())
+        {
+            return null;
+        }
+        return ToolResult.error("Retyping '" + FormStructureReader.nameOf(member) + "' to a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "collection would leave " + bound.size() + " form item(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+            + String.join(", ", bound) + ") bound to a name the collection does not own: under a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "ValueTable / ValueTree a dotted data path addresses a COLUMN. Delete those items with " //$NON-NLS-1$
+            + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.").toJson(); //$NON-NLS-1$
     }
 
     /**

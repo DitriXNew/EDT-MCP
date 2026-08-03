@@ -17,6 +17,9 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.common.util.TreeIterator;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -110,9 +113,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * THE single point where a destructive delete is authorized: asks, and invokes {@code write} ONLY
-     * on ALLOW. Every gated branch routes through here, so "did we ask before mutating?" is one
-     * testable question rather than one per call site.
+     * The authorization point of the FORM delete branches: asks, and invokes {@code write} ONLY on
+     * ALLOW, so "did we ask before mutating?" is one question for both of them instead of one per
+     * call site.
+     *
+     * <p>It is NOT the tool's only gate, and this javadoc used to claim it was: the mdclass
+     * top-object / member deletes and the XDTO delete still call
+     * {@link DestructiveConsentGate#getInstance()} directly (see the {@code requireConsent} call
+     * sites below). Those paths are older than the form branches and are not routed through here
+     * yet; at least the XDTO one asks BEFORE it looks its target up, so a typo raises a destructive
+     * prompt and only then answers "not found" - the ordering defect this branch fixed for the form
+     * paths. Recorded rather than quietly widened: rerouting them is a change to code this branch
+     * does not otherwise touch.</p>
      *
      * @param preview what the user is being asked to authorize
      * @param write the mutation, invoked only when consent is granted
@@ -745,36 +757,89 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static FormContentSummary readFormObjectContent(IProject project, MdObject mdForm)
     {
+        // Resolving the BM services is NOT best-effort: when they are unavailable the delete cannot
+        // happen either, so that is a DETERMINISTIC refusal and it must reach the caller before the
+        // consent gate. Swallowing it here asked the user to authorize a delete that would then fail
+        // below the authorization point with the very error the prompt had hidden (issue #295 review).
+        FormElementWriter.FormEditContext fctx = FormElementWriter.editContextFor(project, mdForm);
         try
         {
-            FormElementWriter.FormEditContext fctx =
-                FormElementWriter.editContextFor(project, mdForm);
             return FormElementWriter.readEditableForm(fctx, "DeleteFormContentPreview", //$NON-NLS-1$
-                (formModel, tx) ->
-                {
-                    FormContentSummary summary = new FormContentSummary();
-                    // The same recursive items walk the member preview uses, run from the form ROOT.
-                    List<Map<String, Object>> items = new ArrayList<>();
-                    collectItemDescendants(formModel, items);
-                    summary.items = items.size();
-                    for (EObject attribute : FormStructureReader.getReferenceList(formModel,
-                        KEY_ATTRIBUTES))
-                    {
-                        summary.attributes++;
-                        summary.columns +=
-                            FormStructureReader.getReferenceList(attribute, KEY_COLUMNS).size();
-                    }
-                    summary.commands =
-                        FormStructureReader.getReferenceList(formModel, KEY_FORM_COMMANDS).size();
-                    return summary;
-                });
+                (formModel, tx) -> summarizeFormContent(formModel));
         }
-        catch (Exception e) // NOSONAR the prompt must degrade, never fail the delete
+        catch (Exception e) // NOSONAR only the CONTENT read degrades - see above
         {
+            // A form with no editable content model still deletes; only the prompt's wording degrades.
             Activator.logWarning("Could not read the form content for the delete prompt: " //$NON-NLS-1$
                 + unwrapCauseMessage(e));
             return new FormContentSummary();
         }
+    }
+
+    /**
+     * Counts everything the delete removes with the form: the items TREE (including the singular
+     * containments a form carries - its auto command bar, and every element's context menu and
+     * extended tooltip), the attributes and their columns, and the commands.
+     *
+     * <p>The items walk is its own, not {@link #collectItemDescendants}: that one lists the
+     * {@code items} / {@code columns} the MEMBER preview reports on the wire, and a form ROOT also
+     * owns the singular containments above - a hand-placed button under the auto command bar is
+     * removed by the delete, so a prompt that ignored it understated its own destruction (issue #295
+     * review). Bounded by {@link FormStructureReader#MAX_NODES}, because this walks a whole form and
+     * a {@code StackOverflowError} is an {@link Error} no {@code catch (Exception)} would stop.</p>
+     *
+     * @param formModel the tx-bound form model
+     * @return the counts
+     */
+    private static FormContentSummary summarizeFormContent(EObject formModel)
+    {
+        FormContentSummary summary = new FormContentSummary();
+        summary.items = countFormItems(formModel);
+        for (EObject attribute : FormStructureReader.getReferenceList(formModel, KEY_ATTRIBUTES))
+        {
+            summary.attributes++;
+            summary.columns += FormStructureReader.getReferenceList(attribute, KEY_COLUMNS).size();
+        }
+        summary.commands = FormStructureReader.getReferenceList(formModel, KEY_FORM_COMMANDS).size();
+        return summary;
+    }
+
+    /**
+     * Counts every contained FORM ITEM under {@code formModel}, whichever containment holds it.
+     *
+     * <p>Walks {@code eAllContents} and keeps what IS a {@code FormItem} - deliberately not a
+     * hand-written list of features. The first version of this counter named
+     * {@code items}/{@code autoCommandBar}/{@code contextMenu}/{@code extendedTooltip} explicitly and
+     * therefore missed a table's three additions (search string, view status, search control) and
+     * whatever the next form model adds; those are addressable elements, and deleting the form
+     * removes them, so leaving them out understated the prompt. Asking the metamodel which objects are
+     * items cannot fall behind the metamodel. The iterator also removes the recursion, so no
+     * {@code StackOverflowError} (an {@link Error}, uncatchable by the callers) is possible; the
+     * {@link FormStructureReader#MAX_NODES} bound still caps a pathological form.</p>
+     *
+     * @param formModel the tx-bound form model
+     * @return the number of contained form items
+     */
+    private static int countFormItems(EObject formModel)
+    {
+        EClassifier formItem = formModel.eClass().getEPackage() == null ? null
+            : formModel.eClass().getEPackage().getEClassifier("FormItem"); //$NON-NLS-1$
+        if (!(formItem instanceof EClass))
+        {
+            return 0;
+        }
+        int counted = 0;
+        // The bound counts VISITS, not matches: bounding matches would let a form full of non-item
+        // objects walk unboundedly while the javadoc claimed a cap.
+        int visits = FormStructureReader.MAX_NODES;
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext() && visits > 0; visits--)
+        {
+            if (((EClass)formItem).isInstance(it.next()))
+            {
+                counted++;
+            }
+        }
+        return counted;
     }
 
     /**
@@ -2052,22 +2117,45 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Walks the item's contained {@code items} subtree depth-first, appending each descendant as a
-     * {name, type} map (the same {@code getReferenceList} / {@code nameOf} walk the form reader uses),
-     * so the preview lists what a container delete cascades. The item ITSELF is not added.
+     * Walks the item's contained descendants depth-first, appending each as a {name, type} map (the
+     * same {@code getReferenceList} / {@code nameOf} accessors the form reader uses), so the preview
+     * lists what a container delete cascades. The item ITSELF is not added.
+     *
+     * <p>Covers the {@code items} subtree, a collection attribute's {@code columns}, AND the SINGULAR
+     * containments an element owns - its auto command bar, context menu, extended tooltip and a
+     * table's three additions. Every one of them is a real addressable element that
+     * {@code EcoreUtil.remove} takes with its owner: deleting a Table removed its command bar and
+     * additions while the preview promised only the table, which is the same understatement the
+     * columns were added to fix (issue #295 review).</p>
      */
+    /**
+     * Test seam for {@link #collectItemDescendants}: the walk decides what a destructive preview
+     * promises, so it is verified directly instead of through a live form.
+     *
+     * @param item the element to descend from
+     * @param out receives one {name, type} entry per contained descendant
+     */
+    static void collectDescendantsForTest(EObject item, List<Map<String, Object>> out)
+    {
+        collectItemDescendants(item, out);
+    }
+
     private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
     {
-        // A collection-typed form ATTRIBUTE owns its columns by containment, so the confirmed
-        // EcoreUtil.remove takes them with it. They are not in the `items` tree, so without this the
-        // preview would promise to remove the attribute alone while silently dropping every column -
-        // a two-phase confirm that understates its own destruction (issue #295 review).
         for (EObject column : FormStructureReader.getReferenceList(item, KEY_COLUMNS))
         {
             Map<String, Object> entry = new java.util.LinkedHashMap<>();
             entry.put("name", FormStructureReader.nameOf(column)); //$NON-NLS-1$
             entry.put("type", column.eClass().getName()); //$NON-NLS-1$
             out.add(entry);
+        }
+        for (EObject satellite : singularElementsOf(item))
+        {
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("name", FormStructureReader.nameOf(satellite)); //$NON-NLS-1$
+            entry.put("type", satellite.eClass().getName()); //$NON-NLS-1$
+            out.add(entry);
+            collectItemDescendants(satellite, out);
         }
         for (EObject child : FormStructureReader.getReferenceList(item, KEY_ITEMS))
         {
@@ -2077,6 +2165,39 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             out.add(entry);
             collectItemDescendants(child, out);
         }
+    }
+
+    /**
+     * The SINGLE-valued containments of {@code item} that hold a form ELEMENT - asked of the
+     * metamodel, not listed by hand, so a model that grows another one cannot slip past the preview.
+     * A containment holding something that is not an item (a data path, a type description) is not an
+     * element and is skipped.
+     *
+     * @param item the element to inspect
+     * @return its singular contained elements, in metamodel order
+     */
+    private static List<EObject> singularElementsOf(EObject item)
+    {
+        List<EObject> found = new ArrayList<>();
+        EClassifier formItem = item.eClass().getEPackage() == null ? null
+            : item.eClass().getEPackage().getEClassifier("FormItem"); //$NON-NLS-1$
+        if (!(formItem instanceof EClass))
+        {
+            return found;
+        }
+        for (EReference reference : item.eClass().getEAllReferences())
+        {
+            if (!reference.isContainment() || reference.isMany())
+            {
+                continue;
+            }
+            Object value = item.eGet(reference);
+            if (value instanceof EObject && ((EClass)formItem).isInstance(value))
+            {
+                found.add((EObject)value);
+            }
+        }
+        return found;
     }
 
     /** Mutable carrier for the form-delete preview read task so tx-bound EObjects never escape. */

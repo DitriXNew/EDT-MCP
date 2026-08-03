@@ -106,8 +106,13 @@ public final class FormStructureReader
     /** The Russian language CODE; selects the {@code nameRu} event name over the English {@code name}. */
     private static final String LANG_RU = "ru"; //$NON-NLS-1$
 
-    /** Upper bound on total visited item nodes for {@link #render}, guarding a pathological form. */
-    private static final int MAX_NODES = 5000;
+    /**
+     * Upper bound on total visited item nodes for {@link #render}, guarding a pathological form.
+     * Shared with the other whole-form walks (the delete prompt's content count) so one form-wide
+     * traversal budget is stated once: an unbounded recursion would raise a {@code StackOverflowError},
+     * which is an {@link Error} and would escape every {@code catch (Exception)} on the way out.
+     */
+    public static final int MAX_NODES = 5000;
 
     /** The root-owner label used in the Event handlers table for a form-level handler. */
     private static final String FORM_OWNER_LABEL = "(form)"; //$NON-NLS-1$
@@ -628,8 +633,17 @@ public final class FormStructureReader
         return String.join(", ", names); //$NON-NLS-1$
     }
 
-    /** The value of a single-valued reference feature, or {@code null} when absent/unset. */
-    private static EObject getSingleReference(EObject object, String featureName)
+    /**
+     * The value of a single-valued reference feature, or {@code null} when absent/unset. Public
+     * alongside {@link #getReferenceList}: a caller walking a form has to reach the SINGULAR
+     * containments too (the auto command bar, a context menu, an extended tooltip), and reading them
+     * through a second hand-rolled accessor is how the two walks drift apart.
+     *
+     * @param object the owner to read from, may be {@code null}
+     * @param featureName the single-valued reference name
+     * @return the referenced object, or {@code null}
+     */
+    public static EObject getSingleReference(EObject object, String featureName)
     {
         if (object == null)
         {

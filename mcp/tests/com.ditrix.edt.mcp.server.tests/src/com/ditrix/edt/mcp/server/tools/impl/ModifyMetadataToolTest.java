@@ -1551,6 +1551,96 @@ public class ModifyMetadataToolTest
     }
 
     @Test
+    public void testARetypeThatOrphansExistingItemsIsRefusedBeforeThePrompt()
+    {
+        // Driven through formRetypeVerdict, the point the property branch's pre-check calls, NOT
+        // through the FormElementWriter helper: computing the guard and never consulting it passes a
+        // helper-level test, which is exactly the hole a revert exposed here.
+        //
+        // The link it still cannot pin, said plainly: formRetypePreflight's own call to
+        // formRetypeVerdict needs a resolved FormEditContext, so removing THAT line would not turn
+        // this red. One line, at the pre-check.
+        String verdict = neverAsking().formRetypeVerdict(null, Version.LATEST,
+            attributeWithAnItemBoundBelowIt(), Collections.singletonList(retypeToCollectionProperty()),
+            report());
+
+        assertNotNull("a retype that strands bound items must be refused", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must name the item: " + verdict, verdict.contains("NumberField")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and say how to clear it: " + verdict, //$NON-NLS-1$
+            verdict.contains("delete_metadata") || verdict.contains("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A form attribute {@code Object} living on a form that also holds a field bound to
+     * {@code Object.Number} - the shape a retype to a collection would leave pointing at nothing.
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject attributeWithAnItemBoundBelowIt()
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = formLikePackage();
+        EClass attributeClass = (EClass)pkg.getEClassifier("FormAttribute"); //$NON-NLS-1$
+
+        EClass dataPathClass = factory.createEClass();
+        dataPathClass.setName("DataPath"); //$NON-NLS-1$
+        EAttribute segments = factory.createEAttribute();
+        segments.setName("segments"); //$NON-NLS-1$
+        segments.setEType(EcorePackage.Literals.ESTRING);
+        segments.setUpperBound(-1);
+        dataPathClass.getEStructuralFeatures().add(segments);
+
+        EClass itemClass = factory.createEClass();
+        itemClass.setName("FormField"); //$NON-NLS-1$
+        EAttribute itemName = factory.createEAttribute();
+        itemName.setName("name"); //$NON-NLS-1$
+        itemName.setEType(EcorePackage.Literals.ESTRING);
+        itemClass.getEStructuralFeatures().add(itemName);
+        EReference itemPath = factory.createEReference();
+        itemPath.setName("dataPath"); //$NON-NLS-1$
+        itemPath.setEType(dataPathClass);
+        itemPath.setContainment(true);
+        itemClass.getEStructuralFeatures().add(itemPath);
+        EReference nested = factory.createEReference();
+        nested.setName("items"); //$NON-NLS-1$
+        nested.setEType(itemClass);
+        nested.setContainment(true);
+        nested.setUpperBound(-1);
+        itemClass.getEStructuralFeatures().add(nested);
+
+        EClass formClass = factory.createEClass();
+        formClass.setName("Form"); //$NON-NLS-1$
+        EReference attributes = factory.createEReference();
+        attributes.setName("attributes"); //$NON-NLS-1$
+        attributes.setEType(attributeClass);
+        attributes.setContainment(true);
+        attributes.setUpperBound(-1);
+        formClass.getEStructuralFeatures().add(attributes);
+        EReference items = factory.createEReference();
+        items.setName("items"); //$NON-NLS-1$
+        items.setEType(itemClass);
+        items.setContainment(true);
+        items.setUpperBound(-1);
+        formClass.getEStructuralFeatures().add(items);
+        pkg.getEClassifiers().add(dataPathClass);
+        pkg.getEClassifiers().add(itemClass);
+        pkg.getEClassifiers().add(formClass);
+
+        EObject form = new DynamicEObjectImpl(formClass);
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(attributeClass.getEStructuralFeature("name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((java.util.List<EObject>)form.eGet(attributes)).add(attribute);
+
+        EObject field = new DynamicEObjectImpl(itemClass);
+        field.eSet(itemName, "NumberField"); //$NON-NLS-1$
+        EObject path = new DynamicEObjectImpl(dataPathClass);
+        ((java.util.List<String>)path.eGet(segments)).add("Object"); //$NON-NLS-1$
+        ((java.util.List<String>)path.eGet(segments)).add("Number"); //$NON-NLS-1$
+        field.eSet(itemPath, path);
+        ((java.util.List<EObject>)form.eGet(items)).add(field);
+        return attribute;
+    }
+
+    @Test
     public void testACollectionTypeOnAPlainAttributeIsNotBlockedByThatGuard()
     {
         // The guard is scoped to the conflict: an attribute that is NOT a dynamic list still reaches
