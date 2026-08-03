@@ -1534,6 +1534,36 @@ public class ModifyMetadataToolTest
     }
 
     @Test
+    public void testGivingACollectionTypeToADynamicListIsRefusedBeforeThePrompt()
+    {
+        // Writing only the valueType would leave the DynamicListExtInfo attached: the attribute would
+        // export as a collection AND still count as a dynamic list, able to take columns while a stale
+        // query described it. The tool refuses instead of dropping the caller's list configuration -
+        // and, being decidable from the model, it refuses ABOVE the gate (issue #295 review).
+        String verdict = neverAsking().formRetypeVerdict(null, Version.LATEST, dynamicListAttribute(),
+            Collections.singletonList(retypeToCollectionProperty()), report());
+
+        assertNotNull("a collection type on a dynamic list must be refused", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must say WHAT blocks it: " + verdict, //$NON-NLS-1$
+            verdict.contains("DYNAMIC LIST") && verdict.contains("DynamicListExtInfo")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and HOW to clear it: " + verdict, //$NON-NLS-1$
+            verdict.contains("delete_metadata")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACollectionTypeOnAPlainAttributeIsNotBlockedByThatGuard()
+    {
+        // The guard is scoped to the conflict: an attribute that is NOT a dynamic list still reaches
+        // the type builder (here: the headless provider limit), never the list refusal.
+        String verdict = neverAsking().formRetypeVerdict(null, Version.LATEST, collectionAttribute(),
+            Collections.singletonList(retypeToCollectionProperty()), report());
+
+        assertNotNull(verdict);
+        assertFalse("a plain attribute must not be refused as a dynamic list: " + verdict, //$NON-NLS-1$
+            verdict.contains("DYNAMIC LIST")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheDynamicListPreflightRefusesAnUnresolvableMainTable()
     {
         // The main table used to be resolved only inside the write callback, so a nonexistent one
@@ -1658,6 +1688,33 @@ public class ModifyMetadataToolTest
         return attribute;
     }
 
+    /** An attribute already configured as a dynamic list: it carries a {@code DynamicListExtInfo}. */
+    private static EObject dynamicListAttribute()
+    {
+        EPackage pkg = formLikePackage();
+        EClass attributeClass = (EClass)pkg.getEClassifier("FormAttribute"); //$NON-NLS-1$
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(attributeClass.getEStructuralFeature("name"), "List"); //$NON-NLS-1$ //$NON-NLS-2$
+        attribute.eSet(attributeClass.getEStructuralFeature("extInfo"), //$NON-NLS-1$
+            new DynamicEObjectImpl((EClass)pkg.getEClassifier("DynamicListExtInfo"))); //$NON-NLS-1$
+        return attribute;
+    }
+
+    /** {name:'type', value:{types:[{kind:'ValueTable'}]}} - the retype the dynamic-list guard blocks. */
+    private static JsonObject retypeToCollectionProperty()
+    {
+        JsonObject kind = new JsonObject();
+        kind.addProperty("kind", "ValueTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonArray types = new JsonArray();
+        types.add(kind);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.add("value", spec); //$NON-NLS-1$
+        return prop;
+    }
+
     /** A COLUMN of a collection attribute: it owns no columns of its own, but is retyped like one. */
     private static EObject plainColumn()
     {
@@ -1685,18 +1742,31 @@ public class ModifyMetadataToolTest
         columnClass.getEStructuralFeatures().add(columnName);
         columnClass.getEStructuralFeatures().add(typeReference(factory, typeDescription));
 
+        EClass listExtInfo = factory.createEClass();
+        listExtInfo.setName("DynamicListExtInfo"); //$NON-NLS-1$
+
         EClass attributeClass = factory.createEClass();
         attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+        EAttribute attributeName = factory.createEAttribute();
+        attributeName.setName("name"); //$NON-NLS-1$
+        attributeName.setEType(EcorePackage.Literals.ESTRING);
+        attributeClass.getEStructuralFeatures().add(attributeName);
         EReference columns = factory.createEReference();
         columns.setName("columns"); //$NON-NLS-1$
         columns.setEType(columnClass);
         columns.setContainment(true);
         columns.setUpperBound(-1);
         attributeClass.getEStructuralFeatures().add(columns);
+        EReference extInfo = factory.createEReference();
+        extInfo.setName("extInfo"); //$NON-NLS-1$
+        extInfo.setEType(EcorePackage.Literals.EOBJECT);
+        extInfo.setContainment(true);
+        attributeClass.getEStructuralFeatures().add(extInfo);
         attributeClass.getEStructuralFeatures().add(typeReference(factory, typeDescription));
 
         pkg.getEClassifiers().add(typeDescription);
         pkg.getEClassifiers().add(columnClass);
+        pkg.getEClassifiers().add(listExtInfo);
         pkg.getEClassifiers().add(attributeClass);
         return pkg;
     }

@@ -4289,6 +4289,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             throw new FormValidationException(orphanErr);
         }
+        String listErr = refuseCollectionRetypeOnADynamicList(member, normProp);
+        if (listErr != null)
+        {
+            throw new FormValidationException(listErr);
+        }
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
         // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
@@ -4412,28 +4417,77 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        List<String> columns = FormElementWriter.attributeColumnNames(member);
-        if (columns.isEmpty())
+        if (FormElementWriter.attributeColumnNames(member).isEmpty())
         {
             return null;
         }
+        // Collection-to-collection (ValueTable to ValueTree) keeps an owner the columns can live on.
+        return requestsCollectionType(normProp) ? null : orphanColumnsError(member);
+    }
+
+    /**
+     * Whether a {@code valueType} spec names an IN-MEMORY collection kind (ValueTable / ValueTree).
+     * One reader for the two guards that both turn on "is the caller asking for a collection".
+     *
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return {@code true} when at least one requested type item is a collection kind
+     */
+    private static boolean requestsCollectionType(JsonObject normProp)
+    {
         JsonElement spec = normProp.get(KEY_VALUE);
-        if (spec != null && spec.isJsonObject())
+        if (spec == null || !spec.isJsonObject())
         {
-            JsonElement types = spec.getAsJsonObject().get("types"); //$NON-NLS-1$
-            if (types != null && types.isJsonArray())
+            return false;
+        }
+        JsonElement types = spec.getAsJsonObject().get("types"); //$NON-NLS-1$
+        if (types == null || !types.isJsonArray())
+        {
+            return false;
+        }
+        for (JsonElement item : types.getAsJsonArray())
+        {
+            if (item.isJsonObject()
+                && MetadataTypeBuilder.isCollectionKind(asString(item.getAsJsonObject().get("kind")))) //$NON-NLS-1$
             {
-                for (JsonElement item : types.getAsJsonArray())
-                {
-                    if (item.isJsonObject()
-                        && MetadataTypeBuilder.isCollectionKind(asString(item.getAsJsonObject().get("kind")))) //$NON-NLS-1$
-                    {
-                        return null;
-                    }
-                }
+                return true;
             }
         }
-        return orphanColumnsError(member);
+        return false;
+    }
+
+    /**
+     * Refuses giving a collection type to an attribute that is already a DYNAMIC LIST. Writing only
+     * the {@code valueType} would leave the {@code DynamicListExtInfo} attached, so the exported
+     * attribute would be a collection AND still answer {@code isDynamicListAttribute} - it could then
+     * take columns while a stale query / main table kept describing it. That state cannot exist in the
+     * designer, and this branch is what made it reachable at all (issue #295 review).
+     *
+     * <p>The tool REFUSES rather than dropping the list configuration silently, for the same reason
+     * {@link #refuseRetypeThatOrphansColumns} refuses instead of deleting columns: the ext-info holds
+     * content the caller authored (the query text, the main table), the request says "make it a
+     * collection" and not "discard my query", and the consent prompt the caller answered speaks of a
+     * type change only - stripping the list under it would destroy something nobody authorized.</p>
+     *
+     * @param member the form member being modified
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return a ready JSON error, or {@code null} when nothing conflicts
+     */
+    private static String refuseCollectionRetypeOnADynamicList(EObject member, JsonObject normProp)
+    {
+        if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name"))) //$NON-NLS-1$
+            || !requestsCollectionType(normProp)
+            || !FormElementWriter.isDynamicListAttribute(member))
+        {
+            return null;
+        }
+        String name = FormStructureReader.nameOf(member);
+        return ToolResult.error("Form attribute '" + name + "' is configured as a DYNAMIC LIST (it " //$NON-NLS-1$ //$NON-NLS-2$
+            + "carries a DynamicListExtInfo with its query / main table), and a dynamic list cannot " //$NON-NLS-1$
+            + "also hold an in-memory collection type: the attribute would be exported as a collection " //$NON-NLS-1$
+            + "while still counting as a list, with the old query left describing it. The list " //$NON-NLS-1$
+            + "configuration is not dropped for you - delete the attribute with delete_metadata " //$NON-NLS-1$
+            + "('...Attribute." + name + "') and create it again with the collection type, or keep the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "dynamic list and set its data with 'queryText' / 'mainTable'.").toJson(); //$NON-NLS-1$
     }
 
     /**

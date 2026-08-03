@@ -2910,6 +2910,44 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testAMainCollectionAttributeStillHasItsColumnsValidated()
+    {
+        // The column check used to hang off "neither a dynamic list nor the main object attribute",
+        // so a collection attribute that ALSO carries main=true (a generated Object attribute retyped
+        // to ValueTable) took the main shortcut: any tail was accepted and the field bound to a column
+        // that does not exist (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Object", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        rows.eSet(feature(rows, "main"), Boolean.TRUE); //$NON-NLS-1$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "GhostOnMain", null, //$NON-NLS-1$
+            "Object.NoSuchColumn", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("main must not switch off column validation on a collection", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing column", err.contains("NoSuchColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "GhostOnMain")); //$NON-NLS-1$
+
+        // ...and a column that DOES exist is still accepted on the very same attribute.
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceOnMain", null, //$NON-NLS-1$
+            "Object.Price", null, null, false, null)); //$NON-NLS-1$
+        assertEquals(Arrays.asList("Object", "Price"), segmentsOf(form, "PriceOnMain")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAMainNonCollectionAttributeKeepsItsObjectSubAttributeShortcut()
+    {
+        // The other side of the same branch: the main OBJECT attribute's sub-attributes live outside
+        // the form model, so a dotted path on it stays accepted unchecked.
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "NumberField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testCreateFieldRejectsAnUnknownColumnOnACollectionAttribute()
     {
         // Widening the dotted path must not widen it to ANY tail: a column that does not exist is

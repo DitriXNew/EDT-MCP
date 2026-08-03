@@ -2784,12 +2784,17 @@ public final class FormElementWriter
                 + "(e.g. {name:'dataPath', value:'Price'})."; //$NON-NLS-1$
         }
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
-        // head form attribute. Two heads are valid for a dotted path:
+        // head form attribute, and WHICH head it is decides what the tail may name:
+        //   - a COLLECTION attribute (ValueTable / ValueTree, e.g. "Rows.Price"): the tail must name // NOSONAR explanatory prose, not commented-out code
+        //     one of ITS columns - the only sub-name such an attribute has, so it is checkable here; // NOSONAR explanatory prose, not commented-out code
         //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields // NOSONAR explanatory prose, not commented-out code
-        //     (auto-filled by EDT - not a model attribute); // NOSONAR explanatory prose, not commented-out code
+        //     (auto-filled by EDT - not a model attribute), so it is NOT checkable here; // NOSONAR explanatory prose, not commented-out code
         //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of // NOSONAR explanatory prose, not commented-out code
-        //     the object type, like the designer's bound object fields.
-        // Validate the head attribute, and require one of those two heads when a dotted path is used.
+        //     the object TYPE, likewise outside this model. // NOSONAR explanatory prose, not commented-out code
+        // The collection case is decided FIRST and on its own: it used to hang off "neither a list nor
+        // main", so a collection attribute that also carried main=true (a generated Object attribute
+        // retyped to ValueTable) took the main shortcut and had its columns validated by nobody - any
+        // tail was accepted and the field bound to nothing (issue #295 review).
         int dot = attrName.indexOf('.');
         String headAttr = dot > 0 ? attrName.substring(0, dot) : attrName;
         EObject boundAttribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), headAttr);
@@ -2798,13 +2803,19 @@ public final class FormElementWriter
             return "Form attribute '" + headAttr + "' not found - create it first, then bind the field " //$NON-NLS-1$ //$NON-NLS-2$
                 + "to it (so the data path resolves)."; //$NON-NLS-1$
         }
-        if (dot > 0 && !isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
+        if (dot > 0)
         {
-            //   - a COLLECTION attribute (ValueTable / ValueTree) that OWNS a column of that name: the // NOSONAR explanatory prose, not commented-out code
-            //     visual counterpart of the FormAttributeColumn, without which a collection attribute // NOSONAR explanatory prose, not commented-out code
-            //     could hold data no form element could ever show (issue #295). // NOSONAR explanatory prose, not commented-out code
             String columnName = attrName.substring(dot + 1);
-            if (!hasCollectionValueType(boundAttribute))
+            if (hasCollectionValueType(boundAttribute))
+            {
+                if (findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName) == null)
+                {
+                    return "Form attribute '" + headAttr + "' has no column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                        + "'. Create it first with create_metadata on '...Attribute." + headAttr //$NON-NLS-1$
+                        + ".Column." + columnName + "', then bind the field to it."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            else if (!isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
             {
                 return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + "dynamic list, nor a collection attribute, nor the form's main object attribute. " //$NON-NLS-1$
@@ -2812,12 +2823,6 @@ public final class FormElementWriter
                     + "dynamic-list column (e.g. 'List.Number', where the list has a custom query), for " //$NON-NLS-1$
                     + "a ValueTable / ValueTree attribute's column (e.g. 'Rows.Price'), or for an " //$NON-NLS-1$
                     + "object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
-            }
-            if (findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName) == null)
-            {
-                return "Form attribute '" + headAttr + "' has no column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
-                    + "'. Create it first with create_metadata on '...Attribute." + headAttr //$NON-NLS-1$
-                    + ".Column." + columnName + "', then bind the field to it."; //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
         if (findItem(formModel, name) != null)
