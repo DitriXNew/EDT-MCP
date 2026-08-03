@@ -81,10 +81,9 @@ def test_apply_a_discovered_fixable_marker():
         # The fix mutated the extension (model + disk); the per-test reset only covers the
         # BASE, so revert + re-sync the extension here to keep the whole tree clean.
         reset_all_fixtures()
-        try:
-            call("clean_project", {"projectName": TESTS_PROJECT})
-        except Exception:
-            pass
+        r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
+        assert_ok(r_clean, "clean_project after apply_quick_fix must succeed, "
+                  "or the extension model/tree stays polluted for later tests")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
