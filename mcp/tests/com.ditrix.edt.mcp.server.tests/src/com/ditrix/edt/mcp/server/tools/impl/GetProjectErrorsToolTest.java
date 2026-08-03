@@ -1445,23 +1445,22 @@ public class GetProjectErrorsToolTest
     @Test
     public void testEveryValidFirstStepIsAContainmentAndStaysPossible()
     {
-        // The table of valid first steps is DERIVED from the grammar catalogue, not hand-written:
-        // every nested kind the catalogue publishes, mapped through the resolver's own token ->
-        // feature map, crossed with every type the gate can address. A new putTokens entry is
-        // therefore covered the moment it is added - it cannot slip past a list someone forgot to
-        // extend. (An earlier version of this check pinned SEVEN hand-picked pairs while the map
-        // holds many more: dimensions, resources, enumValues, accountingFlags, recalculations and
-        // the rest were never checked at all.)
-        int checked = 0;
-        for (String token : MetadataTypeUtils.nestedKindCanonicalTokens())
+        // Walks THE grammar the gate resolves against - MetadataNodeResolver's own token -> feature
+        // map - not a catalogue that mirrors it. Pinning the mirror was vacuous: a token added to
+        // the resolver alone is live in address resolution while the mirror, and so the check,
+        // knows nothing about it.
+        Map<String, Integer> ownersPerFeature = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : MetadataNodeResolver.childFeatureByToken().entrySet())
         {
-            String feature = MetadataNodeResolver.featureNameForKind(token);
-            if (feature == null)
-            {
-                // Form / Handler / Predefined / Subsystem and the form-only item kinds: owned by
-                // other grammars, never a mdclass first step.
-                continue;
-            }
+            String token = entry.getKey();
+            String feature = entry.getValue();
+            // PARITY with the catalogue the object filters advertise. A token live in the resolver
+            // but unpublished there is drift: addresses resolve through it that the filter never
+            // offers, and no bilingual expansion exists for it.
+            assertNotNull("resolver token is not published by the kind catalogue - the two have " //$NON-NLS-1$
+                + "drifted apart: " + token, MetadataTypeUtils.resolveNestedKind(token)); //$NON-NLS-1$
+
+            ownersPerFeature.putIfAbsent(feature, Integer.valueOf(0));
             for (EClassifier classifier : MdClassPackage.eINSTANCE.getEClassifiers())
             {
                 if (!(classifier instanceof EClass)
@@ -1483,11 +1482,35 @@ public class GetProjectErrorsToolTest
                 String address = type + ".X." + token + ".Y"; //$NON-NLS-1$ //$NON-NLS-2$
                 assertTrue("a valid first step must stay POSSIBLE: " + address, //$NON-NLS-1$
                     GetProjectErrorsTool.possibleAddressShape(address));
-                checked++;
+                ownersPerFeature.put(feature, Integer.valueOf(ownersPerFeature.get(feature) + 1));
             }
         }
-        assertTrue("the derived table must not be empty - the catalogue walk broke", checked > 50); //$NON-NLS-1$
+
+        // PER KIND, not in aggregate. A total floor lets a whole family fall to zero - a renamed
+        // feature, or an owner that lost its containment - while the other families hold the count
+        // up and nothing is reported.
+        for (Map.Entry<String, Integer> entry : ownersPerFeature.entrySet())
+        {
+            if (DEEPER_ONLY_FEATURES.contains(entry.getKey()))
+            {
+                assertEquals("legal only deeper, so it must have NO first-step owner: " //$NON-NLS-1$
+                    + entry.getKey(), Integer.valueOf(0), entry.getValue());
+                continue;
+            }
+            assertTrue("no owner type carries this first-step feature any more: " + entry.getKey(), //$NON-NLS-1$
+                entry.getValue().intValue() > 0);
+        }
     }
+
+    /**
+     * Features whose kinds are legal only DEEPER in an address: {@code methods} hangs off an
+     * HTTPService URLTemplate and {@code parameters} off a WebService Operation, so neither may have
+     * a first-step owner. Named explicitly so a new kind that resolves to nothing is a failure
+     * rather than another silent zero.
+     */
+    private static final Set<String> DEEPER_ONLY_FEATURES =
+        new HashSet<>(Arrays.asList("methods", "parameters")); //$NON-NLS-1$ //$NON-NLS-2$
+
 
     @Test
     public void testKindsThatAreLegalOnlyDeeperAreNotValidFirstSteps()
@@ -1519,23 +1542,15 @@ public class GetProjectErrorsToolTest
         assertFalse("a scalar feature must NOT satisfy the owner question", //$NON-NLS-1$
             MetadataTypeUtils.typeCanContain("Catalog", "uuid")); //$NON-NLS-1$ //$NON-NLS-2$
 
-        // ...and every containment the gate really asks about must still answer yes, or the
-        // tightening would turn real addresses into false misses.
-        String[][] gateAsks = { {"Catalog", "attributes"}, {"Catalog", "tabularSections"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            {"Catalog", "forms"}, {"Catalog", "templates"}, {"Catalog", "commands"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-            {"Catalog", "predefined"}, {"DocumentJournal", "columns"} }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        for (String[] pair : gateAsks)
-        {
-            EClass owner = (EClass)MdClassPackage.eINSTANCE.getEClassifier(pair[0]);
-            assertNotNull("the metamodel must model " + pair[0], owner); //$NON-NLS-1$
-            EStructuralFeature feature = owner.getEStructuralFeature(pair[1]);
-            assertTrue("the gate asks about it, so it must be a CONTAINMENT reference: " //$NON-NLS-1$
-                + pair[0] + "." + pair[1], //$NON-NLS-1$
-                feature instanceof EReference && ((EReference)feature).isContainment());
-            assertTrue("a real gate containment must still answer yes: " //$NON-NLS-1$
-                + pair[0] + "." + pair[1], //$NON-NLS-1$
-                MetadataTypeUtils.typeCanContain(pair[0], pair[1]));
-        }
+        // The mdclass first steps are covered exhaustively by the derived walk above. These two are
+        // NOT in that table - forms and predefined are reached by their own grammars, never through
+        // the resolver's child-feature map - so they are pinned here.
+        assertTrue("Catalog must be able to own forms", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "forms")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("Catalog must be able to own predefined items", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "predefined")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a Document holds no predefined items", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Document", "predefined")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
