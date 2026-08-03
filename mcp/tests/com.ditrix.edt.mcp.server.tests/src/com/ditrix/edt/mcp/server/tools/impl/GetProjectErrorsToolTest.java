@@ -2168,6 +2168,110 @@ public class GetProjectErrorsToolTest
             singleton("P"), r.incompleteFor.get(requested)); //$NON-NLS-1$
     }
 
+
+    @Test
+    public void testEveryModelIndependentVerdictIsReachedWithoutAModel()
+    {
+        // The full list of decisions this filter can make with NO model at all. Each must be
+        // settled by shape alone, because each is impossible in EVERY configuration - not merely
+        // absent from the ones we managed to read.
+        for (String impossible : new String[] {
+            "Catalog.Products.",                    // trailing empty segment //$NON-NLS-1$
+            ".Catalog.Products",                    // leading empty segment //$NON-NLS-1$
+            "Catalog..Products",                    // doubled separator //$NON-NLS-1$
+            ".",                                    // nothing but a separator //$NON-NLS-1$
+            "NoSuchType_e2e.X",                     // unknown leading TYPE token //$NON-NLS-1$
+            "Catalog.Products.Fom.ItemForm",        // misspelt nested KIND //$NON-NLS-1$
+            "Catalog.Products.Module"})             // odd arity: no grammar has it //$NON-NLS-1$
+        {
+            assertFalse("must be impossible by shape alone: " + impossible, //$NON-NLS-1$
+                GetProjectErrorsTool.possibleAddressShape(impossible));
+        }
+        // ...and every documented grammar must stay POSSIBLE, or a real address would be called
+        // missing without anyone looking for it.
+        for (String possible : new String[] {
+            "Catalog.Products", //$NON-NLS-1$
+            "Catalog.Products.Attribute.Weight", //$NON-NLS-1$
+            "Catalog.Products.TabularSection.Goods.Attribute.Price", //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm", //$NON-NLS-1$
+            "CommonForm.Settings", //$NON-NLS-1$
+            "CommonForm.Settings.Field.Code", //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm.Field.Code.Handler.OnChange", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
+            "Catalog.Products.Predefined.Sample", //$NON-NLS-1$
+            "XDTOPackage.Exchange"}) //$NON-NLS-1$
+        {
+            assertTrue("a documented grammar must stay possible: " + possible, //$NON-NLS-1$
+                GetProjectErrorsTool.possibleAddressShape(possible));
+        }
+    }
+
+    @Test
+    public void testAnImpossibleAddressStaysMissingEvenBesideAnUnreadableProject()
+    {
+        // THE pair. In a workspace with one closed or still-indexing EDT project, every candidate
+        // used to be marked undecided - including addresses whose impossibility needs no model at
+        // all. The whole call then became "could not decide" instead of naming the typo, so
+        // model-dependent uncertainty overrode model-independent knowledge.
+        String impossible = "Catalog.Products.Fom.ItemForm"; //$NON-NLS-1$
+        String possible = "Catalog.NoSuchObject_e2e"; //$NON-NLS-1$
+        List<String> asked = Arrays.asList(impossible, possible);
+
+        // A readable project that holds neither, plus one that cannot be consulted at all.
+        GetProjectErrorsTool.ProjectResolution readable = GetProjectErrorsTool.resolveInProject(
+            project("open"), readModel(), MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            Collections.singletonList(possible));
+        GetProjectErrorsTool.ProjectResolution unreadable = GetProjectErrorsTool.projectDecision(
+            closedProject("archived"), null, null, Collections.singletonList(possible)); //$NON-NLS-1$
+
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(r, asked, Arrays.asList(readable, unreadable));
+
+        // The POSSIBLE address is still undecided - nobody could rule it out.
+        assertNotNull("a possible address must stay undecided beside an unreadable project", //$NON-NLS-1$
+            r.error);
+        assertTrue("and the refusal must name it", r.error.contains(possible)); //$NON-NLS-1$
+        assertFalse("but NOT the impossible one - that one was never in doubt", //$NON-NLS-1$
+            r.error.contains(impossible));
+
+        // With only the impossible address asked, there is nothing to refuse at all: it is a plain
+        // miss, exactly as in a workspace where every project is readable.
+        GetProjectErrorsTool.AddressResolution onlyImpossible =
+            new GetProjectErrorsTool.AddressResolution();
+        GetProjectErrorsTool.foldProjectDecisions(onlyImpossible,
+            Collections.singletonList(impossible),
+            Arrays.asList(readable, GetProjectErrorsTool.projectDecision(
+                closedProject("archived"), null, null, Collections.<String> emptyList()))); //$NON-NLS-1$
+        assertNull("an impossible address must never cause a refusal", onlyImpossible.error); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(impossible), onlyImpossible.notFound);
+    }
+
+
+    @Test
+    public void testAnImpossibleAddressIsNeverOfferedToAnyProject()
+    {
+        // The wiring, not just the predicate: an address settled by shape must keep its place among
+        // the candidates (it still needs a verdict) while being withheld from the projects, because
+        // that is exactly what stops one unreadable project from calling it "undecided".
+        GetProjectErrorsTool.AddressResolution r = new GetProjectErrorsTool.AddressResolution();
+        List<String> candidates = new ArrayList<>();
+        List<String> resolvable = GetProjectErrorsTool.classifyRequestedAddresses(Arrays.asList(
+            "Catalog.Products",                 // possible //$NON-NLS-1$
+            "Catalog.Products.Fom.ItemForm",    // impossible: misspelt kind //$NON-NLS-1$
+            "XDTOPackage.P.ObjectType.T",       // unsupported family //$NON-NLS-1$
+            "Catalog.Products.",                // impossible: empty segment //$NON-NLS-1$
+            "NoSuchType_e2e.X"),                // impossible: unknown head //$NON-NLS-1$
+            r, candidates);
+
+        assertEquals("every address that still needs a verdict keeps request order", //$NON-NLS-1$
+            Arrays.asList("Catalog.Products", "Catalog.Products.Fom.ItemForm", //$NON-NLS-1$ //$NON-NLS-2$
+                "Catalog.Products.", "NoSuchType_e2e.X"), candidates); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ONLY the possible address may be offered to a project", //$NON-NLS-1$
+            Collections.singletonList("Catalog.Products"), resolvable); //$NON-NLS-1$
+        assertEquals("the XDTO member is a family verdict, not a candidate", //$NON-NLS-1$
+            1, r.unsupported.size());
+    }
+
     // ========== helpers ==========
     /** A two-level subsystem chain: parent -> child. */
     private static Subsystem chain(String parentName, String childName)

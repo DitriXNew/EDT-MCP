@@ -710,27 +710,8 @@ public class GetProjectErrorsTool implements IMcpTool
     {
         AddressResolution resolution = new AddressResolution();
 
-        // Shape-only verdicts first: an unsupported family needs no model at all, and taking it out
-        // here keeps it out of the "could not be inspected" accounting below.
         List<String> candidates = new ArrayList<>();
-        for (String fqn : objectFqns)
-        {
-            // A MALFORMED address is never "unsupported" - it addresses nothing at all, so it must
-            // reach the ordinary not-found verdict rather than a family-level explanation.
-            String canonical = canonicalAddress(fqn);
-            String unsupportedReason = canonical == null ? null : unsupportedAddressReason(canonical);
-            if (unsupportedReason != null)
-            {
-                Map<String, String> entry = new LinkedHashMap<>();
-                entry.put("fqn", fqn); //$NON-NLS-1$
-                entry.put("reason", unsupportedReason); //$NON-NLS-1$
-                resolution.unsupported.add(entry);
-            }
-            else
-            {
-                candidates.add(fqn);
-            }
-        }
+        List<String> resolvable = classifyRequestedAddresses(objectFqns, resolution, candidates);
         if (candidates.isEmpty())
         {
             return resolution;
@@ -750,7 +731,7 @@ public class GetProjectErrorsTool implements IMcpTool
                     ProjectContext.of(project.getName()).resolveConfiguration();
                 config = configResult.ok() ? configResult.configuration() : null;
             }
-            ProjectResolution decided = projectDecision(project, bmModel, config, candidates);
+            ProjectResolution decided = projectDecision(project, bmModel, config, resolvable);
             if (decided != null)
             {
                 perProject.add(decided);
@@ -758,6 +739,59 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         foldProjectDecisions(resolution, candidates, perProject);
         return resolution;
+    }
+
+
+    /**
+     * Splits the requested addresses by what can be decided WITHOUT a model, before any project is
+     * consulted.
+     *
+     * <p>Three outcomes, and the order between them is the point:</p>
+     * <ul>
+     *   <li>an XDTO MEMBER is {@code objectsUnsupported} - a family this filter cannot scope at
+     *       all;</li>
+     *   <li>an address whose SHAPE is impossible ({@link #possibleAddressShape}) stays a candidate,
+     *       so it still gets a verdict and keeps its place in request order, but is NOT offered to
+     *       any project. It is already settled: no configuration anywhere could hold it;</li>
+     *   <li>everything else is resolvable and goes to the projects.</li>
+     * </ul>
+     *
+     * <p>Withholding the impossible ones is what keeps model-INDEPENDENT knowledge above
+     * model-DEPENDENT uncertainty. Handing them to the projects meant one closed or still-indexing
+     * project marked them "undecided", and a call that should have named the typo was refused
+     * instead - the same inversion that once made an external-objects project look unreadable
+     * rather than incapable.</p>
+     *
+     * @param objectFqns the requested addresses, in request order
+     * @param resolution the resolution being filled (its {@code unsupported} list is populated here)
+     * @param candidates out-parameter: every address that still needs a verdict, in request order
+     * @return the subset the projects are actually asked about
+     */
+    static List<String> classifyRequestedAddresses(List<String> objectFqns,
+        AddressResolution resolution, List<String> candidates)
+    {
+        List<String> resolvable = new ArrayList<>();
+        for (String fqn : objectFqns)
+        {
+            // A MALFORMED address is never "unsupported" - it addresses nothing at all, so it must
+            // reach the ordinary not-found verdict rather than a family-level explanation.
+            String canonical = canonicalAddress(fqn);
+            String unsupportedReason = canonical == null ? null : unsupportedAddressReason(canonical);
+            if (unsupportedReason != null)
+            {
+                Map<String, String> entry = new LinkedHashMap<>();
+                entry.put("fqn", fqn); //$NON-NLS-1$
+                entry.put("reason", unsupportedReason); //$NON-NLS-1$
+                resolution.unsupported.add(entry);
+                continue;
+            }
+            candidates.add(fqn);
+            if (possibleAddressShape(fqn))
+            {
+                resolvable.add(fqn);
+            }
+        }
+        return resolvable;
     }
 
     /**
@@ -1465,11 +1499,33 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static boolean enumerableAddressShape(String normFqn, int yoSegmentCount)
     {
-        if (yoSegmentCount > MAX_ENUMERATED_YO_SEGMENTS)
+        return yoSegmentCount <= MAX_ENUMERATED_YO_SEGMENTS && possibleAddressShape(normFqn);
+    }
+
+    /**
+     * Whether {@code fqn} could name a node in ANY configuration - a decision that needs no model.
+     *
+     * <p>Every grammar this filter documents is tried; a string that fits none of them addresses
+     * nothing anywhere. That is KNOWLEDGE, not a gap: an empty segment, an unknown leading TYPE
+     * token, an unrecognized nested KIND and an odd segment count are impossible whatever any
+     * project contains, and no amount of reading a model could turn them into a hit.</p>
+     *
+     * <p>Single source for the shape question: the enumeration gate above asks it too, so the two
+     * cannot drift into disagreeing about what a supported address looks like.</p>
+     *
+     * @param fqn the requested address, as the caller wrote it
+     * @return {@code true} when some configuration could hold it
+     */
+    static boolean possibleAddressShape(String fqn)
+    {
+        String canonical = canonicalAddress(fqn);
+        if (canonical == null)
         {
             return false;
         }
-        return PredefinedWriter.parseRef(normFqn) != null
+        String normFqn = MetadataTypeUtils.normalizeFqn(canonical);
+        return SubsystemUtils.parseSubsystemPath(normFqn) != null
+            || PredefinedWriter.parseRef(normFqn) != null
             || FormElementWriter.parseFormPath(normFqn) != null
             || FormElementWriter.parse(normFqn) != null
             || isMdclassChain(normFqn);
