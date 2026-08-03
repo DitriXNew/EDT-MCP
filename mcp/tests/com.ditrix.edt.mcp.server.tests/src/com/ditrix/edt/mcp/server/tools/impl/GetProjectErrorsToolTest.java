@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,6 +37,7 @@ import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
@@ -48,6 +50,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -1438,6 +1441,57 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testTheOwnerQuestionSeesFeaturesInHERITedFromABaseEClass()
+    {
+        // The whole owner gate rests on one unstated assumption: that asking an EClass for a feature
+        // finds features declared on its ANCESTORS too, not only its own. Nothing tested it. If it
+        // were false, every type that inherits 'forms' or 'attributes' from a base class would be
+        // judged unable to hold them, and real addresses would be reported as not found.
+        // Which of the gate's features is inherited is the metamodel's business, not ours, so the
+        // control DISCOVERS one instead of assuming. Written the other way round it passed
+        // vacuously: 'forms' turns out to be declared on Catalog itself.
+        // Measured 2026-08-03: EVERY containment the gate currently asks about (attributes,
+        // tabularSections, forms, templates, commands, columns, predefined) is declared on the
+        // owner's own EClass, so no pair among them can exercise inheritance. The assumption still
+        // has to hold for the next feature that isn't, so the control tests the MECHANISM: find any
+        // type token the gate can be asked about whose feature is inherited, and prove it is seen.
+        String[] tokens = {"Catalog", "Document", "DocumentJournal", "ChartOfAccounts", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "InformationRegister", "AccumulationRegister", "Report", "DataProcessor", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "BusinessProcess", "Task", "Enum", "ExchangePlan"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        String inheritedType = null;
+        String inheritedFeature = null;
+        for (String token : tokens)
+        {
+            EClass owner = (EClass)MdClassPackage.eINSTANCE.getEClassifier(token);
+            if (owner == null)
+            {
+                continue;
+            }
+            for (EStructuralFeature feature : owner.getEAllStructuralFeatures())
+            {
+                if (feature.getEContainingClass() != owner)
+                {
+                    inheritedType = token;
+                    inheritedFeature = feature.getName();
+                    break;
+                }
+            }
+            if (inheritedFeature != null)
+            {
+                break;
+            }
+        }
+        // Self-check: if the metamodel ever declares every one of these locally, this control stops
+        // testing inheritance - and says so, instead of passing on nothing.
+        assertNotNull("the metamodel has no inherited feature on any gate-addressable type - control is vacuous", //$NON-NLS-1$
+            inheritedFeature);
+
+        assertTrue("an inherited feature must satisfy the owner question: " //$NON-NLS-1$
+            + inheritedType + "." + inheritedFeature, //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain(inheritedType, inheritedFeature));
+    }
+
+    @Test
     public void testEveryOwnerAPredefinedAddressCanMeanIsScoped()
     {
         // Both spellings of the owner AND of the item exist, in the crossed arrangement: M[yo]d
@@ -2244,7 +2298,14 @@ public class GetProjectErrorsToolTest
             "Catalog.Products.Predefined.Sample", // Catalogs DO hold predefined items //$NON-NLS-1$
             "ChartOfAccounts.Main.Predefined.Cash", // ...and so do charts of accounts //$NON-NLS-1$
             "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
-            "Catalog.Products.Predefined.Sample", //$NON-NLS-1$
+            // The owner question must survive a RUSSIAN owner token and a Russian nested kind: it
+            // resolves the type through the bilingual catalogue before asking the metamodel, and a
+            // regression there would reject a legitimate address written the other way round.
+            fromCp(0x0421, 0x043f, 0x0440, 0x0430, 0x0432, 0x043e, 0x0447, 0x043d, 0x0438, 0x043a)
+                + ".Products." //$NON-NLS-1$
+                + fromCp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0447, 0x043d, 0x0430, 0x044f,
+                    0x0427, 0x0430, 0x0441, 0x0442, 0x044c)
+                + ".Goods", //$NON-NLS-1$
             "XDTOPackage.Exchange"}) //$NON-NLS-1$
         {
             assertTrue("a documented grammar must stay possible: " + possible, //$NON-NLS-1$

@@ -495,14 +495,6 @@ public final class MetadataTypeUtils
     }
 
     /**
-     * Resolves any recognized form of a metadata type name to its canonical English singular form.
-     * Supports English singular/plural and Russian singular/plural forms.
-     * Case-insensitive.
-     *
-     * @param typeName type name in any recognized form (e.g. "Catalogs", "Справочник", "document")
-     * @return canonical English singular form (e.g. "Catalog"), or {@code null} if not recognized
-     */
-    /**
      * Whether the metadata TYPE named by {@code typeToken} really carries a containment feature
      * called {@code featureName} - asked of the EDT metamodel itself, with NO model loaded.
      *
@@ -537,6 +529,14 @@ public final class MetadataTypeUtils
         return ((EClass)classifier).getEStructuralFeature(featureName) != null;
     }
 
+    /**
+     * Resolves any recognized form of a metadata type name to its canonical English singular form.
+     * Supports English singular/plural and Russian singular/plural forms.
+     * Case-insensitive.
+     *
+     * @param typeName type name in any recognized form (e.g. "Catalogs", "Справочник", "document")
+     * @return canonical English singular form (e.g. "Catalog"), or {@code null} if not recognized
+     */
     public static String toEnglishSingular(String typeName)
     {
         if (typeName == null || typeName.isEmpty())
