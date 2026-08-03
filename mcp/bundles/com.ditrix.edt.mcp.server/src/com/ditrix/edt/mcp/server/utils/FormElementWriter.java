@@ -640,6 +640,38 @@ public final class FormElementWriter
     }
 
     /**
+     * The names of the form items bound to {@code attribute} ITSELF (a one-segment data path) that
+     * need it to hold ROWS - today the tables. Retyping the attribute to a scalar leaves such a table
+     * bound to something that no longer has rows, which is exactly the shape
+     * {@link #createTable} refuses to build: without this the tool was stricter about CREATING a form
+     * than about editing one into the same state (issue #295 review).
+     *
+     * @param attribute the form attribute about to be retyped
+     * @return the offending item names, empty when nothing needs its rows
+     */
+    public static List<String> rowConsumersBoundToAttribute(EObject attribute)
+    {
+        List<String> consumers = new ArrayList<>();
+        String attributeName = attribute == null ? null : stringFeature(attribute, FEATURE_NAME);
+        EObject formModel = attribute == null ? null : contentFormOf(attribute);
+        if (attributeName == null || attributeName.isEmpty() || formModel == null)
+        {
+            return consumers;
+        }
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject item = it.next();
+            String[] segments = dataPathSegments(item);
+            if (segments.length == 1 && attributeName.equalsIgnoreCase(segments[0])
+                && ECLASS_TABLE.equals(item.eClass().getName()))
+            {
+                consumers.add(stringFeature(item, FEATURE_NAME));
+            }
+        }
+        return consumers;
+    }
+
+    /**
      * The CONTENT form {@code member} lives in: the nearest ancestor that owns both the {@code items}
      * tree and the {@code attributes} list. A group owns {@code items} but no attributes, and the
      * form's own container (its {@code BasicForm}, the owner object, the configuration) owns neither -
@@ -3152,7 +3184,22 @@ public final class FormElementWriter
             String columnName = nextDot > 0 ? tail.substring(0, nextDot) : tail;
             if (hasCollectionValueType(boundAttribute))
             {
-                if (findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName) == null)
+                EObject column = findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName);
+                // A path that CONTINUES past the column ('Rows.Price.Amount') walks into the column's
+                // own type. Refused only when the column is PROVABLY primitive - a String or a Number
+                // has no members, so no tail can resolve. A reference / composite / not-yet-typed
+                // column is accepted: its members live in metadata this writer cannot read, and
+                // refusing on "unknown" would break the legitimate 'Rows.Product.Description'. The
+                // third option - accepting a path that is provably impossible - is the silent success
+                // this branch has been closing all along (issue #295 review).
+                if (column != null && nextDot > 0 && hasPrimitiveValueType(column))
+                {
+                    return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                        + "', but that column holds a primitive value, which has no nested members. " //$NON-NLS-1$
+                        + "Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
+                        + "." + columnName + "'})."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                if (column == null)
                 {
                     return "Form attribute '" + headAttr + "' has no column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
                         + "'. Create it first with create_metadata on '...Attribute." + headAttr //$NON-NLS-1$

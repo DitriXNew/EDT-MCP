@@ -1483,6 +1483,89 @@ public class ModifyMetadataToolTest
     }
 
     @Test
+    public void testARetypeAwayFromACollectionIsRefusedWhileATableNeedsItsRows()
+    {
+        // The early return on "no columns" let a column-less collection be retyped to a scalar while a
+        // table was still bound to it - the create path refuses to build that very shape, so the edit
+        // path was the looser of the two (issue #295 review).
+        //
+        // The spec is one the type builder refuses on its own SHAPE, so removing the guard makes
+        // this fail on the assertion below rather than crash in the platform type provider: a
+        // revert has to red HERE, for this reason, or it proves nothing about this guard.
+        String verdict = neverAsking().formRetypeVerdict(null, Version.LATEST,
+            attributeWithATableBoundToIt(), Collections.singletonList(malformedTypeProperty()),
+            report());
+
+        assertNotNull("a retype that strands a table must be refused", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must name the table: " + verdict, verdict.contains("RowsTable")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and say how to clear it: " + verdict, //$NON-NLS-1$
+            verdict.contains("delete_metadata")); //$NON-NLS-1$
+    }
+
+    /**
+     * A column-less collection attribute {@code Rows} with a TABLE bound to it - the row consumer a
+     * retype to a scalar would strand.
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject attributeWithATableBoundToIt()
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = formLikePackage();
+        EClass attributeClass = (EClass)pkg.getEClassifier("FormAttribute"); //$NON-NLS-1$
+
+        EClass dataPathClass = factory.createEClass();
+        dataPathClass.setName("DataPath"); //$NON-NLS-1$
+        EAttribute segments = factory.createEAttribute();
+        segments.setName("segments"); //$NON-NLS-1$
+        segments.setEType(EcorePackage.Literals.ESTRING);
+        segments.setUpperBound(-1);
+        dataPathClass.getEStructuralFeatures().add(segments);
+
+        EClass tableClass = factory.createEClass();
+        tableClass.setName("Table"); //$NON-NLS-1$
+        EAttribute tableName = factory.createEAttribute();
+        tableName.setName("name"); //$NON-NLS-1$
+        tableName.setEType(EcorePackage.Literals.ESTRING);
+        tableClass.getEStructuralFeatures().add(tableName);
+        EReference tablePath = factory.createEReference();
+        tablePath.setName("dataPath"); //$NON-NLS-1$
+        tablePath.setEType(dataPathClass);
+        tablePath.setContainment(true);
+        tableClass.getEStructuralFeatures().add(tablePath);
+
+        EClass formClass = factory.createEClass();
+        formClass.setName("Form"); //$NON-NLS-1$
+        EReference attributes = factory.createEReference();
+        attributes.setName("attributes"); //$NON-NLS-1$
+        attributes.setEType(attributeClass);
+        attributes.setContainment(true);
+        attributes.setUpperBound(-1);
+        formClass.getEStructuralFeatures().add(attributes);
+        EReference items = factory.createEReference();
+        items.setName("items"); //$NON-NLS-1$
+        items.setEType(tableClass);
+        items.setContainment(true);
+        items.setUpperBound(-1);
+        formClass.getEStructuralFeatures().add(items);
+        pkg.getEClassifiers().add(dataPathClass);
+        pkg.getEClassifiers().add(tableClass);
+        pkg.getEClassifiers().add(formClass);
+
+        EObject form = new DynamicEObjectImpl(formClass);
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(attributeClass.getEStructuralFeature("name"), "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((java.util.List<EObject>)form.eGet(attributes)).add(attribute);
+
+        EObject table = new DynamicEObjectImpl(tableClass);
+        table.eSet(tableName, "RowsTable"); //$NON-NLS-1$
+        EObject path = new DynamicEObjectImpl(dataPathClass);
+        ((java.util.List<String>)path.eGet(segments)).add("Rows"); //$NON-NLS-1$
+        table.eSet(tablePath, path);
+        ((java.util.List<EObject>)form.eGet(items)).add(table);
+        return attribute;
+    }
+
+    @Test
     public void testTheRetypePreflightRefusesARetypeThatStrandsColumns()
     {
         // The DECISION itself, not just the order: a retype of a column-bearing attribute answers the

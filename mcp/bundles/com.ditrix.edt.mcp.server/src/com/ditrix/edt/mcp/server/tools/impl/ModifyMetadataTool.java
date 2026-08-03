@@ -4437,12 +4437,41 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        if (FormElementWriter.attributeColumnNames(member).isEmpty())
+        // Collection-to-collection (ValueTable to ValueTree) keeps an owner the columns can live on,
+        // and keeps every path through the attribute resolving - nothing is stranded either way.
+        if (requestsCollectionType(normProp))
         {
             return null;
         }
-        // Collection-to-collection (ValueTable to ValueTree) keeps an owner the columns can live on.
-        return requestsCollectionType(normProp) ? null : orphanColumnsError(member);
+        if (!FormElementWriter.attributeColumnNames(member).isEmpty())
+        {
+            return orphanColumnsError(member);
+        }
+        // A collection with NO columns could still be the row source of a table, and the early return
+        // on "no columns" let that through: the table stayed bound to something that no longer has
+        // rows - the state createTable refuses to build, so the tool was stricter about creating a
+        // form than about editing one into the same shape (issue #295 review).
+        List<String> rowConsumers = FormElementWriter.rowConsumersBoundToAttribute(member);
+        if (!rowConsumers.isEmpty())
+        {
+            return ToolResult.error("Form attribute '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
+                + "' is the row source of " + rowConsumers.size() + " table(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+                + String.join(", ", rowConsumers) + "), which a non-collection type cannot be. Delete " //$NON-NLS-1$ //$NON-NLS-2$
+                + "them with delete_metadata (or re-point them with modify_metadata 'dataPath') " //$NON-NLS-1$
+                + "first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
+        }
+        // ...and the same for items bound BELOW it: a field on 'Rows.Price' survives the retype and
+        // keeps pointing at a name the new scalar type does not have.
+        List<String> below = FormElementWriter.itemsBoundBelowAttribute(member);
+        if (!below.isEmpty())
+        {
+            return ToolResult.error("Retyping '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
+                + "' would leave " + below.size() + " form item(s) (" + String.join(", ", below) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ") bound below it to a name the new type does not have. Delete them with " //$NON-NLS-1$
+                + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.") //$NON-NLS-1$
+                .toJson();
+        }
+        return null;
     }
 
     /**

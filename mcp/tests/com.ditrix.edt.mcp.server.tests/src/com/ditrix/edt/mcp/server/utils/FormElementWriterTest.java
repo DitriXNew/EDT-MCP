@@ -2567,6 +2567,10 @@ public class FormElementWriterTest
             table = f.createEClass();
             table.setName("Table"); //$NON-NLS-1$
             table.getESuperTypes().add(formItem);
+            // A table is a BOUND item: createTable writes its dataPath, and the retype guards read it
+            // back to find the tables that need the attribute's rows. The fixture declared the feature
+            // only on FormField, so buildDataPath was a silent no-op here (issue #295 review).
+            table.getEStructuralFeatures().add(containment(f, "dataPath", dataPath, false)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
@@ -3110,6 +3114,78 @@ public class FormElementWriterTest
         assertEquals("the item bound below the COLUMN must be found from the form root", //$NON-NLS-1$
             Collections.singletonList("DeepField"), //$NON-NLS-1$
             FormElementWriter.itemsBoundBelowAttribute(column));
+    }
+
+    @Test
+    public void testAFieldCannotWalkPastAPrimitiveColumn()
+    {
+        // Validating only the FIRST tail segment (so 'Rows.Product.Description' works) opened the
+        // other side: 'Rows.Price.Amount' was truncated to 'Price', passed the column check and was
+        // written whole - a primitive column has no 'Amount' (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject price = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        setPrimitiveType(price, "Number"); //$NON-NLS-1$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnPrimitive", null, //$NON-NLS-1$
+            "Rows.Price.Amount", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a path past a primitive column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the column", err.contains("Price")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "DeepOnPrimitive")); //$NON-NLS-1$
+
+        // The column ITSELF still binds - the refusal is about continuing past it.
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceCell2", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFieldMayWalkPastANonPrimitiveColumn()
+    {
+        // The other direction: a column whose type is NOT provably primitive (a reference, or not yet
+        // typed) keeps accepting a deeper path - its members live in metadata this writer cannot read,
+        // so refusing on "unknown" would break a legitimate 'Rows.Product.Description'.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("an untyped column must not block a deeper path", //$NON-NLS-1$
+            FormElementWriter.createMember(form, Kind.FIELD, "DeepOnRef", null, //$NON-NLS-1$
+                "Rows.Product.Description", null, null, false, null)); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "DeepOnRef")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableBoundToTheAttributeIsFoundAsARowConsumer()
+    {
+        // What blocks a retype AWAY from a collection even when it has no columns: a table that needs
+        // its rows. The create path already refuses to build a table on a scalar, so the edit path
+        // must refuse to turn one into that (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createTable(form, "RowsTable", null, "Rows", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+
+        assertEquals("the table bound to the attribute must be reported", //$NON-NLS-1$
+            Collections.singletonList("RowsTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(rows));
+
+        // A FIELD bound to the attribute itself is not a row consumer - it must not block a retype.
+        EObject plain = newObject(MODEL.formAttribute);
+        plain.eSet(feature(plain, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plain); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField2", null, //$NON-NLS-1$
+            "Price", null, null, false, null)); //$NON-NLS-1$
+        assertTrue(FormElementWriter.rowConsumersBoundToAttribute(plain).isEmpty());
+    }
+
+    /** Gives {@code member} a value type of the named platform PRIMITIVE. */
+    @SuppressWarnings("unchecked")
+    private static void setPrimitiveType(EObject member, String typeName)
+    {
+        EObject typeDescription = newObject(modelClass("TypeDescription")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.Type type = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
+        type.setName(typeName);
+        ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(type); //$NON-NLS-1$
+        member.eSet(feature(member, "valueType"), typeDescription); //$NON-NLS-1$
     }
 
     @Test
