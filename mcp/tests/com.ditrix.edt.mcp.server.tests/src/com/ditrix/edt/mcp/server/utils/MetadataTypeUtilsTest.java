@@ -8,15 +8,15 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.Locale;
-import java.util.TreeSet;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 import java.util.function.Predicate;
 import org.junit.Test;
@@ -692,14 +692,26 @@ public class MetadataTypeUtilsTest
         addOwner(owners, "Handler", FormElementWriter::isHandlerToken);
         addOwner(owners, "Subsystem", SubsystemUtils::isSubsystemTypeToken);
         addOwner(owners, "Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
-        // The mdclass resolver is an owner of EVERY kind it maps - including ones a form consumer
-        // also claims. This is the line whose absence made the guarantee false.
-        for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
+        // Resolver groups are built by a FULL pass over the resolver's own map, and its
+        // applicability is decided by THAT, never by asking the resolver about the canonical token.
+        // Deriving applicability from the thing under test let it opt out: deleting just the
+        // canonical "attribute" token made featureNameForKind("Attribute") null, the resolver
+        // dropped out of the owners, the reverse-equality block was skipped, and the form owner
+        // kept the "no owner declared" assertion quiet. Losing a token switched off its own check.
+        Map<String, Set<String>> resolverTokens = new LinkedHashMap<>();
+        Map<String, Set<String>> resolverFeatures = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : MetadataNodeResolver.childFeatureByToken().entrySet())
         {
-            if (MetadataNodeResolver.featureNameForKind(canonical) != null)
-            {
-                addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
-            }
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(e.getKey());
+            assertNotNull("resolver token is not published by the catalogue: " + e.getKey(), info);
+            resolverTokens.computeIfAbsent(info.getEnglish(), k -> new TreeSet<>())
+                .add(e.getKey().toLowerCase(Locale.ROOT));
+            resolverFeatures.computeIfAbsent(info.getEnglish(), k -> new LinkedHashSet<>())
+                .add(e.getValue());
+        }
+        for (String canonical : resolverTokens.keySet())
+        {
+            addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
         }
 
         // Every OTHER kind is an mdclass member, and its exact resolver is MetadataNodeResolver:
@@ -738,29 +750,31 @@ public class MetadataTypeUtilsTest
             }
             // ...and the reverse direction for the mdclass resolver: its token group for this kind
             // must equal the catalogue's aliases EXACTLY, and all of them must mean one feature.
-            if (MetadataNodeResolver.featureNameForKind(canonical) != null)
+            Set<String> published = new TreeSet<>();
+            for (String alias : aliases)
             {
-                Set<String> resolverTokens = new TreeSet<>();
-                Set<String> features = new LinkedHashSet<>();
-                for (Map.Entry<String, String> e : MetadataNodeResolver.childFeatureByToken().entrySet())
-                {
-                    MetadataTypeUtils.NestedKindInfo i = MetadataTypeUtils.resolveNestedKind(e.getKey());
-                    assertNotNull("resolver token is not published by the catalogue: " + e.getKey(), i);
-                    if (canonical.equals(i.getEnglish()))
-                    {
-                        resolverTokens.add(e.getKey().toLowerCase(Locale.ROOT));
-                        features.add(e.getValue());
-                    }
-                }
-                Set<String> published = new TreeSet<>();
-                for (String alias : aliases)
-                {
-                    published.add(alias.toLowerCase(Locale.ROOT));
-                }
+                published.add(alias.toLowerCase(Locale.ROOT));
+            }
+            if (resolverTokens.containsKey(canonical))
+            {
                 assertEquals("resolver and catalogue must accept EXACTLY the same tokens for "
-                    + canonical, published, resolverTokens);
+                    + canonical, published, resolverTokens.get(canonical));
                 assertEquals("every alias of one kind must resolve to ONE feature: " + canonical,
-                    1, features.size());
+                    1, resolverFeatures.get(canonical).size());
+            }
+            // 2. The FORM consumer, in the SAME place and in the reverse direction too: its token
+            // list must equal the catalogue's aliases exactly, so a token the form parser accepts
+            // but the catalogue does not publish is caught here rather than in a second test.
+            FormElementWriter.Kind formKind = FormElementWriter.kindForToken(canonical);
+            if (formKind != null)
+            {
+                Set<String> formTokens = new TreeSet<>();
+                for (String token : FormElementWriter.tokensForKind(formKind))
+                {
+                    formTokens.add(token.toLowerCase(Locale.ROOT));
+                }
+                assertEquals("form parser and catalogue must accept EXACTLY the same tokens for "
+                    + canonical, published, formTokens);
             }
         }
     }
