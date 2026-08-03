@@ -1541,10 +1541,6 @@ public class GetProjectErrorsTool implements IMcpTool
      * exist" - and a lenient answer HERE is a false gap: the address gets carried into the model as
      * if a project might hold it, and an impossible string ends up undecided instead of absent.</p>
      *
-     * <p>Each grammar is asked in its STRICT form. Several of the parsers below are deliberately
-     * lenient for their own callers - they answer "close enough to report on" rather than "could
-     * exist" - and a lenient answer HERE is a false gap: the address gets carried into the model as
-     * if a project might hold it, and an impossible string ends up undecided instead of absent.</p>
      *
      * <p>Single source for the shape question: the enumeration gate above asks it too, so the two
      * cannot drift into disagreeing about what a supported address looks like.</p>
