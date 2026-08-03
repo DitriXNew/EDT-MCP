@@ -46,12 +46,11 @@ import com._1c.g5.v8.dt.bsl.model.StaticFeatureAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.HtmlToMarkdown;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
-
-import io.github.furstenheim.CopyDown;
 
 /**
  * Domain service that resolves type/hover information for a symbol at a specific
@@ -72,9 +71,6 @@ public class SymbolInfoService
     private static final String SYMBOL = "Symbol"; //$NON-NLS-1$
     private static final String IN_METHOD = "In method"; //$NON-NLS-1$
     private static final String EMF_TYPE = "EMF type"; //$NON-NLS-1$
-
-    // Lazy-initialized CopyDown instance for HTML-to-Markdown conversion (thread-confined to UI thread)
-    private CopyDown copyDown; //$NON-NLS-1$
 
     /**
      * Gets symbol info at the specified position.
@@ -324,7 +320,7 @@ public class SymbolInfoService
                     String infoStr = extractHoverContent(info2);
                     if (infoStr != null && !infoStr.isEmpty())
                     {
-                        return cleanHtmlToMarkdown(infoStr);
+                        return HtmlToMarkdown.convert(infoStr);
                     }
                 }
             }
@@ -334,7 +330,7 @@ public class SymbolInfoService
             String hoverInfo = textHover.getHoverInfo(sourceViewer, hoverRegion);
             if (hoverInfo != null && !hoverInfo.isEmpty())
             {
-                return cleanHtmlToMarkdown(hoverInfo);
+                return HtmlToMarkdown.convert(hoverInfo);
             }
         }
         catch (Exception e)
@@ -963,41 +959,5 @@ public class SymbolInfoService
         }
         offset += Math.max(0, column - 1);
         return offset;
-    }
-
-    /**
-     * Converts HTML content to Markdown format using CopyDown library.
-     * Follows the same pattern as GetContentAssistTool.cleanHtmlContent().
-     */
-    private String cleanHtmlToMarkdown(String html)
-    {
-        if (html == null || html.isEmpty())
-        {
-            return ""; //$NON-NLS-1$
-        }
-
-        try
-        {
-            // Remove <style> blocks before conversion
-            String cleaned = html.replaceAll("(?s)<style[^>]*>.*?</style>", ""); //$NON-NLS-1$ //$NON-NLS-2$
-
-            // Convert HTML to Markdown using CopyDown library (lazy init)
-            if (copyDown == null)
-            {
-                copyDown = new CopyDown();
-            }
-            String markdown = copyDown.convert(cleaned);
-
-            // Normalize excessive line breaks
-            markdown = markdown.replaceAll("\n{3,}", "\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
-
-            return markdown.trim();
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error converting HTML to Markdown", e); //$NON-NLS-1$
-            // Fallback: just strip tags
-            return html.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim(); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        }
     }
 }
