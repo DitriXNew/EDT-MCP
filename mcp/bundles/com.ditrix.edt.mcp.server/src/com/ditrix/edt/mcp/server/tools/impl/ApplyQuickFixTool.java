@@ -14,6 +14,8 @@ import java.util.Map;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
@@ -29,6 +31,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
 
 /**
  * Applies EDT's official quick-fix (auto-fix) to one validation marker — the MCP
@@ -68,9 +71,11 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     {
         return "Apply EDT's official quick-fix (auto-fix) to one validation marker — the headless " //$NON-NLS-1$
             + "counterpart of the 'Quick Fix' action in the problems view. Address the marker by the " //$NON-NLS-1$
-            + "locator get_project_errors prints: its Check code (+ Module path + Line to narrow); the " //$NON-NLS-1$
-            + "'Fix' column there flags which rows are fixable. When the locator matches several markers " //$NON-NLS-1$
-            + "(or the fix has several variants) the error lists them and you re-call with index / variant. " //$NON-NLS-1$
+            + "locator get_project_errors prints: its Check code (+ Module path + Line to narrow); its " //$NON-NLS-1$
+            + "'Fix registered' column flags rows whose CHECK TYPE has one (not a guarantee for that " //$NON-NLS-1$
+            + "exact marker - this tool reports when none is applicable). When the locator matches " //$NON-NLS-1$
+            + "several markers (or the fix has several variants) the error lists them, each with its " //$NON-NLS-1$
+            + "location, and you re-call with index / variant. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('apply_quick_fix')."; //$NON-NLS-1$
     }
 
@@ -177,11 +182,17 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
 
         List<MarkerMatch> matches = findMatches(markerManager, checkRepository, project,
             checkId, modulePath, line);
+        // Resolve each candidate's object presentation (inside a read boundary - see the method).
+        // Needed BEFORE the ambiguity listing below: an object/metadata-level marker carries no
+        // modulePath/line, so without it several candidates would print as an identical
+        // "<checkId> - <message>" and an index would pick a target the caller cannot identify.
+        resolveObjectPresentations(project, matches);
         if (matches.isEmpty())
         {
             return ToolResult.error("No marker matches check '" + checkId + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + locatorSuffix(modulePath, line) + " in project '" + projectName //$NON-NLS-1$
-                + "'. Run get_project_errors (responseFormat=detailed) and pick a row whose 'Fix' column is 'yes'.").toJson(); //$NON-NLS-1$
+                + "'. Run get_project_errors (responseFormat=detailed) and pick a row whose " //$NON-NLS-1$
+                + "'Fix registered' column is 'yes'.").toJson(); //$NON-NLS-1$
         }
 
         int chosenIdx = chooseIndex(matches.size(), index);
@@ -242,6 +253,65 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Fills in each match's {@link MarkerMatch#objectPresentation} - the marker's target object as
+     * {@code get_project_errors} prints it in its {@code Location} column (e.g.
+     * {@code Catalog.Products}).
+     * <p>
+     * Kept SEPARATE from {@link #findMatches} because it is the one part that needs a BM read
+     * boundary: {@link Marker#getObjectPresentation()} resolves the target lazily out of the model
+     * (CLAUDE.md don't #1 - the same reason {@code GetProjectErrorsTool.collectErrors} wraps its own
+     * marker walk). The presentation is what makes an OBJECT-level candidate identifiable: such a
+     * marker has no {@code modulePath}/{@code line}, so without it {@link #multipleMarkersError}
+     * would list several candidates as an identical "{@code <checkId> - <message>}" and an
+     * {@code index} would select a target the caller cannot tell apart.
+     * <p>
+     * Best-effort and never fatal: a project with no BM model, or a marker whose target cannot be
+     * resolved, simply leaves that presentation {@code null} and the listing falls back to the
+     * module/check locator - a marker is never dropped just because its presentation failed.
+     *
+     * @param project the project the markers belong to
+     * @param matches the matches to enrich, modified in place (may be empty)
+     */
+    private static void resolveObjectPresentations(IProject project, List<MarkerMatch> matches)
+    {
+        if (matches.isEmpty())
+        {
+            return;
+        }
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        IBmModel bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
+        if (bmModel == null)
+        {
+            return;
+        }
+        BmTransactions.<Void>read(bmModel, "ApplyQuickFixResolveTargets", (tx, pm) -> { //$NON-NLS-1$
+            for (MarkerMatch match : matches)
+            {
+                try
+                {
+                    String presentation = match.marker.getObjectPresentation();
+                    if (presentation != null && !presentation.isEmpty())
+                    {
+                        match.objectPresentation = presentation;
+                    }
+                }
+                catch (Exception e)
+                {
+                    // Unresolvable target: keep the match, just without a presentation.
+                    Activator.logWarning("Could not resolve the target of a quick-fix candidate for check '" //$NON-NLS-1$
+                        + match.checkId + "': " + e.getMessage()); //$NON-NLS-1$
+                }
+            }
+            return null;
+        });
+        // Re-sort now that the presentations are known: it is a tiebreaker in
+        // DETERMINISTIC_ORDER, and findMatches sorted while every value was still null - so
+        // object-level candidates would otherwise keep the marker stream's arbitrary order and
+        // an index=N could point at a different object on the next call.
+        matches.sort(MarkerMatch.DETERMINISTIC_ORDER);
+    }
+
+    /**
      * Drives EDT's quick-fix lifecycle for the chosen marker: prepare → list applicable variants →
      * select → execute → finish. {@code finishFix} always runs (cleanup), including on the early
      * returns where no change was applied.
@@ -274,6 +344,21 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             FixVariantDescriptor chosenVariant = variants.get(chosenIdx);
 
             fixManager.selectFixVariant(chosenVariant, handle);
+            // The engine's selectFixVariant/executeFix are BOTH silent no-ops when the fix session is
+            // not in the state they expect (selectFixVariant needs CONTEXTS_INITIALIZED, executeFix
+            // needs VARIANT_SELECTED) - they return void and swallow the mismatch. Without this guard
+            // a session that refused the selection would fall straight through to a do-nothing
+            // executeFix and still be reported as a successful fix. getSelectedFixVariant is the
+            // engine's own read-back of that state, so a null here means "nothing was selected,
+            // executeFix would change nothing" - report it instead of a false success.
+            if (fixManager.getSelectedFixVariant(handle) == null)
+            {
+                return ToolResult.error("The quick-fix engine did not accept the selected variant '" //$NON-NLS-1$
+                    + describe(chosenVariant) + "' for check '" + chosen.checkId + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                    + " - nothing was applied. Re-run get_project_errors (the marker set may have " //$NON-NLS-1$
+                    + "changed since it was listed) and try again, or fix it manually via " //$NON-NLS-1$
+                    + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
+            }
             fixManager.executeFix(handle, new NullProgressMonitor());
 
             return ToolResult.success()
@@ -391,9 +476,15 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     /** Actionable "no quick-fix for this marker" error - either no fix process, or no variants. */
     private static String noFixAvailableError(MarkerMatch chosen)
     {
+        // Via location() so an OBJECT-level marker (no modulePath/line) still names its target
+        // object rather than reporting the check alone; when location() has nothing better than the
+        // check id it returns exactly that, and repeating it as "at <checkId>" would be noise.
+        String where = chosen.location();
+        String suffix = where.equals(chosen.checkId) ? "" : " at " + where; //$NON-NLS-1$ //$NON-NLS-2$
         return ToolResult.error("No quick-fix is available for check '" + chosen.checkId //$NON-NLS-1$
-            + "'" + locatorSuffix(chosen.modulePath, chosen.line == null ? -1 : chosen.line) //$NON-NLS-1$
-            + ". Not every validation check has an auto-fix; fix it manually via " //$NON-NLS-1$
+            + "'" + suffix //$NON-NLS-1$
+            + ". Not every validation check has an auto-fix (and a check whose type HAS one can " //$NON-NLS-1$
+            + "still have no variant applicable to this particular marker); fix it manually via " //$NON-NLS-1$
             + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
     }
 
@@ -463,14 +554,22 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     static final class MarkerMatch
     {
         /**
-         * Content-derived total order (module path, then line, then check id, then message), all
+         * Content-derived total order (module path, line, target object, check id, message), all
          * null-safe: markers with no module path sort first, followed by unattributed lines. Two
-         * markers that are identical across all four fields are genuinely indistinguishable to the
-         * caller, so their relative order does not matter.
+         * markers identical across every field are genuinely indistinguishable to the caller, so
+         * their relative order does not matter.
+         * <p>
+         * {@code objectPresentation} participates because it is the ONLY thing separating two
+         * object-level markers that share a check and a message (neither has a module position): if
+         * it were left out they would tie here, and their printed order - hence what {@code index=N}
+         * selects - would fall back to the marker stream's own unspecified order. Since it is filled
+         * only after the read boundary, {@link ApplyQuickFixTool#resolveObjectPresentations} re-sorts
+         * once the values are known.
          */
         static final Comparator<MarkerMatch> DETERMINISTIC_ORDER = Comparator
             .comparing((MarkerMatch m) -> m.modulePath, Comparator.nullsFirst(Comparator.naturalOrder()))
             .thenComparing(m -> m.line, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(m -> m.objectPresentation, Comparator.nullsFirst(Comparator.naturalOrder()))
             .thenComparing(m -> m.checkId, Comparator.nullsFirst(Comparator.naturalOrder()))
             .thenComparing(m -> m.message, Comparator.nullsFirst(Comparator.naturalOrder()));
 
@@ -479,6 +578,15 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         final String modulePath;
         final Integer line;
         final String message;
+
+        /**
+         * The marker's target object as {@code get_project_errors} prints it in its {@code Location}
+         * column (e.g. {@code Catalog.Products}), or {@code null} when it has none / could not be
+         * resolved. NOT final and NOT set by the constructor: resolving it needs a BM read boundary,
+         * so it is filled afterwards by {@link ApplyQuickFixTool#resolveObjectPresentations} rather
+         * than dragging a transaction into the marker walk itself.
+         */
+        String objectPresentation;
 
         MarkerMatch(Marker marker, String checkId, String modulePath, Integer line, String message)
         {
@@ -489,12 +597,21 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             this.message = message;
         }
 
-        /** "module:line" when the marker resolves to a BSL position, else the check id. */
+        /**
+         * The most specific locator available: "module:line" for a BSL-positioned marker, else the
+         * target object's presentation (an object/metadata-level marker has no module position), and
+         * only if neither resolves, the check id - which alone identifies nothing when several
+         * markers share the check, hence the presentation fallback in between.
+         */
         String location()
         {
             if (modulePath != null && !modulePath.isEmpty())
             {
                 return line != null ? modulePath + ":" + line : modulePath; //$NON-NLS-1$
+            }
+            if (objectPresentation != null && !objectPresentation.isEmpty())
+            {
+                return objectPresentation;
             }
             return checkId;
         }

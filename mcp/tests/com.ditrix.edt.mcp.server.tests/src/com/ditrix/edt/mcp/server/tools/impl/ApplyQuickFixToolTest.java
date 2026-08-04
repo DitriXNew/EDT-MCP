@@ -256,4 +256,57 @@ public class ApplyQuickFixToolTest
         }
         return ids;
     }
+
+    // ---- location(): an object-level marker must still identify its target ---------------------
+
+    @Test
+    public void testLocationPrefersModulePositionWhenAvailable()
+    {
+        MarkerMatch m = new MarkerMatch(null, "check-a", "Module.bsl", 12, "msg"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        m.objectPresentation = "Catalog.Products"; //$NON-NLS-1$
+        assertEquals("a BSL-positioned marker keeps its module:line locator", //$NON-NLS-1$
+            "Module.bsl:12", m.location()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLocationFallsBackToObjectPresentationForAnObjectLevelMarker()
+    {
+        // The bug this guards: an object/metadata-level marker has NO modulePath/line, so location()
+        // used to degrade straight to the check id - and two such markers of the same check then
+        // printed as an identical choice in the "several markers match" listing, leaving index=N
+        // pointing at a target the caller could not identify.
+        MarkerMatch m = new MarkerMatch(null, "check-a", null, null, "msg"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.objectPresentation = "Catalog.Products"; //$NON-NLS-1$
+        assertEquals("Catalog.Products", m.location()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testLocationFallsBackToCheckIdWhenNothingElseResolved()
+    {
+        MarkerMatch m = new MarkerMatch(null, "check-a", null, null, "msg"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("check-a", m.location()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDeterministicOrderSeparatesObjectLevelMarkersByTheirTarget()
+    {
+        // Two object-level markers of the SAME check with the SAME message differ only by their
+        // target object. Without objectPresentation in the comparator they would tie, and their
+        // printed order - hence what index=N selects - would fall back to the marker stream's own
+        // unspecified order.
+        MarkerMatch b = new MarkerMatch(null, "check-a", null, null, "same message"); //$NON-NLS-1$ //$NON-NLS-2$
+        b.objectPresentation = "Catalog.Beta"; //$NON-NLS-1$
+        MarkerMatch a = new MarkerMatch(null, "check-a", null, null, "same message"); //$NON-NLS-1$ //$NON-NLS-2$
+        a.objectPresentation = "Catalog.Alpha"; //$NON-NLS-1$
+
+        List<MarkerMatch> order1 = new ArrayList<>(List.of(b, a));
+        List<MarkerMatch> order2 = new ArrayList<>(List.of(a, b));
+        order1.sort(MarkerMatch.DETERMINISTIC_ORDER);
+        order2.sort(MarkerMatch.DETERMINISTIC_ORDER);
+
+        assertEquals("Catalog.Alpha", order1.get(0).objectPresentation); //$NON-NLS-1$
+        assertEquals("Catalog.Beta", order1.get(1).objectPresentation); //$NON-NLS-1$
+        assertEquals("both encounter orders must sort identically", //$NON-NLS-1$
+            order1.get(0).objectPresentation, order2.get(0).objectPresentation);
+    }
 }
