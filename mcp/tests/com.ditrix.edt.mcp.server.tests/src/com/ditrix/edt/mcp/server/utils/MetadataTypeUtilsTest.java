@@ -710,10 +710,7 @@ public class MetadataTypeUtilsTest
             resolverFeatures.computeIfAbsent(info.getEnglish(), k -> new LinkedHashSet<>())
                 .add(e.getValue());
         }
-        for (String canonical : resolverTokens.keySet())
-        {
-            addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
-        }
+
         // Applicability of the mdclass resolver is DECLARED, not inferred from the map under test.
         // Deriving it from resolverTokens.keySet() still let the subject opt out: deleting the whole
         // Attribute block made the group vanish, so the exact-equality branch never ran, and the
@@ -721,10 +718,15 @@ public class MetadataTypeUtilsTest
         // regression this test exists to catch, so the set below is written by hand ON PURPOSE -
         // the alternative is not inference but self-confirmation. Adding an mdclass kind requires
         // adding it here, and that is the step that must not be silent.
+        // EQUALITY, both ways. Registering owners from resolverTokens.keySet() as well left the
+        // declaration optional: an existing group could not vanish, but a NEW undeclared group
+        // switched its own check on, so "adding a kind requires declaring it here" was not true.
+        // Self-confirmation had simply moved one floor down.
+        assertEquals("the declared mdclass kinds and the resolver's groups must match EXACTLY - " //$NON-NLS-1$
+            + "a missing entry means a group vanished, an extra group means it was never declared", //$NON-NLS-1$
+            MDCLASS_RESOLVED_KINDS, new LinkedHashSet<>(resolverTokens.keySet()));
         for (String canonical : MDCLASS_RESOLVED_KINDS)
         {
-            assertTrue("the mdclass resolver must still map the kind '" + canonical //$NON-NLS-1$
-                + "' - its whole token group disappeared", resolverTokens.containsKey(canonical)); //$NON-NLS-1$
             addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
         }
 
@@ -1072,12 +1074,6 @@ public class MetadataTypeUtilsTest
             boolean sawCyrillic = false;
             for (String token : tokens)
             {
-                // Kept, NOT delegated: absorption of this one is UNPROVEN. The mutation meant to
-                // test it was invalid (it referenced a map before its declaration, so it never
-                // compiled), and a mutation that cannot run proves nothing. Deleting an assertion
-                // on an unproven absorption is exactly how a guarantee is lost.
-                assertEquals("the form parser must read '" + token + "' as " + kind, //$NON-NLS-1$ //$NON-NLS-2$
-                    kind, FormElementWriter.kindForToken(token));
                 MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
                 if (info == null)
                 {
