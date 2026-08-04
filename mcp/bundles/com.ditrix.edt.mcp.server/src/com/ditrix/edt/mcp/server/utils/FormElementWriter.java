@@ -2513,12 +2513,52 @@ public final class FormElementWriter
                 continue;
             }
             everyTypeMemberless = false;
-            if (!MetadataTypeBuilder.isCollectionKind(typeName) || ownsColumns)
+            if (carriesMembersOutsideThisModel(typeName) || ownsColumns)
             {
                 return NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL;
             }
         }
         return everyTypeMemberless ? NestedAddressing.NO_MEMBERS : NestedAddressing.MEMBERS_HAVE_NO_HOME;
+    }
+
+    /**
+     * Whether {@code typeName} carries members this writer cannot enumerate - a reference (its members
+     * live in the metadata), or a type it cannot identify at all. Such a type can resolve a dotted
+     * tail on its own, whatever the OTHER types in a composite can or cannot do.
+     *
+     * @param typeName a resolved platform type name or a spec {@code kind}, either language
+     * @return {@code true} when a tail below it may still resolve
+     */
+    private static boolean carriesMembersOutsideThisModel(String typeName)
+    {
+        return !MetadataTypeBuilder.isMemberlessType(typeName)
+            && !MetadataTypeBuilder.isCollectionKind(typeName);
+    }
+
+    /**
+     * Whether ANY of {@code typeNames} carries members outside this model - the composite question,
+     * and the reason a guard must not decide on "a collection is mentioned".
+     *
+     * <p>A value typed {@code {ValueTable, CatalogRef.Products}} resolves {@code Rows.Product.
+     * Description} through its REFERENCE half, which is why {@link #createField} accepts that path;
+     * a retype guard that fired on the mere presence of a collection kind refused the very shape the
+     * creator builds (issue #295 review). This is the same per-type rule
+     * {@link #nestedAddressingOf} applies, exported so both sides of "may a tail survive here" get
+     * one answer.</p>
+     *
+     * @param typeNames the resolved type names, or the requested spec kinds, in any order
+     * @return {@code true} when at least one of them could carry a nested member
+     */
+    public static boolean carriesMembersOutsideThisModel(List<String> typeNames)
+    {
+        for (String typeName : typeNames)
+        {
+            if (carriesMembersOutsideThisModel(typeName))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

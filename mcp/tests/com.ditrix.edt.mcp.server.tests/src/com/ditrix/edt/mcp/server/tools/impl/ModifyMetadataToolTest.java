@@ -48,6 +48,7 @@ import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
@@ -1684,6 +1685,75 @@ public class ModifyMetadataToolTest
             assertTrue("the refusal must name the stranded item: " + verdict, //$NON-NLS-1$
                 verdict.contains("NumberField")); //$NON-NLS-1$
         }
+    }
+
+    @Test
+    public void testARetypeToACompositeCollectionAndReferenceKeepsItemsBoundBelowIt()
+    {
+        // The collection guard fired on "a collection is MENTIONED", so a composite
+        // {ValueTable, CatalogRef.Products} was refused as soon as anything was bound below - even
+        // though the REFERENCE half still owns the tail, which is precisely why createField accepts
+        // 'Rows.Product.Description' for such a column. Creation allowed, editing forbade, one level
+        // below the terminal-type case this branch already fixed (issue #295 review).
+        String verdict = neverAsking().formRetypeVerdict(null, null, attributeWithAnItemBoundBelowIt(),
+            Collections.singletonList(retypeToCollectionAndRefProperty()), report());
+
+        assertFalse("a composite carrying a reference must not be refused as orphaning: " + verdict, //$NON-NLS-1$
+            verdict != null && verdict.contains("NumberField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARetypeToAPureCollectionStillRefusesItemsBoundBelowIt()
+    {
+        // The other side, so relaxing the guard cannot quietly disable it: with NO type that carries
+        // members of its own, the bound path really is stranded - under a ValueTable / ValueTree a
+        // dotted path addresses a COLUMN, and 'Number' is not one.
+        String verdict = neverAsking().formRetypeVerdict(null, null, attributeWithAnItemBoundBelowIt(),
+            Collections.singletonList(retypeToCollectionProperty()), report());
+
+        assertNotNull("a pure collection retype must still be refused", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must name the stranded item: " + verdict, //$NON-NLS-1$
+            verdict.contains("NumberField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheCompositeRuleIsTheSameOneTheNestedAddressClassifierApplies()
+    {
+        // Both sides of "may a tail survive here" must come from ONE rule, or creating and editing
+        // drift apart again. Asserted directly on the exported predicate, in both languages.
+        assertTrue("a reference carries members of its own", //$NON-NLS-1$
+            FormElementWriter.carriesMembersOutsideThisModel(
+                Arrays.asList("ValueTable", "CatalogRef.Products"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a pure collection does not", //$NON-NLS-1$
+            FormElementWriter.carriesMembersOutsideThisModel(
+                Arrays.asList("ValueTable", "ValueTree"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("nor does a collection mixed with memberless types", //$NON-NLS-1$
+            FormElementWriter.carriesMembersOutsideThisModel(
+                Arrays.asList("ValueTable", "String", "UUID"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("the Russian collection name is read the same way", //$NON-NLS-1$
+            FormElementWriter.carriesMembersOutsideThisModel(Arrays.asList(
+                MetadataLanguageUtils.cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430, 0x0417,
+                    0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439), // TablicaZnachenij
+                "DocumentRef.Invoice"))); //$NON-NLS-1$
+    }
+
+    /** {name:'type', value:{types:[{kind:'ValueTable'},{kind:'Ref', ref:'Catalog.Products'}]}}. */
+    private static JsonObject retypeToCollectionAndRefProperty()
+    {
+        JsonObject collection = new JsonObject();
+        collection.addProperty("kind", "ValueTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject reference = new JsonObject();
+        reference.addProperty("kind", "Ref"); //$NON-NLS-1$ //$NON-NLS-2$
+        reference.addProperty("ref", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonArray types = new JsonArray();
+        types.add(collection);
+        types.add(reference);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", "type"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.add("value", spec); //$NON-NLS-1$
+        return prop;
     }
 
     /** {name:'type', value:{types:[{kind:'Ref', ref:'Catalog.Products'}]}} - a type that HAS members. */

@@ -718,6 +718,31 @@ def test_retype_of_a_column_carrying_a_nested_binding_follows_the_requested_type
     assert_ok(ok, "a retype to a REFERENCE keeps the nested binding resolving and must be allowed")
     wait_for_project_ready()
 
+    # A COMPOSITE {ValueTable, Ref} keeps the tail resolving through its REFERENCE half - which is
+    # exactly why createField accepts such a path - so the collection guard must not fire on the mere
+    # presence of a collection kind (issue #295 review).
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [
+            {"kind": "ValueTable"}, {"kind": "Ref", "ref": "Catalog.Catalog"}]}}]})
+    assert_ok(ok, "a composite collection+reference retype must be allowed")
+    wait_for_project_ready()
+
+    # ...while a PURE collection strands the same binding and must still be refused.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    e = assert_error(r, "a PURE collection retype must still be refused")
+    assert_error_quality(e, names=["MFRefDeep"], suggests=["delete_metadata", "dataPath"],
+                         ctx="the refusal must name the item the collection would strand")
+
+    # Put the column back on a reference so the scalar case below is judged on its own.
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "Catalog.Catalog"}]}}]})
+    assert_ok(ok, "restore the reference type")
+    wait_for_project_ready()
+
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": column_fqn,
         "properties": [{"name": "type", "value": {"types": [{"kind": "String", "length": 10}]}}]})

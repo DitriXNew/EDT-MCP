@@ -4575,6 +4575,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * ValueTable ends up in exactly the shape {@code createField} refuses to build - silently, since
      * nothing revalidates existing items (issue #295 review).
      *
+     * <p>A COMPOSITE spec is not that shape. {@code {ValueTable, CatalogRef.Products}} keeps
+     * {@code Rows.Product.Description} resolving through its REFERENCE half - which is exactly why
+     * {@code createField} accepts that path - so firing on "a collection is mentioned" refused a
+     * retype the creator is happy to build, one level below the same defect this branch already
+     * fixed for terminal types. The question is put to
+     * {@link FormElementWriter#carriesMembersOutsideThisModel}, the per-type rule the nested-address
+     * classifier itself applies, so creating and editing cannot answer it differently (issue #295
+     * review).</p>
+     *
      * @param member the form member being modified
      * @param normProp the normalized property (its name already aliased to {@code valueType})
      * @return a ready JSON error naming the items, or {@code null}
@@ -4582,7 +4591,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String refuseRetypeThatOrphansItems(EObject member, JsonObject normProp)
     {
         if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name"))) //$NON-NLS-1$
-            || !requestsCollectionType(normProp))
+            || !requestsCollectionType(normProp)
+            || FormElementWriter.carriesMembersOutsideThisModel(requestedTypeKinds(normProp)))
         {
             return null;
         }
