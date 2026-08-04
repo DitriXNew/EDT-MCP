@@ -415,6 +415,40 @@ def read_disk(relpath):
         return f.read()
 
 
+# ── Markdown table parsing (this project's OWN presentation contract) ──────────
+#
+# Splits on a '|' COLUMN DELIMITER but never on an escaped '\|'. This mirrors the
+# production writer: MarkdownUtils.escapeForTable turns a literal '|' inside a cell's
+# own text into '\|' precisely so it cannot be mistaken for a delimiter. A naive
+# str.split("|") does not know about that escape, so it cuts an escaped cell at the
+# WRONG point: the row then yields MORE cells than the table has columns, and a caller
+# filtering on an exact column count silently DROPS that row - a real row, quietly
+# invisible to the test. Any e2e test parsing a table this project rendered must go
+# through here (see CLAUDE.md pre-push item #10). Covered by test_markdown_table.py.
+_MD_CELL_SPLIT = re.compile(r"(?<!\\)\|")
+
+
+def split_markdown_row(line):
+    r"""Splits one rendered '| c1 | c2 | ... |' table row into its cell strings.
+
+    Delimiters are unescaped '|' only; each returned cell is stripped and has its
+    '\|' escapes turned back into a literal '|', so a cell's value equals the text
+    production was given. Returns [] for a line that is not a table row.
+    """
+    if line is None:
+        return []
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    parts = _MD_CELL_SPLIT.split(stripped)
+    # A well-formed row's OUTER delimiters produce an empty string before the first and
+    # after the last real cell - drop those two BY POSITION, never by stripping '|'
+    # characters off the ends (that would eat a genuine trailing '\|' in the last cell).
+    if len(parts) >= 2 and parts[0] == "" and parts[-1] == "":
+        parts = parts[1:-1]
+    return [p.strip().replace("\\|", "|") for p in parts]
+
+
 def reset_model():
     """Re-sync EDT's in-memory BM model to the on-disk baseline after a write-metadata test.
 

@@ -7,59 +7,47 @@ markers carry no stable per-marker id. JSON-response tool: success lands in
 Result.structured, errors in structured.error.
 
 The happy path is DISCOVERY-based: it scans the extension project's detailed problems
-for a row whose 'Fix' column says 'yes' (the doc-comment checks reliably expose fixes),
-reads that row's Check code / Module path / Line, and applies it; a locator that still
-matches several markers (or a multi-variant fix) is disambiguated with index / variant.
-It then RE-SCANS get_project_errors and asserts the fixed check/module no longer appears -
-proving the fix actually changed something, not just trusting the tool's self-reported
-success=true (a stub that always returned success without doing anything would otherwise
-still pass). It then cleans up after itself (revert + clean_project) so the run's tree
-stays clean. If the live fixture exposes no auto-fixable marker the happy test SKIPS - a
-known, accepted tradeoff of discovery-based scanning (there is no fixture-independent way
-to GUARANTEE a fixable marker without seeding one, which this suite does not do here).
+for a row whose 'Fix registered' column says 'yes' (the doc-comment checks reliably
+expose fixes), reads that row's Check code / Module path / Line, and applies it; a
+locator that still matches several markers (or a multi-variant fix) is disambiguated with
+index / variant. It then RE-SCANS get_project_errors and requires the marker COUNT for
+that locator to have dropped - proving the fix actually changed something, not just
+trusting the tool's self-reported success=true (a stub that always returned success
+without doing anything would otherwise still pass). It then cleans up after itself
+(revert + clean_project) so the run's tree stays clean. If the live fixture exposes no
+auto-fixable marker the happy test SKIPS - a known, accepted tradeoff of discovery-based
+scanning (there is no fixture-independent way to GUARANTEE a fixable marker without
+seeding one, which this suite does not do here).
+
+The table parsing itself is NOT discovery-dependent: it goes through the shared
+escape-aware harness.split_markdown_row, whose contract is pinned deterministically by
+test_markdown_table.py - so a parser regression fails there even when this test skips.
 
 Negative matrix (real error paths from ApplyQuickFixTool):
   - unknown checkId           -> "No marker matches check '<id>' ... run get_project_errors"
   - missing required checkId  -> requireArguments rejects it, naming the parameter
 """
 
-import re
-
 from harness import (
     call, assert_ok, assert_error, assert_error_quality, e2e_test,
     PROJECT, TESTS_PROJECT, E2ESkip, reset_all_fixtures, wait_for_project_ready,
+    split_markdown_row,
 )
-
-# Splits a markdown table row on '|' delimiters, but NOT on an escaped '\|' - production
-# (MarkdownUtils.escapeForTable) escapes a literal '|' inside a cell's own text (e.g. a
-# Description mentioning a BSL "?" operator's surrounding pipe-like syntax, or any text that
-# happens to contain '|') exactly so it cannot be mistaken for a column delimiter. A naive
-# str.split("|") does not know about that escape and cuts the row at the WRONG points, so a
-# row whose Description/Location cell contains a real '|' would parse to more than 7 cells and
-# get silently skipped here - even though it is a perfectly good, fixable marker.
-_CELL_SPLIT = re.compile(r"(?<!\\)\|")
-
-
-def _split_table_row(line):
-    """Splits one '| c1 | c2 | ... |' row into its (unescaped) cell strings."""
-    parts = _CELL_SPLIT.split(line.strip())
-    # A well-formed row's boundary delimiters produce an empty string before the first and
-    # after the last real cell - drop those two by position, not by stripping '|' characters
-    # off the ends (which could eat into a real trailing "\|" in the last cell's content).
-    if len(parts) >= 2 and parts[0] == "" and parts[-1] == "":
-        parts = parts[1:-1]
-    return [p.strip().replace("\\|", "|") for p in parts]
 
 
 def _scan_detailed_rows(project):
     """Yields each detailed-table row of get_project_errors(project) as a 7-cell dict:
-    desc, loc, modulePath, line, checkId, fix, hasDocs."""
+    desc, loc, modulePath, line, checkId, fix, hasDocs.
+
+    Rows are split with the shared escape-aware parser (harness.split_markdown_row): a
+    literal '|' inside a cell is escaped as '\\|' by production, and a naive split would
+    cut such a row into 8+ cells, so the exact-7 filter below would silently DROP a real,
+    fixable marker. The parser's own contract is pinned by test_markdown_table.py.
+    """
     r = call("get_project_errors", {"projectName": project, "responseFormat": "detailed"})
     assert_ok(r, "get_project_errors detailed scan")
     for line in (r.text or "").splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = _split_table_row(line)
+        cells = split_markdown_row(line)
         if len(cells) != 7 or cells[0].lower() == "description":  # skip the header row too
             continue
         desc, loc, module, ln, check, fix, docs = cells
@@ -68,20 +56,26 @@ def _scan_detailed_rows(project):
 
 
 def _find_fixable(project):
-    """Scan a project's DETAILED problems for rows flagged fixable (Fix == 'yes').
+    """Scan a project's DETAILED problems for rows flagged fixable (Fix registered == 'yes').
     Returns a list of {checkId, modulePath, line}."""
     return [{"checkId": row["checkId"], "modulePath": row["modulePath"], "line": row["line"]}
             for row in _scan_detailed_rows(project) if row["fix"].lower() == "yes"]
 
 
-def _has_marker(project, check_id, module_path):
-    """True when get_project_errors(project) still reports ANY marker for this exact
-    (checkId, modulePath) pair - used to confirm a fix actually made the ORIGINAL issue go
-    away (the line number is not part of the match: the fix itself can shift subsequent
-    lines, e.g. inserting a doc-comment stub, so re-matching the exact old line would be
-    fragile)."""
-    return any(row["checkId"] == check_id and row["modulePath"] == module_path
-               for row in _scan_detailed_rows(project))
+def _count_markers(project, check_id, module_path):
+    """How many markers get_project_errors(project) reports for this exact
+    (checkId, modulePath) pair.
+
+    A COUNT, not a boolean: the locator can legitimately match SEVERAL markers (that is
+    exactly the collision this tool disambiguates with `index`), so "is any still there?"
+    is the wrong question after fixing ONE of them - a surviving sibling would read as
+    "the fix did nothing". Comparing the count before/after proves one marker went away
+    while tolerating its siblings. The line is deliberately not part of the key: a fix can
+    shift the lines below it (e.g. inserting a doc-comment stub), so pinning the old line
+    number would be fragile in the other direction.
+    """
+    return sum(1 for row in _scan_detailed_rows(project)
+               if row["checkId"] == check_id and row["modulePath"] == module_path)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -99,6 +93,8 @@ def test_apply_a_discovered_fixable_marker():
         raise E2ESkip("no auto-fixable marker in the extension fixture (env-dependent)")
     try:
         c = candidates[0]
+        # Baseline for the effect assertion below, captured BEFORE the mutation.
+        before = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
         args = {"projectName": TESTS_PROJECT, "checkId": c["checkId"],
                 "modulePath": c["modulePath"]}
         if c["line"]:
@@ -121,12 +117,20 @@ def test_apply_a_discovered_fixable_marker():
 
         # Anti-cheat: a self-reported success alone does not prove the fix did anything (a
         # stub that always returns success=true without touching the source would pass
-        # everything above). Re-scan after the model revalidates and confirm the ORIGINAL
-        # check/module combination is genuinely gone.
+        # everything above). Re-scan after the model revalidates and require the marker
+        # COUNT for this locator to have DROPPED.
+        #
+        # Deliberately a count comparison, not "no marker with this locator survives": the
+        # locator can match several markers (the very collision resolved with `index`
+        # above), and this call fixed exactly ONE of them - demanding the whole locator be
+        # clean would fail the test even though the tool worked correctly.
         wait_for_project_ready()
-        assert not _has_marker(TESTS_PROJECT, c["checkId"], c["modulePath"]), (
-            "check '%s' must be gone from %s after its quick-fix was applied, not just "
-            "reported as success" % (c["checkId"], c["modulePath"]))
+        after = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
+        if after >= before:
+            raise AssertionError(
+                "applying the quick-fix for '%s' in %s must REMOVE a marker, but the count "
+                "did not drop (before=%d, after=%d) - success:true alone does not prove the "
+                "fix changed anything" % (c["checkId"], c["modulePath"], before, after))
     finally:
         # The fix mutated the extension (model + disk); the per-test reset only covers the
         # BASE, so revert + re-sync the extension here to keep the whole tree clean.
