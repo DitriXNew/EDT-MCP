@@ -543,6 +543,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     // ==================== FORM members (cross-model hop) ====================
 
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
+        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
+        return project != null ? project.getVersion() : null;
+    }
+
     /**
      * Deletes a FORM member (item / attribute / command / handler) addressed by a form FQN. The member
      * lives on the editable Form content model, so it is removed directly with {@link EcoreUtil#remove}
@@ -553,14 +561,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * previews what would be removed (no write transaction), {@code confirm=true} removes it and
      * force-exports the content form to {@code Form.form}.
      */
-    /** The project's platform version, or {@code null} when it cannot be resolved. */
-    private static Version platformVersionOf(ProjectContext ctx)
-    {
-        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
-        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
-        return project != null ? project.getVersion() : null;
-    }
-
     private String deleteFormMember(ProjectContext ctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean confirm)
     {

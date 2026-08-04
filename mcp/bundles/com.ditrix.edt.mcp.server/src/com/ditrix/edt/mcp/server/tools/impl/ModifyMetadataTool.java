@@ -4415,6 +4415,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return ToolResult.error("Failed to move form item: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
     }
 
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
+        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
+        return project != null ? project.getVersion() : null;
+    }
+
     /**
      * REBINDS an existing event handler (addressed by a handler FQN, {@code ...Handler.Event} at form
      * or item level) to a different BSL procedure {@code procName}. Resolves the MD-form, opens ONE BM
@@ -4427,14 +4435,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * persistence path the property-modify branch uses. Does NOT bind a NEW event (that is
      * create_metadata's job); a single {@code procedure} property is the whole change.
      */
-    /** The project's platform version, or {@code null} when it cannot be resolved. */
-    private static Version platformVersionOf(ProjectContext ctx)
-    {
-        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
-        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
-        return project != null ? project.getVersion() : null;
-    }
-
     private String rebindFormHandler(ProjectContext ctx, String normFqn,
         FormElementWriter.FormMemberRef ref, String procName)
     {
