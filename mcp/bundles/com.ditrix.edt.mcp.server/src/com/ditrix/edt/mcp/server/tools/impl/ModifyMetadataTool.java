@@ -2996,6 +2996,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * The tail of a form "not found" message: the kind-mismatch advice when there is one (issue
+     * #343), otherwise the branch's own generic pointer. Keeps every form miss in this tool phrased
+     * the same way - name the kind that found nothing, then either explain what DOES bear the name or
+     * point at {@code get_metadata_details}.
+     *
+     * @param advice the advice from {@code FormElementWriter} (never {@code null}, possibly empty)
+     * @param fallback the generic tail to use when there is no advice
+     * @return the tail to append
+     */
+    private static String advisedOr(String advice, String fallback)
+    {
+        return advice.isEmpty() ? fallback : advice;
+    }
+
+    /**
      * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
      * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
      * attribute can drop stored values on the next database update, so it is the destructive case a plain
@@ -3719,21 +3734,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The tail of a form "not found" message: the kind-mismatch advice when there is one (issue
-     * #343), otherwise the branch's own generic pointer. Keeps every form miss in this tool phrased
-     * the same way - name the kind that found nothing, then either explain what DOES bear the name or
-     * point at {@code get_metadata_details}.
-     *
-     * @param advice the advice from {@code FormElementWriter} (never {@code null}, possibly empty)
-     * @param fallback the generic tail to use when there is no advice
-     * @return the tail to append
-     */
-    private static String advisedOr(String advice, String fallback)
-    {
-        return advice.isEmpty() ? fallback : advice;
-    }
-
-    /**
      * Modifies the ordinary (non-handler, non-command, non-move) properties of a form member, the
      * remaining case of {@link #modifyFormMember} once those three structural branches are ruled out.
      * Resolves the platform version, then validates + applies every property inside ONE BM write
@@ -3767,7 +3767,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return gateFormRetype(formRetypePreview(normFqn),
                 () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport),
                 () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx,
-                    version));        }
+                    version));
+        }
         catch (Exception e)
         {
             // A property-validation failure carries a ready JSON error (possibly wrapped by the tx
@@ -3973,7 +3974,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             final Version version = platformVersionOf(ctx);
             return gateFormRetype(dynamicListRetypePreview(normFqn),
                 () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
-                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));        }
+                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
+        }
         catch (Exception e)
         {
             String validationJson = FormValidationException.jsonOf(e);
