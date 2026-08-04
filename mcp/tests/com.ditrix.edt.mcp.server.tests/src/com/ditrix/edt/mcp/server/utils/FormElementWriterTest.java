@@ -3183,6 +3183,35 @@ public class FormElementWriterTest
                 containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
             formAttribute.getEStructuralFeatures().add(
                 containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
+            // A collection attribute's value type + its COLUMNS (issue #295): the writer reads both
+            // reflectively, so a headless test can exercise the collection paths (a table bound to a
+            // ValueTable attribute, a field bound to one of its columns). 'types' is NON-containment,
+            // so a real mcore Type can be dropped in without re-parenting it.
+            EClass typeDescription = f.createEClass();
+            typeDescription.setName("TypeDescription"); //$NON-NLS-1$
+            EReference types = f.createEReference();
+            types.setName("types"); //$NON-NLS-1$
+            types.setEType(EcorePackage.Literals.EOBJECT);
+            types.setUpperBound(-1);
+            typeDescription.getEStructuralFeatures().add(types);
+            EClass formAttributeColumn = f.createEClass();
+            formAttributeColumn.setName("FormAttributeColumn"); //$NON-NLS-1$
+            formAttributeColumn.getESuperTypes().add(abstractFormAttribute);
+            formAttributeColumn.getEStructuralFeatures().add(
+                containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "columns", formAttributeColumn, true)); //$NON-NLS-1$
+            // A dynamic list is an attribute carrying a DynamicListExtInfo - the shape the table
+            // binding classifies as DYNAMIC_LIST_ATTRIBUTE (issue #295 review).
+            EClass dynamicListExtInfo = f.createEClass();
+            dynamicListExtInfo.setName("DynamicListExtInfo"); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "extInfo", dynamicListExtInfo, false)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(typeDescription);
+            pkg.getEClassifiers().add(formAttributeColumn);
+            pkg.getEClassifiers().add(dynamicListExtInfo);
 
             autoCommandBar = f.createEClass();
             autoCommandBar.setName("AutoCommandBar"); //$NON-NLS-1$
@@ -3202,6 +3231,10 @@ public class FormElementWriterTest
             table = f.createEClass();
             table.setName("Table"); //$NON-NLS-1$
             table.getESuperTypes().add(formItem);
+            // A table is a BOUND item: createTable writes its dataPath, and the retype guards read it
+            // back to find the tables that need the attribute's rows. The fixture declared the feature
+            // only on FormField, so buildDataPath was a silent no-op here (issue #295 review).
+            table.getEStructuralFeatures().add(containment(f, "dataPath", dataPath, false)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
@@ -3223,6 +3256,12 @@ public class FormElementWriterTest
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
 
             pkg.getEClassifiers().add(form);
+            // The owner that holds several forms: the level the orphan-item scan must NOT climb to,
+            // or it would see a sibling form's items (issue #295 review).
+            EClass formOwner = f.createEClass();
+            formOwner.setName("FormOwner"); //$NON-NLS-1$
+            formOwner.getEStructuralFeatures().add(containment(f, "forms", form, true)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(formOwner);
             pkg.getEClassifiers().add(table);
             pkg.getEClassifiers().add(buttonType);
             pkg.getEClassifiers().add(placementArea);
@@ -3412,6 +3451,729 @@ public class FormElementWriterTest
             commonForm.eGet(MdClassPackage.Literals.BASIC_FORM__FORM));
         org.mockito.Mockito.verify(tx, org.mockito.Mockito.never())
             .attachTopObject(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    // ---- attribute COLUMNS of a collection-typed form attribute (issue #295) ---------------------
+
+    @Test
+    public void testIsColumnToken()
+    {
+        assertTrue(FormElementWriter.isColumnToken("Column")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isColumnToken("columns")); //$NON-NLS-1$
+        assertTrue(FormElementWriter.isColumnToken("COLUMN")); //$NON-NLS-1$
+        // kolonka / kolonki
+        assertTrue(FormElementWriter.isColumnToken(fromCp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430)));
+        assertTrue(FormElementWriter.isColumnToken(fromCp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438)));
+        assertFalse(FormElementWriter.isColumnToken("Attribute")); //$NON-NLS-1$
+        assertFalse(FormElementWriter.isColumnToken(null));
+        assertEquals(FormElementWriter.Kind.COLUMN, FormElementWriter.kindForToken("Column")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseAttributeColumn()
+    {
+        FormMemberRef ref =
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Catalog.Products.forms.ItemForm", ref.formPath); //$NON-NLS-1$
+        assertEquals("Column", ref.kindToken); //$NON-NLS-1$
+        assertEquals("Price", ref.name); //$NON-NLS-1$
+        assertEquals("Rows", ref.ownerAttributeName); //$NON-NLS-1$
+        assertTrue(ref.isAttributeColumn());
+        // A column is NOT an item-level handler: half a dozen call sites branch on isItemLevel(), and
+        // folding the column into itemName would silently reroute all of them.
+        assertFalse(ref.isItemLevel());
+        assertNull(ref.itemName);
+        assertNull(ref.itemKindToken);
+    }
+
+    @Test
+    public void testParseAttributeColumnRussianTokensAndCommonForm()
+    {
+        // "Реквизит" + "Колонка" on a CommonForm (the 2-segment form path shape).
+        String attribute = fromCp(0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442);
+        String column = fromCp(0x041a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430);
+        FormMemberRef ref =
+            FormElementWriter.parse("CommonForm.Settings." + attribute + ".Rows." + column + ".Price"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull(ref);
+        assertEquals("CommonForm.Settings", ref.formPath); //$NON-NLS-1$
+        assertEquals("Price", ref.name); //$NON-NLS-1$
+        assertEquals("Rows", ref.ownerAttributeName); //$NON-NLS-1$
+        assertTrue(ref.isAttributeColumn());
+    }
+
+    @Test
+    public void testParseColumnOnlyOnAnAttribute()
+    {
+        // Only an ATTRIBUTE owns columns. A Field/Table "column" is part of the ITEM tree and is
+        // addressed as an item, so this shape must NOT be parsed as a form member at all.
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Rows.Column.Price")); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Table.Rows.Column.Price")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBareColumnFqnIsRefusedWithTheRightShape()
+    {
+        // 'Column' is a normal two-segment kind token, so parse() accepts '...Form.F.Column.Price'.
+        // Without an owner it addresses nothing - and left alone it used to fall through to
+        // findFormItem and hit a VISUAL ITEM named Price, editing/deleting the wrong element.
+        FormMemberRef bare = FormElementWriter.parse("Catalog.Products.Form.ItemForm.Column.Price"); //$NON-NLS-1$
+        assertNotNull(bare);
+        assertFalse(bare.isAttributeColumn());
+        String err = FormElementWriter.columnAddressingError(bare);
+        assertNotNull("a bare Column FQN must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must show the owner-qualified shape", //$NON-NLS-1$
+            err.contains("Attribute.<AttributeName>.Column.Price")); //$NON-NLS-1$
+
+        // A well-formed column ref, and every other kind, pass untouched.
+        assertNull(FormElementWriter.columnAddressingError(
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.columnAddressingError(
+            FormElementWriter.parse("Catalog.Products.Form.ItemForm.Field.Price"))); //$NON-NLS-1$
+        assertNull(FormElementWriter.columnAddressingError(null));
+    }
+
+    @Test
+    public void testColumnHandlerFqnIsRefusedBeforeItReachesTheItemTree()
+    {
+        // The leaf kind here is Handler, so the bare-Column guard alone would pass this through -
+        // and resolveHandlerContainer looks an item-level handler's owner up BY NAME for every
+        // non-Command token, so the handler would be created/rebound/deleted on a visual item that
+        // happens to share the column's name. Columns are form DATA and carry no events at all.
+        FormMemberRef ref = FormElementWriter.parse(
+            "Catalog.Products.Form.ItemForm.Column.Price.Handler.OnChange"); //$NON-NLS-1$
+        assertNotNull(ref);
+        assertEquals("Handler", ref.kindToken); //$NON-NLS-1$
+        assertEquals("Column", ref.itemKindToken); //$NON-NLS-1$
+        assertTrue("the shape parses as an ITEM-LEVEL handler", ref.isItemLevel()); //$NON-NLS-1$
+
+        String err = FormElementWriter.columnAddressingError(ref);
+        assertNotNull("a handler addressed on a Column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must say a column has no handlers", //$NON-NLS-1$
+            err.contains("no event handlers")); //$NON-NLS-1$
+        assertTrue("and point at the ITEM that displays it", err.contains("Field.<ItemName>")); //$NON-NLS-1$
+
+        // A handler on a real ITEM kind stays untouched.
+        assertNull(FormElementWriter.columnAddressingError(FormElementWriter.parse(
+            "Catalog.Products.Form.ItemForm.Field.Price.Handler.OnChange"))); //$NON-NLS-1$
+        // ... and so does a well-formed COLUMN address.
+        assertNull(FormElementWriter.columnAddressingError(FormElementWriter.parse(
+            "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParsePlainMemberHasNoOwnerAttribute()
+    {
+        // The new field must stay null for every pre-existing shape (a regression guard for the
+        // ownerAttributeName-based branching).
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.A").ownerAttributeName); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Handler.OnOpen").ownerAttributeName); //$NON-NLS-1$
+        assertNull(FormElementWriter.parse( //$NON-NLS-1$
+            "Catalog.Products.Form.ItemForm.Field.Price.Handler.OnChange").ownerAttributeName); //$NON-NLS-1$
+        assertFalse(FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.A").isAttributeColumn()); //$NON-NLS-1$
+    }
+
+    // ============ Showing a collection attribute's columns on the form (issue #295 review) ==========
+
+    @Test
+    public void testCreateFieldBindsToACollectionAttributeColumn()
+    {
+        // A ValueTable attribute could hold columns that NO form element could ever display: a dotted
+        // dataPath was accepted only for a dynamic list or the main object attribute, so 'Rows.Price'
+        // was refused and the data column stayed invisible.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+        EObject field = FormElementWriter.findFormItem(form, "PriceField"); //$NON-NLS-1$
+        assertNotNull("the field bound to the column must exist", field); //$NON-NLS-1$
+        EObject dataPath = (EObject)field.eGet(feature(field, "dataPath")); //$NON-NLS-1$
+        assertEquals("Rows.Price must split into 2 segments", Arrays.asList("Rows", "Price"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            dataPath.eGet(feature(dataPath, "segments"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMainCollectionAttributeStillHasItsColumnsValidated()
+    {
+        // The column check used to hang off "neither a dynamic list nor the main object attribute",
+        // so a collection attribute that ALSO carries main=true (a generated Object attribute retyped
+        // to ValueTable) took the main shortcut: any tail was accepted and the field bound to a column
+        // that does not exist (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Object", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        rows.eSet(feature(rows, "main"), Boolean.TRUE); //$NON-NLS-1$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "GhostOnMain", null, //$NON-NLS-1$
+            "Object.NoSuchColumn", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("main must not switch off column validation on a collection", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing column", err.contains("NoSuchColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "GhostOnMain")); //$NON-NLS-1$
+
+        // ...and a column that DOES exist is still accepted on the very same attribute.
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceOnMain", null, //$NON-NLS-1$
+            "Object.Price", null, null, false, null)); //$NON-NLS-1$
+        assertEquals(Arrays.asList("Object", "Price"), segmentsOf(form, "PriceOnMain")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAMainNonCollectionAttributeKeepsItsObjectSubAttributeShortcut()
+    {
+        // The other side of the same branch: the main OBJECT attribute's sub-attributes live outside
+        // the form model, so a dotted path on it stays accepted unchecked.
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "NumberField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateFieldRejectsAnUnknownColumnOnACollectionAttribute()
+    {
+        // Widening the dotted path must not widen it to ANY tail: a column that does not exist is
+        // named, with the create_metadata address that would create it.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "GhostField", null, //$NON-NLS-1$
+            "Rows.NoSuchColumn", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a nonexistent column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the missing column", err.contains("NoSuchColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and point at the tool that creates it", err.contains("create_metadata")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "GhostField")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateTableOverACollectionAttributeTakesItsOwnColumns()
+    {
+        // A table bound to a ValueTable attribute has no tabular section behind it, so the metadata-
+        // aware caller can supply no column names: they come from the ATTRIBUTE's own columns. And it
+        // gets NO LineNumber column - an in-memory collection has no such field.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price", "Qty"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNull(FormElementWriter.createTable(form, "RowsTable", null, "Rows", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+
+        assertEquals("the column field must be bound to the attribute's column", //$NON-NLS-1$
+            Arrays.asList("Rows", "Price"), segmentsOf(form, "RowsTablePrice")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(Arrays.asList("Rows", "Qty"), segmentsOf(form, "RowsTableQty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull("a collection has no LineNumber field, so no column may address one", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form, "RowsTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableOnAScalarAttributeIsRefusedAndWritesNothing()
+    {
+        // The silent-success case: a bare dataPath naming an attribute that was never retyped to a
+        // collection fell through to the tabular-section branch and reported SUCCESS while writing a
+        // table whose only column addressed '<Attr>.LineNumber' - a field a form attribute does not
+        // have (issue #295 review).
+        EObject form = newForm();
+        EObject plain = newObject(MODEL.formAttribute);
+        plain.eSet(feature(plain, "name"), "Plain"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plain); //$NON-NLS-1$
+
+        String err = FormElementWriter.createTable(form, "PlainTable", null, "Plain", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]);
+
+        assertNotNull("a table on a non-collection attribute must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must say how to fix it", err.contains("ValueTable")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and name the tool that does it", err.contains("modify_metadata")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Nothing was written: neither the table nor the bogus LineNumber column.
+        assertNull("a refused table must leave no item behind", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form, "PlainTable")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findFormItem(form, "PlainTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableOnAnUnknownAttributeIsRefusedAndWritesNothing()
+    {
+        EObject form = newForm();
+        String err = FormElementWriter.createTable(form, "GhostTable", null, "NoSuchAttr", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]);
+
+        assertNotNull("a table on a nonexistent attribute must be refused", err); //$NON-NLS-1$
+        assertTrue(err.contains("NoSuchAttr")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findFormItem(form, "GhostTable")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableBoundInsideACollectionAttributeIsRefused()
+    {
+        // The dotted arm used to win for ANY dotted path, so 'Rows.Price' - a path INTO a collection -
+        // was treated as a tabular section and produced a table on a column with an invented
+        // 'Rows.Price.LineNumber' (issue #295 review, found by self-review before push).
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String err = FormElementWriter.createTable(form, "InsideTable", null, "Rows.Price", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]);
+
+        assertNotNull("a table bound inside a collection attribute must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must point at the row source itself", err.contains("'Rows'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "InsideTable")); //$NON-NLS-1$
+        assertNull(FormElementWriter.findFormItem(form, "InsideTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATabularSectionTableIsStillBoundThroughTheMainObjectAttribute()
+    {
+        // The legitimate dotted shape: the head IS a form attribute (the main object one), and it must
+        // keep reaching the tabular-section arm.
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createTable(form, "Goods", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonList("Product"), null, null, false, new String[1])); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testItemsBoundBelowAnAttributeAreFound()
+    {
+        // What a retype to a collection would strand ABOVE the attribute: an existing field carrying
+        // 'Object.Number' when 'Number' is not (and will not be) a column.
+        EObject form = newForm();
+        EObject objectAttr = newObject(MODEL.formAttribute);
+        objectAttr.eSet(feature(objectAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        objectAttr.eSet(feature(objectAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", objectAttr); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "NumberField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+
+        assertEquals("the field bound below the attribute must be reported", //$NON-NLS-1$
+            Collections.singletonList("NumberField"), //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(objectAttr));
+
+        // A field bound to the attribute ITSELF is untouched by a retype, so it is not reported.
+        EObject plain = newObject(MODEL.formAttribute);
+        plain.eSet(feature(plain, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plain); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField", null, //$NON-NLS-1$
+            "Price", null, null, false, null)); //$NON-NLS-1$
+        assertTrue(FormElementWriter.itemsBoundBelowAttribute(plain).isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testItemsBoundBelowAColumnAreFoundFromTheFormRoot()
+    {
+        // A COLUMN's eContainer() is its owning ATTRIBUTE, not the form, so scanning from there found
+        // no items at all and every column retype passed the guard (issue #295 review). The scan now
+        // starts at the ROOT container.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        // A field bound two levels deep: Rows.Product.Description.
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "DeepField", null, //$NON-NLS-1$
+            "Rows.Product", null, null, false, null)); //$NON-NLS-1$
+        EObject deep = FormElementWriter.findFormItem(form, "DeepField"); //$NON-NLS-1$
+        EObject path = (EObject)deep.eGet(feature(deep, "dataPath")); //$NON-NLS-1$
+        ((List<String>)path.eGet(feature(path, "segments"))).add("Description"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the item bound below the COLUMN must be found from the form root", //$NON-NLS-1$
+            Collections.singletonList("DeepField"), //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(column));
+    }
+
+    @Test
+    public void testAFieldCannotWalkPastAPrimitiveColumn()
+    {
+        // Validating only the FIRST tail segment (so 'Rows.Product.Description' works) opened the
+        // other side: 'Rows.Price.Amount' was truncated to 'Price', passed the column check and was
+        // written whole - a primitive column has no 'Amount' (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject price = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformType(price, "Number"); //$NON-NLS-1$
+
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnPrimitive", null, //$NON-NLS-1$
+            "Rows.Price.Amount", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a path past a primitive column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the column", err.contains("Price")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "DeepOnPrimitive")); //$NON-NLS-1$
+
+        // The column ITSELF still binds - the refusal is about continuing past it.
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceCell2", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFieldCannotWalkPastAColumnOfAnyMemberlessPlatformType()
+    {
+        // Terminality used to be a hand-written list of the four primitives, while the type builder had
+        // grown ValueStorage and UUID: 'Rows.Id.Part' on a UUID column was accepted merely because the
+        // column existed, and the field was written with a binding that resolves to nothing (issue #295
+        // review). The question now goes to MetadataTypeBuilder - the place that decides which platform
+        // types this tool builds at all - so the two cannot drift apart again. Both languages, because
+        // the platform answers the type name in the configuration's own.
+        String[] memberless = {"UUID", "ValueStorage", //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataLanguageUtils.cp(0x0423, 0x043d, 0x0438, 0x043a, 0x0430, 0x043b, 0x044c, 0x043d, 0x044b,
+                0x0439, 0x0418, 0x0434, 0x0435, 0x043d, 0x0442, 0x0438, 0x0444, 0x0438, 0x043a, 0x0430,
+                0x0442, 0x043e, 0x0440), // UnikalnyjIdentifikator
+            MetadataLanguageUtils.cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430)}; // Stroka
+        for (String typeName : memberless)
+        {
+            EObject form = newForm();
+            EObject rows = newCollectionAttribute(form, "Rows", "Id"); //$NON-NLS-1$ //$NON-NLS-2$
+            EObject id = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+            setPlatformType(id, typeName);
+
+            String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnOpaque", null, //$NON-NLS-1$
+                "Rows.Id.Part", null, null, false, null); //$NON-NLS-1$
+            assertNotNull("a path past a " + typeName + " column must be refused", err); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the refusal must name the column: " + err, err.contains("'Id'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull(FormElementWriter.findFormItem(form, "DeepOnOpaque")); //$NON-NLS-1$
+
+            // The column ITSELF still binds - the refusal is about continuing past it.
+            assertNull(FormElementWriter.createMember(form, Kind.FIELD, "IdCell", null, //$NON-NLS-1$
+                "Rows.Id", null, null, false, null)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAFieldMayWalkPastANonPrimitiveColumn()
+    {
+        // OUTCOME 3 of NestedAddressing (MEMBERS_OUTSIDE_THIS_MODEL): a column whose type could carry
+        // the tail keeps accepting a deeper path - its members live in metadata this writer cannot
+        // read, so refusing on "unknown" would break a legitimate 'Rows.Product.Description'. Both
+        // shapes that reach this outcome are asserted: a not-yet-typed column and a REFERENCE one.
+        EObject form = newForm();
+        newCollectionAttribute(form, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("an untyped column must not block a deeper path", //$NON-NLS-1$
+            FormElementWriter.createMember(form, Kind.FIELD, "DeepOnRef", null, //$NON-NLS-1$
+                "Rows.Product.Description", null, null, false, null)); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "DeepOnRef")); //$NON-NLS-1$
+
+        EObject typedForm = newForm();
+        EObject typedRows = newCollectionAttribute(typedForm, "Rows", "Product"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject product = (EObject)((List<?>)typedRows.eGet(feature(typedRows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformType(product, "CatalogRef.Catalog"); //$NON-NLS-1$
+        assertNull("a REFERENCE column must not block a deeper path either", //$NON-NLS-1$
+            FormElementWriter.createMember(typedForm, Kind.FIELD, "DeepOnTypedRef", null, //$NON-NLS-1$
+                "Rows.Product.Description", null, null, false, null)); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(typedForm, "DeepOnTypedRef")); //$NON-NLS-1$
+        assertEquals(FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL,
+            FormElementWriter.nestedAddressingOf(product));
+    }
+
+    @Test
+    public void testAFieldCannotWalkPastACollectionColumnBecauseAColumnOwnsNoColumns()
+    {
+        // OUTCOME 2 of NestedAddressing (MEMBERS_HAVE_NO_HOME) - the case a two-valued rule had no
+        // room for. A ValueTable column is NOT terminal, so "not terminal => pass" accepted
+        // 'Rows.Nested.Price' as soon as the column existed. But the members such a value implies are
+        // COLUMNS, and the form metamodel puts `columns` on FormAttribute only - a FormAttributeColumn
+        // owns none - so 'Price' can never be declared under 'Nested', and the binding is dead on
+        // arrival (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Nested"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject nested = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformType(nested, "ValueTable"); //$NON-NLS-1$
+
+        assertEquals("a collection COLUMN has members with nowhere to live", //$NON-NLS-1$
+            FormElementWriter.NestedAddressing.MEMBERS_HAVE_NO_HOME,
+            FormElementWriter.nestedAddressingOf(nested));
+        String err = FormElementWriter.createMember(form, Kind.FIELD, "DeepOnNested", null, //$NON-NLS-1$
+            "Rows.Nested.Price", null, null, false, null); //$NON-NLS-1$
+        assertNotNull("a path past a collection column must be refused", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the column: " + err, err.contains("'Nested'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...and say WHY nothing can live under it: " + err, //$NON-NLS-1$
+            err.contains("owns no") || err.contains("owns none")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormItem(form, "DeepOnNested")); //$NON-NLS-1$
+
+        // The OTHER side: the collection column as the FINAL segment stays addressable - the refusal
+        // is about continuing PAST it, never about binding to it.
+        assertNull("a field bound to the collection column itself must still be created", //$NON-NLS-1$
+            FormElementWriter.createMember(form, Kind.FIELD, "NestedCell", null, //$NON-NLS-1$
+                "Rows.Nested", null, null, false, null)); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "NestedCell")); //$NON-NLS-1$
+
+        // ...and the same ValueTable type on an ATTRIBUTE, which DOES own columns, keeps its address
+        // space: the outcome is decided by the metamodel, not by the type name.
+        assertEquals("a collection ATTRIBUTE owns columns, so members can be declared under it", //$NON-NLS-1$
+            FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL,
+            FormElementWriter.nestedAddressingOf(rows));
+    }
+
+    @Test
+    public void testACompositeColumnStaysAddressableThroughItsReferenceHalf()
+    {
+        // The refusals fire only when EVERY declared type is provably dead. A column typed
+        // {ValueTable, CatalogRef.Catalog} can still resolve 'Description' through its reference half,
+        // so widening the guard to "any collection type" would have been a false refusal - the exact
+        // inversion this branch has had to undo four times.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Mixed"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject mixed = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformTypes(mixed, "ValueTable", "CatalogRef.Catalog"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL,
+            FormElementWriter.nestedAddressingOf(mixed));
+        assertNull("a composite carrying a reference must keep the deeper path", //$NON-NLS-1$
+            FormElementWriter.createMember(form, Kind.FIELD, "DeepOnMixed", null, //$NON-NLS-1$
+                "Rows.Mixed.Description", null, null, false, null)); //$NON-NLS-1$
+
+        // ...while {ValueTable, String} - both halves dead - is refused, and as the COLLECTION case,
+        // because "no members at all" is only true when EVERY type is memberless.
+        EObject deadRows = newCollectionAttribute(form, "Dead", "Both"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject both = (EObject)((List<?>)deadRows.eGet(feature(deadRows, "columns"))).get(0); //$NON-NLS-1$
+        setPlatformTypes(both, "ValueTable", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(FormElementWriter.NestedAddressing.MEMBERS_HAVE_NO_HOME,
+            FormElementWriter.nestedAddressingOf(both));
+    }
+
+    @Test
+    public void testEveryNestedAddressingOutcomeIsDecidedExplicitly()
+    {
+        // The point of naming the outcomes: there is no third default left. Walking values() means a
+        // constant added later and not answered raises here instead of silently reading as "allowed",
+        // which is exactly how the collection case slipped through the two-valued rule.
+        int refusals = 0;
+        for (FormElementWriter.NestedAddressing addressing : FormElementWriter.NestedAddressing.values())
+        {
+            String message = FormElementWriter.nestedAddressingError(addressing,
+                "Rows.Col.Tail", "Rows", "Col"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            if (addressing == FormElementWriter.NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL)
+            {
+                assertNull("an addressable continuation must not be refused", message); //$NON-NLS-1$
+                continue;
+            }
+            refusals++;
+            assertNotNull("outcome " + addressing + " must answer with a refusal", message); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the refusal must name the column (" + addressing + "): " + message, //$NON-NLS-1$ //$NON-NLS-2$
+                message.contains("'Col'")); //$NON-NLS-1$
+            assertTrue("the refusal must be actionable (" + addressing + "): " + message, //$NON-NLS-1$ //$NON-NLS-2$
+                message.contains("dataPath")); //$NON-NLS-1$
+        }
+        assertEquals("exactly two of the three outcomes refuse", 2, refusals); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATableBoundToTheAttributeIsFoundAsARowConsumer()
+    {
+        // What blocks a retype AWAY from a collection even when it has no columns: a table that needs
+        // its rows. The create path already refuses to build a table on a scalar, so the edit path
+        // must refuse to turn one into that (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createTable(form, "RowsTable", null, "Rows", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+
+        assertEquals("the table bound to the attribute must be reported", //$NON-NLS-1$
+            Collections.singletonList("RowsTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(rows));
+
+        // A FIELD bound to the attribute itself is not a row consumer - it must not block a retype.
+        EObject plain = newObject(MODEL.formAttribute);
+        plain.eSet(feature(plain, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", plain); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceField2", null, //$NON-NLS-1$
+            "Price", null, null, false, null)); //$NON-NLS-1$
+        assertTrue(FormElementWriter.rowConsumersBoundToAttribute(plain).isEmpty());
+    }
+
+    @Test
+    public void testARowConsumerIsMatchedByAddressNotByLeafName()
+    {
+        // The name conflict: a COLUMN 'Price' inside 'Rows', and a SEPARATE top-level collection
+        // attribute also called 'Price' shown by a table. Matching the leaf name against a
+        // one-segment data path made the column answer for that table and refused a legitimate
+        // column retype (issue #295 review).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        EObject sameNamedAttribute = newCollectionAttribute(form, "Price"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createTable(form, "PriceTable", null, "Price", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+
+        // The table consumes the ATTRIBUTE's rows...
+        assertEquals(Collections.singletonList("PriceTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(sameNamedAttribute));
+        // ...and NOT the column's: the column is addressed 'Rows.Price'.
+        assertTrue("a same-named column must not answer for the attribute's table", //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(column).isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testATableBoundToAColumnIsStillFoundForThatColumn()
+    {
+        // The other side of addressing by path: a table bound to 'Rows.Price' DOES consume that
+        // column's rows, and the leaf-name match (one segment only) could never have seen it.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = (EObject)((List<?>)rows.eGet(feature(rows, "columns"))).get(0); //$NON-NLS-1$
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "NestedTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject path = newObject(modelClass("DataPath")); //$NON-NLS-1$
+        ((List<String>)path.eGet(feature(path, "segments"))).add("Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<String>)path.eGet(feature(path, "segments"))).add("Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "dataPath"), path); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+
+        assertEquals("a table bound to the COLUMN's path must be found for it", //$NON-NLS-1$
+            Collections.singletonList("NestedTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(column));
+    }
+
+    /** Gives {@code member} a value type of the named platform type (primitive or no-qualifier). */
+    private static void setPlatformType(EObject member, String typeName)
+    {
+        setPlatformTypes(member, typeName);
+    }
+
+    /** Gives {@code member} a COMPOSITE value type of the named platform types, in order. */
+    @SuppressWarnings("unchecked")
+    private static void setPlatformTypes(EObject member, String... typeNames)
+    {
+        EObject typeDescription = newObject(modelClass("TypeDescription")); //$NON-NLS-1$
+        for (String typeName : typeNames)
+        {
+            com._1c.g5.v8.dt.mcore.Type type =
+                com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(type); //$NON-NLS-1$
+        }
+        member.eSet(feature(member, "valueType"), typeDescription); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheOrphanScanStopsAtItsOwnForm()
+    {
+        // getRootContainer climbed PAST the content form (a Form is contained by its BasicForm) into
+        // the owner, so the scan reached the owner's OTHER forms: a field named 'Object.Number' on a
+        // neighbouring form refused a retype here (issue #295 review). Both forms are put under one
+        // container, the way an owner holds them.
+        EObject owner = newObject(modelClass("FormOwner")); //$NON-NLS-1$
+        EObject thisForm = newForm();
+        EObject otherForm = newForm();
+        addTo(owner, "forms", thisForm); //$NON-NLS-1$
+        addTo(owner, "forms", otherForm); //$NON-NLS-1$
+
+        EObject attr = newObject(MODEL.formAttribute);
+        attr.eSet(feature(attr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        attr.eSet(feature(attr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(thisForm, "attributes", attr); //$NON-NLS-1$
+
+        // The NEIGHBOUR carries the very path the guard looks for.
+        EObject strangerAttr = newObject(MODEL.formAttribute);
+        strangerAttr.eSet(feature(strangerAttr, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        strangerAttr.eSet(feature(strangerAttr, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(otherForm, "attributes", strangerAttr); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(otherForm, Kind.FIELD, "StrangerField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+
+        assertTrue("a field on a NEIGHBOURING form must not block this retype", //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(attr).isEmpty());
+
+        // ...and the same path on THIS form still does.
+        assertNull(FormElementWriter.createMember(thisForm, Kind.FIELD, "OwnField", null, //$NON-NLS-1$
+            "Object.Number", null, null, false, null)); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("OwnField"), //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(attr));
+    }
+
+    @Test
+    public void testAnItemBoundToAnExistingColumnIsNotReported()
+    {
+        // Collection-to-collection: the column exists, so the field keeps resolving and must not block.
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceCell", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+
+        assertTrue("an item bound to a real column is not orphaned", //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(rows).isEmpty());
+    }
+
+    @Test
+    public void testATableOnADynamicListGetsNoInventedColumns()
+    {
+        // A dynamic list's columns are its query fields (EDT fills them) and it has no LineNumber, so
+        // the table is created EMPTY instead of carrying a column that addresses nothing.
+        EObject form = newForm();
+        EObject list = newObject(MODEL.formAttribute);
+        list.eSet(feature(list, "name"), "List"); //$NON-NLS-1$ //$NON-NLS-2$
+        list.eSet(feature(list, "extInfo"), newObject(modelClass("DynamicListExtInfo"))); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", list); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createTable(form, "ListTable", null, "List", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+        assertNotNull(FormElementWriter.findFormItem(form, "ListTable")); //$NON-NLS-1$
+        assertNull("a dynamic list has no LineNumber field to bind a column to", //$NON-NLS-1$
+            FormElementWriter.findFormItem(form, "ListTableLineNumber")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTabularSectionTableKeepsItsLineNumberColumn()
+    {
+        // The other side of the same branch: a tabular-section table is unchanged.
+        EObject form = newForm();
+        assertNull(FormElementWriter.createTable(form, "Goods", null, "Object.Goods", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonList("Product"), null, null, false, new String[1])); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsLineNumber")); //$NON-NLS-1$
+        assertNotNull(FormElementWriter.findFormItem(form, "GoodsProduct")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMainTableResolutionErrorAnswersBeforeTheWrite()
+    {
+        // The wording used to live only inside the write callback, so an unresolvable main table was
+        // answered AFTER the destructive prompt. Exposed as a pre-check the caller runs first.
+        String err = FormElementWriter.mainTableResolutionError(null, "Catalog.NoSuchObject"); //$NON-NLS-1$
+        assertNotNull("an unresolvable main table must be refusable before the write", err); //$NON-NLS-1$
+        assertTrue(err.contains("Cannot resolve the main table")); //$NON-NLS-1$
+        assertTrue(err.contains("Catalog.NoSuchObject")); //$NON-NLS-1$
+        // Nothing requested - nothing to refuse.
+        assertNull(FormElementWriter.mainTableResolutionError(null, null));
+        assertNull(FormElementWriter.mainTableResolutionError(null, "")); //$NON-NLS-1$
+    }
+
+    /** The dot-split segments of the item named {@code itemName}, or {@code null} when it is absent. */
+    private static List<?> segmentsOf(EObject form, String itemName)
+    {
+        EObject item = FormElementWriter.findFormItem(form, itemName);
+        if (item == null)
+        {
+            return null;
+        }
+        EObject dataPath = (EObject)item.eGet(feature(item, "dataPath")); //$NON-NLS-1$
+        return (List<?>)dataPath.eGet(feature(dataPath, "segments")); //$NON-NLS-1$
+    }
+
+    /**
+     * Adds a ValueTable form attribute named {@code name} carrying {@code columnNames}. The value type
+     * is a REAL mcore {@code Type} named ValueTable, because the collection check reads it through
+     * {@code McoreUtil}, not through the raw EMF feature.
+     */
+    @SuppressWarnings("unchecked")
+    private static EObject newCollectionAttribute(EObject form, String name, String... columnNames)
+    {
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), name); //$NON-NLS-1$
+        EObject typeDescription = newObject(modelClass("TypeDescription")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.Type valueTable = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createType();
+        valueTable.setName("ValueTable"); //$NON-NLS-1$
+        ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(valueTable); //$NON-NLS-1$
+        attribute.eSet(feature(attribute, "valueType"), typeDescription); //$NON-NLS-1$
+        for (String columnName : columnNames)
+        {
+            EObject column = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+            column.eSet(feature(column, "name"), columnName); //$NON-NLS-1$
+            ((List<EObject>)attribute.eGet(feature(attribute, "columns"))).add(column); //$NON-NLS-1$
+        }
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return attribute;
     }
 
     @Test

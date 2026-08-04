@@ -490,6 +490,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         if (formRef != null)
         {
+            // Checked BEFORE the handler/member split: a handler FQN whose owning item is addressed
+            // as a Column takes the handler branch, which never sees createFormMember's guard, and
+            // would bind the handler to a same-named visual ITEM (issue #295 review).
+            String columnErr = FormElementWriter.columnAddressingError(formRef);
+            if (columnErr != null)
+            {
+                return ToolResult.error(columnErr).toJson();
+            }
             if (FormElementWriter.isHandlerToken(formRef.kindToken))
             {
                 return createFormHandler(projectName, normFqn, formRef, properties, callType);
@@ -1274,7 +1282,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Unsupported form element kind '" + ref.kindToken + "' in '" //$NON-NLS-1$ //$NON-NLS-2$
                 + normFqn + "'. Supported form kinds: Attribute, Command, Group, Decoration, Field, " //$NON-NLS-1$
-                + "Button, Table (and Handler for events).").toJson(); //$NON-NLS-1$
+                + "Button, Table, Column (a collection attribute's column, addressed as " //$NON-NLS-1$
+                + "'...Attribute.AttrName.Column.ColName') and Handler for events.").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(ref.name))
         {
@@ -1298,7 +1307,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         Configuration config = ctx.config;
 
         final FormElementWriter.Kind fKind = kind;
-        final String parent = fmProps.parentName;
+        // A COLUMN's owner is named by the FQN itself ('...Attribute.AttrName.Column.ColName'), so it
+        // takes the parent slot; every other kind nests via the optional `parent` property (#295).
+        final String parent = ref.isAttributeColumn() ? ref.ownerAttributeName : fmProps.parentName;
         final String bind = fmProps.bindTarget;
         final String titleText = fmProps.titleVal;
         // The designer's auto-children (extended tooltip / context menu) get script-variant
@@ -1483,6 +1494,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             if (pName == null || pName.isEmpty())
             {
                 return ToolResult.error(ERR_PROPERTY_NEEDS_NAME).toJson();
+            }
+            // A COLUMN accepts only a title. Its owner comes from the FQN, it is not a visual item so
+            // it nests under nothing, and it binds to nothing - every other property would be parsed,
+            // stored and then never applied by createColumn, reporting success for a discarded
+            // request. Refused HERE so there is one place to keep right (issue #295 review).
+            if (kind == FormElementWriter.Kind.COLUMN && !"title".equalsIgnoreCase(pName)) //$NON-NLS-1$
+            {
+                return ToolResult.error(ERR_PROPERTY_PREFIX + pName + "' does not apply to an " //$NON-NLS-1$
+                    + "attribute column. A column takes only 'title': its owner is the attribute " //$NON-NLS-1$
+                    + "named in the FQN, and its data type is set afterwards with modify_metadata.") //$NON-NLS-1$
+                    .toJson();
             }
             switch (pName.toLowerCase())
             {

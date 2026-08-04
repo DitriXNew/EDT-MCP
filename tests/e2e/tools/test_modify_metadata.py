@@ -38,6 +38,7 @@ from harness import (
     poll_disk_contains,
     read_disk,
     e2e_test,
+    _fail,
     PROJECT,
     PROJECT_DIR,
     TESTS_PROJECT,
@@ -521,6 +522,280 @@ def test_modify_form_attribute_type():
         "the type alias must apply to valueType: %r" % (r.structured,)
     poll_diff_contains("precision",
                        ctx="the form attribute's Number(10,2) type must land in the .form on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# In-memory collection types on a FORM attribute, and their refusal elsewhere (issue #295)
+# ──────────────────────────────────────────────────────────────────────────────
+
+ITEM_FORM_FILE = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_attribute_valuetable_type():
+    # A form attribute CAN hold an in-memory collection - this is the whole point of #295.
+    _seed_form_attribute("MFValueTable")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFValueTable",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}],
+    })
+    assert_ok(r, "set a form attribute's type to ValueTable")
+    poll_disk_contains(ITEM_FORM_FILE, "<types>ValueTable</types>",
+                       ctx="the ValueTable type must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_form_attribute_valuetree_russian_token():
+    # The kind token is bilingual, like every other type token.
+    _seed_form_attribute("MFValueTree")
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFValueTree",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ДеревоЗначений"}]}}],
+    })
+    assert_ok(r, "set a form attribute's type to ValueTree via the Russian token")
+    poll_disk_contains(ITEM_FORM_FILE, "<types>ValueTree</types>",
+                       ctx="the Russian collection token must resolve to the ValueTree platform type")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_collection_type_refused_on_stored_attribute():
+    # EDT does NOT catch this: a ValueTable written into a .mdo attribute survives a full
+    # revalidation and only breaks later, in the platform. So the refusal must come from the tool,
+    # and it must say where the kind IS allowed and what to use instead (issue #295).
+    attr = "E2ECollectionOnStored"
+    cr = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr})
+    assert_ok(cr, "seed stored attribute")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}],
+    })
+    e = assert_error(r, "a stored attribute must refuse an in-memory collection")
+    assert_error_quality(e, names=["ValueTable"], suggests=["Form", "ValueStorage"],
+                         ctx="the refusal must name the kind, point at a FORM attribute and offer "
+                             "ValueStorage as the persistable alternative")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_attribute_column_type():
+    # A column is typed exactly like an attribute, addressed one level deeper.
+    _seed_form_attribute("MFColsOwner")
+    tr = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFColsOwner",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(tr, "make the owner a ValueTable")
+    wait_for_project_ready()
+    cr = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFColsOwner.Column.Price"})
+    assert_ok(cr, "seed the column")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFColsOwner.Column.Price",
+        "properties": [{"name": "type",
+                        "value": {"types": [{"kind": "Number", "precision": 15, "scale": 2}]}}],
+    })
+    assert_ok(r, "set an attribute column's type")
+    assert "valueType" in (r.structured.get("applied") or []), \
+        "the type alias must apply to the column's valueType: %r" % (r.structured,)
+    poll_disk_contains(ITEM_FORM_FILE, "<precision>15</precision>",
+                       ctx="the column's Number(15,2) type must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_column_type_is_rendered_by_its_platform_name():
+    # The types of a just-assigned valueType are platform PROXIES whose raw EMF `name` can be empty;
+    # rendering that raw feature would show the column's type as the bare EClass name `TypeItem`,
+    # defeating the point of the section (issue #295 review).
+    attr = "MFColRender"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Amount"})
+    assert_ok(c, "add the column")
+    wait_for_project_ready()
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Amount",
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Number", "precision": 12}]}}]})
+    assert_ok(r, "type the column")
+    wait_for_project_ready()
+
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    text = d.text or ""
+    assert_contains(text, "## Attribute columns", "the columns section must be rendered")
+    rows = [ln for ln in text.splitlines() if "Amount" in ln and "|" in ln]
+    if not rows:
+        _fail("the column row must be present: %r" % text[:400])
+    if "Number" not in rows[0]:
+        _fail("the column type must render as its platform name, not the EClass: %r" % rows[0])
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_bare_column_fqn_does_not_hit_a_visual_item():
+    # 'Column' is an ordinary two-segment kind token, so '...Form.F.Column.Name' parses - but it names
+    # no owning attribute. Left alone it fell through to the ITEM lookup and would have modified a
+    # visual item of the same name (issue #295 review). It must be refused, and the item untouched.
+    fld = "MFBareCol"
+    _seed_form_field("MFBareColAttr", fld)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Column." + fld,
+        "properties": [{"name": "title", "value": "Hijacked", "language": "en"}],
+    })
+    e = assert_error(r, "a bare Column FQN must be refused")
+    assert_contains(e, "Attribute.<AttributeName>.Column",
+                    ctx="the refusal must show the owner-qualified column shape")
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "Hijacked",
+                        ctx="the same-named visual item must NOT have been modified")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_is_refused_while_columns_exist():
+    # Retyping a collection attribute to a non-collection would strand its columns - the very shape
+    # create_metadata refuses to build, and EDT does not flag it either (issue #295 review).
+    attr = "MFOrphanOwner"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Kept"})
+    assert_ok(c, "add a column")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "String", "length": 10}]}}]})
+    e = assert_error(r, "retyping away from a collection while columns exist must be refused")
+    assert_error_quality(e, names=["Kept"], suggests=["delete_metadata", "ValueTable"],
+                         ctx="the refusal must name the stranded columns and the two ways out")
+
+    # ValueTable -> ValueTree is collection-to-collection, so it stays allowed.
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTree"}]}}]})
+    assert_ok(ok, "collection-to-collection retype must still be allowed")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_of_a_column_carrying_a_nested_binding_follows_the_requested_type():
+    # The orphan scan fired on the mere PRESENCE of a tail, so a column with 'Rows.Product.Description'
+    # under it refused EVERY non-collection retype - including one to a REFERENCE type, whose members
+    # live in the metadata and whose deeper paths createField deliberately builds. The tool was
+    # stricter about editing a form than about creating one (issue #295 review). The verdict now
+    # follows the REQUESTED type: memberless refuses, member-owning proceeds.
+    attr, col = "MFRefCol", "Product"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.%s.Column.%s" % (attr, col)})
+    assert_ok(c, "add the column")
+    wait_for_project_ready()
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.MFRefDeep",
+        "properties": [{"name": "dataPath", "value": "%s.%s.Description" % (attr, col)}]})
+    assert_ok(f, "bind a field BELOW the column (createField allows this through an untyped column)")
+    wait_for_project_ready()
+
+    column_fqn = "Catalog.Catalog.Form.ItemForm.Attribute.%s.Column.%s" % (attr, col)
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "Catalog.Catalog"}]}}]})
+    assert_ok(ok, "a retype to a REFERENCE keeps the nested binding resolving and must be allowed")
+    wait_for_project_ready()
+
+    # A COMPOSITE {ValueTable, Ref} keeps the tail resolving through its REFERENCE half - which is
+    # exactly why createField accepts such a path - so the collection guard must not fire on the mere
+    # presence of a collection kind (issue #295 review).
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [
+            {"kind": "ValueTable"}, {"kind": "Ref", "ref": "Catalog.Catalog"}]}}]})
+    assert_ok(ok, "a composite collection+reference retype must be allowed")
+    wait_for_project_ready()
+
+    # ...while a PURE collection strands the same binding and must still be refused.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    e = assert_error(r, "a PURE collection retype must still be refused")
+    assert_error_quality(e, names=["MFRefDeep"], suggests=["delete_metadata", "dataPath"],
+                         ctx="the refusal must name the item the collection would strand")
+
+    # Put the column back on a reference so the scalar case below is judged on its own.
+    ok = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "Catalog.Catalog"}]}}]})
+    assert_ok(ok, "restore the reference type")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": column_fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "String", "length": 10}]}}]})
+    e = assert_error(r, "a retype to a MEMBERLESS type must still be refused")
+    assert_error_quality(e, names=["MFRefDeep"], suggests=["delete_metadata", "dataPath"],
+                         ctx="the refusal must name the item it would strand and the two ways out")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dynamic_list_conversion_is_refused_while_columns_exist():
+    # The dynamic-list branch retypes the attribute to DynamicList WITHOUT building a TypeDescription,
+    # so it bypassed the ordinary property path's guard and stranded the columns just the same
+    # (issue #295 review). Both doors must be shut.
+    attr = "MFDynOrphan"
+    _seed_form_attribute(attr)
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Survivor"})
+    assert_ok(c, "add a column")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "queryText", "value": "SELECT Catalog.Catalog.Ref FROM Catalog.Catalog"}]})
+    e = assert_error(r, "dynamic-list conversion must be refused while columns exist")
+    assert_error_quality(e, names=["Survivor"], suggests=["delete_metadata", "ValueTable"],
+                         ctx="the refusal must name the columns the conversion would strand")
+
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_contains(d.text or "", "Survivor",
+                    ctx="the column must still be there after the refused conversion")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_addressing_error_lists_column():
+    # The addressing help an agent reads when the form cannot be resolved is the kind inventory; it
+    # must advertise Column, or the column FQN shape stays undiscoverable (issue #295).
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.NoSuchForm_zzz.Attribute.X",
+        "properties": [{"name": "title", "value": "x", "language": "en"}],
+    })
+    e = assert_error(r, "an unresolvable form is refused with the addressing help")
+    assert_contains(e, "Column", ctx="the form-addressing inventory must mention Column")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

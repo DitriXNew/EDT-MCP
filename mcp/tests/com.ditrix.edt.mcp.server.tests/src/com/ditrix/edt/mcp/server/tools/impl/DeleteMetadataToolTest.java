@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -20,7 +23,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EPackage;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EcoreFactory;
+import org.eclipse.emf.ecore.EcorePackage;
+import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
 import com.google.gson.JsonObject;
@@ -860,5 +870,504 @@ public class DeleteMetadataToolTest
             row.containsKey("referencingObject")); //$NON-NLS-1$
         assertEquals("someFeature", row.get("reference")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Blue", row.get("targetObject")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ---- the destructive-consent authorization point (issue #331 / #295 review) ------------------
+
+    /**
+     * A recording write: it must run ONLY when consent was granted, and exactly once.
+     */
+    private static final class RecordingWrite implements java.util.function.Supplier<String>
+    {
+        int calls;
+
+        @Override
+        public String get()
+        {
+            calls++;
+            return "{\"written\":true}"; //$NON-NLS-1$
+        }
+    }
+
+    private static ConsentPreview anyPreview()
+    {
+        return new ConsentPreview("Delete form member", "subtitle", 1, //$NON-NLS-1$ //$NON-NLS-2$
+            java.util.Collections.singletonList("Catalog.X.Form.F.Attribute.A")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentRejectNeverRunsTheWrite()
+    {
+        RecordingWrite write = new RecordingWrite();
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.REJECT);
+
+        String result = tool.deleteWithConsent(anyPreview(), write);
+
+        assertEquals("a REJECTED delete must not mutate anything", 0, write.calls); //$NON-NLS-1$
+        assertNotNull(result);
+        assertTrue("the caller must get the refusal, not a success payload", //$NON-NLS-1$
+            result.contains("error")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentTimeoutNeverRunsTheWrite()
+    {
+        RecordingWrite write = new RecordingWrite();
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.TIMEOUT);
+
+        String result = tool.deleteWithConsent(anyPreview(), write);
+
+        assertEquals("an UNANSWERED prompt must not mutate anything", 0, write.calls); //$NON-NLS-1$
+        assertTrue(result.contains("error")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConsentAllowRunsTheWriteExactlyOnce()
+    {
+        RecordingWrite write = new RecordingWrite();
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW);
+
+        String result = tool.deleteWithConsent(anyPreview(), write);
+
+        assertEquals("an ALLOWED delete runs the write exactly once", 1, write.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", result); //$NON-NLS-1$
+    }
+
+    private static DeleteMetadataTool toolAnswering(DestructiveConsentGate.ConsentDecision decision)
+    {
+        return new DeleteMetadataTool((name, preview) -> decision);
+    }
+
+    private static DeleteMetadataTool.FormDeletePreview previewWithDescendants(int count)
+    {
+        DeleteMetadataTool.FormDeletePreview data = new DeleteMetadataTool.FormDeletePreview();
+        data.found = true;
+        data.type = "FormAttribute"; //$NON-NLS-1$
+        for (int i = 0; i < count; i++)
+        {
+            data.descendants.add(descendant("Col" + i, "FormAttributeColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return data;
+    }
+
+    private static FormElementWriter.FormMemberRef columnRef()
+    {
+        return FormElementWriter.parse("Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormMemberBranchRunsItsWriteOnlyWhenConsentIsGranted()
+    {
+        // Pins the MEMBER branch's authorization step (the Column shape): given ITS preview and ITS
+        // write, the write runs only on ALLOW.
+        //
+        // What this does NOT prove, stated plainly because the comment here used to claim it did: it
+        // calls gateFormMemberDelete directly, so re-routing deleteFormMember() straight to
+        // performFormDelete() would leave this test green. Driving the real dispatch needs a resolved
+        // project + BM services, which a headless unit test has none of; the production call site is
+        // one line (see deleteFormMember) and is what a reviewer must read.
+        for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
+            DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
+        {
+            RecordingWrite write = new RecordingWrite();
+            String result = toolAnswering(refused).gateFormMemberDelete(
+                "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price", //$NON-NLS-1$
+                columnRef(), false, previewWithDescendants(0), write);
+            assertEquals("a refused member delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
+                0, write.calls);
+            assertTrue(result.contains("error")); //$NON-NLS-1$
+        }
+
+        RecordingWrite allowed = new RecordingWrite();
+        String ok = toolAnswering(DestructiveConsentGate.ConsentDecision.ALLOW).gateFormMemberDelete(
+            "Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price", //$NON-NLS-1$
+            columnRef(), false, previewWithDescendants(2), allowed);
+        assertEquals("an allowed member delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormObjectBranchRunsItsWriteOnlyWhenConsentIsGranted()
+    {
+        // Same scope as its twin above: the authorization STEP, not the branch's wiring to it.
+        for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
+            DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
+        {
+            RecordingWrite write = new RecordingWrite();
+            String result = toolAnswering(refused).gateFormObjectDelete(
+                "Catalog.Products.Form.ItemForm", new DeleteMetadataTool.FormContentSummary(), write); //$NON-NLS-1$
+            assertEquals("a refused form-object delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
+                0, write.calls);
+            assertTrue(result.contains("error")); //$NON-NLS-1$
+        }
+
+        RecordingWrite allowed = new RecordingWrite();
+        String ok = toolAnswering(DestructiveConsentGate.ConsentDecision.ALLOW).gateFormObjectDelete(
+            "Catalog.Products.Form.ItemForm", new DeleteMetadataTool.FormContentSummary(), allowed); //$NON-NLS-1$
+        assertEquals("an allowed form-object delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePreviewListsTheSingularElementsADeleteTakesToo()
+    {
+        // A Table owns its command bar, context menu, tooltip and three additions through SINGULAR
+        // containments - real addressable elements that EcoreUtil.remove takes with it. The walk
+        // covered only `items` and `columns`, so the preview promised the table alone (issue #295
+        // review). The features are not listed by hand: anything single-valued that IS a FormItem.
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/deletepreview"); //$NON-NLS-1$
+        EClass formItem = factory.createEClass();
+        formItem.setName("FormItem"); //$NON-NLS-1$
+        EAttribute itemName = factory.createEAttribute();
+        itemName.setName("name"); //$NON-NLS-1$
+        itemName.setEType(EcorePackage.Literals.ESTRING);
+        formItem.getEStructuralFeatures().add(itemName);
+        EReference bar = factory.createEReference();
+        bar.setName("autoCommandBar"); //$NON-NLS-1$
+        bar.setEType(formItem);
+        bar.setContainment(true);
+        formItem.getEStructuralFeatures().add(bar);
+        EReference dataPath = factory.createEReference();
+        dataPath.setName("dataPath"); //$NON-NLS-1$
+        dataPath.setEType(EcorePackage.Literals.EOBJECT);
+        dataPath.setContainment(true);
+        formItem.getEStructuralFeatures().add(dataPath);
+        pkg.getEClassifiers().add(formItem);
+
+        EObject table = new DynamicEObjectImpl(formItem);
+        EObject commandBar = new DynamicEObjectImpl(formItem);
+        commandBar.eSet(itemName, "GoodsCommandBar"); //$NON-NLS-1$
+        table.eSet(bar, commandBar);
+        // A non-element containment must NOT be counted as a removed element.
+        table.eSet(dataPath, EcoreFactory.eINSTANCE.createEObject());
+
+        List<java.util.Map<String, Object>> out = new java.util.ArrayList<>();
+        DeleteMetadataTool.collectDescendantsForTest(table, out);
+
+        assertEquals("the singular contained element must be listed, the data path must not", //$NON-NLS-1$
+            1, out.size());
+        assertEquals("GoodsCommandBar", out.get(0).get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testThePreviewListsTheHandlerBindingsADeleteTakesToo()
+    {
+        // The walk named the features it followed - `items`, `columns`, and the singular containments
+        // holding a FormItem - so the two containments that hold something ELSE were invisible: an
+        // element's `handlers` list and a command's `action`. EcoreUtil.remove takes both, so deleting
+        // a field, a button or a command was authorized and previewed as "one member" while it
+        // silently carried off the procedure binding (issue #295 review). The radius now follows the
+        // CONTAINMENT structure, and reports whatever in it carries its own name.
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/deleteradius"); //$NON-NLS-1$
+
+        // An EventHandler is NOT a FormItem and lives in a MANY containment - the shape the walk missed.
+        EClass eventHandler = factory.createEClass();
+        eventHandler.setName("EventHandler"); //$NON-NLS-1$
+        eventHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        // A command's action: an UNNAMED container holding the named CommandHandler - so the walk has
+        // to descend THROUGH something it does not report.
+        EClass commandHandler = factory.createEClass();
+        commandHandler.setName("CommandHandler"); //$NON-NLS-1$
+        commandHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass actionContainer = factory.createEClass();
+        actionContainer.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
+        EReference handlerRef = factory.createEReference();
+        handlerRef.setName("handler"); //$NON-NLS-1$
+        handlerRef.setEType(commandHandler);
+        handlerRef.setContainment(true);
+        actionContainer.getEStructuralFeatures().add(handlerRef);
+
+        EClass field = factory.createEClass();
+        field.setName("FormField"); //$NON-NLS-1$
+        field.getEStructuralFeatures().add(nameAttribute(factory));
+        field.getEStructuralFeatures().add(manyContainment(factory, "handlers", eventHandler)); //$NON-NLS-1$
+        EReference action = factory.createEReference();
+        action.setName("action"); //$NON-NLS-1$
+        action.setEType(actionContainer);
+        action.setContainment(true);
+        field.getEStructuralFeatures().add(action);
+        pkg.getEClassifiers().add(eventHandler);
+        pkg.getEClassifiers().add(commandHandler);
+        pkg.getEClassifiers().add(actionContainer);
+        pkg.getEClassifiers().add(field);
+
+        EObject target = new DynamicEObjectImpl(field);
+        target.eSet(field.getEStructuralFeature("name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject bound = new DynamicEObjectImpl(eventHandler);
+        bound.eSet(eventHandler.getEStructuralFeature("name"), "PriceOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)target.eGet(field.getEStructuralFeature("handlers"))).add(bound); //$NON-NLS-1$
+        EObject container = new DynamicEObjectImpl(actionContainer);
+        EObject command = new DynamicEObjectImpl(commandHandler);
+        command.eSet(commandHandler.getEStructuralFeature("name"), "PriceRun"); //$NON-NLS-1$ //$NON-NLS-2$
+        container.eSet(handlerRef, command);
+        target.eSet(action, container);
+
+        List<Map<String, Object>> out = new ArrayList<>();
+        DeleteMetadataTool.collectDescendantsForTest(target, out);
+
+        List<Object> names = new ArrayList<>();
+        for (Map<String, Object> entry : out)
+        {
+            names.add(entry.get("name")); //$NON-NLS-1$
+        }
+        assertTrue("the bound event handler must be in the delete radius: " + names, //$NON-NLS-1$
+            names.contains("PriceOnChange")); //$NON-NLS-1$
+        assertTrue("the command action's handler must be in the delete radius: " + names, //$NON-NLS-1$
+            names.contains("PriceRun")); //$NON-NLS-1$
+        assertEquals("the unnamed action container is descended through, not reported: " + names, //$NON-NLS-1$
+            2, out.size());
+    }
+
+    @Test
+    public void testThePromptBreakdownIsReadOffTheDescendantsItCounts()
+    {
+        // The prompt spelled out the kinds the old walk followed ("nested items, attribute columns")
+        // while the event handler it now finds went unmentioned - a fixed phrase can only describe the
+        // walk it was written for. The wording is grouped from the entries themselves, so it cannot
+        // name a category the walk does not produce, nor omit one it does (issue #295 review).
+        DeleteMetadataTool.FormDeletePreview data = new DeleteMetadataTool.FormDeletePreview();
+        data.found = true;
+        data.type = "FormField"; //$NON-NLS-1$
+        data.descendants.add(descendant("Menu", "FormGroup")); //$NON-NLS-1$ //$NON-NLS-2$
+        data.descendants.add(descendant("PriceOnChange", "EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String[] seenSubtitle = {null};
+        new DeleteMetadataTool((name, preview) -> {
+            seenSubtitle[0] = preview.getSubtitle();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Field.Price", //$NON-NLS-1$
+            columnRef(), false, data, new RecordingWrite());
+
+        assertTrue("the prompt must name what it actually found: " + seenSubtitle[0], //$NON-NLS-1$
+            seenSubtitle[0].contains("1 FormGroup") && seenSubtitle[0].contains("1 EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("...and must not recite categories it never walked: " + seenSubtitle[0], //$NON-NLS-1$
+            seenSubtitle[0].contains("attribute columns")); //$NON-NLS-1$
+        assertEquals("nothing contained describes as nothing", "", //$NON-NLS-1$ //$NON-NLS-2$
+            new DeleteMetadataTool.FormDeletePreview().describeDescendants());
+    }
+
+    private static Map<String, Object> descendant(String name, String type)
+    {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("name", name); //$NON-NLS-1$
+        entry.put("type", type); //$NON-NLS-1$
+        return entry;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testTheContentSummaryListsWhatItCounts()
+    {
+        // One summary feeds both phases: the prompt's counters and the confirm=false preview's item
+        // list. The prompt told the caller to run the preview for details while the preview answered
+        // with the BasicForm alone (issue #295 review), so the elements are asserted here and the
+        // preview's USE of them by the e2e (a wire output).
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/contentsummary"); //$NON-NLS-1$
+        // A separate 'name' attribute per EClass: an EStructuralFeature belongs to ONE class, so
+        // sharing the instance re-parents it and the first class silently loses the feature.
+        EClass formItem = factory.createEClass();
+        formItem.setName("FormItem"); //$NON-NLS-1$
+        formItem.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass columnClass = factory.createEClass();
+        columnClass.setName("FormAttributeColumn"); //$NON-NLS-1$
+        columnClass.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass commandClass = factory.createEClass();
+        commandClass.setName("FormCommand"); //$NON-NLS-1$
+        commandClass.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass attributeClass = factory.createEClass();
+        attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+        attributeClass.getEStructuralFeatures().add(nameAttribute(factory));
+        attributeClass.getEStructuralFeatures().add(manyContainment(factory, "columns", columnClass)); //$NON-NLS-1$
+        // The named NON-FormItem containments a whole-form delete also takes: the form's own event
+        // handlers, an element's event handlers, and a command's action (an unnamed container holding
+        // a named CommandHandler). None of them is a FormItem, so a walk that counted the items tree
+        // plus three named features could not see them (issue #295 review).
+        EClass eventHandler = factory.createEClass();
+        eventHandler.setName("EventHandler"); //$NON-NLS-1$
+        eventHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass commandHandler = factory.createEClass();
+        commandHandler.setName("CommandHandler"); //$NON-NLS-1$
+        commandHandler.getEStructuralFeatures().add(nameAttribute(factory));
+        EClass actionContainer = factory.createEClass();
+        actionContainer.setName("FormCommandHandlerContainer"); //$NON-NLS-1$
+        EReference actionHandler = factory.createEReference();
+        actionHandler.setName("handler"); //$NON-NLS-1$
+        actionHandler.setEType(commandHandler);
+        actionHandler.setContainment(true);
+        actionContainer.getEStructuralFeatures().add(actionHandler);
+        EReference commandAction = factory.createEReference();
+        commandAction.setName("action"); //$NON-NLS-1$
+        commandAction.setEType(actionContainer);
+        commandAction.setContainment(true);
+        commandClass.getEStructuralFeatures().add(commandAction);
+        formItem.getEStructuralFeatures().add(manyContainment(factory, "handlers", eventHandler)); //$NON-NLS-1$
+
+        EClass form = factory.createEClass();
+        form.setName("Form"); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(manyContainment(factory, "items", formItem)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(manyContainment(factory, "attributes", attributeClass)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(
+            manyContainment(factory, "formCommands", commandClass)); //$NON-NLS-1$
+        form.getEStructuralFeatures().add(manyContainment(factory, "handlers", eventHandler)); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formItem);
+        pkg.getEClassifiers().add(columnClass);
+        pkg.getEClassifiers().add(commandClass);
+        pkg.getEClassifiers().add(attributeClass);
+        pkg.getEClassifiers().add(eventHandler);
+        pkg.getEClassifiers().add(commandHandler);
+        pkg.getEClassifiers().add(actionContainer);
+        pkg.getEClassifiers().add(form);
+
+        EObject model = new DynamicEObjectImpl(form);
+        EObject field = new DynamicEObjectImpl(formItem);
+        field.eSet(formItem.getEStructuralFeature("name"), "PriceField"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject itemHandler = new DynamicEObjectImpl(eventHandler);
+        itemHandler.eSet(eventHandler.getEStructuralFeature("name"), "PriceOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)field.eGet(formItem.getEStructuralFeature("handlers"))).add(itemHandler); //$NON-NLS-1$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("items"))).add(field); //$NON-NLS-1$
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(attributeClass.getEStructuralFeature("name"), "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject column = new DynamicEObjectImpl(columnClass);
+        column.eSet(columnClass.getEStructuralFeature("name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)attribute.eGet(attributeClass.getEStructuralFeature("columns"))).add(column); //$NON-NLS-1$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("attributes"))).add(attribute); //$NON-NLS-1$
+        EObject command = new DynamicEObjectImpl(commandClass);
+        command.eSet(commandClass.getEStructuralFeature("name"), "Post"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject action = new DynamicEObjectImpl(actionContainer);
+        EObject actionProc = new DynamicEObjectImpl(commandHandler);
+        actionProc.eSet(commandHandler.getEStructuralFeature("name"), "PostRun"); //$NON-NLS-1$ //$NON-NLS-2$
+        action.eSet(actionHandler, actionProc);
+        command.eSet(commandAction, action);
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("formCommands"))).add(command); //$NON-NLS-1$
+        EObject formHandler = new DynamicEObjectImpl(eventHandler);
+        formHandler.eSet(eventHandler.getEStructuralFeature("name"), "OnCreateAtServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        ((List<EObject>)model.eGet(form.getEStructuralFeature("handlers"))).add(formHandler); //$NON-NLS-1$
+
+        DeleteMetadataTool.FormContentSummary summary =
+            DeleteMetadataTool.summarizeFormContentForTest(model);
+
+        // EVERY member the prompt counts must be listed, with its type - dropping any of them (or the
+        // 'type' field) has to fail here, or the preview could stop promising what it promises.
+        List<Object> names = new ArrayList<>();
+        for (java.util.Map<String, Object> entry : summary.elements)
+        {
+            names.add(entry.get("name")); //$NON-NLS-1$
+            assertNotNull("every listed element needs its type: " + entry, //$NON-NLS-1$
+                entry.get("type")); //$NON-NLS-1$
+        }
+        assertTrue("the item must be listed: " + names, names.contains("PriceField")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the attribute must be listed: " + names, names.contains("Rows")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the COLUMN must be listed: " + names, names.contains("Price")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the COMMAND must be listed: " + names, names.contains("Post")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The three the feature-named walk could not reach.
+        assertTrue("the FORM-level handler must be listed: " + names, //$NON-NLS-1$
+            names.contains("OnCreateAtServer")); //$NON-NLS-1$
+        assertTrue("the ITEM's handler must be listed: " + names, //$NON-NLS-1$
+            names.contains("PriceOnChange")); //$NON-NLS-1$
+        assertTrue("the command's ACTION handler must be listed: " + names, //$NON-NLS-1$
+            names.contains("PostRun")); //$NON-NLS-1$
+        assertEquals("the unnamed action container is walked through, not listed: " + names, //$NON-NLS-1$
+            7, summary.total());
+        assertTrue("the breakdown is derived from what was found: " + summary.describe(), //$NON-NLS-1$
+            summary.describe().contains("EventHandler") //$NON-NLS-1$
+                && summary.describe().contains("CommandHandler")); //$NON-NLS-1$
+    }
+
+    /** A fresh {@code name} string attribute (one instance per owning EClass - see above). */
+    private static EAttribute nameAttribute(EcoreFactory factory)
+    {
+        EAttribute attribute = factory.createEAttribute();
+        attribute.setName("name"); //$NON-NLS-1$
+        attribute.setEType(EcorePackage.Literals.ESTRING);
+        return attribute;
+    }
+
+    /** A many-valued containment reference named {@code name} holding {@code type}. */
+    private static EReference manyContainment(EcoreFactory factory, String name, EClass type)
+    {
+        EReference reference = factory.createEReference();
+        reference.setName(name);
+        reference.setEType(type);
+        reference.setContainment(true);
+        reference.setUpperBound(-1);
+        return reference;
+    }
+
+    @Test
+    public void testTheFormPromptCountsTheContentItRemoves()
+    {
+        // A form delete takes the whole content Form.form with it, so a constant "1" asked the user to
+        // authorize a single element while items, attributes, columns and commands went too - the
+        // understatement issue #331's acceptance criteria call out. The MEMBER branch has counted
+        // honestly since the review; this is its twin.
+        DeleteMetadataTool.FormContentSummary content = new DeleteMetadataTool.FormContentSummary();
+        content.elements.add(descendant("PriceField", "FormField")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("QtyField", "FormField")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("Rows", "FormAttribute")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("Price", "FormAttributeColumn")); //$NON-NLS-1$ //$NON-NLS-2$
+        content.elements.add(descendant("OnCreateAtServer", "EventHandler")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        int[] seenCount = {0};
+        String[] seenSubtitle = {null};
+        new DeleteMetadataTool((name, preview) -> {
+            seenCount[0] = preview.getTotalCount();
+            seenSubtitle[0] = preview.getSubtitle();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormObjectDelete("Catalog.Products.Form.ItemForm", content, new RecordingWrite()); //$NON-NLS-1$
+
+        assertEquals("the prompt counts the form plus everything its content holds", 6, seenCount[0]); //$NON-NLS-1$
+        // The breakdown is grouped from the entries, so it names the handler it really found instead
+        // of reciting the four categories the old feature walk knew (issue #295 review).
+        assertTrue("the prompt must say what is inside: " + seenSubtitle[0], //$NON-NLS-1$
+            seenSubtitle[0].contains("2 FormField") && seenSubtitle[0].contains("1 FormAttribute") //$NON-NLS-1$ //$NON-NLS-2$
+                && seenSubtitle[0].contains("1 FormAttributeColumn") //$NON-NLS-1$
+                && seenSubtitle[0].contains("1 EventHandler")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEmptyFormPromptStaysReadable()
+    {
+        // A form whose content is empty (or could not be read) must not grow an empty parenthesis.
+        String[] seenSubtitle = {null};
+        int[] seenCount = {0};
+        new DeleteMetadataTool((name, preview) -> {
+            seenSubtitle[0] = preview.getSubtitle();
+            seenCount[0] = preview.getTotalCount();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormObjectDelete("Catalog.Products.Form.ItemForm", //$NON-NLS-1$
+            new DeleteMetadataTool.FormContentSummary(), new RecordingWrite());
+
+        assertEquals(1, seenCount[0]);
+        assertFalse("an empty content must not render an empty '()'", seenSubtitle[0].contains("()")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheConsentPromptCountsTheContainedElements()
+    {
+        // The prompt must describe the real blast radius, so a column-bearing attribute is not
+        // presented as a single-element delete.
+        int[] seen = {0};
+        new DeleteMetadataTool((name, preview) -> {
+            seen[0] = preview.getTotalCount();
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
+            columnRef(), false, previewWithDescendants(3), new RecordingWrite());
+        assertEquals("the prompt counts the member plus its contained elements", 4, seen[0]); //$NON-NLS-1$
     }
 }

@@ -296,6 +296,40 @@ def test_delete_form_group_cascades_subtree():
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_form_field_preview_lists_the_handler_it_takes():
+    # A field's event handler lives in a `handlers` containment - not in `items`, not a FormItem - so
+    # the walk that named the features it followed never saw it, while EcoreUtil.remove takes it with
+    # the field. The delete was authorized and previewed as "one member" and carried the procedure
+    # binding off silently (issue #295 review). The radius now follows the CONTAINMENT structure.
+    _seed_form_attribute("DHAttr")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DHField",
+        "properties": [{"name": "dataPath", "value": "DHAttr"}]})
+    assert_ok(r, "seed bound field")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.DHField.Handler.OnChange",
+        "properties": [{"name": "procedure", "value": "DHFieldOnChange_zz"}]})
+    assert_ok(r, "seed the field's OnChange handler")
+    wait_for_project_ready()
+
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.DHField"
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the field delete")
+    names = [it.get("name") for it in (pv.structured.get("items") or [])]
+    assert "DHFieldOnChange_zz" in names, \
+        "the preview must list the handler the delete takes with the field: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""), "EventHandler",
+                    "the message must break the radius down by what it actually found")
+
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the field (confirm)")
+    poll_disk_lacks(_FORM, "DHFieldOnChange_zz",
+                    ctx="the handler binding must be gone from the .form with its field")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_delete_form_handler_confirm():
     # Seed a form-level OnOpen handler with a distinctive proc name, then delete it by event FQN.
     r = call("create_metadata", {
@@ -483,6 +517,14 @@ def test_delete_form_object_preview_then_confirm():
     cr = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
     assert_ok(cr, "seed form object to delete")
     wait_for_project_ready()
+    # A form-level event handler: it lives in the form's `handlers` containment, which is neither the
+    # items tree nor one of the three named features the old count walked - so a whole-form delete
+    # carried the procedure binding off unmentioned (issue #295 review).
+    h = call("create_metadata", {
+        "projectName": PROJECT, "fqn": fqn + ".Handler.OnOpen",
+        "properties": [{"name": "procedure", "value": "ZDelFormOnOpen_zz"}]})
+    assert_ok(h, "seed a form-level handler")
+    wait_for_project_ready()
 
     # Preview (confirm omitted): the form is LISTED and nothing is removed.
     pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
@@ -492,6 +534,20 @@ def test_delete_form_object_preview_then_confirm():
     assert form in names, "preview items must list the form: %r" % (pv.structured,)
     assert_contains(pv.structured.get("message", ""), "confirm=true",
                     "preview must instruct re-calling with confirm=true")
+    assert "ZDelFormOnOpen_zz" in names, \
+        "the preview must list the handler the form delete takes with it: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""), "EventHandler",
+                    "the breakdown must name what the walk actually found")
+    # ...and it must NOT be padded with the form's DERIVED data (the form-data structure, the BSL
+    # context types/parameters/events, the standard commands): none of that is authored or persisted,
+    # and counting it turned a small form into a 450-entry prompt (found by this round's live probe).
+    assert len(names) < 60, \
+        "the preview must count authored content, not derived data: %d entries" % (len(names),)
+    # The prompt counts the form's CONTENT and points the caller here for the details, so the preview
+    # has to list that content too - it used to answer with the BasicForm alone (issue #295 review).
+    # A fresh form already carries its auto command bar.
+    assert len(names) > 1, \
+        "the preview must list the form's content, not the form alone: %r" % (pv.structured,)
     # The form must still render after a preview (not mutated).
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [fqn]})
     assert_ok(d, "the form must still resolve after a preview")
@@ -769,3 +825,37 @@ def test_delete_xdto_member():
     assert_ok(d, "get_metadata_details read-back on the package")
     assert_not_contains(d.text, "| Gone |", "the deleted property must be GONE from the model read-back")
     assert_contains(d.text, "| Kept |", "the surviving property must remain in the model read-back")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_preview_of_a_collection_attribute_lists_its_columns():
+    """The preview must name the COLUMNS the confirmed delete will take with the attribute.
+
+    Columns are containment children of a collection-typed form attribute, so EcoreUtil.remove
+    removes them - but they are not in the `items` tree the preview used to walk. Listing only the
+    attribute would understate the destruction of a two-phase confirm (issue #295 review).
+    """
+    attr, col = "E2EDelColOwner", "E2EDelCol"
+    a = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(a, "seed the attribute")
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "make it a ValueTable")
+    wait_for_project_ready()
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(c, "seed the column")
+    wait_for_project_ready()
+
+    r = call("delete_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "preview the collection attribute delete")
+    assert r.structured.get("action") == "preview", \
+        "confirm absent must take the preview branch: %r" % (r.structured,)
+    names = [str(item.get("name")) for item in (r.structured.get("items") or [])]
+    assert col in names, \
+        "the preview must list the column the delete will remove: %r" % (names,)

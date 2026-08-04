@@ -45,6 +45,7 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -78,6 +79,8 @@ public final class FormElementWriter
     // Form-model feature names (reflective).
     private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
+    /** The COLUMNS of a form attribute whose value type is an in-memory collection (issue #295). */
+    private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
     private static final String FEATURE_TITLE = "title"; //$NON-NLS-1$
     private static final String FEATURE_VALUE_TYPE = "valueType"; //$NON-NLS-1$
@@ -155,6 +158,7 @@ public final class FormElementWriter
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_LABEL_DECORATION_EXT_INFO = "LabelDecorationExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_ATTRIBUTE_COLUMN = "FormAttributeColumn"; //$NON-NLS-1$
     private static final String ECLASS_AUTO_COMMAND_BAR = "AutoCommandBar"; //$NON-NLS-1$
     private static final String ECLASS_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
@@ -214,7 +218,7 @@ public final class FormElementWriter
     private static final String TYPE_MANAGED_FORM = "ManagedForm"; //$NON-NLS-1$
 
     /** A supported form-element kind, resolved from a (bilingual) FQN kind token. */
-    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON, TABLE }
+    public enum Kind { ATTRIBUTE, COMMAND, GROUP, DECORATION, FIELD, BUTTON, TABLE, COLUMN }
 
     /** A parsed form-member FQN: the form path (for {@code resolveMdForm}) + the leaf kind/name. */
     public static final class FormMemberRef
@@ -231,21 +235,53 @@ public final class FormElementWriter
         public final String itemKindToken;
         /** For an ITEM-LEVEL handler FQN, the owning item's name; {@code null} otherwise. */
         public final String itemName;
+        /**
+         * For an attribute-COLUMN FQN ({@code ...Attribute.Table.Column.Name}), the owning form
+         * attribute's name; {@code null} for every other shape. Deliberately NOT folded into
+         * {@code itemName}: {@link #isItemLevel()} means "an event handler on a form item" to half a
+         * dozen call sites, and a column is not that (issue #295).
+         */
+        public final String ownerAttributeName;
+
+        /**
+         * How many trailing FQN segments {@link #parse} consumed for this member - 2 for a form-level
+         * member or handler, 4 for an item-level handler AND for an attribute column. Carried rather
+         * than re-derived: a caller that needs the OWNING FORM cuts this many segments off the
+         * address, and re-deriving it from a boolean got the column shape wrong (it is not
+         * item-level, yet its tail is 4), which scoped a marker filter to the ATTRIBUTE instead of
+         * the form and answered a false all-clear (issue #295 review). Set where the shape is
+         * actually decided, so a shape added later cannot forget to declare its length.
+         */
+        public final int tailSegments;
 
         FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
-            String itemName)
+            String itemName, int tailSegments)
+        {
+            this(formPath, kindToken, name, itemKindToken, itemName, null, tailSegments);
+        }
+
+        FormMemberRef(String formPath, String kindToken, String name, String itemKindToken,
+            String itemName, String ownerAttributeName, int tailSegments)
         {
             this.formPath = formPath;
             this.kindToken = kindToken;
             this.name = name;
             this.itemKindToken = itemKindToken;
             this.itemName = itemName;
+            this.ownerAttributeName = ownerAttributeName;
+            this.tailSegments = tailSegments;
         }
 
         /** Whether the FQN addresses an event handler on a form ITEM (vs the form root). */
         public boolean isItemLevel()
         {
             return itemName != null;
+        }
+
+        /** Whether the FQN addresses a COLUMN of a form attribute (issue #295). */
+        public boolean isAttributeColumn()
+        {
+            return ownerAttributeName != null;
         }
     }
 
@@ -263,6 +299,8 @@ public final class FormElementWriter
      *   <li>{@code CommonForm.FormName.Kind.Name} (a CommonForm IS a form)</li>
      *   <li>{@code Type.Object.Form.FormName.ItemKind.ItemName.Handler.Event} (an event handler on a
      *       form ITEM) and its {@code CommonForm.FormName.ItemKind.ItemName.Handler.Event} variant</li>
+     *   <li>{@code Type.Object.Form.FormName.Attribute.AttrName.Column.ColumnName} (a COLUMN of a
+     *       collection-typed form attribute) and its {@code CommonForm.} variant - issue #295</li>
      * </ul>
      * The form-element kind tokens are NOT confused with the mdclass member tokens because a mdclass
      * member FQN never carries a form token at position 2 nor starts with {@code CommonForm} followed
@@ -295,12 +333,18 @@ public final class FormElementWriter
         if (tail == 2)
         {
             // Form-level member or handler: Kind.Name.
-            return new FormMemberRef(formPath, p[rem], p[rem + 1], null, null);
+            return new FormMemberRef(formPath, p[rem], p[rem + 1], null, null, tail);
         }
         if (tail == 4 && isHandlerToken(p[rem + 2]))
         {
             // Item-level handler: ItemKind.ItemName.Handler.Event.
-            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1]);
+            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], p[rem], p[rem + 1], tail);
+        }
+        if (tail == 4 && isColumnToken(p[rem + 2]) && kindForToken(p[rem]) == Kind.ATTRIBUTE)
+        {
+            // Attribute column: Attribute.AttrName.Column.ColumnName (issue #295). Only an ATTRIBUTE
+            // owns columns - a Field/Table column is part of the ITEM tree and is addressed as an item.
+            return new FormMemberRef(formPath, p[rem + 2], p[rem + 3], null, null, p[rem + 1], tail);
         }
         return null;
     }
@@ -478,6 +522,11 @@ public final class FormElementWriter
     private static final String RU_FORM = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x0430); // forma
     private static final String RU_FORMS = cp(0x0444, 0x043e, 0x0440, 0x043c, 0x044b); // formy
     private static final String RU_HANDLER = cp(0x043e, 0x0431, 0x0440, 0x0430, 0x0431, 0x043e, 0x0442, 0x0447, 0x0438, 0x043a); // obrabotchik
+    private static final String RU_COLUMN = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0430); // kolonka
+    private static final String RU_COLUMNS = cp(0x043a, 0x043e, 0x043b, 0x043e, 0x043d, 0x043a, 0x0438); // kolonki
+    // The Russian platform NAMES of the value types this writer classifies are not repeated here: the
+    // classification is asked of MetadataTypeBuilder, whose bilingual kind maps are the same ones the
+    // type builder resolves a spec with (issue #295 review).
     // Unlike the kind tokens above (matched through the lowercasing kindForToken), this one is an
     // event LEAF: it is both matched case-insensitively and EMITTED as a scoping address segment,
     // so it is held in the capitalized spelling EDT renders.
@@ -532,6 +581,267 @@ public final class FormElementWriter
     private static final String RU_CATALOG_DESCRIPTION =
         cp(0x041d, 0x0430, 0x0438, 0x043c, 0x0435, 0x043d, 0x043e, 0x0432, 0x0430, 0x043d, 0x0438, 0x0435); // Naimenovanie
 
+    /**
+     * Whether a kind token addresses an attribute COLUMN (English or Russian, case-insensitive) - the
+     * leaf of a {@code ...Attribute.Table.Column.Name} FQN (issue #295).
+     *
+     * @param token the raw kind token from the FQN
+     * @return {@code true} for Column / Columns / kolonka / kolonki
+     */
+    public static boolean isColumnToken(String token)
+    {
+        // Answered by the SAME token table every other kind is resolved through, not by a private
+        // list of literals - the anti-drift seam #342 introduced for exactly this class of predicate
+        // (a spelling the catalogue gained and a predicate did not became an address the tool
+        // documents and then refuses).
+        return kindForToken(token) == Kind.COLUMN;
+    }
+
+    /**
+     * The addressing error for a Column FQN that names no owning attribute, or {@code null} when the
+     * ref is well-formed. A bare {@code ...Form.F.Column.Name} resolves to nothing, and the generic
+     * "member not found" wording would not tell the caller what the right shape is (issue #295).
+     *
+     * @param ref the parsed form-member ref
+     * @return the actionable addressing error, or {@code null} when the ref is fine
+     */
+    public static String columnAddressingError(FormMemberRef ref)
+    {
+        if (ref == null || ref.isAttributeColumn())
+        {
+            return null;
+        }
+        if (kindForToken(ref.itemKindToken) == Kind.COLUMN)
+        {
+            // An ITEM-LEVEL handler whose owning item is addressed as a Column
+            // ('...Form.F.Column.Price.Handler.OnChange'). The leaf kind is Handler, so the check
+            // below would pass, and resolveHandlerContainer treats every non-Command item token as a
+            // visual-item lookup BY NAME - the handler would be created, rebound or deleted on a
+            // same-named visual item. Attribute columns are not form items and carry no events at
+            // all, so this address is refused outright (issue #295 review).
+            return "An attribute column has no event handlers: a column is form DATA, not a visual " //$NON-NLS-1$
+                + "item. '" + ref.itemName + "' here would be looked up among the form's items, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "which is not what a column address means. Bind the handler to the ITEM that " //$NON-NLS-1$
+                + "displays the column (a Field or a Table), e.g. " //$NON-NLS-1$
+                + "'...Form.FormName.Field.<ItemName>.Handler." + ref.name + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (kindForToken(ref.kindToken) != Kind.COLUMN)
+        {
+            return null;
+        }
+        return "A column belongs to a collection form attribute, so it is addressed on its owner: " //$NON-NLS-1$
+            + "'...Form.FormName.Attribute.<AttributeName>.Column." + ref.name + "'. A bare 'Column." //$NON-NLS-1$ //$NON-NLS-2$
+            + ref.name + "' names no attribute."; //$NON-NLS-1$
+    }
+
+    /**
+     * The names of {@code member}'s attribute COLUMNS, or an empty list when it is not a form
+     * attribute or owns none. Used to refuse a retype that would strand them (issue #295).
+     *
+     * @param member the form member to inspect
+     * @return the column names in model order, never {@code null}
+     */
+    public static List<String> attributeColumnNames(EObject member)
+    {
+        List<String> names = new ArrayList<>();
+        if (member == null || !(member.eClass().getEStructuralFeature(FEATURE_COLUMNS) instanceof EReference))
+        {
+            return names;
+        }
+        for (EObject column : referenceList(member, FEATURE_COLUMNS))
+        {
+            names.add(stringFeature(column, FEATURE_NAME));
+        }
+        return names;
+    }
+
+    /**
+     * The names of the form ITEMS that bind THROUGH {@code attribute} into a sub-name it does not own
+     * as a column - the elements a retype to a collection would leave pointing at nothing.
+     *
+     * <p>The mirror of {@link #attributeColumnNames}: that one answers "what would this retype strand
+     * BELOW the attribute", this one "what already points INTO it". Once the attribute holds rows, a
+     * dotted path under it addresses a COLUMN - which is why {@code createField} refuses to build one
+     * for a name that is not a column; an item that predates the retype must not be left in the exact
+     * shape the creator forbids (issue #295 review).</p>
+     *
+     * @param attribute the form attribute about to be retyped
+     * @return the offending item names, empty when nothing binds below it
+     */
+    public static List<String> itemsBoundBelowAttribute(EObject attribute)
+    {
+        List<String> broken = new ArrayList<>();
+        List<String> prefix = ownDataPath(attribute);
+        if (prefix.isEmpty())
+        {
+            return broken;
+        }
+        // The nearest ancestor that IS the content form - not eContainer() and not the EMF root.
+        // eContainer() is the owning ATTRIBUTE for a column, so the scan found nothing and passed
+        // every column retype; getRootContainer climbs PAST the content form (a Form is contained by
+        // its BasicForm) into the owner, so the scan reached the owner's OTHER forms and a field named
+        // 'Rows.Price' on a neighbouring form refused a retype here. Both were this guard, in
+        // opposite directions (issue #295 review).
+        EObject formModel = contentFormOf(attribute);
+        if (formModel == null)
+        {
+            return broken;
+        }
+        List<String> columns = attributeColumnNames(attribute);
+        // eAllContents, not a hand-rolled recursion: it visits the WHOLE form without a depth budget
+        // that could silently stop before the item that would have blocked the retype, and without a
+        // StackOverflowError on a pathological tree.
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject item = it.next();
+            String[] segments = dataPathSegments(item);
+            if (segments.length > prefix.size() && startsWithIgnoreCase(segments, prefix)
+                && !containsIgnoreCase(columns, segments[prefix.size()]))
+            {
+                broken.add(stringFeature(item, FEATURE_NAME));
+            }
+        }
+        return broken;
+    }
+
+    /**
+     * The names of the form items bound to {@code attribute} ITSELF (a one-segment data path) that
+     * need it to hold ROWS - today the tables. Retyping the attribute to a scalar leaves such a table
+     * bound to something that no longer has rows, which is exactly the shape
+     * {@link #createTable} refuses to build: without this the tool was stricter about CREATING a form
+     * than about editing one into the same state (issue #295 review).
+     *
+     * @param attribute the form attribute about to be retyped
+     * @return the offending item names, empty when nothing needs its rows
+     */
+    public static List<String> rowConsumersBoundToAttribute(EObject attribute)
+    {
+        List<String> consumers = new ArrayList<>();
+        // The member's OWN address, not its bare name: 'Rows' for a top-level attribute, but
+        // 'Rows.Price' for a column. Matching the leaf name against a one-segment path made a COLUMN
+        // named Price answer for a table bound to a same-named top-level attribute - a false refusal
+        // of a legitimate retype (issue #295 review). The same address builder the below-scan uses.
+        List<String> ownPath = ownDataPath(attribute);
+        EObject formModel = attribute == null ? null : contentFormOf(attribute);
+        if (ownPath.isEmpty() || formModel == null)
+        {
+            return consumers;
+        }
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject item = it.next();
+            String[] segments = dataPathSegments(item);
+            // EQUAL to the address, not merely starting with it: a table bound BELOW the member does
+            // not consume the member's own rows.
+            if (segments.length == ownPath.size() && startsWithIgnoreCase(segments, ownPath)
+                && ECLASS_TABLE.equals(item.eClass().getName()))
+            {
+                consumers.add(stringFeature(item, FEATURE_NAME));
+            }
+        }
+        return consumers;
+    }
+
+    /**
+     * The CONTENT form {@code member} lives in: the nearest ancestor that owns both the {@code items}
+     * tree and the {@code attributes} list. A group owns {@code items} but no attributes, and the
+     * form's own container (its {@code BasicForm}, the owner object, the configuration) owns neither -
+     * so this stops at exactly one level, and a scan started here cannot reach a sibling form.
+     *
+     * @param member a form attribute or one of its columns
+     * @return the content form, or {@code null} when the member is detached
+     */
+    private static EObject contentFormOf(EObject member)
+    {
+        for (EObject candidate = member.eContainer(); candidate != null;
+            candidate = candidate.eContainer())
+        {
+            if (candidate.eClass().getEStructuralFeature(FEATURE_ITEMS) instanceof EReference
+                && candidate.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) instanceof EReference)
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The data-path PREFIX that addresses {@code member} itself: {@code [Rows]} for a form attribute,
+     * {@code [Rows, Price]} for one of its columns. An item is bound "below" the member when its path
+     * starts with this prefix and carries at least one more segment - matching on the leaf name alone
+     * would never fire for a column, whose name sits at the second segment.
+     *
+     * @param member a form attribute or one of its columns
+     * @return the prefix segments, empty when the member is unnamed
+     */
+    private static List<String> ownDataPath(EObject member)
+    {
+        List<String> path = new ArrayList<>();
+        String name = member == null ? null : stringFeature(member, FEATURE_NAME);
+        if (name == null || name.isEmpty())
+        {
+            return path;
+        }
+        EObject owner = member.eContainer();
+        String ownerName = owner == null ? null : stringFeature(owner, FEATURE_NAME);
+        // A column's owner is the attribute that holds it in `columns`; a form root has no name.
+        if (ownerName != null && !ownerName.isEmpty()
+            && owner.eClass().getEStructuralFeature(FEATURE_COLUMNS) instanceof EReference)
+        {
+            path.add(ownerName);
+        }
+        path.add(name);
+        return path;
+    }
+
+    /** Whether {@code segments} starts with {@code prefix}, compared the way {@code findByName} resolves. */
+    private static boolean startsWithIgnoreCase(String[] segments, List<String> prefix)
+    {
+        for (int i = 0; i < prefix.size(); i++)
+        {
+            if (!prefix.get(i).equalsIgnoreCase(segments[i]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Whether {@code names} holds {@code candidate}, compared the way {@code findByName} resolves. */
+    private static boolean containsIgnoreCase(List<String> names, String candidate)
+    {
+        for (String name : names)
+        {
+            if (name != null && name.equalsIgnoreCase(candidate))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The dot-split segments of an item's bound {@code dataPath}, or an empty array when unbound. */
+    private static String[] dataPathSegments(EObject item)
+    {
+        EObject dataPath = singleReference(item, "dataPath"); //$NON-NLS-1$
+        if (dataPath == null)
+        {
+            return new String[0];
+        }
+        EStructuralFeature segments = dataPath.eClass().getEStructuralFeature("segments"); //$NON-NLS-1$
+        if (segments == null || !(dataPath.eGet(segments) instanceof List<?>))
+        {
+            return new String[0];
+        }
+        List<?> values = (List<?>)dataPath.eGet(segments);
+        String[] parts = new String[values.size()];
+        for (int i = 0; i < values.size(); i++)
+        {
+            parts[i] = String.valueOf(values.get(i));
+        }
+        return parts;
+    }
+
     /** Whether a kind token addresses an event Handler (English or Russian, case-insensitive). */
     public static boolean isHandlerToken(String token)
     {
@@ -567,6 +877,10 @@ public final class FormElementWriter
         tokens.put(Kind.FIELD, tokenList("field", "fields", RU_FIELD, RU_FIELDS)); //$NON-NLS-1$ //$NON-NLS-2$
         tokens.put(Kind.BUTTON, tokenList("button", "buttons", RU_BUTTON, RU_BUTTONS)); //$NON-NLS-1$ //$NON-NLS-2$
         tokens.put(Kind.TABLE, tokenList("table", "tables", RU_TABLE, RU_TABLES)); //$NON-NLS-1$ //$NON-NLS-2$
+        // A COLUMN is a DATA kind, not a visual one - it is the leaf of '...Attribute.T.Column.C'
+        // (issue #295) - but it is addressed by the same token grammar, so it belongs in the same
+        // table rather than in a predicate of its own (issue #295 review / #342 merge).
+        tokens.put(Kind.COLUMN, tokenList("column", FEATURE_COLUMNS, RU_COLUMN, RU_COLUMNS)); //$NON-NLS-1$
         Map<String, Kind> byToken = new HashMap<>();
         for (Map.Entry<Kind, List<String>> entry : tokens.entrySet())
         {
@@ -907,6 +1221,9 @@ public final class FormElementWriter
         {
             case ATTRIBUTE:
                 return createAttribute(formModel, name, titleLanguage, title, createdKind);
+            case COLUMN:
+                // The bind/parent slot carries the OWNING form attribute's name (issue #295).
+                return createColumn(formModel, name, parentName, titleLanguage, title, createdKind);
             case COMMAND:
                 return createCommand(formModel, name, titleLanguage, title, createdKind);
             case FIELD:
@@ -1935,6 +2252,407 @@ public final class FormElementWriter
     }
 
     /**
+     * Creates a COLUMN on a collection-typed form attribute ({@code ValueTable} / {@code ValueTree}),
+     * fully reflectively. The column is a {@code FormAttributeColumn}: it has no own features, only the
+     * {@code AbstractFormAttribute} ones (name / id / valueType / title), so this mirrors
+     * {@link #createAttribute} except that it instantiates from the OWNER's {@code columns} feature and
+     * allocates the id from the FORM-WIDE attribute id space attributes and columns share. Its type is
+     * then set with {@code modify_metadata}, like an attribute's. Issue #295.
+     *
+     * @param formModel the tx-bound form model
+     * @param name the new column's programmatic name
+     * @param ownerAttributeName the name of the form attribute the column belongs to
+     * @param titleLanguage the language code for {@code title}, or {@code null}
+     * @param title the optional column title
+     * @param createdKind out-parameter: the created EClass name
+     * @return {@code null} on success, or an actionable error
+     */
+    private static String createColumn(EObject formModel, String name, String ownerAttributeName,
+        String titleLanguage, String title, String[] createdKind)
+    {
+        if (ownerAttributeName == null || ownerAttributeName.isEmpty())
+        {
+            return "A column FQN must name its owning form attribute: " //$NON-NLS-1$
+                + "'...Form.FormName.Attribute.AttrName.Column.ColumnName'."; //$NON-NLS-1$
+        }
+        EObject owner = findFormAttribute(formModel, ownerAttributeName);
+        if (owner == null)
+        {
+            return "Form attribute not found: " + ownerAttributeName //$NON-NLS-1$
+                + ". Create it first, then add its columns."; //$NON-NLS-1$
+        }
+        if (!hasCollectionValueType(owner))
+        {
+            return "Form attribute '" + ownerAttributeName + "' is not a collection, so it cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                + "hold columns. Set its type first: modify_metadata with " //$NON-NLS-1$
+                + "{name:'type', value:{types:[{kind:'ValueTable'}]}} (or ValueTree)."; //$NON-NLS-1$
+        }
+        if (findByName(referenceList(owner, FEATURE_COLUMNS), name) != null)
+        {
+            return "Form attribute column already exists: " + ownerAttributeName + '.' + name; //$NON-NLS-1$
+        }
+        EObject column = createFromFeatureType(owner, FEATURE_COLUMNS);
+        if (column == null)
+        {
+            return "Cannot create an attribute column for this form model."; //$NON-NLS-1$
+        }
+        setStringFeature(column, FEATURE_NAME, name);
+        setIntFeature(column, FEATURE_ID, nextAttributeId(formModel));
+        setDefaultValueType(column);
+        applyTitle(column, titleLanguage, title);
+        addToList(owner, FEATURE_COLUMNS, column);
+        recordKind(column, createdKind);
+        return null;
+    }
+
+    /**
+     * What a table's {@code dataPath} addresses. The cases are NAMED, exhaustive and mutually
+     * exclusive, and every one of them is handled explicitly - so a path can never "fall through"
+     * into the next case's behaviour. Three review findings in a row came from exactly that: a new
+     * case bolted onto a chain of ifs, where an earlier arm silently won (issue #295 review).
+     */
+    private enum TableBinding
+    {
+        /** A ValueTable / ValueTree form attribute: the table shows ITS columns. */
+        COLLECTION_ATTRIBUTE,
+        /** A dynamic-list attribute: EDT auto-fills the query fields, the model knows no columns. */
+        DYNAMIC_LIST_ATTRIBUTE,
+        /** A form attribute that is neither - it has no rows, so no table can bind to it. */
+        SCALAR_ATTRIBUTE,
+        /** A bare name that is no form attribute at all. */
+        UNKNOWN_ATTRIBUTE,
+        /** A dotted path into the metadata: the tabular section the caller resolved columns for. */
+        TABULAR_SECTION,
+        /**
+         * A dotted path INTO a form attribute that owns rows itself ({@code Rows.Price}) - a table
+         * binds to the collection, never to one of its columns.
+         */
+        NESTED_IN_ATTRIBUTE
+    }
+
+    /**
+     * Classifies a table's {@code dataPath} by the NATURE of what it names - not by a chain of
+     * refusals. A dotted path addresses metadata (a tabular section); a bare name addresses a form
+     * attribute, and then the attribute's own shape decides.
+     *
+     * @param formModel the tx-bound form model
+     * @param dataPath the table's data path
+     * @return the binding, never {@code null}
+     */
+    private static TableBinding tableBindingOf(EObject formModel, String dataPath)
+    {
+        int dot = dataPath.indexOf('.');
+        if (dot > 0)
+        {
+            // A dotted path is the tabular-section shape: the head is an OBJECT-typed form attribute
+            // and the tail names a section of that object type, which lives outside this model. The
+            // head does NOT have to be the main attribute - a form can carry a second object-typed
+            // attribute and bind a table to its sections, so keying this on isMainAttribute() would
+            // refuse a legitimate 'BackupOrder.Goods'.
+            //
+            // What IS decidable here is the opposite: an attribute whose own value already holds rows
+            // (a collection, a dynamic list) has no nested row source at all - its sub-names are
+            // columns and query fields - so a dotted path through it addresses something a table
+            // cannot bind to. A head of UNKNOWN type is left alone deliberately: telling an
+            // unidentified type from "DocumentObject.SalesOrder" needs the metadata this writer does
+            // not see, and guessing would refuse working forms. Recorded as a gap rather than closed
+            // by a heuristic.
+            EObject head = findByName(referenceList(formModel, FEATURE_ATTRIBUTES),
+                dataPath.substring(0, dot));
+            if (head != null && (hasCollectionValueType(head) || isDynamicListAttribute(head)
+                || hasTerminalValueType(head)))
+            {
+                return TableBinding.NESTED_IN_ATTRIBUTE;
+            }
+            return TableBinding.TABULAR_SECTION;
+        }
+        EObject attribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), dataPath);
+        if (attribute == null)
+        {
+            return TableBinding.UNKNOWN_ATTRIBUTE;
+        }
+        if (hasCollectionValueType(attribute))
+        {
+            return TableBinding.COLLECTION_ATTRIBUTE;
+        }
+        return isDynamicListAttribute(attribute) ? TableBinding.DYNAMIC_LIST_ATTRIBUTE
+            : TableBinding.SCALAR_ATTRIBUTE;
+    }
+
+    /**
+     * The refusal for a {@code dataPath} no table can bind to, or {@code null} when the binding is
+     * buildable. Answered BEFORE anything is created, so a refused table leaves no trace: the
+     * scalar-attribute case used to fall into the tabular-section branch and report SUCCESS while
+     * writing a table whose only column addressed a {@code <Attr>.LineNumber} that does not exist
+     * (issue #295 review).
+     *
+     * @param binding the classified binding
+     * @param dataPath the table's data path, for the message
+     * @return an actionable refusal, or {@code null}
+     */
+    private static String tableBindingError(TableBinding binding, String dataPath)
+    {
+        if (binding == TableBinding.SCALAR_ATTRIBUTE)
+        {
+            return "Form attribute '" + dataPath + "' is neither a collection nor a dynamic list, so " //$NON-NLS-1$ //$NON-NLS-2$
+                + "a table has no rows to show for it. Set its type first with modify_metadata " //$NON-NLS-1$
+                + "({name:'type', value:{types:[{kind:'ValueTable'}]}}, or ValueTree), or bind the " //$NON-NLS-1$
+                + "table to a tabular section with a dotted dataPath (e.g. 'Object.Goods')."; //$NON-NLS-1$
+        }
+        if (binding == TableBinding.UNKNOWN_ATTRIBUTE)
+        {
+            return "Form attribute '" + dataPath + "' not found - create it and give it a collection " //$NON-NLS-1$ //$NON-NLS-2$
+                + "type (ValueTable / ValueTree) first, or bind the table to a tabular section with a " //$NON-NLS-1$
+                + "dotted dataPath (e.g. 'Object.Goods')."; //$NON-NLS-1$
+        }
+        if (binding == TableBinding.NESTED_IN_ATTRIBUTE)
+        {
+            String head = dataPath.substring(0, dataPath.indexOf('.'));
+            return "'" + dataPath + "' addresses something INSIDE the form attribute '" + head //$NON-NLS-1$ //$NON-NLS-2$
+                + "', but a table binds to the row source itself: use {name:'dataPath', value:'" //$NON-NLS-1$
+                + head + "'}. Its columns are generated from the attribute (or, for a dynamic list, " //$NON-NLS-1$
+                + "added as fields with a dotted dataPath)."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Whether the form attribute's value type is an IN-MEMORY collection - the only shape that owns
+     * columns. Read reflectively off the {@code valueType -> types -> name} chain and classified by
+     * {@link MetadataTypeBuilder#isCollectionKind}, the same bilingual map the type builder resolves a
+     * collection spec with, so an attribute whose type is unset (a fresh attribute) or terminal answers
+     * {@code false}. Issue #295.
+     *
+     * @param attribute the form attribute to inspect
+     * @return {@code true} when a ValueTable / ValueTree is among its types
+     */
+    private static boolean hasCollectionValueType(EObject attribute)
+    {
+        for (String typeName : valueTypeNames(attribute))
+        {
+            if (MetadataTypeBuilder.isCollectionKind(typeName))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the attribute's value type is TERMINAL - every declared type owns no addressable member,
+     * so a dotted path through it names nothing. This is the half of "not an object-typed attribute"
+     * that IS decidable in the form model: an object-typed attribute
+     * ({@code DocumentObject.SalesOrder}) does have tabular sections, and a form may bind a table to
+     * one of them through a NON-main attribute - so the test is "is it provably memberless", never
+     * "is it the main attribute" (issue #295 review).
+     *
+     * <p>Terminality is asked of {@link MetadataTypeBuilder#isMemberlessType}, the place that decides
+     * which platform types this tool builds at all, so the two cannot disagree. Asking it here by name
+     * instead left the check behind the builder: it knew the four primitives while the builder had
+     * grown ValueStorage and UUID, and a path past a UUID column was accepted because the column
+     * existed (issue #295 review).</p>
+     *
+     * @param attribute the form attribute (or column) to inspect
+     * @return {@code true} only when it declares at least one type and every one of them is memberless
+     */
+    private static boolean hasTerminalValueType(EObject attribute)
+    {
+        return nestedAddressingOf(attribute) == NestedAddressing.NO_MEMBERS;
+    }
+
+    /**
+     * What a dotted data path may address BELOW a form member. The outcomes are NAMED, exhaustive and
+     * mutually exclusive, because the subject is three-valued while the guard that asked it used to be
+     * two-valued: it split "terminal, refuse" from "not terminal, pass", and everything not terminal
+     * fell into "pass" - including a value whose members exist in principle but have nowhere in this
+     * model to be declared (issue #295 review). Each outcome is answered explicitly by
+     * {@link #nestedAddressingError}, so no case can fall through into another's behaviour.
+     */
+    enum NestedAddressing
+    {
+        /**
+         * Every declared type is memberless (String / Number / Boolean / Date / UUID / ValueStorage):
+         * there is nothing for a tail to resolve against, whatever the model offers.
+         */
+        NO_MEMBERS,
+        /**
+         * The members the declared types imply are COLUMNS, and this member's EClass owns no
+         * {@code columns} containment to hold them. A {@code FormAttributeColumn} is exactly that: the
+         * form metamodel puts {@code columns} on {@code FormAttribute} only, so a column of collection
+         * type holds a nested table whose columns can never be declared - and therefore never
+         * addressed. The value is rich; the address space under it is empty.
+         */
+        MEMBERS_HAVE_NO_HOME,
+        /**
+         * At least one declared type could carry the tail - a reference (its members live in the
+         * metadata this writer cannot read), a collection on a member that DOES own columns, or a type
+         * not yet set at all. Unknown counts as addressable on purpose: refusing here would break the
+         * legitimate {@code Rows.Product.Description}.
+         */
+        MEMBERS_OUTSIDE_THIS_MODEL
+    }
+
+    /**
+     * Classifies what a dotted tail could address below {@code member}, by asking the MODEL two
+     * separate questions per declared type - does the type carry members at all, and does this member
+     * have somewhere to put them - instead of the single "is it terminal" the guard used to ask.
+     *
+     * <p>A member answers {@link NestedAddressing#MEMBERS_OUTSIDE_THIS_MODEL} as soon as ONE declared
+     * type could carry the tail, so a composite {@code {CatalogRef.X, ValueTable}} stays addressable
+     * through its reference half - the refusals below fire only when EVERY declared type is provably
+     * dead, which is the same "refuse only what is provably impossible" bar the rest of this validation
+     * keeps.</p>
+     *
+     * @param member the form attribute or column the path would continue past
+     * @return the outcome, never {@code null}
+     */
+    static NestedAddressing nestedAddressingOf(EObject member)
+    {
+        List<String> typeNames = valueTypeNames(member);
+        if (typeNames.isEmpty())
+        {
+            return NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL;
+        }
+        // Asked of the metamodel, not of the member's class NAME: whoever gains a `columns`
+        // containment gains an address space under it, and this follows without an edit here.
+        boolean ownsColumns =
+            member.eClass().getEStructuralFeature(FEATURE_COLUMNS) instanceof EReference;
+        boolean everyTypeMemberless = true;
+        for (String typeName : typeNames)
+        {
+            if (MetadataTypeBuilder.isMemberlessType(typeName))
+            {
+                continue;
+            }
+            everyTypeMemberless = false;
+            if (carriesMembersOutsideThisModel(typeName) || ownsColumns)
+            {
+                return NestedAddressing.MEMBERS_OUTSIDE_THIS_MODEL;
+            }
+        }
+        return everyTypeMemberless ? NestedAddressing.NO_MEMBERS : NestedAddressing.MEMBERS_HAVE_NO_HOME;
+    }
+
+    /**
+     * Whether {@code typeName} carries members this writer cannot enumerate - a reference (its members
+     * live in the metadata), or a type it cannot identify at all. Such a type can resolve a dotted
+     * tail on its own, whatever the OTHER types in a composite can or cannot do.
+     *
+     * @param typeName a resolved platform type name or a spec {@code kind}, either language
+     * @return {@code true} when a tail below it may still resolve
+     */
+    private static boolean carriesMembersOutsideThisModel(String typeName)
+    {
+        return !MetadataTypeBuilder.isMemberlessType(typeName)
+            && !MetadataTypeBuilder.isCollectionKind(typeName);
+    }
+
+    /**
+     * Whether ANY of {@code typeNames} carries members outside this model - the composite question,
+     * and the reason a guard must not decide on "a collection is mentioned".
+     *
+     * <p>A value typed {@code {ValueTable, CatalogRef.Products}} resolves {@code Rows.Product.
+     * Description} through its REFERENCE half, which is why {@link #createField} accepts that path;
+     * a retype guard that fired on the mere presence of a collection kind refused the very shape the
+     * creator builds (issue #295 review). This is the same per-type rule
+     * {@link #nestedAddressingOf} applies, exported so both sides of "may a tail survive here" get
+     * one answer.</p>
+     *
+     * @param typeNames the resolved type names, or the requested spec kinds, in any order
+     * @return {@code true} when at least one of them could carry a nested member
+     */
+    public static boolean carriesMembersOutsideThisModel(List<String> typeNames)
+    {
+        for (String typeName : typeNames)
+        {
+            if (carriesMembersOutsideThisModel(typeName))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The refusal for a path that continues past a column it can never resolve through, or
+     * {@code null} when the continuation is addressable. Every {@link NestedAddressing} constant is
+     * answered here explicitly - an unhandled one raises rather than silently reading as "allowed",
+     * which is what a two-valued rule did to the third case.
+     *
+     * @param addressing what the column's value can be addressed through
+     * @param attrName the whole requested data path, for the message
+     * @param headAttr the head form attribute's name
+     * @param columnName the column the path continues past
+     * @return an actionable refusal, or {@code null} to allow the path
+     */
+    static String nestedAddressingError(NestedAddressing addressing, String attrName, String headAttr,
+        String columnName)
+    {
+        switch (addressing)
+        {
+            case NO_MEMBERS:
+                return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', but that column's type has no nested members. " //$NON-NLS-1$
+                    + "Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
+                    + "." + columnName + "'})."; //$NON-NLS-1$ //$NON-NLS-2$
+            case MEMBERS_HAVE_NO_HOME:
+                return "'" + attrName + "' continues past the column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', which holds an in-memory collection - but only a form ATTRIBUTE owns " //$NON-NLS-1$
+                    + "columns, a column owns none, so nothing can be declared (or addressed) under " //$NON-NLS-1$
+                    + "it. Bind the field to the column itself ({name:'dataPath', value:'" + headAttr //$NON-NLS-1$
+                    + "." + columnName + "'}), or give the nested table its own form attribute " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "('...Attribute.<Name>' with a ValueTable type) and bind to ITS column."; //$NON-NLS-1$
+            case MEMBERS_OUTSIDE_THIS_MODEL:
+                return null;
+            default:
+                throw new IllegalStateException("unhandled nested addressing: " + addressing); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The RESOLVED platform type names of the member's {@code valueType}, in whichever language the
+     * platform answers, or an EMPTY list when it declares no value type at all. One reader for both
+     * questions asked of a value type, so "is it a collection" and "is it terminal" can never be
+     * answered off different chains.
+     *
+     * <p>A declared type that is not a {@code TypeItem} contributes an EMPTY name rather than being
+     * skipped: it is a type the reader cannot identify, which must count as "not memberless" for the
+     * caller that requires EVERY type to answer, and as "not a collection" for the one that requires
+     * any.</p>
+     *
+     * @param member the form attribute or column to read
+     * @return one entry per declared type, never {@code null} entries
+     */
+    private static List<String> valueTypeNames(EObject member)
+    {
+        List<String> names = new ArrayList<>();
+        EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (feature == null || !(member.eGet(feature) instanceof EObject))
+        {
+            return names;
+        }
+        for (EObject type : referenceList((EObject)member.eGet(feature), "types")) //$NON-NLS-1$
+        {
+            if (!(type instanceof TypeItem))
+            {
+                names.add(""); //$NON-NLS-1$
+                continue;
+            }
+            // The types of an attribute just retyped through MCP are platform PROXIES created by
+            // IEObjectProvider, whose raw EMF `name` feature can still be null - reading it directly
+            // would call a perfectly good ValueTable attribute "not a collection". McoreUtil is the
+            // proxy-aware accessor the rest of the code uses for exactly this.
+            String typeName = McoreUtil.getTypeName((TypeItem)type);
+            if (typeName == null || typeName.isEmpty())
+            {
+                typeName = McoreUtil.getTypeNameRu((TypeItem)type);
+            }
+            names.add(typeName == null ? "" : typeName); //$NON-NLS-1$
+        }
+        return names;
+    }
+
+    /**
      * Configures the form {@code attribute} as a <b>dynamic list with a custom query</b>, fully
      * reflectively (no compile dependency on the form model). If the attribute is not already a dynamic
      * list it is turned into one: a {@code DynamicListExtInfo} is created, the {@code DynamicList} value
@@ -2018,15 +2736,21 @@ public final class FormElementWriter
         EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
         if (extInfo == null)
         {
-            throw new IllegalStateException(
-                "The form model does not expose a DynamicListExtInfo classifier."); //$NON-NLS-1$
+            // Defence in depth: the caller answers this from dynamicListUnsupportedError BEFORE the
+            // consent gate, so reaching it here means the metamodel changed under the transaction.
+            throw new IllegalStateException(ERR_NO_DYNAMIC_LIST_CLASSIFIER);
         }
         EObject dynamicListType = MetadataTypeBuilder.dynamicListType(version);
         EStructuralFeature valueTypeFeature = attribute.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
-        if (dynamicListType != null && valueTypeFeature instanceof EReference)
+        if (dynamicListType == null || !(valueTypeFeature instanceof EReference))
         {
-            attribute.eSet(valueTypeFeature, dynamicListType);
+            // Refuse rather than half-convert: the ext-info classifier is already set, so returning
+            // here would leave an attribute that carries a DynamicListExtInfo while its value type is
+            // still the old one. The caller answers this from dynamicListTypeUnavailableError BEFORE
+            // the consent gate; reaching it here rolls the transaction back (issue #295 review).
+            throw new FormValidationException(dynamicListTypeUnavailableJson());
         }
+        attribute.eSet(valueTypeFeature, dynamicListType);
         setBooleanFeature(extInfo, FEATURE_AUTO_FILL_AVAILABLE_FIELDS, true);
         // The designer turns on "dynamic data reading" for a new dynamic list (the model default is
         // false); mirror it so an MCP-created list matches a designer-created one.
@@ -2050,9 +2774,7 @@ public final class FormElementWriter
         EObject mainTable = resolveMainTableDbView(config, mainTableFqn);
         if (mainTable == null)
         {
-            throw new FormValidationException(ToolResult.error(
-                "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
-                + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson()); //$NON-NLS-1$
+            throw new FormValidationException(mainTableNotResolvedJson(mainTableFqn));
         }
         EStructuralFeature mainTableFeature = extInfo.eClass().getEStructuralFeature(FEATURE_MAIN_TABLE);
         if (mainTableFeature instanceof EReference)
@@ -2062,8 +2784,100 @@ public final class FormElementWriter
         }
     }
 
-    /** Whether a form attribute carries a {@code DynamicListExtInfo} (i.e. it is a dynamic list). */
-    private static boolean isDynamicListAttribute(EObject attribute)
+    /**
+     * The main-table refusal for {@code mainTableFqn}, or {@code null} when it resolves (or when no
+     * main table was requested). Lets a caller answer an unresolvable FQN BEFORE it asks the consent
+     * gate: {@link #applyMainTable} raises the very same wording from inside the write callback, which
+     * is too late - a destructive prompt would be shown for a write that can never be applied, and a
+     * denial would come back instead of this error (issue #295 review). Single owner of the wording;
+     * must run inside a BM transaction, like the resolution it wraps.
+     *
+     * @param config the configuration to resolve against
+     * @param mainTableFqn the requested main-table FQN, or {@code null} / empty when none was asked for
+     * @return a ready JSON error, or {@code null} when nothing is wrong
+     */
+    public static String mainTableResolutionError(Configuration config, String mainTableFqn)
+    {
+        if (mainTableFqn == null || mainTableFqn.isEmpty()
+            || resolveMainTableDbView(config, mainTableFqn) != null)
+        {
+            return null;
+        }
+        return mainTableNotResolvedJson(mainTableFqn);
+    }
+
+    /**
+     * The refusal for a form model whose metamodel has no {@code DynamicListExtInfo} classifier, or
+     * {@code null} when it has one. A pure metamodel lookup (nothing is created), so a caller can
+     * answer it BEFORE the consent gate: {@link #convertPlainAttributeToDynamicList} otherwise raises
+     * the same condition from inside the write, which is too late - it is decided by the form model,
+     * never by the user's answer to a destructive prompt (issue #295 review).
+     *
+     * @param formModel the tx-bound form model
+     * @return a ready JSON error, or {@code null} when a dynamic list can be built here
+     */
+    public static String dynamicListUnsupportedError(EObject formModel)
+    {
+        return formEClass(formModel, ECLASS_DYNAMIC_LIST_EXT_INFO) != null ? null
+            : ToolResult.error(ERR_NO_DYNAMIC_LIST_CLASSIFIER).toJson();
+    }
+
+    /** Single wording: the form metamodel cannot represent a dynamic list at all. */
+    private static final String ERR_NO_DYNAMIC_LIST_CLASSIFIER =
+        "The form model does not expose a DynamicListExtInfo classifier."; //$NON-NLS-1$
+
+    /**
+     * The refusal for a platform version whose {@code DynamicList} value type cannot be built, or
+     * {@code null} when it can. The conversion would otherwise set the ext-info classifier and then
+     * fail on the value type - and it fails identically whatever the user answers, so the caller runs
+     * this BEFORE the consent gate. {@link #convertPlainAttributeToDynamicList} raises the same
+     * wording from inside the write (issue #295 review).
+     *
+     * @param version the platform version the type is built for, may be {@code null}
+     * @return a ready JSON error, or {@code null} when the type resolves
+     */
+    public static String dynamicListTypeUnavailableError(Version version)
+    {
+        try
+        {
+            return MetadataTypeBuilder.dynamicListType(version) != null ? null
+                : dynamicListTypeUnavailableJson();
+        }
+        catch (RuntimeException e) // NOSONAR createProxy THROWS for a name the provider does not know
+        {
+            // Documented behaviour of the platform provider (issue #262): an unknown type name raises
+            // instead of answering null. A probe that propagated it would replace the deterministic
+            // refusal with a generic failure - the very masking this pre-check exists to prevent.
+            return dynamicListTypeUnavailableJson();
+        }
+    }
+
+    /** Single wording of an unbuildable DynamicList value type, as a ready JSON error. */
+    private static String dynamicListTypeUnavailableJson()
+    {
+        return ToolResult.error(
+            "Cannot build the DynamicList value type for this platform version, so the attribute " //$NON-NLS-1$
+                + "would be left half-converted (a dynamic-list ext-info on its old type). Nothing " //$NON-NLS-1$
+                + "was changed.").toJson(); //$NON-NLS-1$
+    }
+
+    /** The single wording of an unresolvable dynamic-list main table, as a ready JSON error. */
+    private static String mainTableNotResolvedJson(String mainTableFqn)
+    {
+        return ToolResult.error(
+            "Cannot resolve the main table '" + mainTableFqn + "'. Pass the FQN of the object " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the list reads from, e.g. 'Catalog.Products' or 'Document.Order'.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether the form attribute is ALREADY a dynamic list. Public so a caller can tell a query
+     * update on an existing list from a RETYPE of a plain (or collection-typed) attribute, which is
+     * destructive and must be consented to first (issue #295 review). Call on the tx-bound model.
+     *
+     * @param attribute the form attribute to inspect
+     * @return {@code true} when it already carries a dynamic-list ext-info
+     */
+    public static boolean isDynamicListAttribute(EObject attribute)
     {
         EObject extInfo = singleReference(attribute, FEATURE_EXT_INFO);
         return extInfo != null && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());
@@ -2608,12 +3422,18 @@ public final class FormElementWriter
                 + "(e.g. {name:'dataPath', value:'Price'})."; //$NON-NLS-1$
         }
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
-        // head form attribute. Two heads are valid for a dotted path:
+        // head form attribute, and WHICH head it is decides what the tail may name:
+        //   - a COLLECTION attribute (ValueTable / ValueTree, e.g. "Rows.Price"): the tail must name // NOSONAR explanatory prose, not commented-out code
+        //     one of ITS columns - the only sub-name such an attribute has, so it is checkable here, // NOSONAR explanatory prose, not commented-out code
+        //     and so is what may follow that column (see NestedAddressing); // NOSONAR explanatory prose, not commented-out code
         //   - a dynamic-list attribute (e.g. "List.Number"): the tail is one of its query fields // NOSONAR explanatory prose, not commented-out code
-        //     (auto-filled by EDT - not a model attribute); // NOSONAR explanatory prose, not commented-out code
+        //     (auto-filled by EDT - not a model attribute), so it is NOT checkable here; // NOSONAR explanatory prose, not commented-out code
         //   - the form's MAIN object attribute (e.g. "Object.Number"): the tail is a sub-attribute of // NOSONAR explanatory prose, not commented-out code
-        //     the object type, like the designer's bound object fields.
-        // Validate the head attribute, and require one of those two heads when a dotted path is used.
+        //     the object TYPE, likewise outside this model. // NOSONAR explanatory prose, not commented-out code
+        // The collection case is decided FIRST and on its own: it used to hang off "neither a list nor
+        // main", so a collection attribute that also carried main=true (a generated Object attribute
+        // retyped to ValueTable) took the main shortcut and had its columns validated by nobody - any
+        // tail was accepted and the field bound to nothing (issue #295 review).
         int dot = attrName.indexOf('.');
         String headAttr = dot > 0 ? attrName.substring(0, dot) : attrName;
         EObject boundAttribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), headAttr);
@@ -2622,12 +3442,53 @@ public final class FormElementWriter
             return "Form attribute '" + headAttr + "' not found - create it first, then bind the field " //$NON-NLS-1$ //$NON-NLS-2$
                 + "to it (so the data path resolves)."; //$NON-NLS-1$
         }
-        if (dot > 0 && !isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
+        if (dot > 0)
         {
-            return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a dynamic " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "list nor the form's main object attribute. A field binds to a form attribute by name " //$NON-NLS-1$
-                + "(e.g. 'Price'); a dotted path is for a dynamic-list column (e.g. 'List.Number', where " //$NON-NLS-1$
-                + "the list has a custom query) or for an object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
+            // Only the FIRST tail segment is checked - it is the column. Anything deeper walks INTO
+            // that column's own type ('Rows.Product.Description' through a reference column), which
+            // this model cannot resolve; taking the whole tail as one column name refused those paths
+            // outright (issue #295 review).
+            String tail = attrName.substring(dot + 1);
+            int nextDot = tail.indexOf('.');
+            String columnName = nextDot > 0 ? tail.substring(0, nextDot) : tail;
+            if (hasCollectionValueType(boundAttribute))
+            {
+                EObject column = findByName(referenceList(boundAttribute, FEATURE_COLUMNS), columnName);
+                // A path that CONTINUES past the column ('Rows.Price.Amount') walks into the column's
+                // own type, and what it may find there is THREE-valued, not two - which is why the
+                // decision is delegated to NestedAddressing rather than to one predicate here:
+                //   - the type carries no members at all (String, UUID, ...): nothing to resolve; // NOSONAR explanatory prose, not commented-out code
+                //   - the type is an in-memory COLLECTION: its members would be columns, and the form // NOSONAR explanatory prose, not commented-out code
+                //     metamodel gives a COLUMN no `columns` of its own, so they can never be declared; // NOSONAR explanatory prose, not commented-out code
+                //   - anything else (a reference, a composite carrying one, a not-yet-typed column): // NOSONAR explanatory prose, not commented-out code
+                //     its members live in metadata this writer cannot read, so the path is allowed. // NOSONAR explanatory prose, not commented-out code
+                // Reading "not terminal" as "allowed" collapsed the middle case into the last one and
+                // accepted 'Rows.Nested.Price' whenever the column existed (issue #295 review).
+                if (column != null && nextDot > 0)
+                {
+                    String nestedErr = nestedAddressingError(nestedAddressingOf(column), attrName,
+                        headAttr, columnName);
+                    if (nestedErr != null)
+                    {
+                        return nestedErr;
+                    }
+                }
+                if (column == null)
+                {
+                    return "Form attribute '" + headAttr + "' has no column '" + columnName //$NON-NLS-1$ //$NON-NLS-2$
+                        + "'. Create it first with create_metadata on '...Attribute." + headAttr //$NON-NLS-1$
+                        + ".Column." + columnName + "', then bind the field to it."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            else if (!isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
+            {
+                return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "dynamic list, nor a collection attribute, nor the form's main object attribute. " //$NON-NLS-1$
+                    + "A field binds to a form attribute by name (e.g. 'Price'); a dotted path is for a " //$NON-NLS-1$
+                    + "dynamic-list column (e.g. 'List.Number', where the list has a custom query), for " //$NON-NLS-1$
+                    + "a ValueTable / ValueTree attribute's column (e.g. 'Rows.Price'), or for an " //$NON-NLS-1$
+                    + "object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
+            }
         }
         if (findItem(formModel, name) != null)
         {
@@ -2703,6 +3564,14 @@ public final class FormElementWriter
             return "A table needs a 'dataPath' property naming the tabular section it shows " //$NON-NLS-1$
                 + "(e.g. {name:'dataPath', value:'Object.Goods'})."; //$NON-NLS-1$
         }
+        // Classify the binding FIRST and refuse an unbuildable one before anything is created, so a
+        // refused table leaves nothing behind (issue #295 review).
+        TableBinding binding = tableBindingOf(formModel, dataPath);
+        String bindingErr = tableBindingError(binding, dataPath);
+        if (bindingErr != null)
+        {
+            return bindingErr;
+        }
         if (findItem(formModel, name) != null)
         {
             return ERR_ITEM_EXISTS + name;
@@ -2747,16 +3616,48 @@ public final class FormElementWriter
         addTableAddition(formModel, table, FEATURE_SEARCH_CONTROL_ADDITION,
             russianAutoNames ? RU_SUFFIX_SEARCH_CONTROL : SUFFIX_SEARCH_CONTROL,
             "SearchControlAddition", "SearchControlAdditionExtInfo", russianAutoNames); //$NON-NLS-1$ //$NON-NLS-2$
-        // Auto-columns: the standard LineNumber column, then one column per TS attribute (all input
-        // fields, like the designer's table output).
-        String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
-        buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, russianAutoNames); //$NON-NLS-1$
-        if (columnAttributeNames != null)
+        // Auto-columns, dispatched on the SAME named binding the refusal above used - every case is
+        // handled, so none can inherit another's behaviour.
+        switch (binding)
         {
-            for (String attr : columnAttributeNames)
-            {
-                buildColumnField(formModel, table, name + attr, dataPath + "." + attr, russianAutoNames); //$NON-NLS-1$
-            }
+            case COLLECTION_ATTRIBUTE:
+                // The columns come from the ATTRIBUTE itself: the form model knows them and the
+                // metadata-aware caller cannot, since no tabular section stands behind such a table.
+                // No LineNumber either - an in-memory collection has no such field, so the path would
+                // resolve to nothing (issue #295).
+                for (EObject column : referenceList(
+                    findByName(referenceList(formModel, FEATURE_ATTRIBUTES), dataPath), FEATURE_COLUMNS))
+                {
+                    String columnName = stringFeature(column, FEATURE_NAME);
+                    if (columnName != null && !columnName.isEmpty())
+                    {
+                        buildColumnField(formModel, table, name + columnName,
+                            dataPath + "." + columnName, russianAutoNames); //$NON-NLS-1$
+                    }
+                }
+                break;
+            case DYNAMIC_LIST_ATTRIBUTE:
+                // A dynamic list's columns are its QUERY fields, which EDT auto-fills - the form model
+                // knows none of them, and a list has no LineNumber field either. So the table is
+                // created empty and the caller outputs the fields it wants with a dotted dataPath
+                // ('List.Ref'). Generating a LineNumber here wrote a column addressing nothing.
+                break;
+            case TABULAR_SECTION:
+            default:
+                // The designer's tabular-section table: the standard LineNumber column, then one input
+                // column per TS attribute the metadata-aware caller resolved.
+                String lineNumber = russianAutoNames ? RU_LINE_NUMBER : EN_LINE_NUMBER;
+                buildColumnField(formModel, table, name + lineNumber, dataPath + "." + lineNumber, //$NON-NLS-1$
+                    russianAutoNames);
+                if (columnAttributeNames != null)
+                {
+                    for (String attr : columnAttributeNames)
+                    {
+                        buildColumnField(formModel, table, name + attr, dataPath + "." + attr, //$NON-NLS-1$
+                            russianAutoNames);
+                    }
+                }
+                break;
         }
         recordKind(table, createdKind);
         return null;
@@ -4359,6 +5260,18 @@ public final class FormElementWriter
     public static EObject resolveFormMember(EObject formModel, FormMemberRef ref)
     {
         Kind kind = kindForToken(ref.kindToken);
+        if (ref.isAttributeColumn())
+        {
+            EObject owner = findFormAttribute(formModel, ref.ownerAttributeName);
+            return owner == null ? null : findByName(referenceList(owner, FEATURE_COLUMNS), ref.name);
+        }
+        if (kind == Kind.COLUMN)
+        {
+            // A bare 'Column.Name' names no owner, so it addresses nothing. Falling through would
+            // reach findFormItem and silently hit a VISUAL ITEM of the same name - the caller would
+            // then edit or delete the wrong element (issue #295).
+            return null;
+        }
         if (kind == Kind.ATTRIBUTE)
         {
             // The attributes / formCommands containments are kind-scoped by construction: nothing of
@@ -4452,6 +5365,8 @@ public final class FormElementWriter
      *                          Table                                       =&gt; token Table
      *   Decoration          -&gt; Decoration, ExtendedTooltip                 =&gt; token Decoration
      *   Addition                                                           =&gt; NO token
+     * AbstractFormAttribute -&gt; FormAttribute                               =&gt; token Attribute
+     *                          FormAttributeColumn                         =&gt; token Column
      * </pre>
      * <p>{@code DataItem} is deliberately NOT used: three different tokens denote its subclasses, so
      * widening to it would let {@code Button.} address a FIELD again - the very bug of issue #343.
@@ -4467,17 +5382,26 @@ public final class FormElementWriter
      * {@code ...Button.<addition>} through to the delete path. An addition is created and removed
      * with its table, so nothing needs to address it on its own.</p>
      *
+     * <p>ORDERING MATTERS, and one pair is load-bearing: {@code FormAttributeColumn} INHERITS
+     * {@code AbstractFormAttribute}, so the COLUMN arm has to be asked FIRST or a column classifies
+     * as an ATTRIBUTE and an existing {@code ...Attribute.T.Column.C} reads as unresolved (issue
+     * #295). Same rule as the {@code Group} base above: most specific first.</p>
+     *
      * @param eClass the EClass of a resolved form element, may be {@code null}
      * @return the addressing kind, or {@code null} when no kind token denotes this EClass
      */
+    public static Kind addressableKind(EObject element)
+    {
+        return element == null ? null : addressableKindOf(element.eClass());
+    }
+
     private static Kind addressableKindOf(EClass eClass)
     {
         if (eClass == null)
         {
             return null;
         }
-        if (isOrInherits(eClass, ELEM_BUTTON))
-        {
+        if (isOrInherits(eClass, ELEM_BUTTON))        {
             return Kind.BUTTON;
         }
         if (isOrInherits(eClass, ECLASS_FORM_FIELD))
@@ -4506,6 +5430,13 @@ public final class FormElementWriter
         if (isOrInherits(eClass, ECLASS_FORM_COMMAND))
         {
             return Kind.COMMAND;
+        }
+        // A COLUMN is a DATA member and IS addressable ('...Attribute.T.Column.C', issue #295).
+        // It MUST be asked before the attribute base it inherits: classify it as ATTRIBUTE and an
+        // existing column reads as unresolved. Most specific first - the same rule as the Group base.
+        if (isOrInherits(eClass, ECLASS_FORM_ATTRIBUTE_COLUMN))
+        {
+            return Kind.COLUMN;
         }
         if (isOrInherits(eClass, ECLASS_ABSTRACT_FORM_ATTRIBUTE)
             || isOrInherits(eClass, ECLASS_FORM_ATTRIBUTE))

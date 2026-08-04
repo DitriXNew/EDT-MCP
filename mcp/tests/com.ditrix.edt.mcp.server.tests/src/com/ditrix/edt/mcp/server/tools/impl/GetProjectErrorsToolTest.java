@@ -1836,6 +1836,71 @@ public class GetProjectErrorsToolTest
 
 
     @Test
+    public void testAnExistingAttributeColumnIsNotReportedUnresolved()
+    {
+        // Registering Kind.COLUMN in the shared token table (the #342 merge) made 'Column' a token
+        // this EXACT filter recognizes, while its kind map still answered "no addressable kind" for a
+        // FormAttributeColumn - so a column that plainly exists was declared unresolved and landed in
+        // objectsNotFound (issue #295 review). The class must answer to the token that addresses it.
+        FormModel form = newFormModel();
+        EObject column = FormElementWriter.resolveFormMember(form.root,
+            FormElementWriter.parse(columnAddress(FORM_ATTRIBUTE_COLUMN)));
+
+        // FIXTURE FIDELITY, asserted so this test cannot quietly stop guarding what it claims to:
+        // the real FormAttributeColumn inherits AbstractFormAttribute, and issue #343's hierarchical
+        // classifier maps that base to Kind.ATTRIBUTE. A column that did not inherit it would make the
+        // assertion below pass for a shape that cannot occur - green by accident.
+        assertNotNull("the fixture must expose the column", column); //$NON-NLS-1$
+        assertTrue("the synthetic column must inherit AbstractFormAttribute, like the real one - " //$NON-NLS-1$
+            + "otherwise this test stops guarding the #343 ordering", //$NON-NLS-1$
+            column.eClass().getEAllSuperTypes().stream()
+                .anyMatch(s -> "AbstractFormAttribute".equals(s.getName()))); //$NON-NLS-1$
+
+        // THE ordering guard. It holds today (the flat map answers COLUMN) and it is exactly what
+        // breaks if #343's hierarchical classifier gains the Column arm BELOW its AbstractFormAttribute
+        // arm: the column would classify as ATTRIBUTE and this fails with expected COLUMN.
+        assertEquals("a FormAttributeColumn must answer to the Column kind", //$NON-NLS-1$
+            FormElementWriter.Kind.COLUMN, FormElementWriter.addressableKind(column));
+        assertFalse("an existing attribute COLUMN must resolve", //$NON-NLS-1$
+            scopeSpellings(form, columnAddress(FORM_ATTRIBUTE_COLUMN)).isEmpty());
+
+        // ...and a column that does NOT exist still resolves to nothing.
+        assertTrue("a missing column must stay unresolved", //$NON-NLS-1$
+            scopeSpellings(form, columnAddress("NoSuchColumn_zz")).isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAttributeColumnIsScopedByItsOwningFormNotByItsAttribute()
+    {
+        // EDT publishes a form member's markers on the content FORM, so the scan scope must include
+        // the form path. How many segments to cut came from isItemLevel(), which is FALSE for a
+        // column - yet a column's tail is 4 (Attribute.Rows.Column.Price), so 2 were cut and the
+        // scope became the ATTRIBUTE. Nothing is ever reported there, so the caller got
+        // objectsResolved next to "No Errors Found" - the false all-clear issue #312 exists to
+        // prevent (issue #295 review).
+        FormModel form = newFormModel();
+        List<String> spellings = scopeSpellings(form, columnAddress(FORM_ATTRIBUTE_COLUMN));
+
+        assertTrue("the scan must be scoped by the OWNING FORM: " + spellings, //$NON-NLS-1$
+            spellings.contains(FORM_FQN));
+        assertFalse("...and must not stop at the owning attribute: " + spellings, //$NON-NLS-1$
+            spellings.contains(FORM_FQN + ".Attribute." + FORM_ATTRIBUTE)); //$NON-NLS-1$
+
+        // The shapes that were already right must stay right - the cut length now comes from the
+        // parsed shape itself, so every one of them is asserted here.
+        assertTrue("a form-level member stays scoped by its form", //$NON-NLS-1$
+            scopeSpellings(form, FORM_FQN + ".Field.Price").contains(FORM_FQN)); //$NON-NLS-1$
+        assertTrue("an item-level handler stays scoped by its form", //$NON-NLS-1$
+            scopeSpellings(form, HANDLER_ON_FIELD).contains(FORM_FQN));
+    }
+
+    /** The synthetic model's column address, with {@code name} as the leaf. */
+    private static String columnAddress(String name)
+    {
+        return FORM_FQN + ".Attribute." + FORM_ATTRIBUTE + ".Column." + name; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testAnItemWithNoAddressableKindDoesNotAnswerToAForeignKind()
     {
         // findFormItem finds an element by NAME, and matchesKindToken accepts ANY requested kind for
@@ -2592,6 +2657,9 @@ public class GetProjectErrorsToolTest
     /** The synthetic model's form ATTRIBUTE (reached by its own containment, not by an item kind). */
     private static final String FORM_ATTRIBUTE = "Object"; //$NON-NLS-1$
 
+    /** The synthetic model's attribute COLUMN, addressed '...Attribute.Object.Column.Amount'. */
+    private static final String FORM_ATTRIBUTE_COLUMN = "Amount"; //$NON-NLS-1$
+
     /** The English address of the handler bound on the synthetic model's FIELD. */
     private static final String HANDLER_ON_FIELD = FORM_FQN + ".Field.Price.Handler.OnChange"; //$NON-NLS-1$
 
@@ -2662,9 +2730,24 @@ public class GetProjectErrorsToolTest
         EClass autoCommandBar = subclass("AutoCommandBar", formItem); //$NON-NLS-1$
         pkg.getEClassifiers().add(autoCommandBar);
 
-        EClass formAttribute = f.createEClass();
-        formAttribute.setName("FormAttribute"); //$NON-NLS-1$
-        formAttribute.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        // The real metamodel's SHARED base: FormAttribute and FormAttributeColumn both inherit
+        // AbstractFormAttribute (verified in the 2025.2 apidocs - FormAttributeColumn's superinterfaces
+        // are AbstractFormAttribute / NamedElement / Titled, and getColumns() lives on FormAttribute
+        // alone). The inheritance is mirrored here ON PURPOSE: issue #343's hierarchical classifier
+        // maps AbstractFormAttribute -> Kind.ATTRIBUTE, so a column that did NOT inherit it would let
+        // the ordering test below pass without ever exercising the case that can actually break.
+        EClass abstractFormAttribute = f.createEClass();
+        abstractFormAttribute.setName("AbstractFormAttribute"); //$NON-NLS-1$
+        abstractFormAttribute.setAbstract(true);
+        abstractFormAttribute.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        pkg.getEClassifiers().add(abstractFormAttribute);
+
+        // A collection attribute's COLUMN: addressed '...Attribute.<Attr>.Column.<Name>' (issue #295).
+        EClass formAttributeColumn = subclass("FormAttributeColumn", abstractFormAttribute); //$NON-NLS-1$
+        pkg.getEClassifiers().add(formAttributeColumn);
+
+        EClass formAttribute = subclass("FormAttribute", abstractFormAttribute); //$NON-NLS-1$
+        formAttribute.getEStructuralFeatures().add(containment("columns", formAttributeColumn, true)); //$NON-NLS-1$
         pkg.getEClassifiers().add(formAttribute);
 
         EClass action = f.createEClass();
@@ -2712,6 +2795,9 @@ public class GetProjectErrorsToolTest
 
         EObject attribute = pkg.getEFactoryInstance().create(formAttribute);
         setString(attribute, "name", FORM_ATTRIBUTE); //$NON-NLS-1$
+        EObject attributeColumn = pkg.getEFactoryInstance().create(formAttributeColumn);
+        setString(attributeColumn, "name", FORM_ATTRIBUTE_COLUMN); //$NON-NLS-1$
+        list(attribute, "columns").add(attributeColumn); //$NON-NLS-1$
         list(model.root, "attributes").add(attribute); //$NON-NLS-1$
 
         return model;

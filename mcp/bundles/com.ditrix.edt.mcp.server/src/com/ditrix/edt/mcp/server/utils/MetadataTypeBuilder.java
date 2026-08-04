@@ -47,14 +47,29 @@ import com.google.gson.JsonObject;
  *              {"kind":"Ref", "ref":"Catalog.Goods"} ] }
  * </pre>
  *
- * Primitive kinds: String / Number / Boolean / Date (qualifiers given inline); ValueStorage / UUID
- * are platform simple types that carry no qualifiers. A reference is
+ * Primitive kinds: String / Number / Boolean / Date (qualifiers given inline); ValueStorage / UUID /
+ * ValueTable / ValueTree are platform types that carry no qualifiers - the last two are in-memory
+ * collections the platform accepts on a FORM attribute only (issue #295). A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
  * {@code {"kind":"CatalogRef", "ref":"Name"}}. The {@code types} list may mix several (a composite
  * type). The shape is validated before any platform call, so a malformed spec fails fast.
  */
 public final class MetadataTypeBuilder
 {
+    /**
+     * The RUSSIAN platform names of the primitives, parallel to {@link #EN_PRIMITIVE_NAMES}. Read-side
+     * only: a resolved type answers its name in the configuration's language, while a spec always
+     * spells its {@code kind} the way {@link #normalizePrimitive} maps it.
+     */
+    private static final String[] RU_PRIMITIVE_NAMES = {
+        MetadataLanguageUtils.cp(0x0421, 0x0442, 0x0440, 0x043e, 0x043a, 0x0430), // Stroka
+        MetadataLanguageUtils.cp(0x0427, 0x0438, 0x0441, 0x043b, 0x043e), // Chislo
+        MetadataLanguageUtils.cp(0x0411, 0x0443, 0x043b, 0x0435, 0x0432, 0x043e), // Bulevo
+        MetadataLanguageUtils.cp(0x0414, 0x0430, 0x0442, 0x0430) }; // Data
+
+    /** The canonical ENGLISH platform names of the primitives, parallel to {@link #RU_PRIMITIVE_NAMES}. */
+    private static final String[] EN_PRIMITIVE_NAMES = {"String", "Number", "Boolean", "Date"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
     /** The build outcome: exactly one of {@link #typeDescription} / {@link #error} is non-null. */
     public static final class Result
     {
@@ -114,7 +129,31 @@ public final class MetadataTypeBuilder
     }
 
     /**
-     * Builds the {@link TypeDescription} from a validated spec.
+     * What the built {@link TypeDescription} will be attached to. This decides whether the IN-MEMORY
+     * collection kinds (ValueTable / ValueTree) are acceptable: the platform materializes them only in
+     * a form's data, never in the database, so a stored metadata attribute must reject them (issue
+     * #295). EDT itself does NOT validate this - a ValueTable written into a {@code .mdo} attribute
+     * passes a full revalidation silently and only breaks later, in the platform - which is exactly why
+     * the refusal has to happen here.
+     */
+    public enum TypeTarget
+    {
+        /** A persisted metadata feature (an attribute, a resource, a predefined item's value, ...). */
+        METADATA,
+        /** A form attribute (or one of its columns) - the only place an in-memory collection lives. */
+        FORM_ATTRIBUTE,
+        /**
+         * A data-composition (DCS) parameter's {@code valueType}. Not a stored metadata feature: the
+         * refusal the METADATA target gives ("never in a stored metadata feature", "use ValueStorage")
+         * would be untrue here, so this target owns its own wording, which claims only what this tool
+         * actually does - it does not build the collection kinds for a DCS parameter (issue #295
+         * review).
+         */
+        DCS_PARAMETER
+    }
+
+    /**
+     * Builds the {@link TypeDescription} from a validated spec for a persisted METADATA feature.
      *
      * @param spec the {@code type} value (object with a {@code types} array)
      * @param config the configuration (to resolve reference targets)
@@ -143,6 +182,25 @@ public final class MetadataTypeBuilder
     public static Result build(JsonElement spec, Configuration config, Version version,
         boolean isExtensionProject)
     {
+        return build(spec, config, version, isExtensionProject, TypeTarget.METADATA);
+    }
+
+    /**
+     * Builds the {@link TypeDescription} from a validated spec, like {@link #build(JsonElement,
+     * Configuration, Version, boolean)}, for an explicit {@code typeTarget}. Only
+     * {@link TypeTarget#FORM_ATTRIBUTE} accepts the in-memory collection kinds (issue #295); every
+     * other target refuses them with an actionable error naming where they ARE allowed.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param config the configuration (to resolve reference targets)
+     * @param version the platform version (to create primitive type proxies)
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @param typeTarget what the built type description will be attached to
+     * @return the result (type or error)
+     */
+    public static Result build(JsonElement spec, Configuration config, Version version,
+        boolean isExtensionProject, TypeTarget typeTarget)
+    {
         String shapeError = validateShape(spec);
         if (shapeError != null)
         {
@@ -162,7 +220,7 @@ public final class MetadataTypeBuilder
         {
             JsonObject item = itemEl.getAsJsonObject();
             String kind = asString(item.get("kind")).trim(); //$NON-NLS-1$
-            String err = addType(td, item, kind, provider, config, isExtensionProject);
+            String err = addType(td, item, kind, provider, config, isExtensionProject, typeTarget);
             if (err != null)
             {
                 return error(err);
@@ -313,7 +371,7 @@ public final class MetadataTypeBuilder
     // including the extension-adopt hint - directly, without a registered platform type `provider`
     // (which only the primitive branch needs; see MetadataTypeBuilderTest's class doc).
     static String addType(TypeDescription td, JsonObject item, String kind,
-        IEObjectProvider provider, Configuration config, boolean isExtensionProject)
+        IEObjectProvider provider, Configuration config, boolean isExtensionProject, TypeTarget typeTarget)
     {
         if (isRefKind(kind))
         {
@@ -366,16 +424,47 @@ public final class MetadataTypeBuilder
         String[] simpleTypeCandidates = platformSimpleTypeCandidates(kind);
         if (simpleTypeCandidates.length > 0)
         {
+            if (isCollectionKind(kind) && typeTarget != TypeTarget.FORM_ATTRIBUTE)
+            {
+                return collectionKindRefusal(kind, typeTarget);
+            }
             return addSimplePlatformType(td, provider, simpleTypeCandidates);
         }
 
         return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$ //$NON-NLS-2$
-            + "UUID, or a reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), or a " //$NON-NLS-1$
+            + "reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
     }
 
     /**
-     * Resolves a NO-QUALIFIER platform simple type (ValueStorage / UUID) by trying each candidate
-     * proxy name in order and adding the first one that resolves to a real {@link TypeItem}.
+     * The refusal of an in-memory collection kind, worded for the TARGET that refused it. The stored
+     * metadata wording ("never in a stored metadata feature", "use {@code ValueStorage}") is TRUE only
+     * for a persisted feature; a DCS parameter is neither stored nor served by {@code ValueStorage}, so
+     * repeating it there would state a platform fact that does not hold and give advice that does not
+     * apply (issue #295 review). Each target claims only what is true of it.
+     *
+     * @param kind the requested collection kind
+     * @param typeTarget what the type description was being built for
+     * @return the actionable refusal
+     */
+    private static String collectionKindRefusal(String kind, TypeTarget typeTarget)
+    {
+        if (typeTarget == TypeTarget.DCS_PARAMETER)
+        {
+            return "Type kind '" + kind + "' is an IN-MEMORY collection, and this tool does not build " //$NON-NLS-1$ //$NON-NLS-2$
+                + "one for a data-composition parameter: a FORM attribute (fqn " //$NON-NLS-1$
+                + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts the " //$NON-NLS-1$
+                + "collection kinds. Give the parameter a primitive or a reference type instead."; //$NON-NLS-1$
+        }
+        return "Type kind '" + kind + "' is an IN-MEMORY collection: the platform holds it " //$NON-NLS-1$ //$NON-NLS-2$
+            + "only in a FORM attribute (fqn 'Type.Object.Form.FormName.Attribute.Name'), " //$NON-NLS-1$
+            + "never in a stored metadata feature. Set it on a form attribute, or use " //$NON-NLS-1$
+            + "{kind:'ValueStorage'} to persist arbitrary data here."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves a NO-QUALIFIER platform type (ValueStorage / UUID / ValueTable / ValueTree) by trying
+     * each candidate proxy name in order and adding the first one that resolves to a real {@link TypeItem}.
      * {@code createProxy} THROWS for a name the provider does not know (verified in issue #262), so
      * each attempt is guarded; this tolerates a platform-version rename of the same type (the
      * candidate list is name-tolerance, never a retry of a DIFFERENT type). Mirrors the try/catch
@@ -518,16 +607,19 @@ public final class MetadataTypeBuilder
     }
 
     /**
-     * Maps a NO-QUALIFIER platform simple type kind (ValueStorage / UUID, bilingual, case-insensitive)
-     * to its candidate platform proxy NAMES, in resolution order, or {@code null} when {@code kind} is
-     * neither. Unlike {@link #normalizePrimitive}, a kind here may carry MORE THAN ONE candidate name:
+     * Maps a NO-QUALIFIER platform type kind (ValueStorage / UUID / ValueTable / ValueTree, bilingual,
+     * case-insensitive) to its candidate platform proxy NAMES, in resolution order, or an empty array
+     * when {@code kind} is none of them. The collection kinds (ValueTable / ValueTree) are in-memory
+     * types: the platform stores them only in a FORM attribute, never in a database attribute (issue
+     * #295). Unlike {@link #normalizePrimitive}, a kind here may carry MORE THAN ONE candidate name:
      * some platform versions expose the type under a different proxy name (issue #279), and
      * {@code createProxy} throws for a name it does not know, so the caller tries each name in turn -
      * {@link #addSimplePlatformType} does the trying. These kinds take no inline qualifiers
      * ({@link #applyQualifiers} is never invoked for them).
      *
      * @param kind the raw {@code kind} token from the spec
-     * @return the candidate proxy names, or an empty array when {@code kind} is not ValueStorage/UUID
+     * @return the candidate proxy names, or an empty array when {@code kind} is not one of the
+     *             no-qualifier platform types (ValueStorage / UUID / ValueTable / ValueTree)
      */
     static String[] platformSimpleTypeCandidates(String kind)
     {
@@ -544,9 +636,97 @@ public final class MetadataTypeBuilder
             case "uniqueidentifier": //$NON-NLS-1$
             case "уникальныйидентификатор": //$NON-NLS-1$
                 return new String[] { "UUID", "UniqueIdentifier" }; //$NON-NLS-1$ //$NON-NLS-2$
+            case "valuetable": //$NON-NLS-1$
+            case "таблицазначений": //$NON-NLS-1$
+                return new String[] { "ValueTable" }; //$NON-NLS-1$
+            case "valuetree": //$NON-NLS-1$
+            case "деревозначений": //$NON-NLS-1$
+                return new String[] { "ValueTree" }; //$NON-NLS-1$
             default:
                 return new String[0];
         }
+    }
+
+    /**
+     * Whether {@code kind} names an IN-MEMORY collection (ValueTable / ValueTree). Keyed off the
+     * CANONICAL name {@link #platformSimpleTypeCandidates} resolves to, so the bilingual alias list
+     * stays in exactly one place.
+     *
+     * @param kind the raw {@code kind} token from the spec
+     * @return {@code true} for a collection kind, {@code false} for anything else
+     */
+    public static boolean isCollectionKind(String kind)
+    {
+        String[] candidates = platformSimpleTypeCandidates(kind);
+        return candidates.length > 0
+            && ("ValueTable".equals(candidates[0]) || "ValueTree".equals(candidates[0])); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Whether {@code kindOrTypeName} names a platform type that owns NO addressable member - nothing a
+     * dotted path can continue into. Answered for the spec vocabulary (a {@code kind} token) and for a
+     * RESOLVED platform type name alike: the two coincide for every type this builder produces without
+     * a reference, and the Russian names ARE the Russian kind aliases.
+     *
+     * <p>The classification is DERIVED from the maps a spec is resolved with -
+     * {@link #platformSimpleTypeCandidates} for the no-qualifier platform types and
+     * {@link #normalizePrimitive} for the qualified primitives - minus the collections
+     * ({@link #isCollectionKind}), which own their {@code columns}. A kind added to the builder is
+     * therefore classified here by construction, instead of being re-listed by every caller that needs
+     * to know whether a path may continue: the caller-side list knew String / Number / Boolean / Date
+     * and had silently fallen behind ValueStorage and UUID (issue #295 review).</p>
+     *
+     * <p>Not asked of the platform type system, on purpose. The query does exist
+     * ({@code Type.getContextDef().allProperties()}), but the types on a form attribute are
+     * {@link IEObjectProvider} PROXIES - which is why the readers go through {@code McoreUtil}, whose
+     * accessors are proxy-aware - and a raw feature read of an unresolved proxy answers "no
+     * properties", which is exactly the answer that REFUSES a path. A predicate whose failure mode is
+     * indistinguishable from its refusal verdict cannot be used to refuse. Reference kinds answer
+     * {@code false}: their members live in the metadata, which this classification deliberately does
+     * not read.</p>
+     *
+     * @param kindOrTypeName a spec {@code kind} token or a resolved platform type name, either language
+     * @return {@code true} only for a type this builder knows to own no addressable member
+     */
+    public static boolean isMemberlessType(String kindOrTypeName)
+    {
+        if (kindOrTypeName == null || kindOrTypeName.isEmpty())
+        {
+            return false;
+        }
+        if (platformSimpleTypeCandidates(kindOrTypeName).length > 0)
+        {
+            // ValueStorage / UUID hold one opaque value; ValueTable / ValueTree own their columns.
+            return !isCollectionKind(kindOrTypeName);
+        }
+        return normalizePrimitiveTypeName(kindOrTypeName) != null;
+    }
+
+    /**
+     * The canonical platform name of a PRIMITIVE, accepting a resolved Russian type name as well as
+     * every EN {@code kind} token {@link #normalizePrimitive} maps. Kept beside it so the primitive
+     * vocabulary lives in one place; the Russian names are read-side only (a spec still spells its
+     * kinds the way the tool documents them).
+     *
+     * @param typeName a {@code kind} token or a resolved platform type name
+     * @return the canonical EN name, or {@code null} when it names no primitive
+     */
+    private static String normalizePrimitiveTypeName(String typeName)
+    {
+        String canonical = normalizePrimitive(typeName);
+        if (canonical != null)
+        {
+            return canonical;
+        }
+        String trimmed = typeName.trim();
+        for (int i = 0; i < RU_PRIMITIVE_NAMES.length; i++)
+        {
+            if (RU_PRIMITIVE_NAMES[i].equalsIgnoreCase(trimmed))
+            {
+                return EN_PRIMITIVE_NAMES[i];
+            }
+        }
+        return null;
     }
 
     /** Parses the date-fractions name; defaults to date+time. */

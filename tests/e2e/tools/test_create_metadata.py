@@ -1135,8 +1135,253 @@ def test_create_form_unknown_kind_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Nonsense.X"})
     e = assert_error(r, "unknown form element kind")
-    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command"],
+    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command", "Column"],
                          ctx="an unknown form kind must list the supported form kinds")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Columns of a collection-typed form attribute (issue #295)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _seed_collection_attribute(attr):
+    """Create a form attribute and make it a ValueTable - the shape that owns columns."""
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed collection attribute " + attr)
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "type " + attr + " as a ValueTable")
+    wait_for_project_ready()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column():
+    attr, col = "E2EColOwner", "E2ECol"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(r, "create a column on a collection form attribute")
+    assert r.structured.get("kind") == "FormAttributeColumn", \
+        "the created element must be a FormAttributeColumn: %r" % (r.structured,)
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
+                       ctx="the new column must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column_russian_token():
+    attr, col = "E2EColOwnerRu", "E2EColRu"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Реквизит." + attr + ".Колонка." + col})
+    assert_ok(r, "create a column via the Russian Колонка token")
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
+                       ctx="the Russian-token column must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_cannot_walk_past_a_memberless_column():
+    # A column typed UUID / ValueStorage holds one opaque value, so no tail can resolve against it and
+    # EDT does not flag the binding. The terminality check knew only the four primitives while the
+    # type builder had grown these two, so 'Rows.Id.Part' was accepted merely because the 'Id' column
+    # existed and the tool reported success for a dead binding (issue #295 review). Asserted LIVE
+    # because a real form's types are platform PROXIES, not the in-memory Types a unit test builds.
+    attr = "E2EOpaqueOwner"
+    _seed_collection_attribute(attr)
+    base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    for col, kind in (("OpaqueId", "UUID"), ("OpaqueBlob", "ValueStorage")):
+        c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
+        assert_ok(c, "seed column " + col)
+        wait_for_project_ready()
+        t = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": base + ".Column." + col,
+            "properties": [{"name": "type", "value": {"types": [{"kind": kind}]}}]})
+        assert_ok(t, "type the column as " + kind)
+        wait_for_project_ready()
+
+        r = call("create_metadata", {
+            "projectName": PROJECT,
+            "fqn": "Catalog.Catalog.Form.ItemForm.Field.Deep" + col,
+            "properties": [{"name": "dataPath", "value": "%s.%s.Part" % (attr, col)}]})
+        e = assert_error(r, "a path past a %s column must be refused" % kind)
+        assert_error_quality(e, names=[col], suggests=["dataPath"],
+                             ctx="the refusal must name the column and how to bind to it instead")
+
+    # ...and the column ITSELF still binds - the guard is about continuing past it, not about the type.
+    ok = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.OpaqueCell",
+        "properties": [{"name": "dataPath", "value": attr + ".OpaqueId"}]})
+    assert_ok(ok, "a field bound to the opaque column itself must still be created")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_cannot_walk_past_a_collection_column():
+    # A COLLECTION column is not terminal, so a two-valued "terminal refuses / else passes" rule let
+    # 'Rows.Nested.Price' through as soon as the column existed. But the members such a value implies
+    # are COLUMNS, and the form metamodel puts `columns` on FormAttribute only - a column owns none -
+    # so 'Price' can never be declared under 'Nested' (issue #295 review). Asserted live, because the
+    # verdict is read off the real metamodel, not the synthetic one a unit test builds.
+    attr, col = "E2ENestedOwner", "Nested"
+    _seed_collection_attribute(attr)
+    base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
+    assert_ok(c, "seed the column")
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": base + ".Column." + col,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "type the column as a ValueTable")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DeepOnNested",
+        "properties": [{"name": "dataPath", "value": "%s.%s.Price" % (attr, col)}]})
+    e = assert_error(r, "a path past a collection column must be refused")
+    assert_error_quality(e, names=[col], suggests=["dataPath", "ATTRIBUTE"],
+                         ctx="the refusal must name the column, say only an attribute owns columns, "
+                             "and give the two ways out")
+
+    # The OTHER side: the collection column as the FINAL segment stays addressable.
+    ok = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NestedCell",
+        "properties": [{"name": "dataPath", "value": "%s.%s" % (attr, col)}]})
+    assert_ok(ok, "a field bound to the collection column ITSELF must still be created")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_column_on_non_collection_attribute_is_error():
+    # Only a ValueTable / ValueTree attribute owns columns. EDT would not flag a column hung off a
+    # String attribute, so the tool has to - and it must say how to fix it (issue #295).
+    attr = "E2EPlainAttr"
+    cr = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(cr, "seed a plain form attribute")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Nope"})
+    e = assert_error(r, "a column on a non-collection attribute is refused")
+    assert_error_quality(e, names=[attr], suggests=["ValueTable", "modify_metadata"],
+                         ctx="the refusal must name the attribute and say how to make it a collection")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_inapplicable_properties_are_refused_on_a_column():
+    # A column takes only `title`. Every other property was parsed, stored and then never applied by
+    # createColumn - the call reported success for a discarded request (issue #295 review).
+    attr = "E2EColPropsOwner"
+    _seed_collection_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.WithProps"
+    for prop, value in (("parent", "SomeGroup"), ("dataPath", "Price"),
+                        ("attribute", "Price"), ("command", "Post"), ("type", "InputField")):
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": prop, "value": value}]})
+        e = assert_error(r, "'%s' on a column must be refused, not silently dropped" % prop)
+        assert_error_quality(e, names=[prop], suggests=["title", "modify_metadata"],
+                             ctx="the refusal must name the property and what a column does accept")
+
+    # None of the refused calls may have created anything.
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "WithProps",
+                        "a refused create must not have written the column")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_column_handler_fqn_does_not_bind_to_a_same_named_item():
+    # '...Form.F.Column.X.Handler.Event' parses as an ITEM-LEVEL handler, so the bare-Column guard
+    # alone let it through and the handler container was looked up among the form's ITEMS by name -
+    # binding the handler to a visual item that merely shares the name (issue #295 review).
+    attr, fld = "E2EColHandlerAttr", "E2EColHandlerField"
+    a = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(a, "seed the form attribute")
+    wait_for_project_ready()
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(f, "seed a FIELD with the name the bad address will use")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Column." + fld + ".Handler.OnChange",
+        "properties": [{"name": "procedure", "value": "Hijacked"}]})
+    e = assert_error(r, "a handler addressed on a Column must be refused")
+    assert_contains(e, "no event handlers", "the refusal must say a column carries no events")
+
+    # The same-named FIELD must not have gained a handler.
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "Hijacked",
+                        "the same-named visual item must NOT have been bound")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_collection_attribute_can_be_shown_on_the_form():
+    # The point of the whole feature: a ValueTable attribute the user can SEE. The data column was
+    # creatable, but nothing could display it - a Table over the attribute auto-generated a bogus
+    # `<Attr>.LineNumber` column (a collection has no such field) and an explicit field with
+    # dataPath 'Rows.Price' was refused, because a dotted path was accepted only for a dynamic list
+    # or the main object attribute (issue #295 review).
+    attr, col, tbl = "E2EShownRows", "E2EShownPrice", "E2EShownTable"
+    _seed_collection_attribute(attr)
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(c, "create the data column")
+    wait_for_project_ready()
+
+    t = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Table." + tbl,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(t, "create a table bound to the collection attribute")
+    form_file = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    # The table's auto-columns come from the ATTRIBUTE's columns, addressed <Attr>.<Column> (a dotted
+    # path serializes as ONE dot-joined <segments> element).
+    poll_disk_contains(form_file, "<segments>%s.%s</segments>" % (attr, col),
+                       ctx="the table column must be bound to the attribute's own column")
+    form_xml = read_disk(form_file)
+    assert "<name>%sLineNumber</name>" % tbl not in form_xml, \
+        "an in-memory collection has no LineNumber field, so the table must not generate that " \
+        "column: %s" % form_xml
+
+    # ...and an EXPLICIT field bound to the same column is accepted too.
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.E2EShownField",
+        "properties": [{"name": "dataPath", "value": attr + "." + col},
+                       {"name": "parent", "value": tbl}]})
+    assert_ok(f, "an explicit field may bind to a collection attribute's column")
+    poll_disk_contains(form_file, "E2EShownField",
+                       ctx="the explicit column field must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_on_an_unknown_collection_column_is_error():
+    # Widening the dotted path must not accept ANY tail: an unknown column is named, with the
+    # address that would create it.
+    attr = "E2EGhostRows"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.E2EGhostField",
+        "properties": [{"name": "dataPath", "value": attr + ".NoSuchColumn"}]})
+    e = assert_error(r, "a field bound to a nonexistent column is refused")
+    assert_error_quality(e, names=["NoSuchColumn", attr], suggests=["create_metadata", "Column"],
+                         ctx="the refusal must name the missing column and how to create it")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_column_on_missing_attribute_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.NoSuchAttr_zzz.Column.C"})
+    e = assert_error(r, "a column on a missing attribute is refused")
+    assert_error_quality(e, names=["NoSuchAttr_zzz"], suggests=["Create it first"],
+                         ctx="the refusal must name the missing owner attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
