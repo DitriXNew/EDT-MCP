@@ -2892,18 +2892,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
-     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
-     * attribute can drop stored values on the next database update, so it is the destructive case a plain
-     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
-     *
-     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
-     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
-     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
-     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
-     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
-     */
-    /**
      * The predefined-item counterpart of {@link #consentForTypeChanges}: a
      * {@code ChartOfCharacteristicTypes} predefined item's {@code valueType} is a real RETYPE (or a
      * clear), so it must pass the same destructive-consent gate an ordinary attribute retype does,
@@ -2927,6 +2915,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
+    /**
+     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
+     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
+     * attribute can drop stored values on the next database update, so it is the destructive case a plain
+     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
+     *
+     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
+     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
+     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
+     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
+     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
+     */
     private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
     {
         List<String> retyped = new ArrayList<>();
@@ -4614,23 +4614,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Validates one property against the introspected schema and, on success, appends a
-     * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
-     * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
-     * and the prepared change are EClass-driven, not mdclass-specific).
-     *
-     * <p>{@code extInfo} is the element's nested {@code <extInfo>} EObject (a form element's layout /
-     * kind-specific sub-object, e.g. a UsualGroup's {@code UsualGroupExtInfo}) when the property may
-     * live there, or {@code null} on the mdclass path (an mdclass object has no extInfo, so the
-     * extInfo traversal is a no-op and this behaves exactly as before). A property found on the
-     * extInfo carries {@code info.onExtInfo == true}; the {@link PreparedChange} is built against the
-     * extInfo's feature, and the caller routes the {@code eSet} to the extInfo holder.</p>
-     *
-     * <p>{@code isExtensionProject} is threaded down only to append the extension-adopt hint (issue
-     * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
-     * it.</p>
-     */
-    /**
      * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
      * model context every {@code ValueKind} branch resolves references / types against. Folded together
      * purely to bring {@link #prepare}'s parameter count under the 7-parameter threshold (S107); no
@@ -4756,6 +4739,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             || defaultLanguage.getName() != null && defaultLanguage.getName().equals(lang.getName());
     }
 
+    /**
+     * Validates one property against the introspected schema and, on success, appends a
+     * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
+     * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
+     * and the prepared change are EClass-driven, not mdclass-specific).
+     *
+     * <p>{@code extInfo} is the element's nested {@code <extInfo>} EObject (a form element's layout /
+     * kind-specific sub-object, e.g. a UsualGroup's {@code UsualGroupExtInfo}) when the property may
+     * live there, or {@code null} on the mdclass path (an mdclass object has no extInfo, so the
+     * extInfo traversal is a no-op and this behaves exactly as before). A property found on the
+     * extInfo carries {@code info.onExtInfo == true}; the {@link PreparedChange} is built against the
+     * extInfo's feature, and the caller routes the {@code eSet} to the extInfo holder.</p>
+     *
+     * <p>{@code isExtensionProject} is threaded down only to append the extension-adopt hint (issue
+     * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
+     * it.</p>
+     */
     private String prepare(PrepareContext ctx, EObject target, EObject extInfo,
         JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)

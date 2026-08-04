@@ -1007,12 +1007,6 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /**
-     * Resolves a single FQN to its metadata object, or {@code null} when the FQN
-     * is malformed or the object does not exist. A {@code null} result is a
-     * per-object failure (recorded in the machine-readable failures table), never
-     * a whole-call failure.
-     */
-    /**
      * Renders a form's structure (items / attributes / commands) for a form FQN, reusing
      * {@code FormStructureReader}'s resolver + renderer: resolve the {@code BasicForm}, then inside a
      * BM READ transaction reach its editable {@code Form} content and render it to markdown (the
@@ -1228,6 +1222,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         });
     }
 
+    /**
+     * Resolves a single FQN to its metadata object, or {@code null} when the FQN
+     * is malformed or the object does not exist. A {@code null} result is a
+     * per-object failure (recorded in the machine-readable failures table), never
+     * a whole-call failure.
+     */
     private MdObject resolveObject(Configuration config, String fqn)
     {
         // Parse FQN: Type.Name

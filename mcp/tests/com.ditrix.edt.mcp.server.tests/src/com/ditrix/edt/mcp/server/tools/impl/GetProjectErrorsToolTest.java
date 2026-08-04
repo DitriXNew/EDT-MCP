@@ -1848,9 +1848,10 @@ public class GetProjectErrorsToolTest
 
         assertTrue("the fixture must expose a tokenless item by name", //$NON-NLS-1$
             FormElementWriter.findFormItem(form.root, TOKENLESS_ITEM) != null);
-        assertNull("...and it must carry no addressable kind", //$NON-NLS-1$
-            FormElementWriter.addressableKind(
-                FormElementWriter.findFormItem(form.root, TOKENLESS_ITEM)));
+        // That it carries no addressable kind is what the loop below proves from the outside: no
+        // kind token reaches it. (A separate assertion on the classifier used to state the same
+        // thing directly; it went with FormElementWriter.addressableKind, which the single strict
+        // predicate made redundant.)
 
         for (String kind : new String[] {"Button", "Field", "Group", "Decoration", "Table"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         {

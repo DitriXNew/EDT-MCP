@@ -1161,16 +1161,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Outcome of {@link #collectPredefinedItemBlockingReferences} (issue #296 P1 fix): the
-     * blocking-reference rows gathered so far, AND whether the scan ran to completion.
-     * {@code completed=false} means the incoming-reference state is UNVERIFIED - a null BM model /
-     * model manager, a missing owner/item once re-fetched inside the transaction, a per-item
-     * {@code getBackReferences} failure, or any other exception - and must NEVER be read as "genuinely
-     * zero references": {@code refs} may still carry a partial list gathered before the failure, but
-     * callers must fail CLOSED (block unless {@code force=true}), never silently proceed. See
-     * {@link #deletePredefinedItem}.
-     */
-    /**
      * Result of the predefined-item incoming-reference scan: the collected blocking-reference rows,
      * and whether the scan RAN TO COMPLETION. {@code completed=false} (a partial/failed scan) is NOT
      * the same as "genuinely zero references" - it means the reference state is UNVERIFIED, which

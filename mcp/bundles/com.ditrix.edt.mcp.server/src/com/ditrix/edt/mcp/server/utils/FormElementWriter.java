@@ -4436,25 +4436,6 @@ public final class FormElementWriter
     }
 
     /**
-     * The element KIND {@code element} can be addressed by, or {@code null} when its class carries no
-     * addressable kind token at all (today only {@code Addition}, a table's search-string /
-     * view-status / search-control child).
-     *
-     * <p>The element-level view of {@link #addressableKindOf}, for a caller that must tell "this
-     * element is a Button" from "this element answers to no kind token" - the exact marker filter of
-     * {@code get_project_errors}. There is exactly ONE classifier behind it and behind
-     * {@link #matchesKindToken}, so the strict filter and the write tools cannot disagree about what
-     * an address names: since issue #343 the resolvers refuse a foreign kind themselves.</p>
-     *
-     * @param element the form element (may be {@code null})
-     * @return the addressable kind, or {@code null} when the class has none
-     */
-    public static Kind addressableKind(EObject element)
-    {
-        return element == null ? null : addressableKindOf(element.eClass());
-    }
-
-    /**
      * The {@link Kind} whose token addresses an element of this form-model EClass, or {@code null} for
      * an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which is deliberately
      * limited to the kinds that carry PLACEMENT rules.
