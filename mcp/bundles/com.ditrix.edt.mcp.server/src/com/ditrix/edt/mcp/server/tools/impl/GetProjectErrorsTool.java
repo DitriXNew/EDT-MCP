@@ -246,20 +246,6 @@ public class GetProjectErrorsTool implements IMcpTool
     }
     
     /**
-     * Gets project errors with filters using EDT IMarkerManager.
-     * 
-     * @param projectName filter by project name (null for all)
-     * @param severity filter by severity (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL)
-     * @param checkId filter by check ID substring
-     * @param objects filter by object FQNs (empty list for all objects)
-     * @param limit maximum number of results
-     * @param detailed when {@code true} render the full table (incl. the secondary
-     *        {@code Has docs} column); when {@code false} (the default) render a leaner
-     *        table that omits {@code Has docs}. Only the table presentation changes — the
-     *        marker collection, model reads and transaction boundaries are identical.
-     * @return Markdown formatted string with error details
-     */
-    /**
      * Parses a severity filter name into a {@link MarkerSeverity}. Returns {@code null} for a
      * null/empty input or an unrecognized name, in which case all severities are shown.
      *
@@ -282,6 +268,20 @@ public class GetProjectErrorsTool implements IMcpTool
         return null;
     }
 
+    /**
+     * Gets project errors with filters using EDT IMarkerManager.
+     *
+     * @param projectName filter by project name (null for all)
+     * @param severity filter by severity (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL)
+     * @param checkId filter by check ID substring
+     * @param objects filter by object FQNs (empty list for all objects)
+     * @param limit maximum number of results
+     * @param detailed when {@code true} render the full table (incl. the secondary
+     *        {@code Has docs} column); when {@code false} (the default) render a leaner
+     *        table that omits {@code Has docs}. Only the table presentation changes — the
+     *        marker collection, model reads and transaction boundaries are identical.
+     * @return Markdown formatted string with error details
+     */
     public static String getProjectErrors(String projectName, String severity, String checkId, List<String> objects, int limit, boolean detailed)
     {
         return getProjectErrors(projectName, severity, checkId, objects, limit, detailed, false);
@@ -2052,14 +2052,13 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     private static boolean addressesTheRequestedKind(EObject element, String kindToken)
     {
-        FormElementWriter.Kind requested = FormElementWriter.kindForToken(kindToken);
-        if (requested == FormElementWriter.Kind.ATTRIBUTE
-            || requested == FormElementWriter.Kind.COMMAND)
-        {
-            return FormElementWriter.matchesKindToken(element, kindToken);
-        }
-        return element != null && requested != null
-            && requested == FormElementWriter.addressableKind(element);
+        // ONE question, asked in ONE place. This used to split: Attribute / Command went to
+        // matchesKindToken (which accepted any token for a class carrying no ITEM kind) and everything
+        // else to a strict comparison, because the shared predicate could not classify the
+        // attribute / command containments. Since issue #343 it can - and the resolvers refuse a
+        // foreign kind themselves - so the exact filter and the write tools now share one verdict
+        // instead of two that could drift.
+        return FormElementWriter.matchesKindToken(element, kindToken);
     }
 
     /**
@@ -2470,16 +2469,6 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * Appends the human-readable {@code objectsUnsupported} block to {@code md} - the addresses
-     * this filter cannot scope at all, each with the reason (see
-     * {@link #unsupportedAddressReason(String)}). Kept apart from {@code objectsNotFound} because
-     * the two are different facts: "this member does not exist" versus "no marker can ever carry
-     * this address". The same entries travel back machine-readably in {@code structuredContent}.
-     *
-     * @param md the Markdown builder to append to
-     * @param objectsUnsupported the {@code fqn} / {@code reason} entries, may be {@code null}/empty
-     */
-    /**
      * Appends the PARTIAL-ANSWER warning: addresses that resolved while some project that could hold
      * them could not be consulted, so the rows below are not the whole story.
      *
@@ -2507,6 +2496,16 @@ public class GetProjectErrorsTool implements IMcpTool
         }
     }
 
+    /**
+     * Appends the human-readable {@code objectsUnsupported} block to {@code md} - the addresses
+     * this filter cannot scope at all, each with the reason (see
+     * {@link #unsupportedAddressReason(String)}). Kept apart from {@code objectsNotFound} because
+     * the two are different facts: "this member does not exist" versus "no marker can ever carry
+     * this address". The same entries travel back machine-readably in {@code structuredContent}.
+     *
+     * @param md the Markdown builder to append to
+     * @param objectsUnsupported the {@code fqn} / {@code reason} entries, may be {@code null}/empty
+     */
     static void appendObjectsUnsupportedWarning(StringBuilder md,
         List<Map<String, String>> objectsUnsupported)
     {

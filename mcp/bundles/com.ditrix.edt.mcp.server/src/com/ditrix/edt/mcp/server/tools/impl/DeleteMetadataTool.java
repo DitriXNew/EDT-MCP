@@ -25,6 +25,9 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -611,6 +614,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     // ==================== FORM members (cross-model hop) ====================
 
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
+        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
+        return project != null ? project.getVersion() : null;
+    }
+
     /**
      * Deletes a FORM member (item / attribute / command / handler) addressed by a form FQN. The member
      * lives on the editable Form content model, so it is removed directly with {@link EcoreUtil#remove}
@@ -634,21 +645,24 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
                     + "Column on a collection attribute / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
+            // The #343 advice may quote a corrected handler address, and whether the corrected
+            // owner really carries that event is a question only the platform type can answer.
+            final Version version = platformVersionOf(ctx);
             if (!confirm)
             {
-                return buildFormDeletePreview(fctx, normFqn, ref, handler);
+                return buildFormDeletePreview(fctx, normFqn, ref, handler, version);
             }
             // Resolve and read the real preview BEFORE asking: a typo must answer "not found"
             // without ever raising a destructive dialog, and the prompt must list what will actually
             // be removed. The gate is the LAST check before the write, and runs outside any
             // transaction because it may block on a UI dialog (issue #331 / #295 review).
-            FormDeletePreview data = readFormDeletePreview(fctx, ref, handler);
+            FormDeletePreview data = readFormDeletePreview(fctx, ref, handler, normFqn, version);
             if (!data.found)
             {
-                return formMemberNotFound(ref, handler);
+                return formMemberNotFound(ref, handler, data.kindAdvice);
             }
             return gateFormMemberDelete(normFqn, ref, handler, data,
-                () -> performFormDelete(fctx, normFqn, ref, handler));
+                () -> performFormDelete(fctx, normFqn, ref, handler, version));
         }
         catch (Exception e)
         {
@@ -676,16 +690,61 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return FormElementWriter.resolveFormMember(formModel, ref);
     }
 
-    private static String formMemberNotFound(FormElementWriter.FormMemberRef ref, boolean handler)
+    /**
+     * The "not found" error for a form delete target. {@code advice} is the kind-mismatch tail computed
+     * INSIDE the transaction (see {@link FormElementWriter#kindMismatchAdvice}): the resolution is
+     * kind-aware (issue #343), so an address whose kind segment names another element's kind must say
+     * which kind the same-named element really has instead of a bare "not found". Empty when there is
+     * nothing to add, in which case the generic pointer is kept verbatim.
+     */
+    private static String formMemberNotFound(FormElementWriter.FormMemberRef ref, boolean handler,
+        String advice)
     {
         if (handler)
         {
+            // A non-empty advice here is only produced when the OWNER itself did not resolve (see
+            // formTargetAdvice), so the miss is the owner's, not the handler's - saying "no event
+            // handler" would blame the wrong thing about an element that does have one. The subject
+            // follows the OWNER's token: a Command address misses a form COMMAND, not an item.
+            if (!advice.isEmpty())
+            {
+                boolean commandOwner = FormElementWriter.kindForToken(ref.itemKindToken)
+                    == FormElementWriter.Kind.COMMAND;
+                return ToolResult.error((commandOwner ? "Form command not found: " //$NON-NLS-1$
+                    : "Form item not found: ") + ref.itemName + " (kind '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref.itemKindToken + "') on " + ref.formPath + advice).toJson(); //$NON-NLS-1$
+            }
             return ToolResult.error("No event handler for '" + ref.name + "' on " //$NON-NLS-1$ //$NON-NLS-2$
                 + (ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath) //$NON-NLS-1$
                 + ". Use get_metadata_details to list the handlers.").toJson(); //$NON-NLS-1$
         }
         return ToolResult.error("Form member not found: " + ref.name + " (kind '" + ref.kindToken //$NON-NLS-1$ //$NON-NLS-2$
-            + "') on " + ref.formPath + ". Use get_metadata_details to list the members.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            + "') on " + ref.formPath //$NON-NLS-1$
+            + (advice.isEmpty() ? ". Use get_metadata_details to list the members." : advice)) //$NON-NLS-1$
+            .toJson();
+    }
+
+    /**
+     * The kind-mismatch advice for a delete target that did not resolve, computed on the tx-bound form
+     * model: for an ITEM-LEVEL handler address the OWNER's kind segment is the one that can be wrong,
+     * for a member address the leaf's. A FORM-LEVEL handler address ({@code ...Form.F.Handler.OnOpen})
+     * carries no element kind segment at all - its leaf is an EVENT name - so it has no advice.
+     *
+     * <p>For a handler the advice is asked for ONLY when the owner itself did not resolve. Otherwise a
+     * genuinely missing handler on a resolved owner would pick up advice about a same-named element of
+     * another kind ({@code ...Command.Sync.Handler.Action} on an existing command {@code Sync} while a
+     * BUTTON {@code Sync} also exists) and report an owner miss that did not happen.</p>
+     */
+    private static String formTargetAdvice(EObject formModel, FormElementWriter.FormMemberRef ref,
+        boolean handler, String normFqn, Version version)
+    {
+        if (handler)
+        {
+            return FormElementWriter.resolveHandlerContainer(formModel, ref) != null
+                ? "" //$NON-NLS-1$
+                : FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn, version);
+        }
+        return FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken, ref.name, normFqn);
     }
 
     /**
@@ -821,7 +880,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @return the preview data; {@code found} is false when the target does not exist
      */
     private FormDeletePreview readFormDeletePreview(FormElementWriter.FormEditContext fctx,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+        FormElementWriter.FormMemberRef ref, boolean handler, String normFqn, Version version)
     {
         return FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
             (formModel, tx) ->
@@ -829,7 +888,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 EObject target = resolveFormTarget(formModel, ref, handler);
                 if (target == null)
                 {
-                    return new FormDeletePreview(); // found stays false
+                    FormDeletePreview miss = new FormDeletePreview(); // found stays false
+                    // The advice must be read HERE: the model is tx-bound and must not escape.
+                    miss.kindAdvice = formTargetAdvice(formModel, ref, handler, normFqn, version);
+                    return miss;
                 }
                 FormDeletePreview d = new FormDeletePreview();
                 d.found = true;
@@ -843,13 +905,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
-        FormDeletePreview data = readFormDeletePreview(fctx, ref, handler);
+        FormDeletePreview data = readFormDeletePreview(fctx, ref, handler, normFqn, version);
 
         if (!data.found)
         {
-            return formMemberNotFound(ref, handler);
+            return formMemberNotFound(ref, handler, data.kindAdvice);
         }
 
         List<Map<String, Object>> removed = new ArrayList<>();
@@ -881,7 +943,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Delete inside a WRITE transaction: EcoreUtil.remove the target, then export the content form. */
     private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
         final String[] capturedType = new String[1];
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "DeleteFormMember", //$NON-NLS-1$
@@ -891,7 +953,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 if (target == null)
                 {
                     // Thrown (not flagged): rolls the unchanged tx back and skips the export.
-                    throw new FormValidationException(formMemberNotFound(ref, handler));
+                    throw new FormValidationException(formMemberNotFound(ref, handler,
+                        formTargetAdvice(formModel, ref, handler, normFqn, version)));
                 }
                 capturedType[0] = target.eClass().getName();
                 // items is containment, so removing a Group/Table cascades its contained subtree.
@@ -2217,6 +2280,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         boolean found;
         String type;
+        /** The kind-mismatch advice for a MISS, read inside the transaction (issue #343); never null. */
+        String kindAdvice = ""; //$NON-NLS-1$
         final List<Map<String, Object>> descendants = new ArrayList<>();
 
         /**

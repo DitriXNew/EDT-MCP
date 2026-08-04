@@ -14,6 +14,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -145,8 +146,13 @@ public final class FormElementWriter
 
     // Concrete form-model classifier names (resolved on the form EPackage).
     private static final String ECLASS_FORM_GROUP = "FormGroup"; //$NON-NLS-1$
+    /** The ABSTRACT base of every group-like form item ({@code FormGroup} / {@code AutoCommandBar} /
+     * {@code ContextMenu} / the two actions panels) - what the {@code Group} kind token denotes. */
+    private static final String ECLASS_GROUP_BASE = "Group"; //$NON-NLS-1$
     private static final String ECLASS_DECORATION = "Decoration"; //$NON-NLS-1$
     private static final String ECLASS_ABSTRACT_FORM_ATTRIBUTE = "AbstractFormAttribute"; //$NON-NLS-1$
+    /** The concrete form-attribute EClass (the base is not exposed by every model). */
+    private static final String ECLASS_FORM_ATTRIBUTE = "FormAttribute"; //$NON-NLS-1$
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
@@ -156,6 +162,8 @@ public final class FormElementWriter
     private static final String ECLASS_AUTO_COMMAND_BAR = "AutoCommandBar"; //$NON-NLS-1$
     private static final String ECLASS_CONTEXT_MENU = "ContextMenu"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
+    /** The concrete table-addition EClass (search string / view status / search control). */
+    private static final String ECLASS_ADDITION = "Addition"; //$NON-NLS-1$
     private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND_HANDLER_CONTAINER = "FormCommandHandlerContainer"; //$NON-NLS-1$
     private static final String ECLASS_COMMAND_HANDLER = "CommandHandler"; //$NON-NLS-1$
@@ -891,7 +899,7 @@ public final class FormElementWriter
         List<String> lower = new ArrayList<>(tokens.length);
         for (String token : tokens)
         {
-            lower.add(token.toLowerCase());
+            lower.add(token.toLowerCase(Locale.ROOT));
         }
         return Collections.unmodifiableList(lower);
     }
@@ -902,7 +910,11 @@ public final class FormElementWriter
      */
     public static Kind kindForToken(String token)
     {
-        return token == null ? null : KIND_BY_TOKEN.get(token.trim().toLowerCase());
+        // Locale.ROOT, not the default locale: under a Turkish/Azeri locale the default lowercasing
+        // turns the 'I' of 'FIELD' into a DOTLESS lowercase i, which matches no catalogue key.
+        // That used to be harmless (an unknown token still fell through to the by-name item
+        // search); since the kind became decisive it would REJECT a valid address (issue #343).
+        return token == null ? null : KIND_BY_TOKEN.get(token.trim().toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -3082,6 +3094,28 @@ public final class FormElementWriter
             throw new IllegalArgumentException("Form item not found: '" + itemName //$NON-NLS-1$
                 + "'. Use get_metadata_details on the form to inspect its items."); //$NON-NLS-1$
         }
+        return moveResolvedItem(formModel, item, itemName, targetParent, position, formName);
+    }
+
+    /**
+     * Moves an ALREADY-RESOLVED form item - the entry point for an FQN-addressed move, whose item must
+     * come from {@link #resolveUniqueFormMember} so the address's KIND is verified (issue #343). The
+     * by-name {@link #moveItem(EObject, String, String, String, String)} above is the kind-UNCHECKED
+     * primitive and must not be used to serve a caller-supplied FQN.
+     *
+     * @param formModel the editable form content model (tx-bound)
+     * @param item the item to move, already resolved on {@code formModel}
+     * @param itemName the item's programmatic name (for the error messages)
+     * @param targetParent the destination container name; blank or equal to {@code formName} means
+     *     the form root; {@code null} keeps the item in its current container (reorder in place)
+     * @param position the destination position spec, or {@code null} to append at the end
+     * @param formName the MD-form Name (matching it as {@code targetParent} means the form root)
+     * @return a human-readable description of where the item ended up
+     * @throws RuntimeException with a user-facing message on any rejection
+     */
+    public static String moveResolvedItem(EObject formModel, EObject item, String itemName,
+        String targetParent, String position, String formName) // NOSONAR signature is inherent: the resolved item AND its name are both needed (the name only for the messages)
+    {
         String err;
         if (targetParent == null)
         {
@@ -3208,7 +3242,7 @@ public final class FormElementWriter
         {
             return 0;
         }
-        String lower = position.toLowerCase(java.util.Locale.ROOT);
+        String lower = position.toLowerCase(Locale.ROOT);
         if (lower.startsWith(POS_BEFORE))
         {
             return indexOfSibling(destNames, position.substring(POS_BEFORE.length()).trim(), movedName);
@@ -4513,6 +4547,11 @@ public final class FormElementWriter
      * form COMMAND for a {@code Command} kind token ({@code ...Command.X.Handler.Action}), the named
      * form ITEM otherwise; the form root for a form-level ref. Returns {@code null} when the named
      * owner does not exist.
+     *
+     * <p>The OWNER's kind is part of the resolution, exactly as it is for the leaf in
+     * {@link #resolveFormMember}: the item lookup goes by NAME, so an owner of a foreign kind
+     * ({@code Button.} for a FIELD) or a misspelt one ({@code Fielld.}) would otherwise bind, rebind
+     * or delete the handler on the element that merely bears the name (issue #343).</p>
      */
     public static EObject resolveHandlerContainer(EObject formModel, FormMemberRef ref)
     {
@@ -4524,7 +4563,8 @@ public final class FormElementWriter
         {
             return findFormCommand(formModel, ref.itemName);
         }
-        return findFormItem(formModel, ref.itemName);
+        EObject item = findFormItem(formModel, ref.itemName);
+        return matchesKindToken(item, ref.itemKindToken) ? item : null;
     }
 
     /** The {@code event} EReference on the EventHandler EClass held by the {@code handlers} feature. */
@@ -5207,6 +5247,15 @@ public final class FormElementWriter
      * Group / Decoration / Table / ...) &rarr; the items tree by name. Returns {@code null} if no such
      * member exists. A handler ref is NOT a member - resolve it via {@link #findFormHandler} on the
      * appropriate container.
+     *
+     * <p>The KIND is part of the resolution, not a hint: the items tree is searched by NAME (names are
+     * form-wide unique across kinds), so the match is accepted only when its concrete EClass really
+     * denotes the requested kind ({@link #matchesKindToken}). A foreign kind
+     * ({@code ...Form.F.Button.Price} for a FIELD named {@code Price}) and a misspelt one
+     * ({@code Fielld.Price}) therefore resolve to {@code null} instead of silently addressing the
+     * element that happens to bear the name - which sent {@code delete_metadata} at the wrong element
+     * (issue #343). {@link #kindMismatchAdvice} turns that {@code null} into an error that names the
+     * kind the element actually has.</p>
      */
     public static EObject resolveFormMember(EObject formModel, FormMemberRef ref)
     {
@@ -5225,55 +5274,59 @@ public final class FormElementWriter
         }
         if (kind == Kind.ATTRIBUTE)
         {
+            // The attributes / formCommands containments are kind-scoped by construction: nothing of
+            // another kind can be found in them, so no extra check is needed (nor possible - the
+            // AbstractFormAttribute / FormCommand EClasses carry no addressable item kind).
             return findFormAttribute(formModel, ref.name);
         }
         if (kind == Kind.COMMAND)
         {
             return findFormCommand(formModel, ref.name);
         }
-        return findFormItem(formModel, ref.name);
+        EObject item = findFormItem(formModel, ref.name);
+        return matchesKindToken(item, ref.kindToken) ? item : null;
     }
 
     /**
-     * Whether {@code member} - the element {@link #resolveFormMember} returned for {@code ref} -
-     * really is of the KIND the FQN asked for.
+     * {@link #resolveFormMember} with the STRICT item lookup: an AMBIGUOUS name (several items bearing
+     * it anywhere in the form-item tree) is rejected with a {@code RuntimeException} instead of
+     * silently returning the first match. THE entry point for a write path that mutates the addressed
+     * item structurally (a move, a button's command re-point) - it applies the same kind check, so
+     * those paths cannot end up resolving by name alone (issue #343).
      *
-     * <p>{@link #resolveFormMember} routes only ATTRIBUTE and COMMAND into their own containment;
-     * EVERY other kind token falls through to the by-NAME item search. So
-     * {@code ...Form.F.Button.Price} "resolves" to the FIELD named {@code Price}, and an
-     * unrecognized token ({@code Fielld.Price}) resolves to whatever bears the name. Both are a
-     * caller's typo, so a consumer whose whole answer IS "does this address exist" - it has no
-     * later kind-specific step that would trip over the mismatch - must ask this too.</p>
-     *
-     * @param member the resolved member, may be {@code null}
-     * @param ref the parsed member reference {@code member} was resolved from, may be {@code null}
-     * @return {@code true} when the member exists and its concrete EClass denotes exactly the
-     *     requested kind, or denotes no addressable kind at all (an auto command bar / context menu
-     *     / extended tooltip and the attribute-and-command containments are reached by name or by
-     *     containment, so their token contradicts nothing); {@code false} for a wrong or
-     *     unrecognized kind token
+     * @param formModel the tx-bound form content model
+     * @param ref the parsed member reference
+     * @return the resolved member, or {@code null} when none of that name AND kind exists
      */
-    public static boolean matchesRequestedKind(EObject member, FormMemberRef ref)
+    public static EObject resolveUniqueFormMember(EObject formModel, FormMemberRef ref)
     {
-        return ref != null && matchesKindToken(member, ref.kindToken);
+        Kind kind = kindForToken(ref.kindToken);
+        if (kind == Kind.ATTRIBUTE)
+        {
+            return findFormAttribute(formModel, ref.name);
+        }
+        if (kind == Kind.COMMAND)
+        {
+            return findFormCommand(formModel, ref.name);
+        }
+        EObject item = findUniqueItem(formModel, ref.name);
+        return matchesKindToken(item, ref.kindToken) ? item : null;
     }
 
     /**
-     * Whether {@code element} really is of the KIND that {@code kindToken} names - the element-level
-     * form of {@link #matchesRequestedKind}, for a caller holding a kind token that is not the ref's
-     * leaf one (the OWNER token of an item-level handler FQN,
-     * {@code ...Form.F.Button.Price.Handler.OnChange}).
+     * Whether {@code element} really is of the KIND that {@code kindToken} names.
      *
-     * <p>The owner lookup behind such an address finds an item by NAME alone, exactly like the leaf
-     * lookup does, so a foreign owner kind ({@code Button.} for a FIELD) or a misspelt one
-     * ({@code Fielld.}) would otherwise pass as resolved.</p>
+     * <p>The item lookup behind a form address finds an item by NAME alone, so without this check a
+     * foreign kind ({@code Button.} for a FIELD) or a misspelt one ({@code Fielld.}) passes as
+     * resolved. Used by {@link #resolveFormMember} for the leaf and by
+     * {@link #resolveHandlerContainer} for the OWNER of an item-level handler address
+     * ({@code ...Form.F.Button.Price.Handler.OnChange}).</p>
      *
      * @param element the resolved form element, may be {@code null}
      * @param kindToken the kind token the address named, may be {@code null}
-     * @return {@code true} when the element exists and its concrete EClass denotes exactly the named
-     *     kind, or denotes no addressable kind at all (an auto command bar / context menu / extended
-     *     tooltip, and the attribute / command containments, are reached by name or by containment,
-     *     so their token contradicts nothing); {@code false} for a wrong or unrecognized token
+     * @return {@code true} only when the element's EClass denotes exactly the named kind (see
+     *     {@link #addressableKindOf}); {@code false} for a wrong or unrecognized token, and for an
+     *     EClass no token denotes at all
      */
     public static boolean matchesKindToken(EObject element, String kindToken)
     {
@@ -5287,75 +5340,447 @@ public final class FormElementWriter
             // An unrecognized kind token addresses nothing: it cannot be the kind of anything.
             return false;
         }
-        Kind actual = addressableKindOf(element.eClass().getName());
-        return actual == null || actual == requested;
+        // An EClass NO token denotes matches NO token either. Accepting "any recognized token" for it
+        // looked like a harmless way to keep such an element reachable, but a token that addresses an
+        // element it does not describe is the whole defect of issue #343: it let
+        // '...Button.<a table Addition>' through to EcoreUtil.remove, deleting an element under a kind
+        // it plainly is not. Reachability is not worth a destructive wrong-kind address.
+        return addressableKindOf(element.eClass()) == requested;
     }
 
     /**
-     * The element KIND {@code element} can be addressed by, or {@code null} when its class carries
-     * no addressable kind token at all ({@code AutoCommandBar}, {@code ContextMenu},
-     * {@code ExtendedTooltip}, and the non-item members {@code FormAttribute} / {@code FormCommand},
-     * which are reached through their own containment rather than by an item kind).
+     * The {@link Kind} whose token addresses an element of this form-model EClass, or {@code null} for
+     * an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which is deliberately
+     * limited to the kinds that carry PLACEMENT rules.
      *
-     * <p>Exposed so a caller that must be STRICT can tell "this element is a Button" from "this
-     * element answers to no kind token", which {@link #matchesKindToken} deliberately blurs: it
-     * accepts any requested kind for a tokenless class so that such elements stay reachable at all.
-     * That leniency is right for the write tools and wrong for an EXACT filter, which would
-     * otherwise call {@code ...Button.FormCommandBar} a resolved address.</p>
+     * <p>A kind token denotes an EClass and addresses that EClass AND its subclasses - which is what
+     * gives the designer's own children a supported address without a token of their own. The
+     * {@code FormItem} hierarchy of the form model (identical on 2025.2 and 2026.1) is:</p>
+     * <pre>
+     * FormItem
+     *   Group (abstract)    -&gt; FormGroup, ContextMenu, AutoCommandBar,
+     *                          SelectedItemsActionsPanel, RowActionsPanel  =&gt; token Group
+     *   DataItem (abstract) -&gt; Button                                      =&gt; token Button
+     *                          FormField                                   =&gt; token Field
+     *                          Table                                       =&gt; token Table
+     *   Decoration          -&gt; Decoration, ExtendedTooltip                 =&gt; token Decoration
+     *   Addition                                                           =&gt; NO token
+     * AbstractFormAttribute -&gt; FormAttribute                               =&gt; token Attribute
+     *                          FormAttributeColumn                         =&gt; token Column
+     * </pre>
+     * <p>{@code DataItem} is deliberately NOT used: three different tokens denote its subclasses, so
+     * widening to it would let {@code Button.} address a FIELD again - the very bug of issue #343.
+     * {@code Group} and {@code Decoration} are each denoted by exactly one token, so every element
+     * under them has ONE supported address: {@code ...Group.FormCommandBar} for an auto command bar,
+     * {@code ...Decoration.PriceExtendedTooltip} for an extended tooltip.</p>
      *
-     * @param element the form element (may be {@code null})
-     * @return the addressable kind, or {@code null} when the class has none
+     * <p>{@code Addition} (a table's search-string / view-status / search-control addition) is the one
+     * class no token denotes: it inherits from {@code FormItem} directly, and the platform gives it its
+     * own base type too ({@code FormItemAddition}, see {@link #PLATFORM_TYPE_BY_ECLASS}). No FQN
+     * addresses it: {@link #matchesKindToken} matches a tokenless class against NO token. Accepting
+     * any recognized one to keep it reachable was the same defect one level down - it let
+     * {@code ...Button.<addition>} through to the delete path. An addition is created and removed
+     * with its table, so nothing needs to address it on its own.</p>
+     *
+     * <p>ORDERING MATTERS, and one pair is load-bearing: {@code FormAttributeColumn} INHERITS
+     * {@code AbstractFormAttribute}, so the COLUMN arm has to be asked FIRST or a column classifies
+     * as an ATTRIBUTE and an existing {@code ...Attribute.T.Column.C} reads as unresolved (issue
+     * #295). Same rule as the {@code Group} base above: most specific first.</p>
+     *
+     * @param eClass the EClass of a resolved form element, may be {@code null}
+     * @return the addressing kind, or {@code null} when no kind token denotes this EClass
      */
     public static Kind addressableKind(EObject element)
     {
-        return element == null ? null : addressableKindOf(element.eClass().getName());
+        return element == null ? null : addressableKindOf(element.eClass());
     }
 
-    /**
-     * The {@link Kind} whose token addresses an element of this concrete form-model EClass, or
-     * {@code null} for an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which
-     * is deliberately limited to the kinds that carry PLACEMENT rules.
-     *
-     * @param eClassName the concrete EClass simple name of a resolved form element
-     * @return the addressing kind, or {@code null} when no kind token denotes this EClass
-     */
-    private static Kind addressableKindOf(String eClassName)
+    private static Kind addressableKindOf(EClass eClass)
     {
-        // A COLUMN is a DATA member, not an item, and it IS addressable - '...Attribute.T.Column.C'
-        // (issue #295). Answering "no kind" for it made the exact marker filter of get_project_errors
-        // call an existing column unresolved, because that filter reads a null as "this class answers
-        // to no token" (issue #295 review).
-        //
-        // NOTE for the #343/#345 merge: that branch reworks this classifier to be HIERARCHICAL
-        // (isOrInherits) and maps AbstractFormAttribute -> Kind.ATTRIBUTE. FormAttributeColumn
-        // INHERITS AbstractFormAttribute, so this arm must stay ABOVE that one there - most specific
-        // first, the ordering rule that branch already applies to the Group base. Without it a column
-        // would classify as ATTRIBUTE and the same false "not found" returns.
-        if (ECLASS_FORM_ATTRIBUTE_COLUMN.equals(eClassName))
+        if (eClass == null)
         {
-            return Kind.COLUMN;
+            return null;
         }
-        if (ELEM_BUTTON.equals(eClassName))
-        {
+        if (isOrInherits(eClass, ELEM_BUTTON))        {
             return Kind.BUTTON;
         }
-        if (ECLASS_DECORATION.equals(eClassName))
-        {
-            return Kind.DECORATION;
-        }
-        if (ECLASS_FORM_FIELD.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_FORM_FIELD))
         {
             return Kind.FIELD;
         }
-        if (ECLASS_FORM_GROUP.equals(eClassName))
-        {
-            return Kind.GROUP;
-        }
-        if (ECLASS_TABLE.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_TABLE))
         {
             return Kind.TABLE;
         }
+        if (isOrInherits(eClass, ECLASS_DECORATION))
+        {
+            return Kind.DECORATION;
+        }
+        // The abstract Group base first, so every group-like designer child maps to the SAME token as
+        // the FormGroup the writer creates; the concrete class is the fallback for a model that does
+        // not expose the base.
+        if (isOrInherits(eClass, ECLASS_GROUP_BASE) || isOrInherits(eClass, ECLASS_FORM_GROUP))
+        {
+            return Kind.GROUP;
+        }
+        // The two NON-item members. They are not in the items tree - the resolvers reach them through
+        // their own containment and never ask this - but a caller holding an already-resolved member
+        // does ask (the marker filter's exact check), and answering "no kind" for a FormCommand would
+        // make a correct '...Command.Print' address look unresolved.
+        if (isOrInherits(eClass, ECLASS_FORM_COMMAND))
+        {
+            return Kind.COMMAND;
+        }
+        // A COLUMN is a DATA member and IS addressable ('...Attribute.T.Column.C', issue #295).
+        // It MUST be asked before the attribute base it inherits: classify it as ATTRIBUTE and an
+        // existing column reads as unresolved. Most specific first - the same rule as the Group base.
+        if (isOrInherits(eClass, ECLASS_FORM_ATTRIBUTE_COLUMN))
+        {
+            return Kind.COLUMN;
+        }
+        if (isOrInherits(eClass, ECLASS_ABSTRACT_FORM_ATTRIBUTE)
+            || isOrInherits(eClass, ECLASS_FORM_ATTRIBUTE))
+        {
+            return Kind.ATTRIBUTE;
+        }
         return null;
+    }
+
+    /**
+     * Whether {@code eClass} IS the named form EClass or inherits from it. Matched by NAME so this
+     * stays reflective (no compile dependency on {@code com._1c.g5.v8.dt.form.model}).
+     */
+    private static boolean isOrInherits(EClass eClass, String eClassName)
+    {
+        if (eClassName.equals(eClass.getName()))
+        {
+            return true;
+        }
+        for (EClass superType : eClass.getEAllSuperTypes())
+        {
+            if (eClassName.equals(superType.getName()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The actionable tail for an address that {@link #resolveFormMember} /
+     * {@link #resolveHandlerContainer} refused: when the form DOES hold a member of that name under a
+     * different kind, it names the kind the element actually has and spells the corrected address, so
+     * "not found" cannot read as a lie about an element the caller can see in
+     * {@code get_metadata_details}. Falls back to naming the unrecognized kind token. Call on the
+     * tx-bound form model (it re-reads the model).
+     *
+     * @param formModel the tx-bound form content model
+     * @param kindToken the kind token the address named
+     * @param name the member name the address named
+     * @param normFqn the whole normalized FQN, used to spell the corrected address; when {@code null}
+     *     (or when its segments do not carry the pair) only the {@code Kind.Name} tail is spelled
+     * @return the tail to append to the "not found" message, starting with a separator, or an EMPTY
+     *     string when there is nothing to add (no same-named member, or the token is fine)
+     */
+    public static String kindMismatchAdvice(EObject formModel, String kindToken, String name,
+        String normFqn)
+    {
+        return kindMismatchAdvice(formModel, kindToken, name, normFqn, false);
+    }
+
+    /**
+     * The same advice for the OWNER segment of an ITEM-LEVEL handler address
+     * ({@code ...Form.F.<ItemKind>.<Item>.Handler.<Event>}): it retargets the OWNER pair, not the
+     * leaf, and never suggests {@code Attribute} - a handler attaches to a form ITEM or a form
+     * COMMAND, so pointing at an attribute would hand back an address that cannot resolve either.
+     *
+     * @param formModel the tx-bound form content model
+     * @param ref the parsed handler reference (its {@code itemKindToken} / {@code itemName} are used)
+     * @param normFqn the whole normalized FQN
+     * @param version the platform version whose type publishes an element's events: a corrected
+     *     address is quoted only when the corrected OWNER really accepts the address's event, and
+     *     only the platform can answer that
+     * @return the tail to append, or an EMPTY string when there is nothing to add
+     */
+    public static String handlerOwnerKindMismatchAdvice(EObject formModel, FormMemberRef ref,
+        String normFqn, Version version)
+    {
+        if (ref == null || !ref.isItemLevel())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return kindMismatchAdvice(formModel, ref.itemKindToken, ref.itemName, normFqn, true, version);
+    }
+
+    private static String kindMismatchAdvice(EObject formModel, String kindToken, String name,
+        String normFqn, boolean ownerPosition)
+    {
+        return kindMismatchAdvice(formModel, kindToken, name, normFqn, ownerPosition, null);
+    }
+
+    private static String kindMismatchAdvice(EObject formModel, String kindToken, String name, // NOSONAR signature is inherent: the model, the pair to judge, the whole address, the position and the platform version all vary independently
+        String normFqn, boolean ownerPosition, Version version)
+    {
+        Kind requested = kindForToken(kindToken);
+        Kind actual = actualKindOf(formModel, name);
+        if (actual == Kind.ATTRIBUTE && ownerPosition)
+        {
+            // Honest, and NOT a corrected address: an attribute has no handlers containment, so
+            // '...Attribute.<name>.Handler.<event>' would be just as unresolvable.
+            return " - there IS a form ATTRIBUTE with this name, but an event handler attaches to a " //$NON-NLS-1$
+                + "form ITEM or a form COMMAND, never to an attribute."; //$NON-NLS-1$
+        }
+        EObject tokenless = actual == null ? findFormItem(formModel, name) : null;
+        if (tokenless != null)
+        {
+            // The element exists but NO kind token denotes its class. Naming a token here would be
+            // inventing one; name the CLASS instead, from the model, so a form-model class added by a
+            // later platform version is described as itself rather than as a table addition.
+            String eClassName = tokenless.eClass().getName();
+            String what = ECLASS_ADDITION.equals(eClassName)
+                ? "a table addition (search string / view status / search control), which is created " //$NON-NLS-1$
+                    + "and removed together with its table" //$NON-NLS-1$
+                : "a " + eClassName; //$NON-NLS-1$
+            return " - there IS an element with this name, but it is " + what //$NON-NLS-1$
+                + ", and no kind token addresses it."; //$NON-NLS-1$
+        }
+        if (actual != null && actual != requested)
+        {
+            String correct = englishTokenOf(actual);
+            String candidate =
+                retargetedCandidate(normFqn, kindToken, name, correct, ownerPosition, actual);
+            String corrected = candidate == null ? null
+                : acceptedAddress(formModel, candidate, ownerPosition, version);
+            // Quote a whole address ONLY when this writer would really act on it. A candidate that
+            // existed and was refused was refused by the OWNER, over its event - say that, without
+            // naming any event: which events an element carries is the platform's answer, not ours.
+            return " - there IS an element with this name, but it is " //$NON-NLS-1$
+                + (actual == Kind.ATTRIBUTE ? "an " : "a ") + correct //$NON-NLS-1$ //$NON-NLS-2$
+                + (corrected == null
+                    ? ". Address it with the '" + correct + "' kind" //$NON-NLS-1$ //$NON-NLS-2$
+                        + noAddressReason(candidate != null && ownerPosition, correct)
+                    : ". Use '" + corrected + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (requested == null)
+        {
+            return " - '" + kindToken + "' is not a form element kind. Use one of: Attribute / " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Command / Field / Button / Group / Decoration / Table."; //$NON-NLS-1$
+        }
+        return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * The corrected address to quote back - and it must RESOLVE, not merely carry the right kind. A
+     * form COMMAND owns exactly one handler slot, its Action, so retargeting only the kind of
+     * {@code ...Button.Refresh.Handler.OnChange} would hand back {@code ...Command.Refresh.Handler.
+     * OnChange}, which {@link #findFormHandler} rejects for a command. The event leaf is corrected
+     * with it.
+     */
+    private static String retargetedCandidate(String normFqn, String kindToken, // NOSONAR signature is inherent: the address, the pair to replace, the position and the actual kind all vary independently
+        String name, String correct, boolean ownerPosition, Kind actual)
+    {
+        String retargeted = retargetKindSegment(normFqn, kindToken, name, correct, ownerPosition);
+        if (retargeted == null)
+        {
+            // The FQN did not carry the pair where its shape says it must, so there is NO whole
+            // address to correct. Returning a '<Kind>.<Name>' tail here would be worse than nothing:
+            // parse() rejects it, and the Action rewrite below would mistake the element NAME for an
+            // event leaf. The caller names the kind instead of quoting a fake address.
+            return null;
+        }
+        String corrected = retargeted;
+        if (ownerPosition && actual == Kind.COMMAND)
+        {
+            int lastDot = retargeted.lastIndexOf('.');
+            corrected = lastDot < 0 ? retargeted
+                : retargeted.substring(0, lastDot + 1) + COMMAND_ACTION_EVENT;
+        }
+        return corrected;
+    }
+
+    /**
+     * The candidate address, or {@code null} when this writer would NOT act on it. Asking
+     * {@code parse()} alone answers "does the string parse", not "will the address work" - and the
+     * addresses we hand out are COMBINATIONS, where only the second question matters. Both branches
+     * put it to the same code that would judge the retried call.
+     */
+    private static String acceptedAddress(EObject formModel, String candidate, boolean ownerPosition,
+        Version version)
+    {
+        return ownerPosition ? correctedHandlerAddress(formModel, candidate, version)
+            : addressOfResolvedMember(formModel, candidate);
+    }
+
+    /** The corrected MEMBER address, or {@code null} when it would not resolve to a member. */
+    private static String addressOfResolvedMember(EObject formModel, String corrected)
+    {
+        FormMemberRef ref = parse(corrected);
+        return ref == null || resolveFormMember(formModel, ref) == null ? null : corrected;
+    }
+
+    /**
+     * The corrected HANDLER address, or {@code null} when the retried call would still fail. The
+     * owner must resolve, and the event leaf must fit that owner: {@link #findFormHandler} gives a
+     * form COMMAND a single {@code Action} slot and every other container its {@code handlers}
+     * feature, so {@code Action} belongs to a command and to nothing else. Correcting only the OWNER
+     * kind of {@code ...Command.Price.Handler.Action} (where {@code Price} is a FIELD) would hand
+     * back {@code ...Field.Price.Handler.Action} - right about the kind, impossible about the event.
+     */
+    private static String correctedHandlerAddress(EObject formModel, String corrected,
+        Version version)
+    {
+        FormMemberRef ref = parse(corrected);
+        EObject owner = ref == null ? null : resolveHandlerContainer(formModel, ref);
+        return owner != null && ownerAcceptsHandlerLeaf(owner, ref.name, version) ? corrected : null;
+    }
+
+    /**
+     * Whether {@code owner} would really accept a handler addressed at {@code leaf} - asked of the
+     * MODEL, mirroring {@link #createHandler}'s own acceptance, so a suggested address cannot promise
+     * what the retried call will refuse.
+     *
+     * <p>The two branches are chosen STRUCTURALLY, not from a list of names. A container that carries
+     * a {@code handlers} COLLECTION takes the events its platform type publishes - so the question is
+     * put to {@link #availableEvents}, exactly as {@code createHandler} puts it, and whatever the
+     * platform says is the answer. A container without that collection carries a single, anonymous
+     * handler slot instead (a form command's {@code action} containment); the MODEL gives that slot no
+     * event name, so an FQN has to spell it with the action token. That one name is the spelling of a
+     * model slot - the same one {@code createCommandAction} accepts - not a membership test against a
+     * remembered list of events.</p>
+     *
+     * @param owner the resolved handler container
+     * @param leaf the event name the address ends with
+     * @param version the platform version whose type publishes the events; {@code null} makes the
+     *     events unknowable, and an unknowable event is not advertised
+     * @return {@code true} only when this owner really takes a handler for this leaf
+     */
+    private static boolean ownerAcceptsHandlerLeaf(EObject owner, String leaf, Version version)
+    {
+        EStructuralFeature handlersFeat = owner.eClass().getEStructuralFeature(KEY_HANDLERS);
+        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        {
+            return owner.eClass().getEStructuralFeature(FEATURE_ACTION) != null && isActionToken(leaf);
+        }
+        for (EObject event : availableEvents(owner, version))
+        {
+            if (leaf.equalsIgnoreCase(eventNameOf(event, false))
+                || leaf.equalsIgnoreCase(eventNameOf(event, true)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The clause that replaces a corrected address when there is none to quote: it must say something
+     * TRUE about why. The only statically decidable mismatch is the {@code Action} leaf, which is a
+     * form command's own event and which no other kind of element carries.
+     */
+    private static String noAddressReason(boolean leafRefused, String correct)
+    {
+        return leafRefused
+            ? ", and with an event that kind carries - the one in this address is not among " //$NON-NLS-1$
+                + "the events a " + correct + " publishes." //$NON-NLS-1$
+            : "."; //$NON-NLS-1$
+    }
+
+    /**
+     * The kind a member of this name actually has on the form - the items tree first (its names are
+     * form-wide unique), then the attributes and formCommands containments - or {@code null} when no
+     * member bears the name or its EClass carries no addressable kind.
+     */
+    private static Kind actualKindOf(EObject formModel, String name)
+    {
+        if (formModel == null || name == null)
+        {
+            return null;
+        }
+        EObject item = findFormItem(formModel, name);
+        if (item != null)
+        {
+            return addressableKindOf(item.eClass());
+        }
+        if (findFormAttribute(formModel, name) != null)
+        {
+            return Kind.ATTRIBUTE;
+        }
+        return findFormCommand(formModel, name) != null ? Kind.COMMAND : null;
+    }
+
+    /** The canonical English FQN token for a kind (what the corrected address is spelled with). */
+    private static String englishTokenOf(Kind kind)
+    {
+        switch (kind)
+        {
+            case ATTRIBUTE:
+                return "Attribute"; //$NON-NLS-1$
+            case COMMAND:
+                return "Command"; //$NON-NLS-1$
+            case GROUP:
+                return "Group"; //$NON-NLS-1$
+            case DECORATION:
+                return "Decoration"; //$NON-NLS-1$
+            case FIELD:
+                return "Field"; //$NON-NLS-1$
+            case BUTTON:
+                return "Button"; //$NON-NLS-1$
+            default:
+                return "Table"; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The FQN with its {@code <kindToken>.<name>} pair re-spelled to {@code <correct>.<name>} - the
+     * corrected address to quote back. The pair's position is DERIVED from the address shape, never
+     * searched for: the LEAF pair is the last two segments, the OWNER pair of an item-level handler
+     * address ({@code ...Button.Price.Handler.OnChange}) the two before {@code Handler.<Event>}. A
+     * search would pick the wrong pair whenever the same {@code Kind.Name} spelling occurs twice in
+     * one FQN (an item named after an event).
+     *
+     * @return the whole corrected FQN, or {@code null} when the FQN is absent or does not carry the
+     *     pair where the shape says it must - the caller then quotes the {@code <correct>.<name>} tail
+     *     instead of treating a partial string as an address
+     */
+    private static String retargetKindSegment(String normFqn, String kindToken, String name,
+        String correct, boolean ownerPosition)
+    {
+        if (normFqn == null || kindToken == null || name == null)
+        {
+            return null;
+        }
+        String[] p = normFqn.split("\\."); //$NON-NLS-1$
+        int kindAt = p.length - (ownerPosition ? 4 : 2);
+        if (kindAt < 0 || !kindToken.equalsIgnoreCase(p[kindAt]) || !name.equalsIgnoreCase(p[kindAt + 1]))
+        {
+            return null;
+        }
+        p[kindAt] = correct;
+        return String.join(".", p); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether {@code member} - the element {@link #resolveFormMember} returned for {@code ref} -
+     * really is of the KIND the FQN asked for. The ref-level form of {@link #matchesKindToken}, and
+     * the SAME verdict: there is one strict answer to "does this address name this element", shared
+     * by the write tools and by the exact marker filter.
+     *
+     * <p>Since issue #343 {@link #resolveFormMember} applies this check ITSELF - a foreign kind
+     * ({@code ...Form.F.Button.Price} for the FIELD {@code Price}) and an unrecognized one
+     * ({@code Fielld.Price}) resolve to {@code null} rather than to whatever bears the name. Asking
+     * again here is therefore a re-statement, not a second gate: it is kept for a caller that holds
+     * an already-resolved member and a ref, and must decide without re-resolving.</p>
+     *
+     * @param member the resolved member, may be {@code null}
+     * @param ref the parsed member reference {@code member} was resolved from, may be {@code null}
+     * @return {@code true} only when the member exists and its EClass denotes exactly the requested
+     *     kind (see {@link #addressableKindOf}: a token denotes an EClass and addresses its
+     *     subclasses, so an {@code AutoCommandBar} answers to {@code Group}); {@code false} for a
+     *     wrong or unrecognized kind token, and for a class no token denotes at all
+     */
+    public static boolean matchesRequestedKind(EObject member, FormMemberRef ref)
+    {
+        return ref != null && matchesKindToken(member, ref.kindToken);
     }
 
     /**

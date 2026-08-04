@@ -2972,18 +2972,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
-     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
-     * attribute can drop stored values on the next database update, so it is the destructive case a plain
-     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
-     *
-     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
-     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
-     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
-     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
-     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
-     */
-    /**
      * The predefined-item counterpart of {@link #consentForTypeChanges}: a
      * {@code ChartOfCharacteristicTypes} predefined item's {@code valueType} is a real RETYPE (or a
      * clear), so it must pass the same destructive-consent gate an ordinary attribute retype does,
@@ -3007,6 +2995,33 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
+    /**
+     * The tail of a form "not found" message: the kind-mismatch advice when there is one (issue
+     * #343), otherwise the branch's own generic pointer. Keeps every form miss in this tool phrased
+     * the same way - name the kind that found nothing, then either explain what DOES bear the name or
+     * point at {@code get_metadata_details}.
+     *
+     * @param advice the advice from {@code FormElementWriter} (never {@code null}, possibly empty)
+     * @param fallback the generic tail to use when there is no advice
+     * @return the tail to append
+     */
+    private static String advisedOr(String advice, String fallback)
+    {
+        return advice.isEmpty() ? fallback : advice;
+    }
+
+    /**
+     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
+     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
+     * attribute can drop stored values on the next database update, so it is the destructive case a plain
+     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
+     *
+     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
+     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
+     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
+     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
+     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
+     */
     private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
     {
         List<String> retyped = new ArrayList<>();
@@ -3807,9 +3822,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                 if (member == null)
                 {
+                    // The KIND is part of the resolution (issue #343), so a member that exists under
+                    // another kind is reported as exactly that, with the corrected address -
+                    // otherwise "not found" contradicts what get_metadata_details lists.
                     throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
                         + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                        + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                            ref.name, normFqn),
+                            ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                 }
                 List<HolderChange> changes =
                     prepareFormMemberChanges(config, version, member, properties, normReport);
@@ -3996,9 +4016,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                 if (member == null)
                 {
+                    // A dynamic list lives on a form ATTRIBUTE; when the name belongs to an element
+                    // of another kind, say so instead of advising a create that would collide.
                     throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
                         + ref.name + " on " + ref.formPath //$NON-NLS-1$
-                        + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                            ref.name, normFqn),
+                            ". Create it with create_metadata, then set its query.")).toJson()); //$NON-NLS-1$
                 }
                 // This branch retypes the attribute to DynamicList without going through the
                 // property path, so it needs the SAME stranded-columns guard (issue #295 review) -
@@ -4899,8 +4923,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
             final String mdFormName = fctx.mdForm.getName();
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
-                (formModel, tx) -> destination[0] = FormElementWriter.moveItem(formModel, itemName,
-                    targetParentFinal, positionFinal, mdFormName));
+                (formModel, tx) ->
+                {
+                    // The addressed move goes through the SAME kind-aware resolver the property /
+                    // delete / read paths use (issue #343): 'Button.<a field>' with a 'parent'
+                    // property must not move the field. The strict variant additionally rejects an
+                    // ambiguous name instead of moving the first match.
+                    EObject item = FormElementWriter.resolveUniqueFormMember(formModel, ref);
+                    if (item == null)
+                    {
+                        throw new FormValidationException(ToolResult.error("Form item not found: " //$NON-NLS-1$
+                            + itemName + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                                itemName, normFqn),
+                                ". Use get_metadata_details on the form to inspect its items.")) //$NON-NLS-1$
+                            .toJson());
+                    }
+                    destination[0] = FormElementWriter.moveResolvedItem(formModel, item, itemName,
+                        targetParentFinal, positionFinal, mdFormName);
+                });
         }
         catch (Exception e)
         {
@@ -4961,6 +5002,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final String eventName = ref.name;
         final boolean commandOwner = ref.isItemLevel()
             && FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
+        // The advice may quote a corrected handler address, and whether the corrected owner really
+        // carries that event is a question only the platform type can answer - hence the version.
+        final Version version = platformVersionOf(ctx);
         final boolean persisted;
         try
         {
@@ -4978,9 +5022,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
                     if (container == null)
                     {
+                        // The OWNER's kind is resolved too (issue #343): an item of that name under
+                        // another kind is named, with the corrected address. The message then names
+                        // the KIND that found nothing, so it cannot read as a lie about the element.
+                        String advice =
+                            FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref,
+                                normFqn, version);
                         throw new FormValidationException(ToolResult.error((commandOwner
                             ? "Form command not found: " : "Form item not found: ") + ref.itemName //$NON-NLS-1$ //$NON-NLS-2$
-                            + ". Use get_metadata_details to inspect the form items.").toJson()); //$NON-NLS-1$
+                            + (advice.isEmpty()
+                                ? ". Use get_metadata_details to inspect the form items." //$NON-NLS-1$
+                                : " (kind '" + ref.itemKindToken + "')" + advice)).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     String err = FormElementWriter.rebindHandler(container, eventName, procName);
                     if (err != null)
@@ -5056,15 +5108,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    // Strict resolution: an AMBIGUOUS button name (several items by that name anywhere
-                    // in the form-item tree) is rejected with a clear error instead of silently
-                    // re-pointing the first match (findUniqueFormItem throws; the tx rolls back).
-                    EObject button = FormElementWriter.findUniqueFormItem(formModel, buttonName);
+                    // Strict resolution: the KIND is verified by the shared resolver (issue #343), so
+                    // 'Button.<a field>' with a 'command' property cannot reach the field, and an
+                    // AMBIGUOUS button name (several items by that name anywhere in the form-item
+                    // tree) is rejected instead of silently re-pointing the first match (the strict
+                    // lookup throws; the tx rolls back).
+                    EObject button = FormElementWriter.resolveUniqueFormMember(formModel, ref);
                     if (button == null)
                     {
                         throw new FormValidationException(ToolResult.error("Form button not found: " //$NON-NLS-1$
-                            + buttonName + ". Use get_metadata_details to inspect the form items.") //$NON-NLS-1$
-                            .toJson());
+                            + buttonName + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                                buttonName, normFqn),
+                                ". Use get_metadata_details to inspect the form items.")).toJson()); //$NON-NLS-1$
                     }
                     String err =
                         FormElementWriter.rebindButtonCommand(formModel, button, commandNameFinal);
@@ -5130,23 +5186,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return prop;
     }
 
-    /**
-     * Validates one property against the introspected schema and, on success, appends a
-     * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
-     * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
-     * and the prepared change are EClass-driven, not mdclass-specific).
-     *
-     * <p>{@code extInfo} is the element's nested {@code <extInfo>} EObject (a form element's layout /
-     * kind-specific sub-object, e.g. a UsualGroup's {@code UsualGroupExtInfo}) when the property may
-     * live there, or {@code null} on the mdclass path (an mdclass object has no extInfo, so the
-     * extInfo traversal is a no-op and this behaves exactly as before). A property found on the
-     * extInfo carries {@code info.onExtInfo == true}; the {@link PreparedChange} is built against the
-     * extInfo's feature, and the caller routes the {@code eSet} to the extInfo holder.</p>
-     *
-     * <p>{@code isExtensionProject} is threaded down only to append the extension-adopt hint (issue
-     * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
-     * it.</p>
-     */
     /**
      * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
      * model context every {@code ValueKind} branch resolves references / types against. Folded together
@@ -5297,6 +5336,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             || defaultLanguage.getName() != null && defaultLanguage.getName().equals(lang.getName());
     }
 
+    /**
+     * Validates one property against the introspected schema and, on success, appends a
+     * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
+     * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
+     * and the prepared change are EClass-driven, not mdclass-specific).
+     *
+     * <p>{@code extInfo} is the element's nested {@code <extInfo>} EObject (a form element's layout /
+     * kind-specific sub-object, e.g. a UsualGroup's {@code UsualGroupExtInfo}) when the property may
+     * live there, or {@code null} on the mdclass path (an mdclass object has no extInfo, so the
+     * extInfo traversal is a no-op and this behaves exactly as before). A property found on the
+     * extInfo carries {@code info.onExtInfo == true}; the {@link PreparedChange} is built against the
+     * extInfo's feature, and the caller routes the {@code eSet} to the extInfo holder.</p>
+     *
+     * <p>{@code isExtensionProject} is threaded down only to append the extension-adopt hint (issue
+     * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
+     * it.</p>
+     */
     private String prepare(PrepareContext ctx, EObject target, EObject extInfo,
         JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
