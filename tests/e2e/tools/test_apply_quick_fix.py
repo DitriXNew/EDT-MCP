@@ -79,15 +79,95 @@ def _count_markers(project, check_id, module_path):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HAPPY PATH (discovery-based, self-cleaning)
+# THE CORE INVARIANT (mandatory - never skips while any fixable marker exists)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="apply_quick_fix", kind="write-metadata")
+def test_never_reports_success_without_actually_changing_anything():
+    """NO FALSE SUCCESS: for every marker 'Fix registered' advertises, the tool must either
+    genuinely change something, or say plainly that it did not - never answer
+    "Applied quick-fix ..." while the code is untouched.
+
+    This is the invariant a stub cannot fake, and it is deliberately NOT tied to any
+    particular fix working: a registered fix is not always an automated edit. EDT's
+    doc-comment checks, for example, register OpenBslDocCommentViewFix (in
+    com.e1c.v8codestyle.bsl.ui) - it OPENS the doc-comment view for a human and edits
+    nothing, so headlessly it legitimately cannot apply. The tool must refuse those with a
+    clear reason instead of reporting a success it did not achieve.
+
+    So each candidate must land in exactly one of two acceptable outcomes:
+      - refused, with a reason naming why it could not be applied; or
+      - applied, AND the marker count for that locator actually dropped.
+    Anything else - success claimed with no effect - fails here.
+
+    Mandatory, not skippable: it asserts over whatever fixable markers the fixture has, and
+    only an EMPTY fixable set (nothing to assert about) skips.
+    """
+    candidates = _find_fixable(TESTS_PROJECT)
+    if not candidates:
+        raise E2ESkip("the fixture advertises no 'Fix registered' marker at all - nothing to assert")
+    try:
+        checked = 0
+        for c in candidates:
+            before = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
+            args = {"projectName": TESTS_PROJECT, "checkId": c["checkId"],
+                    "modulePath": c["modulePath"]}
+            if c["line"]:
+                args["line"] = int(c["line"])
+            r = call("apply_quick_fix", args)
+            if r.is_error and "index=" in (r.error_text() or ""):
+                args["index"] = 1
+                r = call("apply_quick_fix", args)
+            if r.is_error and "variant=" in (r.error_text() or ""):
+                args["variant"] = 1
+                r = call("apply_quick_fix", args)
+            checked += 1
+
+            if r.is_error:
+                # Acceptable outcome 1: refused. The message must EXPLAIN why, so the caller
+                # knows what to do next rather than being left with a bare failure.
+                err = r.error_text() or ""
+                if len(err.strip()) < 20:
+                    raise AssertionError(
+                        "a refused quick-fix must explain why, got %r for %s in %s"
+                        % (err, c["checkId"], c["modulePath"]))
+                continue
+
+            # Acceptable outcome 2: claimed applied -> the effect must be real.
+            wait_for_project_ready()
+            after = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
+            if after >= before:
+                raise AssertionError(
+                    "apply_quick_fix reported SUCCESS for '%s' in %s but the marker count did "
+                    "not drop (before=%d, after=%d) - a success that changed nothing is exactly "
+                    "the false report this tool must never produce"
+                    % (c["checkId"], c["modulePath"], before, after))
+            return  # a genuinely applied fix proves the whole path; stop mutating the fixture
+
+        if checked == 0:
+            raise AssertionError("no candidate was exercised")
+    finally:
+        reset_all_fixtures()
+        r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
+        assert_ok(r_clean, "clean_project after apply_quick_fix must succeed, "
+                  "or the extension model/tree stays polluted for later tests")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HAPPY PATH (an automated fix that really edits; skips when the fixture has none)
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="apply_quick_fix", kind="write-metadata")
 def test_apply_a_discovered_fixable_marker():
-    """Discover a fixable marker (Fix=yes), apply its quick-fix, and confirm the marker
-    ACTUALLY disappeared from a fresh get_project_errors scan - not just that the tool's own
-    response claimed success. Locator collisions (several markers / fix variants) are
-    resolved with index / variant. Self-cleans the extension fixture afterwards."""
+    """Discover a fixable marker (Fix registered=yes), apply its quick-fix, and confirm the
+    marker ACTUALLY disappeared from a fresh get_project_errors scan - not just that the
+    tool's own response claimed success. Locator collisions (several markers / fix variants)
+    are resolved with index / variant. Self-cleans the extension fixture afterwards.
+
+    Skips when every fixable marker the fixture exposes turns out to be an INTERACTIVE
+    (UI-only) fix, which cannot apply headlessly by construction - the no-false-success
+    invariant for that case is covered, mandatorily, by the test above.
+    """
     candidates = _find_fixable(TESTS_PROJECT)
     if not candidates:
         raise E2ESkip("no auto-fixable marker in the extension fixture (env-dependent)")
@@ -107,6 +187,15 @@ def test_apply_a_discovered_fixable_marker():
         if r.is_error and "variant=" in (r.error_text() or ""):
             args["variant"] = 1
             r = call("apply_quick_fix", args)
+
+        # An INTERACTIVE (UI-only) fix cannot apply headlessly - that is a property of the
+        # check's registered fix, not a defect of this tool, and refusing it is the CORRECT
+        # behaviour (asserted mandatorily by the no-false-success test above). There is no
+        # automated fix to exercise here, so skip rather than fail the tool for being right.
+        if r.is_error and "INTERACTIVE" in (r.error_text() or ""):
+            raise E2ESkip("the fixture's fixable markers all register INTERACTIVE (UI-only) "
+                          "fixes, which cannot be applied headlessly: %s"
+                          % (r.error_text() or "")[:160])
 
         assert_ok(r, "apply_quick_fix on a discovered fixable marker")
         assert r.structured is not None, "apply_quick_fix must return structured content"

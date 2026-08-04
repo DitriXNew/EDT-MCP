@@ -23,7 +23,10 @@ import com._1c.g5.v8.dt.validation.marker.Marker;
 import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
 import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
 import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixVariant;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -351,13 +354,23 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             // executeFix and still be reported as a successful fix. getSelectedFixVariant is the
             // engine's own read-back of that state, so a null here means "nothing was selected,
             // executeFix would change nothing" - report it instead of a false success.
-            if (fixManager.getSelectedFixVariant(handle) == null)
+            IFixVariant<?> selected = fixManager.getSelectedFixVariant(handle);
+            if (selected == null)
             {
                 return ToolResult.error("The quick-fix engine did not accept the selected variant '" //$NON-NLS-1$
                     + describe(chosenVariant) + "' for check '" + chosen.checkId + "'" //$NON-NLS-1$ //$NON-NLS-2$
                     + " - nothing was applied. Re-run get_project_errors (the marker set may have " //$NON-NLS-1$
                     + "changed since it was listed) and try again, or fix it manually via " //$NON-NLS-1$
                     + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
+            }
+            String uiBundle = interactiveFixBundle(selected);
+            if (uiBundle != null)
+            {
+                return ToolResult.error("The registered quick-fix for check '" + chosen.checkId //$NON-NLS-1$
+                    + "' (" + describe(chosenVariant) + ") is an INTERACTIVE IDE action from '" + uiBundle //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', not an automated edit - it opens an editor/view for a human and changes " //$NON-NLS-1$
+                    + "nothing on its own, so it cannot be applied headlessly. Fix this one manually " //$NON-NLS-1$
+                    + "via write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
             }
             fixManager.executeFix(handle, new NullProgressMonitor());
 
@@ -373,6 +386,37 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         {
             fixManager.finishFix(handle);
         }
+    }
+
+    /**
+     * Detects a quick-fix that is an INTERACTIVE IDE action rather than an automated edit.
+     * <p>
+     * Not every registered fix edits anything by itself. EDT's doc-comment checks, for instance,
+     * register {@code OpenBslDocCommentViewFix} - which lives in {@code com.e1c.v8codestyle.bsl.ui}
+     * and, as its name says, OPENS the doc-comment view for a human to fill in. Run headlessly it
+     * completes without error and changes nothing: no file, no model, and the marker stays. The
+     * engine reports nothing about this ({@code executeFix} returns {@code void}), so without this
+     * guard the tool would answer "Applied quick-fix ..." for a fix that demonstrably did nothing -
+     * the false success this tool must never produce.
+     * <p>
+     * The signal is the OSGi bundle the fix implementation ships in: an interactive fix lives in a
+     * {@code *.ui} bundle (it needs the workbench), an automated one in the core check bundle (e.g.
+     * {@code ConsecutiveEmptyLinesFix} / {@code RemoveExportFix} in {@code com.e1c.v8codestyle.bsl}).
+     * A conservative test - only a {@code .ui} bundle is refused, anything else proceeds - so a new
+     * automated fix is never wrongly rejected.
+     *
+     * @param fixVariant the variant the engine actually selected
+     * @return the UI bundle's symbolic name when the fix is interactive, else {@code null}
+     */
+    private static String interactiveFixBundle(IFixVariant<?> fixVariant)
+    {
+        Bundle bundle = FrameworkUtil.getBundle(fixVariant.getClass());
+        String name = bundle != null ? bundle.getSymbolicName() : null;
+        if (name == null)
+        {
+            return null;
+        }
+        return name.endsWith(".ui") || name.contains(".ui.") ? name : null; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
