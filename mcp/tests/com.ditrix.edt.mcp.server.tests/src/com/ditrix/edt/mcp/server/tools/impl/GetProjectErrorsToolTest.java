@@ -1702,11 +1702,24 @@ public class GetProjectErrorsToolTest
         // FormAttributeColumn - so a column that plainly exists was declared unresolved and landed in
         // objectsNotFound (issue #295 review). The class must answer to the token that addresses it.
         FormModel form = newFormModel();
+        EObject column = FormElementWriter.resolveFormMember(form.root,
+            FormElementWriter.parse(columnAddress(FORM_ATTRIBUTE_COLUMN)));
 
+        // FIXTURE FIDELITY, asserted so this test cannot quietly stop guarding what it claims to:
+        // the real FormAttributeColumn inherits AbstractFormAttribute, and issue #343's hierarchical
+        // classifier maps that base to Kind.ATTRIBUTE. A column that did not inherit it would make the
+        // assertion below pass for a shape that cannot occur - green by accident.
+        assertNotNull("the fixture must expose the column", column); //$NON-NLS-1$
+        assertTrue("the synthetic column must inherit AbstractFormAttribute, like the real one - " //$NON-NLS-1$
+            + "otherwise this test stops guarding the #343 ordering", //$NON-NLS-1$
+            column.eClass().getEAllSuperTypes().stream()
+                .anyMatch(s -> "AbstractFormAttribute".equals(s.getName()))); //$NON-NLS-1$
+
+        // THE ordering guard. It holds today (the flat map answers COLUMN) and it is exactly what
+        // breaks if #343's hierarchical classifier gains the Column arm BELOW its AbstractFormAttribute
+        // arm: the column would classify as ATTRIBUTE and this fails with expected COLUMN.
         assertEquals("a FormAttributeColumn must answer to the Column kind", //$NON-NLS-1$
-            FormElementWriter.Kind.COLUMN,
-            FormElementWriter.addressableKind(FormElementWriter.resolveFormMember(form.root,
-                FormElementWriter.parse(columnAddress(FORM_ATTRIBUTE_COLUMN)))));
+            FormElementWriter.Kind.COLUMN, FormElementWriter.addressableKind(column));
         assertFalse("an existing attribute COLUMN must resolve", //$NON-NLS-1$
             scopeSpellings(form, columnAddress(FORM_ATTRIBUTE_COLUMN)).isEmpty());
 
@@ -2561,15 +2574,23 @@ public class GetProjectErrorsToolTest
         EClass autoCommandBar = subclass("AutoCommandBar", formItem); //$NON-NLS-1$
         pkg.getEClassifiers().add(autoCommandBar);
 
+        // The real metamodel's SHARED base: FormAttribute and FormAttributeColumn both inherit
+        // AbstractFormAttribute (verified in the 2025.2 apidocs - FormAttributeColumn's superinterfaces
+        // are AbstractFormAttribute / NamedElement / Titled, and getColumns() lives on FormAttribute
+        // alone). The inheritance is mirrored here ON PURPOSE: issue #343's hierarchical classifier
+        // maps AbstractFormAttribute -> Kind.ATTRIBUTE, so a column that did NOT inherit it would let
+        // the ordering test below pass without ever exercising the case that can actually break.
+        EClass abstractFormAttribute = f.createEClass();
+        abstractFormAttribute.setName("AbstractFormAttribute"); //$NON-NLS-1$
+        abstractFormAttribute.setAbstract(true);
+        abstractFormAttribute.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        pkg.getEClassifiers().add(abstractFormAttribute);
+
         // A collection attribute's COLUMN: addressed '...Attribute.<Attr>.Column.<Name>' (issue #295).
-        EClass formAttributeColumn = f.createEClass();
-        formAttributeColumn.setName("FormAttributeColumn"); //$NON-NLS-1$
-        formAttributeColumn.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        EClass formAttributeColumn = subclass("FormAttributeColumn", abstractFormAttribute); //$NON-NLS-1$
         pkg.getEClassifiers().add(formAttributeColumn);
 
-        EClass formAttribute = f.createEClass();
-        formAttribute.setName("FormAttribute"); //$NON-NLS-1$
-        formAttribute.getEStructuralFeatures().add(stringAttribute("name")); //$NON-NLS-1$
+        EClass formAttribute = subclass("FormAttribute", abstractFormAttribute); //$NON-NLS-1$
         formAttribute.getEStructuralFeatures().add(containment("columns", formAttributeColumn, true)); //$NON-NLS-1$
         pkg.getEClassifiers().add(formAttribute);
 

@@ -3193,6 +3193,7 @@ public class FormElementWriterTest
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     public void testItemsBoundBelowAColumnAreFoundFromTheFormRoot()
     {
         // A COLUMN's eContainer() is its owning ATTRIBUTE, not the form, so scanning from there found
@@ -3434,6 +3435,7 @@ public class FormElementWriterTest
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     public void testATableBoundToAColumnIsStillFoundForThatColumn()
     {
         // The other side of addressing by path: a table bound to 'Rows.Price' DOES consume that

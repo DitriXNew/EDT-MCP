@@ -19,10 +19,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
-import org.eclipse.emf.common.util.TreeIterator;
 import org.eclipse.emf.ecore.EAttribute;
-import org.eclipse.emf.ecore.EClass;
-import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -150,12 +147,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Output key: metadata items the deletion would remove (preview). */
     private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
-    /** The columns of a collection-typed form attribute - containment children, so a delete takes them. */
-    private static final String KEY_COLUMNS = "columns"; //$NON-NLS-1$
-    /** The form content's attributes - counted so a form delete prompt cannot understate its scope. */
-    private static final String KEY_ATTRIBUTES = "attributes"; //$NON-NLS-1$
-    /** The form content's commands - counted with the attributes for the same reason. */
-    private static final String KEY_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
 
     /** Output key: whether the listed blocking references block the delete. */
     private static final String KEY_BLOCKING = "blocking"; //$NON-NLS-1$
@@ -697,7 +688,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "') on " + ref.formPath + ". Use get_metadata_details to list the members.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
     /**
      * The FORM-MEMBER branch's authorization step: builds the prompt from what the preview actually
      * found and hands the branch's write to {@link #deleteWithConsent}. Package-private and taking the
@@ -784,15 +774,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Everything a whole-form delete removes, read with {@link #collectRemovedMembers} - the SAME
-     * containment walk the member delete uses, for the same reason: the radius of
-     * {@code EcoreUtil.remove} is the containment closure, and any list of features to visit is a
-     * list that will fall behind it.
-     *
-     * @param formModel the tx-bound form model
-     * @return the summary
-     */
-    /**
      * Test seam for {@link #summarizeFormContent}: the same summary feeds BOTH the consent prompt's
      * counts and the {@code confirm=false} preview's item list, so what it collects is asserted
      * directly.
@@ -805,6 +786,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return summarizeFormContent(formModel);
     }
 
+    /**
+     * Everything a whole-form delete removes, read with {@link #collectRemovedMembers} - the SAME
+     * containment walk the member delete uses, for the same reason: the radius of
+     * {@code EcoreUtil.remove} is the containment closure, and any list of features to visit is a
+     * list that will fall behind it.
+     *
+     * @param formModel the tx-bound form model
+     * @return the summary
+     */
     private static FormContentSummary summarizeFormContent(EObject formModel)
     {
         // THE SAME containment walk the member delete uses. Counting by feature name here - the items
@@ -1381,16 +1371,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return result.put(McpKeys.MESSAGE, message.toString()).toJson();
     }
 
-    /**
-     * Outcome of {@link #collectPredefinedItemBlockingReferences} (issue #296 P1 fix): the
-     * blocking-reference rows gathered so far, AND whether the scan ran to completion.
-     * {@code completed=false} means the incoming-reference state is UNVERIFIED - a null BM model /
-     * model manager, a missing owner/item once re-fetched inside the transaction, a per-item
-     * {@code getBackReferences} failure, or any other exception - and must NEVER be read as "genuinely
-     * zero references": {@code refs} may still carry a partial list gathered before the failure, but
-     * callers must fail CLOSED (block unless {@code force=true}), never silently proceed. See
-     * {@link #deletePredefinedItem}.
-     */
     /**
      * Result of the predefined-item incoming-reference scan: the collected blocking-reference rows,
      * and whether the scan RAN TO COMPLETION. {@code completed=false} (a partial/failed scan) is NOT

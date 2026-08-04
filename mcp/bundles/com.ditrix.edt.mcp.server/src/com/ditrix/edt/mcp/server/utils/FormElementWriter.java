@@ -5252,14 +5252,6 @@ public final class FormElementWriter
     }
 
     /**
-     * The {@link Kind} whose token addresses an element of this concrete form-model EClass, or
-     * {@code null} for an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which
-     * is deliberately limited to the kinds that carry PLACEMENT rules.
-     *
-     * @param eClassName the concrete EClass simple name of a resolved form element
-     * @return the addressing kind, or {@code null} when no kind token denotes this EClass
-     */
-    /**
      * The element KIND {@code element} can be addressed by, or {@code null} when its class carries
      * no addressable kind token at all ({@code AutoCommandBar}, {@code ContextMenu},
      * {@code ExtendedTooltip}, and the non-item members {@code FormAttribute} / {@code FormCommand},
@@ -5279,6 +5271,14 @@ public final class FormElementWriter
         return element == null ? null : addressableKindOf(element.eClass().getName());
     }
 
+    /**
+     * The {@link Kind} whose token addresses an element of this concrete form-model EClass, or
+     * {@code null} for an EClass no kind token denotes. Distinct from {@link #kindForEClass}, which
+     * is deliberately limited to the kinds that carry PLACEMENT rules.
+     *
+     * @param eClassName the concrete EClass simple name of a resolved form element
+     * @return the addressing kind, or {@code null} when no kind token denotes this EClass
+     */
     private static Kind addressableKindOf(String eClassName)
     {
         // A COLUMN is a DATA member, not an item, and it IS addressable - '...Attribute.T.Column.C'

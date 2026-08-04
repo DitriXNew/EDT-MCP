@@ -1167,6 +1167,7 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     public void testTheContentSummaryListsWhatItCounts()
     {
         // One summary feeds both phases: the prompt's counters and the confirm=false preview's item
