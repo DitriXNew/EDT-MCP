@@ -1,7 +1,7 @@
 name: MCP Conformance (reusable)
 
 # REUSABLE protocol-conformance gate (on: workflow_call) — invoked by the thin caller
-# workflow conformance-2026.1.yml (parameterized by EDT version so it stays ready for a
+# workflow conformance-2026.2.yml (parameterized by EDT version so it stays ready for a
 # future matrix), which gives the gate its OWN status badge. Runs the official
 # modelcontextprotocol/conformance suite against a LIVE MCP server and compares against
 # the committed baseline of intentional gaps, so the gate catches protocol REGRESSIONS
@@ -14,8 +14,11 @@ name: MCP Conformance (reusable)
 # client hits the local :8765. Conformance is protocol-only — no EDT project and no 1C
 # platform license needed.
 #
-# Note: the plugin is COMPILED against the 2026.1 target platform (mcp/targets), so this
-# runs the plugin on the same EDT version it is built against.
+# Note: the plugin is COMPILED against the 2026.1 target platform (mcp/targets) — the
+# OLDEST supported EDT — so one artifact resolves on 2026.1 and 2026.2 alike. This gate
+# therefore runs the plugin on a NEWER EDT than it was built against, which is exactly
+# the direction worth proving. EDT version ⇄ Eclipse base ⇄ JDK is one tuple: 2026.2 is
+# Eclipse 4.38 on Java 25, so a caller pinning an older EDT must pass its own trio.
 
 on:
   workflow_call:
@@ -28,6 +31,26 @@ on:
         description: "MCP spec version to test against"
         required: false
         default: "2025-11-25"
+        type: string
+      java:
+        description: "JDK the EDT under test requires at RUNTIME (EDT 2026.2 ⇒ 25)"
+        required: false
+        default: "25"
+        type: string
+      eclipse-archive:
+        description: "Eclipse Platform archive the EDT under test is built on"
+        required: false
+        default: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.38-202512010920/eclipse-platform-4.38-linux-gtk-x86_64.tar.gz"
+        type: string
+      eclipse-p2:
+        description: "Eclipse release p2 (for the platform closure) matching that base"
+        required: false
+        default: "https://download.eclipse.org/releases/2025-12/"
+        type: string
+      orbit-simrel-p2:
+        description: "Eclipse Orbit aggregation p2 (Batik / SVG) matching that base"
+        required: false
+        default: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.38.0/"
         type: string
 
 jobs:
@@ -90,11 +113,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up JDK 17
+      - name: Set up the JDK EDT ${{ inputs.edt }} runs on
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: ${{ inputs.java }}
 
       - name: Download plugin p2 repository
         uses: actions/download-artifact@v8
@@ -107,6 +130,10 @@ jobs:
         with:
           plugin-repo: plugin-p2
           edt-p2: "https://edt.1c.ru/downloads/releases/ruby/${{ inputs.edt }}/"
+          java-runtime: ${{ inputs.java }}
+          eclipse-archive: ${{ inputs.eclipse-archive }}
+          eclipse-p2: ${{ inputs.eclipse-p2 }}
+          orbit-simrel-p2: ${{ inputs.orbit-simrel-p2 }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
