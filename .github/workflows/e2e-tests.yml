@@ -214,9 +214,11 @@ jobs:
           # aborts this step under `set -e` (a red gate that forces a conscious re-pin).
           EDT_BUILD="$(bash "$GITHUB_WORKSPACE/.github/scripts/edt-pin.sh" "${{ inputs.edt }}" "$EDT_P2")"
           # Key on the IMMUTABLE base inputs (NOT the plugin, which is overlaid fresh) + the
-          # served EDT build qualifier.
-          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s' \
-                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" \
+          # served EDT build qualifier. EVERY repository fed to the director below must be in
+          # here: they are caller-settable inputs now, and a repo that changes without changing
+          # the key would restore a base assembled from the OLD one and skip the reinstall.
+          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" "$ORBIT_SIMREL_P2" \
                 "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" "$BSL_EXTENSION_IU" \
                 "$EDT_BUILD" \
                 | sha256sum | cut -c1-16)
