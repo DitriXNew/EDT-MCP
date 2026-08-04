@@ -1940,7 +1940,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (container == null)
         {
             String advice =
-                FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, spec.ref, normFqn);
+                FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, spec.ref, normFqn,
+                    spec.version);
             // With advice the subject is the KIND, so the message names it: nothing of that kind
             // bears the name, even though something else does. Without it, the plain miss stands.
             String kindTail = " (kind '" + spec.ref.itemKindToken + "')"; //$NON-NLS-1$ //$NON-NLS-2$

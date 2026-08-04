@@ -22,6 +22,9 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -550,6 +553,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * previews what would be removed (no write transaction), {@code confirm=true} removes it and
      * force-exports the content form to {@code Form.form}.
      */
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
+        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
+        return project != null ? project.getVersion() : null;
+    }
+
     private String deleteFormMember(ProjectContext ctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean confirm)
     {
@@ -563,8 +574,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
             return confirm
-                ? performFormDelete(fctx, normFqn, ref, handler)
-                : buildFormDeletePreview(fctx, normFqn, ref, handler);
+                ? performFormDelete(fctx, normFqn, ref, handler, platformVersionOf(ctx))
+                : buildFormDeletePreview(fctx, normFqn, ref, handler, platformVersionOf(ctx));
         }
         catch (Exception e)
         {
@@ -638,19 +649,20 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * BUTTON {@code Sync} also exists) and report an owner miss that did not happen.</p>
      */
     private static String formTargetAdvice(EObject formModel, FormElementWriter.FormMemberRef ref,
-        boolean handler, String normFqn)
+        boolean handler, String normFqn, Version version)
     {
         if (handler)
         {
             return FormElementWriter.resolveHandlerContainer(formModel, ref) != null
-                ? "" : FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn); //$NON-NLS-1$
+                ? "" //$NON-NLS-1$
+                : FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn, version);
         }
         return FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken, ref.name, normFqn);
     }
 
     /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
     private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
         FormDeletePreview data = FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
             (formModel, tx) ->
@@ -660,7 +672,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 {
                     FormDeletePreview miss = new FormDeletePreview(); // found stays false
                     // The advice must be read HERE: the model is tx-bound and must not escape.
-                    miss.kindAdvice = formTargetAdvice(formModel, ref, handler, normFqn);
+                    miss.kindAdvice = formTargetAdvice(formModel, ref, handler, normFqn, version);
                     return miss;
                 }
                 FormDeletePreview d = new FormDeletePreview();
@@ -706,7 +718,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Delete inside a WRITE transaction: EcoreUtil.remove the target, then export the content form. */
     private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
         final String[] capturedType = new String[1];
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "DeleteFormMember", //$NON-NLS-1$
@@ -717,7 +729,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 {
                     // Thrown (not flagged): rolls the unchanged tx back and skips the export.
                     throw new FormValidationException(formMemberNotFound(ref, handler,
-                        formTargetAdvice(formModel, ref, handler, normFqn)));
+                        formTargetAdvice(formModel, ref, handler, normFqn, version)));
                 }
                 capturedType[0] = target.eClass().getName();
                 // items is containment, so removing a Group/Table cascades its contained subtree.

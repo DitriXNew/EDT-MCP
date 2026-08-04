@@ -1391,25 +1391,38 @@ public class FormElementWriterTest
                 FormElementWriter.resolveFormMember(form, FormElementWriter.parse(suggested)));
         }
 
-        // Owner addresses: the suggestion must resolve as a handler CONTAINER, and for a COMMAND
-        // owner it must carry the only leaf a command accepts.
+        // ---- owner addresses: THE family of three, all judged by one question to the model ------
+        // The corrected owner is asked whether it takes a handler for the address's leaf, the way
+        // createHandler asks it. No branch keys off an event NAME.
+
+        // (1) command owner, item-level event: the leaf is corrected WITH the kind, because the
+        // model gives a command one anonymous handler slot and the FQN spells it with the action
+        // token. Accepted - and the acceptance comes from the container's structure.
         String cmdFqn = "CommonForm.F.Button.AdvCmd.Handler.OnChange"; //$NON-NLS-1$
         String cmdSuggested = quotedAddressOf(FormElementWriter.handlerOwnerKindMismatchAdvice(form,
-            FormElementWriter.parse(cmdFqn), cmdFqn));
+            FormElementWriter.parse(cmdFqn), cmdFqn, null));
         assertEquals("CommonForm.F.Command.AdvCmd.Handler.Action", cmdSuggested); //$NON-NLS-1$
         EObject container = FormElementWriter.resolveHandlerContainer(form,
             FormElementWriter.parse(cmdSuggested));
         assertSame(command, container);
-        // ... and the event leaf really is one the container accepts.
-        assertNull(FormElementWriter.createHandler(container, "Action", "AdvCmdProc", null, null, //$NON-NLS-1$ //$NON-NLS-2$
-            null, new String[1]));
+        assertNull("the suggested leaf must be one the container really takes", //$NON-NLS-1$
+            FormElementWriter.createHandler(container, "Action", "AdvCmdProc", null, null, //$NON-NLS-1$ //$NON-NLS-2$
+                null, new String[1]));
 
-        String itemFqn = "CommonForm.F.Button.AdvFld.Handler.OnChange"; //$NON-NLS-1$
-        String itemSuggested = quotedAddressOf(FormElementWriter.handlerOwnerKindMismatchAdvice(form,
-            FormElementWriter.parse(itemFqn), itemFqn));
-        assertEquals("CommonForm.F.Field.AdvFld.Handler.OnChange", itemSuggested); //$NON-NLS-1$
-        assertNotNull(FormElementWriter.resolveHandlerContainer(form,
-            FormElementWriter.parse(itemSuggested)));
+        // (2) item owner, command leaf, and (3) item owner, an event this owner does not carry.
+        // Both are refused by the SAME question - nothing here enumerates 'Action'. This fixture's
+        // FormField has no handlers collection and no action slot, so the model's answer is "takes
+        // no handler at all", and neither leaf may be advertised.
+        for (String leaf : new String[] { "Action", "OnChange", "Click" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            String itemFqn = "CommonForm.F.Button.AdvFld.Handler." + leaf; //$NON-NLS-1$
+            String advice = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
+                FormElementWriter.parse(itemFqn), itemFqn, null);
+            assertTrue(advice, advice.contains("but it is a Field")); //$NON-NLS-1$
+            assertFalse("an event the corrected owner does not take must not be advertised: " //$NON-NLS-1$
+                + advice, advice.contains("Use '")); //$NON-NLS-1$
+            assertTrue(advice, advice.contains("not among the events a Field publishes")); //$NON-NLS-1$
+        }
 
         // An FQN this writer would not parse can never be offered as one to USE, whatever a caller
         // passes - the guarantee lives in the advice, not in the callers' discipline. The advice
@@ -1420,17 +1433,18 @@ public class FormElementWriterTest
             junk.contains("Use '")); //$NON-NLS-1$
         assertTrue(junk, junk.contains("Address it with the 'Field' kind")); //$NON-NLS-1$
 
-        // THE combination case, the mirror of the command-owner one: correcting only the owner KIND
-        // of '...Command.AdvFld.Handler.Action' (AdvFld is a FIELD) yields
-        // '...Field.AdvFld.Handler.Action' - which parses, and which can never work, because Action
-        // is a form command's own event. Nothing may be quoted, and the reason must be said.
+        // The mirror of the command-owner case, kept as its own probe because it is the one the
+        // review found FIRST: correcting only the owner KIND of '...Command.AdvFld.Handler.Action'
+        // (AdvFld is a FIELD) yields '...Field.AdvFld.Handler.Action' - which parses and can never
+        // work. It is refused by the SAME question as the loop above, with no wording of its own.
         String actionFqn = "CommonForm.F.Command.AdvFld.Handler.Action"; //$NON-NLS-1$
         String actionAdvice = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
-            FormElementWriter.parse(actionFqn), actionFqn);
+            FormElementWriter.parse(actionFqn), actionFqn, null);
         assertTrue(actionAdvice, actionAdvice.contains("but it is a Field")); //$NON-NLS-1$
         assertFalse("an event the corrected owner cannot carry must not be quoted as an address: " //$NON-NLS-1$
             + actionAdvice, actionAdvice.contains("Use '")); //$NON-NLS-1$
-        assertTrue(actionAdvice, actionAdvice.contains("'Action' is a form command's own event")); //$NON-NLS-1$
+        assertTrue(actionAdvice,
+            actionAdvice.contains("not among the events a Field publishes")); //$NON-NLS-1$
         // ... and the address that was NOT quoted really is unusable, judged by the binder itself.
         EObject wrongOwner = FormElementWriter.resolveHandlerContainer(form,
             FormElementWriter.parse("CommonForm.F.Field.AdvFld.Handler.Action")); //$NON-NLS-1$
@@ -1591,7 +1605,7 @@ public class FormElementWriterTest
         command.eSet(feature(command, "name"), "BareCmd"); //$NON-NLS-1$ //$NON-NLS-2$
         addTo(form, "formCommands", command); //$NON-NLS-1$
         String bareOwner = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
-            FormElementWriter.parse("CommonForm.F.Button.BareCmd.Handler.OnChange"), null); //$NON-NLS-1$
+            FormElementWriter.parse("CommonForm.F.Button.BareCmd.Handler.OnChange"), null, null); //$NON-NLS-1$
         assertTrue(bareOwner, bareOwner.contains("Address it with the 'Command' kind")); //$NON-NLS-1$
         assertFalse("the owner name must not be swallowed by the Action rewrite: " + bareOwner, //$NON-NLS-1$
             bareOwner.contains("Command.Action")); //$NON-NLS-1$
@@ -1644,14 +1658,14 @@ public class FormElementWriterTest
         FormMemberRef ref =
             FormElementWriter.parse("CommonForm.F.Button.OwnerAttr.Handler.OnChange"); //$NON-NLS-1$
         String advice = FormElementWriter.handlerOwnerKindMismatchAdvice(form, ref,
-            "CommonForm.F.Button.OwnerAttr.Handler.OnChange"); //$NON-NLS-1$
+            "CommonForm.F.Button.OwnerAttr.Handler.OnChange", null); //$NON-NLS-1$
         assertTrue(advice, advice.contains("there IS a form ATTRIBUTE with this name")); //$NON-NLS-1$
         assertFalse("the advice must NOT hand back an unresolvable attribute handler address: " //$NON-NLS-1$
             + advice, advice.contains("Attribute.OwnerAttr.Handler")); //$NON-NLS-1$
 
         // A form-LEVEL handler address carries no owner segment at all, so it has no advice.
         assertEquals("", FormElementWriter.handlerOwnerKindMismatchAdvice(form, //$NON-NLS-1$
-            FormElementWriter.parse("CommonForm.F.Handler.OnOpen"), "CommonForm.F.Handler.OnOpen")); //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.parse("CommonForm.F.Handler.OnOpen"), "CommonForm.F.Handler.OnOpen", null)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1663,14 +1677,16 @@ public class FormElementWriterTest
         // rewrites the LEAF, handing back 'CommonForm.F.Handler.OnChange.Field.OnChange' - which does
         // not even parse as a handler address. Only the shape rule picks the owner pair.
         EObject form = newForm();
-        addNamedItem(form, "FormField", "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject named = newObject(MODEL.formCommand);
+        named.eSet(feature(named, "name"), "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "formCommands", named); //$NON-NLS-1$
         String fqn = "CommonForm.F.Handler.OnChange.Handler.OnChange"; //$NON-NLS-1$
         FormMemberRef ref = FormElementWriter.parse(fqn);
         assertEquals("Handler", ref.itemKindToken); //$NON-NLS-1$
-        String advice = FormElementWriter.handlerOwnerKindMismatchAdvice(form, ref, fqn);
-        assertTrue(advice, advice.contains("'CommonForm.F.Field.OnChange.Handler.OnChange'")); //$NON-NLS-1$
+        String advice = FormElementWriter.handlerOwnerKindMismatchAdvice(form, ref, fqn, null);
+        assertTrue(advice, advice.contains("'CommonForm.F.Command.OnChange.Handler.Action'")); //$NON-NLS-1$
         assertFalse("the LEAF pair must not be the one rewritten: " + advice, //$NON-NLS-1$
-            advice.contains("Handler.OnChange.Field.OnChange")); //$NON-NLS-1$
+            advice.contains("Handler.OnChange.Command.OnChange")); //$NON-NLS-1$
 
         // A COMMAND owner is corrected too - kind AND event leaf, because a command's only handler
         // slot is its Action. Suggesting '...Command.Refresh.Handler.OnChange' would be right about
@@ -1681,7 +1697,7 @@ public class FormElementWriterTest
         addTo(form, "formCommands", command); //$NON-NLS-1$
         String cmdFqn = "CommonForm.F.Button.Refresh.Handler.OnChange"; //$NON-NLS-1$
         String cmdAdvice = FormElementWriter.handlerOwnerKindMismatchAdvice(form,
-            FormElementWriter.parse(cmdFqn), cmdFqn);
+            FormElementWriter.parse(cmdFqn), cmdFqn, null);
         assertTrue(cmdAdvice, cmdAdvice.contains("'CommonForm.F.Command.Refresh.Handler.Action'")); //$NON-NLS-1$
     }
 

@@ -4427,12 +4427,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * persistence path the property-modify branch uses. Does NOT bind a NEW event (that is
      * create_metadata's job); a single {@code procedure} property is the whole change.
      */
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
+        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
+        return project != null ? project.getVersion() : null;
+    }
+
     private String rebindFormHandler(ProjectContext ctx, String normFqn,
         FormElementWriter.FormMemberRef ref, String procName)
     {
         final String eventName = ref.name;
         final boolean commandOwner = ref.isItemLevel()
             && FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
+        // The advice may quote a corrected handler address, and whether the corrected owner really
+        // carries that event is a question only the platform type can answer - hence the version.
+        final Version version = platformVersionOf(ctx);
         final boolean persisted;
         try
         {
@@ -4454,7 +4465,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         // another kind is named, with the corrected address. The message then names
                         // the KIND that found nothing, so it cannot read as a lie about the element.
                         String advice =
-                            FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn);
+                            FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref,
+                                normFqn, version);
                         throw new FormValidationException(ToolResult.error((commandOwner
                             ? "Form command not found: " : "Form item not found: ") + ref.itemName //$NON-NLS-1$ //$NON-NLS-2$
                             + (advice.isEmpty()

@@ -4566,17 +4566,19 @@ public final class FormElementWriter
      * @param formModel the tx-bound form content model
      * @param ref the parsed handler reference (its {@code itemKindToken} / {@code itemName} are used)
      * @param normFqn the whole normalized FQN
+     * @param version the platform version whose type publishes an element's events: a corrected
+     *     address is quoted only when the corrected OWNER really accepts the address's event, and
+     *     only the platform can answer that
      * @return the tail to append, or an EMPTY string when there is nothing to add
      */
     public static String handlerOwnerKindMismatchAdvice(EObject formModel, FormMemberRef ref,
-        String normFqn)
+        String normFqn, Version version)
     {
         if (ref == null || !ref.isItemLevel())
         {
             return ""; //$NON-NLS-1$
         }
-        return kindMismatchAdvice(formModel, ref.itemKindToken, ref.itemName, normFqn, true,
-            ref.name);
+        return kindMismatchAdvice(formModel, ref.itemKindToken, ref.itemName, normFqn, true, version);
     }
 
     private static String kindMismatchAdvice(EObject formModel, String kindToken, String name,
@@ -4585,8 +4587,8 @@ public final class FormElementWriter
         return kindMismatchAdvice(formModel, kindToken, name, normFqn, ownerPosition, null);
     }
 
-    private static String kindMismatchAdvice(EObject formModel, String kindToken, String name, // NOSONAR signature is inherent: the model, the pair to judge, the whole address, the position and the handler event all vary independently
-        String normFqn, boolean ownerPosition, String handlerEvent)
+    private static String kindMismatchAdvice(EObject formModel, String kindToken, String name, // NOSONAR signature is inherent: the model, the pair to judge, the whole address, the position and the platform version all vary independently
+        String normFqn, boolean ownerPosition, Version version)
     {
         Kind requested = kindForToken(kindToken);
         Kind actual = actualKindOf(formModel, name);
@@ -4614,16 +4616,18 @@ public final class FormElementWriter
         if (actual != null && actual != requested)
         {
             String correct = englishTokenOf(actual);
-            String corrected = correctedAddress(formModel, normFqn, kindToken, name, correct,
-                ownerPosition, actual);
-            // Quote a whole address ONLY when this writer would really act on it (see
-            // correctedAddress). Otherwise name the kind and say why in words: a wrong address the
-            // caller trusts costs more than no address at all.
+            String candidate =
+                retargetedCandidate(normFqn, kindToken, name, correct, ownerPosition, actual);
+            String corrected = candidate == null ? null
+                : acceptedAddress(formModel, candidate, ownerPosition, version);
+            // Quote a whole address ONLY when this writer would really act on it. A candidate that
+            // existed and was refused was refused by the OWNER, over its event - say that, without
+            // naming any event: which events an element carries is the platform's answer, not ours.
             return " - there IS an element with this name, but it is " //$NON-NLS-1$
                 + (actual == Kind.ATTRIBUTE ? "an " : "a ") + correct //$NON-NLS-1$ //$NON-NLS-2$
                 + (corrected == null
                     ? ". Address it with the '" + correct + "' kind" //$NON-NLS-1$ //$NON-NLS-2$
-                        + noAddressReason(handlerEvent, actual, correct)
+                        + noAddressReason(candidate != null && ownerPosition, correct)
                     : ". Use '" + corrected + "'."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (requested == null)
@@ -4641,7 +4645,7 @@ public final class FormElementWriter
      * OnChange}, which {@link #findFormHandler} rejects for a command. The event leaf is corrected
      * with it.
      */
-    private static String correctedAddress(EObject formModel, String normFqn, String kindToken, // NOSONAR signature is inherent: the model, the address, the pair to replace, the position and the actual kind all vary independently
+    private static String retargetedCandidate(String normFqn, String kindToken, // NOSONAR signature is inherent: the address, the pair to replace, the position and the actual kind all vary independently
         String name, String correct, boolean ownerPosition, Kind actual)
     {
         String retargeted = retargetKindSegment(normFqn, kindToken, name, correct, ownerPosition);
@@ -4660,24 +4664,27 @@ public final class FormElementWriter
             corrected = lastDot < 0 ? retargeted
                 : retargeted.substring(0, lastDot + 1) + COMMAND_ACTION_EVENT;
         }
-        FormMemberRef ref = parse(corrected);
-        if (ref == null)
-        {
-            return null;
-        }
-        // Quote it back only if this writer would really ACT on it. Asking parse() alone answers
-        // "does the string parse", not "will the address work" - and the addresses we hand out are
-        // COMBINATIONS, where the second question is the only one that matters. Both branches below
-        // ask the same code that would judge the retried call.
-        return ownerPosition ? correctedHandlerAddress(formModel, ref, corrected)
-            : addressOfResolvedMember(formModel, ref, corrected);
+        return corrected;
+    }
+
+    /**
+     * The candidate address, or {@code null} when this writer would NOT act on it. Asking
+     * {@code parse()} alone answers "does the string parse", not "will the address work" - and the
+     * addresses we hand out are COMBINATIONS, where only the second question matters. Both branches
+     * put it to the same code that would judge the retried call.
+     */
+    private static String acceptedAddress(EObject formModel, String candidate, boolean ownerPosition,
+        Version version)
+    {
+        return ownerPosition ? correctedHandlerAddress(formModel, candidate, version)
+            : addressOfResolvedMember(formModel, candidate);
     }
 
     /** The corrected MEMBER address, or {@code null} when it would not resolve to a member. */
-    private static String addressOfResolvedMember(EObject formModel, FormMemberRef ref,
-        String corrected)
+    private static String addressOfResolvedMember(EObject formModel, String corrected)
     {
-        return resolveFormMember(formModel, ref) == null ? null : corrected;
+        FormMemberRef ref = parse(corrected);
+        return ref == null || resolveFormMember(formModel, ref) == null ? null : corrected;
     }
 
     /**
@@ -4688,16 +4695,50 @@ public final class FormElementWriter
      * kind of {@code ...Command.Price.Handler.Action} (where {@code Price} is a FIELD) would hand
      * back {@code ...Field.Price.Handler.Action} - right about the kind, impossible about the event.
      */
-    private static String correctedHandlerAddress(EObject formModel, FormMemberRef ref,
-        String corrected)
+    private static String correctedHandlerAddress(EObject formModel, String corrected,
+        Version version)
     {
-        EObject owner = resolveHandlerContainer(formModel, ref);
-        if (owner == null)
+        FormMemberRef ref = parse(corrected);
+        EObject owner = ref == null ? null : resolveHandlerContainer(formModel, ref);
+        return owner != null && ownerAcceptsHandlerLeaf(owner, ref.name, version) ? corrected : null;
+    }
+
+    /**
+     * Whether {@code owner} would really accept a handler addressed at {@code leaf} - asked of the
+     * MODEL, mirroring {@link #createHandler}'s own acceptance, so a suggested address cannot promise
+     * what the retried call will refuse.
+     *
+     * <p>The two branches are chosen STRUCTURALLY, not from a list of names. A container that carries
+     * a {@code handlers} COLLECTION takes the events its platform type publishes - so the question is
+     * put to {@link #availableEvents}, exactly as {@code createHandler} puts it, and whatever the
+     * platform says is the answer. A container without that collection carries a single, anonymous
+     * handler slot instead (a form command's {@code action} containment); the MODEL gives that slot no
+     * event name, so an FQN has to spell it with the action token. That one name is the spelling of a
+     * model slot - the same one {@code createCommandAction} accepts - not a membership test against a
+     * remembered list of events.</p>
+     *
+     * @param owner the resolved handler container
+     * @param leaf the event name the address ends with
+     * @param version the platform version whose type publishes the events; {@code null} makes the
+     *     events unknowable, and an unknowable event is not advertised
+     * @return {@code true} only when this owner really takes a handler for this leaf
+     */
+    private static boolean ownerAcceptsHandlerLeaf(EObject owner, String leaf, Version version)
+    {
+        EStructuralFeature handlersFeat = owner.eClass().getEStructuralFeature(KEY_HANDLERS);
+        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
-            return null;
+            return owner.eClass().getEStructuralFeature(FEATURE_ACTION) != null && isActionToken(leaf);
         }
-        boolean commandOwner = ECLASS_FORM_COMMAND.equals(owner.eClass().getName());
-        return commandOwner == isActionToken(ref.name) ? corrected : null;
+        for (EObject event : availableEvents(owner, version))
+        {
+            if (leaf.equalsIgnoreCase(eventNameOf(event, false))
+                || leaf.equalsIgnoreCase(eventNameOf(event, true)))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -4705,14 +4746,12 @@ public final class FormElementWriter
      * TRUE about why. The only statically decidable mismatch is the {@code Action} leaf, which is a
      * form command's own event and which no other kind of element carries.
      */
-    private static String noAddressReason(String handlerEvent, Kind actual, String correct)
+    private static String noAddressReason(boolean leafRefused, String correct)
     {
-        if (handlerEvent != null && isActionToken(handlerEvent) && actual != Kind.COMMAND)
-        {
-            return " - and with an event that kind carries: 'Action' is a form command's own event, " //$NON-NLS-1$
-                + "which a " + correct + " does not have."; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return "."; //$NON-NLS-1$
+        return leafRefused
+            ? ", and with an event that kind carries - the one in this address is not among " //$NON-NLS-1$
+                + "the events a " + correct + " publishes." //$NON-NLS-1$
+            : "."; //$NON-NLS-1$
     }
 
     /**
