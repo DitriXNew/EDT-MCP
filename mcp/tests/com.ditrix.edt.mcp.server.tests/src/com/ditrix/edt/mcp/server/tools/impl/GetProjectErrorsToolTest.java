@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,9 +24,13 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
+import java.util.Collection;
+import java.util.TreeSet;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectDescription;
@@ -33,9 +38,11 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
@@ -48,6 +55,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
@@ -57,6 +65,7 @@ import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 
@@ -1438,6 +1447,138 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testEveryValidFirstStepIsAContainmentAndStaysPossible()
+    {
+        // Walks THE grammar the gate resolves against - MetadataNodeResolver's own token -> feature
+        // map - not a catalogue that mirrors it. Pinning the mirror was vacuous: a token added to
+        // the resolver alone is live in address resolution while the mirror, and so the check,
+        // knows nothing about it.
+        Map<String, Integer> ownersPerFeature = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : MetadataNodeResolver.childFeatureByToken().entrySet())
+        {
+            String token = entry.getKey();
+            String feature = entry.getValue();
+            assertNotNull("resolver token is not published by the kind catalogue - the two have " //$NON-NLS-1$
+                + "drifted apart: " + token, MetadataTypeUtils.resolveNestedKind(token)); //$NON-NLS-1$
+
+            ownersPerFeature.putIfAbsent(feature, Integer.valueOf(0));
+            for (EClassifier classifier : MdClassPackage.eINSTANCE.getEClassifiers())
+            {
+                if (!(classifier instanceof EClass)
+                    || MetadataTypeUtils.toEnglishSingular(classifier.getName()) == null)
+                {
+                    continue;
+                }
+                EStructuralFeature f = ((EClass)classifier).getEStructuralFeature(feature);
+                if (f == null)
+                {
+                    continue;
+                }
+                String type = classifier.getName();
+                assertTrue("a valid first step must be a CONTAINMENT reference: " //$NON-NLS-1$
+                    + type + "." + feature, //$NON-NLS-1$
+                    f instanceof EReference && ((EReference)f).isContainment());
+                assertTrue("the owner question must accept it: " + type + "." + feature, //$NON-NLS-1$ //$NON-NLS-2$
+                    MetadataTypeUtils.typeCanContain(type, feature));
+                String address = type + ".X." + token + ".Y"; //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue("a valid first step must stay POSSIBLE: " + address, //$NON-NLS-1$
+                    GetProjectErrorsTool.possibleAddressShape(address));
+                ownersPerFeature.put(feature, Integer.valueOf(ownersPerFeature.get(feature) + 1));
+            }
+        }
+
+        // PER KIND, not in aggregate. A total floor lets a whole family fall to zero - a renamed
+        // feature, or an owner that lost its containment - while the other families hold the count
+        // up and nothing is reported.
+        for (Map.Entry<String, Integer> entry : ownersPerFeature.entrySet())
+        {
+            if (DEEPER_ONLY_FEATURES.contains(entry.getKey()))
+            {
+                assertEquals("legal only deeper, so it must have NO first-step owner: " //$NON-NLS-1$
+                    + entry.getKey(), Integer.valueOf(0), entry.getValue());
+                continue;
+            }
+            assertTrue("no owner type carries this first-step feature any more: " + entry.getKey(), //$NON-NLS-1$
+                entry.getValue().intValue() > 0);
+        }
+    }
+
+    /**
+     * Features whose kinds are legal only DEEPER in an address: {@code methods} hangs off an
+     * HTTPService URLTemplate and {@code parameters} off a WebService Operation, so neither may have
+     * a first-step owner. Named explicitly so a new kind that resolves to nothing is a failure
+     * rather than another silent zero.
+     */
+    private static final Set<String> DEEPER_ONLY_FEATURES =
+        new HashSet<>(Arrays.asList("methods", "parameters")); //$NON-NLS-1$ //$NON-NLS-2$
+
+
+    @Test
+    public void testKindsThatAreLegalOnlyDeeperAreNotValidFirstSteps()
+    {
+        // Method lives on an HTTPService URLTemplate and Parameter on a WebService Operation, so
+        // neither is a first step. They must NOT be swept into the derived table above just because
+        // the catalogue publishes their tokens.
+        for (String address : new String[] {
+            "HTTPService.Service.Method.Get",        // Method belongs to a URLTemplate //$NON-NLS-1$
+            "WebService.Service.Parameter.Value"})   // Parameter belongs to an Operation //$NON-NLS-1$
+        {
+            assertFalse("legal only deeper, so not a valid first step: " + address, //$NON-NLS-1$
+                GetProjectErrorsTool.possibleAddressShape(address));
+        }
+        // ...and the legitimate deeper shapes they belong to must still be possible.
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "HTTPService.Service.URLTemplate.Root.Method.Get")); //$NON-NLS-1$
+        assertTrue(GetProjectErrorsTool.possibleAddressShape(
+            "WebService.Service.Operation.Calc.Parameter.Value")); //$NON-NLS-1$
+    }
+
+
+    @Test
+    public void testTheOwnerQuestionIsAboutCONTAINMENT()
+    {
+        // The contract says CONTAINMENT feature. A scalar such as Catalog.uuid is a real
+        // EStructuralFeature, so a plain getEStructuralFeature answered yes for it - a contract
+        // written wider than the truth, and an address step that can never exist.
+        assertFalse("a scalar feature must NOT satisfy the owner question", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "uuid")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The mdclass first steps are covered exhaustively by the derived walk above. These two are
+        // NOT in that table - forms and predefined are reached by their own grammars, never through
+        // the resolver's child-feature map - so they are pinned here.
+        assertTrue("Catalog must be able to own forms", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "forms")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("Catalog must be able to own predefined items", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "predefined")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a Document holds no predefined items", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Document", "predefined")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheOwnerQuestionSeesAnInheritedCONTAINMENT()
+    {
+        // The whole owner gate rests on one unstated assumption: that asking an EClass for a feature
+        // reaches containments declared on its ANCESTORS, not only its own. The MdClass metamodel
+        // does have such pairs on gate-addressable types (measured 2026-08-03: Catalog.
+        // standardAttributes, Catalog.characteristics, ChartOfAccounts.tabularParts and others), so
+        // this control is built on a real one - no synthetic hierarchy and, deliberately, no scalar
+        // stand-in: a scalar would prove the opposite of the contract.
+        EClass catalog = (EClass)MdClassPackage.eINSTANCE.getEClassifier("Catalog"); //$NON-NLS-1$
+        assertNotNull("the metamodel must model Catalog", catalog); //$NON-NLS-1$
+        EStructuralFeature inherited = catalog.getEStructuralFeature("standardAttributes"); //$NON-NLS-1$
+        assertNotNull("Catalog must reach 'standardAttributes' at all", inherited); //$NON-NLS-1$
+        // Self-checks: the control means nothing unless the feature really is BOTH inherited and a
+        // containment. If the metamodel ever moves or re-kinds it, these say so instead of passing.
+        assertNotSame("'standardAttributes' must be INHERITED for this control to test anything", //$NON-NLS-1$
+            catalog, inherited.getEContainingClass());
+        assertTrue("'standardAttributes' must be a CONTAINMENT reference", //$NON-NLS-1$
+            inherited instanceof EReference && ((EReference)inherited).isContainment());
+
+        assertTrue("an inherited containment must satisfy the owner question", //$NON-NLS-1$
+            MetadataTypeUtils.typeCanContain("Catalog", "standardAttributes")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testEveryOwnerAPredefinedAddressCanMeanIsScoped()
     {
         // Both spellings of the owner AND of the item exist, in the crossed arrangement: M[yo]d
@@ -2218,6 +2359,10 @@ public class GetProjectErrorsToolTest
             "NoSuchType_e2e.X",                     // unknown leading TYPE token //$NON-NLS-1$
             "Catalog.Products.Fom.ItemForm",        // misspelt nested KIND //$NON-NLS-1$
             "Catalog.Products.Field.Code",          // form-only kind on a mdclass object //$NON-NLS-1$
+            "Catalog.Products.Column.Number",       // Column is a DocumentJournal containment //$NON-NLS-1$
+            "Document.Invoice.Predefined.Sample",   // Documents hold no predefined items //$NON-NLS-1$
+            "NoSuchType.X.Form.F",                  // form grammar never checked the leading TYPE //$NON-NLS-1$
+            "NoSuchType.X.Predefined.Item",         // ...nor did the predefined grammar //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Fielld.Code", // misspelt form-element KIND //$NON-NLS-1$
             "Catalog.Products.Module"})             // odd arity: no grammar has it //$NON-NLS-1$
         {
@@ -2236,8 +2381,18 @@ public class GetProjectErrorsToolTest
             "Catalog.Products.Form.ItemForm.Field.Code.Handler.OnChange", //$NON-NLS-1$
             "Catalog.Products.Form.ItemForm.Handler.OnOpen", // form-LEVEL handler //$NON-NLS-1$
             "DocumentJournal.Sales.Column.Number", // a real mdclass Column //$NON-NLS-1$
+            "Catalog.Products.TabularSection.Goods", // the owner question must not swallow this //$NON-NLS-1$
+            "Catalog.Products.Predefined.Sample", // Catalogs DO hold predefined items //$NON-NLS-1$
+            "ChartOfAccounts.Main.Predefined.Cash", // ...and so do charts of accounts //$NON-NLS-1$
             "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
-            "Catalog.Products.Predefined.Sample", //$NON-NLS-1$
+            // The owner question must survive a RUSSIAN owner token and a Russian nested kind: it
+            // resolves the type through the bilingual catalogue before asking the metamodel, and a
+            // regression there would reject a legitimate address written the other way round.
+            fromCp(0x0421, 0x043f, 0x0440, 0x0430, 0x0432, 0x043e, 0x0447, 0x043d, 0x0438, 0x043a)
+                + ".Products." //$NON-NLS-1$
+                + fromCp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0447, 0x043d, 0x0430, 0x044f,
+                    0x0427, 0x0430, 0x0441, 0x0442, 0x044c)
+                + ".Goods", //$NON-NLS-1$
             "XDTOPackage.Exchange"}) //$NON-NLS-1$
         {
             assertTrue("a documented grammar must stay possible: " + possible, //$NON-NLS-1$

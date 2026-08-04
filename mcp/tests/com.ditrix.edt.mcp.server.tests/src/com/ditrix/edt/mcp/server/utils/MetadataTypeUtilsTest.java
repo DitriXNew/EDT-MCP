@@ -8,11 +8,16 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 import java.util.function.Predicate;
 import org.junit.Test;
@@ -663,7 +668,11 @@ public class MetadataTypeUtilsTest
     @Test
     public void testEveryPublishedNestedKindTokenIsAcceptedByItsExactResolver()
     {
-        Map<String, Predicate<String>> owners = new LinkedHashMap<>();
+        // EVERY applicable consumer, not one. A single-owner map let the FIRST consumer fill the
+        // slot: for Attribute and Command that was the form parser, so the catalogue ->
+        // MetadataNodeResolver direction went unchecked for them and an alias published here and
+        // accepted by the form writer, but unknown to the resolver, passed green.
+        Map<String, List<Predicate<String>>> owners = new LinkedHashMap<>();
         // Form-content kinds: the form parser resolves the element and then checks the KIND token.
         for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
         {
@@ -676,13 +685,50 @@ public class MetadataTypeUtilsTest
                 MetadataTypeUtils.resolveNestedKind(tokens.get(0));
             assertNotNull("the form parser accepts '" + tokens.get(0) + "' but this map does not",
                 info);
-            owners.put(info.getEnglish(), t -> FormElementWriter.kindForToken(t) == kind);
+            owners.computeIfAbsent(info.getEnglish(), k -> new ArrayList<>())
+                .add(t -> FormElementWriter.kindForToken(t) == kind);
         }
         // The structural tokens that route an address to a branch rather than to an element kind.
-        owners.put("Form", FormElementWriter::isFormToken);
-        owners.put("Handler", FormElementWriter::isHandlerToken);
-        owners.put("Subsystem", SubsystemUtils::isSubsystemTypeToken);
-        owners.put("Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+        addOwner(owners, "Form", FormElementWriter::isFormToken);
+        addOwner(owners, "Handler", FormElementWriter::isHandlerToken);
+        addOwner(owners, "Subsystem", SubsystemUtils::isSubsystemTypeToken);
+        addOwner(owners, "Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+        // Resolver groups are built by a FULL pass over the resolver's own map, and its
+        // applicability is decided by THAT, never by asking the resolver about the canonical token.
+        // Deriving applicability from the thing under test let it opt out: deleting just the
+        // canonical "attribute" token made featureNameForKind("Attribute") null, the resolver
+        // dropped out of the owners, the reverse-equality block was skipped, and the form owner
+        // kept the "no owner declared" assertion quiet. Losing a token switched off its own check.
+        Map<String, Set<String>> resolverTokens = new LinkedHashMap<>();
+        Map<String, Set<String>> resolverFeatures = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : MetadataNodeResolver.childFeatureByToken().entrySet())
+        {
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(e.getKey());
+            assertNotNull("resolver token is not published by the catalogue: " + e.getKey(), info);
+            resolverTokens.computeIfAbsent(info.getEnglish(), k -> new TreeSet<>())
+                .add(e.getKey().toLowerCase(Locale.ROOT));
+            resolverFeatures.computeIfAbsent(info.getEnglish(), k -> new LinkedHashSet<>())
+                .add(e.getValue());
+        }
+
+        // Applicability of the mdclass resolver is DECLARED, not inferred from the map under test.
+        // Deriving it from resolverTokens.keySet() still let the subject opt out: deleting the whole
+        // Attribute block made the group vanish, so the exact-equality branch never ran, and the
+        // form owner kept the "no owner declared" assertion quiet. A vanished group is exactly the
+        // regression this test exists to catch, so the set below is written by hand ON PURPOSE -
+        // the alternative is not inference but self-confirmation. Adding an mdclass kind requires
+        // adding it here, and that is the step that must not be silent.
+        // EQUALITY, both ways. Registering owners from resolverTokens.keySet() as well left the
+        // declaration optional: an existing group could not vanish, but a NEW undeclared group
+        // switched its own check on, so "adding a kind requires declaring it here" was not true.
+        // Self-confirmation had simply moved one floor down.
+        assertEquals("the declared mdclass kinds and the resolver's groups must match EXACTLY - " //$NON-NLS-1$
+            + "a missing entry means a group vanished, an extra group means it was never declared", //$NON-NLS-1$
+            MDCLASS_RESOLVED_KINDS, new LinkedHashSet<>(resolverTokens.keySet()));
+        for (String canonical : MDCLASS_RESOLVED_KINDS)
+        {
+            addOwner(owners, canonical, t -> MetadataNodeResolver.featureNameForKind(t) != null);
+        }
 
         // Every OTHER kind is an mdclass member, and its exact resolver is MetadataNodeResolver:
         // it maps the kind token to the EMF child feature. That is a real owner, not an excuse -
@@ -698,27 +744,75 @@ public class MetadataTypeUtilsTest
 
         for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
         {
-            Predicate<String> owner = owners.get(canonical);
-            if (owner == null && !notAddressed.containsKey(canonical))
+            List<Predicate<String>> applicable = owners.get(canonical);
+            if (applicable == null)
             {
-                // An mdclass member kind: its exact resolver is the child-feature mapping.
-                owner = t -> MetadataNodeResolver.featureNameForKind(t) != null;
-            }
-            if (owner == null)
-            {
-                continue; // a documented content-only segment
+                assertTrue("a published kind must declare an owner or be documented as content-only: "
+                    + canonical, notAddressed.containsKey(canonical));
+                continue;
             }
             Set<String> aliases = MetadataTypeUtils.nestedKindAliases(canonical);
             assertFalse("a published kind must have spellings: " + canonical, aliases.isEmpty());
+            for (Predicate<String> owner : applicable)
+            {
+                for (String alias : aliases)
+                {
+                    assertTrue("the catalogue advertises '" + alias + "' for " + canonical
+                        + ", so the exact resolver must accept it", owner.test(alias));
+                    // ...and case must not matter: a marker location renders these capitalized.
+                    assertTrue("case must not matter for '" + alias + "'",
+                        owner.test(alias.substring(0, 1).toUpperCase() + alias.substring(1)));
+                }
+            }
+            // ...and the reverse direction for the mdclass resolver: its token group for this kind
+            // must equal the catalogue's aliases EXACTLY, and all of them must mean one feature.
+            Set<String> published = new TreeSet<>();
             for (String alias : aliases)
             {
-                assertTrue("the catalogue advertises '" + alias + "' for " + canonical
-                    + ", so the exact resolver must accept it", owner.test(alias));
-                // ...and case must not matter: a marker location renders these capitalized.
-                assertTrue("case must not matter for '" + alias + "'",
-                    owner.test(alias.substring(0, 1).toUpperCase() + alias.substring(1)));
+                published.add(alias.toLowerCase(Locale.ROOT));
+            }
+            if (resolverTokens.containsKey(canonical))
+            {
+                assertEquals("resolver and catalogue must accept EXACTLY the same tokens for "
+                    + canonical, published, resolverTokens.get(canonical));
+                assertEquals("every alias of one kind must resolve to ONE feature: " + canonical,
+                    1, resolverFeatures.get(canonical).size());
+            }
+            // 2. The FORM consumer, in the SAME place and in the reverse direction too: its token
+            // list must equal the catalogue's aliases exactly, so a token the form parser accepts
+            // but the catalogue does not publish is caught here rather than in a second test.
+            FormElementWriter.Kind formKind = FormElementWriter.kindForToken(canonical);
+            if (formKind != null)
+            {
+                Set<String> formTokens = new TreeSet<>();
+                for (String token : FormElementWriter.tokensForKind(formKind))
+                {
+                    formTokens.add(token.toLowerCase(Locale.ROOT));
+                }
+                assertEquals("form parser and catalogue must accept EXACTLY the same tokens for "
+                    + canonical, published, formTokens);
             }
         }
+    }
+
+    /**
+     * Canonical kinds the mdclass resolver MUST map, declared explicitly.
+     *
+     * <p>The one place in this file where a hand-written list is the right answer. Everything else
+     * is derived from a catalogue so a new entry cannot slip past; here derivation would mean asking
+     * the map under test whether it still contains the group, which is self-confirmation - losing a
+     * group would switch off the check that a group must not be lost.</p>
+     */
+    private static final Set<String> MDCLASS_RESOLVED_KINDS = new LinkedHashSet<>(Arrays.asList(
+        "Attribute", "TabularSection", "Dimension", "Resource", "EnumValue", "Command",
+        "AccountingFlag", "ExtDimensionAccountingFlag", "AddressingAttribute", "Column",
+        "Template", "Recalculation", "URLTemplate", "Method", "Operation", "Parameter"));
+
+    /** Registers one more applicable consumer for a canonical kind. */
+    private static void addOwner(Map<String, List<Predicate<String>>> owners, String canonical,
+        Predicate<String> owner)
+    {
+        owners.computeIfAbsent(canonical, k -> new ArrayList<>()).add(owner);
     }
 
     /** The predefined-item token predicate, which is private to its writer - probed through parseRef. */
@@ -953,16 +1047,19 @@ public class MetadataTypeUtilsTest
         Collections.emptyMap();
 
     @Test
-    public void testEveryFormKindAliasAgreesWithTheFormParser()
+    public void testEveryFormKindIsSpelledInBothLanguagesAndPairedConsistently()
     {
-        // Two token tables describe the same form kinds: this one (for FILTER variants) and
-        // FormElementWriter's (for FQN parsing). They are separate on purpose - the parser maps a
-        // token to an EMF feature, this map to a bilingual canon - so pin them against each other.
+        // SCOPE - read this before adding to it. Token-SET parity between the catalogue and the form
+        // parser (both directions), and that every alias reads back as its kind, are owned by
+        // testEveryPublishedNestedKindTokenIsAcceptedByItsExactResolver. Duplicating them here is
+        // what left one invariant split across two methods.
         //
-        // The pin walks Kind.values() and every token the parser ACCEPTS for each kind (exported by
-        // tokensForKind) instead of a hand-written list of pairs: a hand-written list keeps passing
-        // when a kind is added to one table only, which is the very drift this test claims to
-        // prevent. Adding a Kind now REQUIRES its bilingual alias here, or this test fails.
+        // What is NOT covered there, and is the only reason this test still exists:
+        //   - BILINGUAL COVERAGE: a kind must have at least one Latin AND one Cyrillic spelling.
+        //     Set equality cannot see this - two catalogues can agree on a purely English set.
+        //   - The RUSSIAN half of the canonical pair: set equality compares tokens, never that all
+        //     spellings of a kind carry the same canonical Russian.
+        //   - Standalone aliases that belong to no form Kind (Column, Handler).
         for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
         {
             if (KINDS_NOT_ADDRESSED_AS_FQN_SEGMENT.containsKey(kind))
@@ -977,19 +1074,22 @@ public class MetadataTypeUtilsTest
             boolean sawCyrillic = false;
             for (String token : tokens)
             {
-                assertEquals("the form parser must read '" + token + "' as " + kind, //$NON-NLS-1$ //$NON-NLS-2$
-                    kind, FormElementWriter.kindForToken(token));
                 MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
-                assertNotNull("this map must know the form-kind token '" + token + "' (" + kind //$NON-NLS-1$ //$NON-NLS-2$
-                    + ")", info); //$NON-NLS-1$
+                if (info == null)
+                {
+                    // NOT this test's business: whether the catalogue publishes every token the
+                    // parser accepts is set parity, owned by the consolidated test. Asserting it
+                    // here too made one mutation raise two identical signals.
+                    continue;
+                }
                 if (canon == null)
                 {
                     canon = info;
                 }
+                // The RUSSIAN half of the pair - the part token-set equality cannot check.
                 assertEquals("every accepted spelling of " + kind //$NON-NLS-1$
-                    + " must resolve to the SAME canonical pair", //$NON-NLS-1$
-                    canon.getEnglish(), info.getEnglish());
-                assertEquals(canon.getRussian(), info.getRussian());
+                    + " must resolve to the SAME canonical Russian", //$NON-NLS-1$
+                    canon.getRussian(), info.getRussian());
                 if (isCyrillic(token))
                 {
                     sawCyrillic = true;
@@ -1001,31 +1101,12 @@ public class MetadataTypeUtilsTest
             }
             assertTrue("the form parser must accept an English spelling of " + kind, sawLatin); //$NON-NLS-1$
             assertTrue("the form parser must accept a Russian spelling of " + kind, sawCyrillic); //$NON-NLS-1$
-            // Both canonical spellings must be readable back by the parser as the same kind, so an
-            // address translated through this map stays addressable.
-            assertEquals(kind, FormElementWriter.kindForToken(canon.getEnglish()));
-            assertEquals(kind, FormElementWriter.kindForToken(canon.getRussian()));
-
-            // THE REVERSE DIRECTION. Walking only the parser's own tokens proves that what it
-            // ACCEPTS is translatable here - never that everything this catalogue ADVERTISES is
-            // accepted there. That gap let the PLURAL spellings (Fields.Price and its Russian twin)
-            // be advertised by the filter and rejected by the form parser on the KIND check, so a
-            // real field came back as objectsNotFound. Every alias this map publishes for the kind
-            // must therefore be readable by the parser as that same kind.
-            for (String alias : MetadataTypeUtils.nestedKindAliases(canon.getEnglish()))
-            {
-                assertEquals("this map advertises '" + alias + "' for " + kind //$NON-NLS-1$ //$NON-NLS-2$
-                    + ", so the form parser must accept it too", //$NON-NLS-1$
-                    kind, FormElementWriter.kindForToken(alias));
-            }
         }
-        // Column is a nested kind of the MDCLASS model (a DocumentJournal column), which this map
-        // must translate; whether the form parser knows it is decided by the loop above, so this
-        // only pins that the alias itself never disappears.
+        // Aliases belonging to no form Kind, so no loop above can pin them: Column is a mdclass
+        // nested kind (a DocumentJournal column) and Handler routes to its own branch.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Column")); //$NON-NLS-1$
         assertNotNull(MetadataTypeUtils.resolveNestedKind(
             "\u041A\u043E\u043B\u043E\u043D\u043A\u0430")); //$NON-NLS-1$
-        // Handler is not a Kind (it routes to its own branch), but it IS a structural segment.
         assertNotNull(MetadataTypeUtils.resolveNestedKind("Handler")); //$NON-NLS-1$
         assertTrue(FormElementWriter.isHandlerToken(
             "\u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A")); //$NON-NLS-1$

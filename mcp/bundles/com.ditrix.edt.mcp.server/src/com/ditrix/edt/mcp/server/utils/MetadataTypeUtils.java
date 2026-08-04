@@ -15,9 +15,13 @@ import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
 /**
@@ -489,6 +493,45 @@ public final class MetadataTypeUtils
     private MetadataTypeUtils()
     {
         // Utility class
+    }
+
+    /**
+     * Whether the metadata TYPE named by {@code typeToken} really carries a containment feature
+     * called {@code featureName} - asked of the EDT metamodel itself, with NO model loaded.
+     *
+     * <p>{@link MdClassPackage} is a static EMF registry, so this is knowledge available before any
+     * project is read: a {@code Catalog} has no {@code columns}, a {@code Document} has no
+     * {@code predefined}, and no configuration anywhere can change that. Asking the metamodel keeps
+     * this class's token tables out of the existence business - they translate a bilingual token to
+     * a feature NAME, which is genuinely their knowledge, while whether that feature EXISTS on a
+     * given type stays the metamodel's.</p>
+     *
+     * <p>PERMISSIVE on anything it cannot answer: an unknown token, or a type EMF does not model,
+     * returns {@code true}. Callers use this to rule addresses OUT, so a confident wrong "no" would
+     * turn a real address into a false "not found" - the failure that matters. A wrong "yes" only
+     * means the model gets consulted, which decides it correctly anyway.</p>
+     *
+     * @param typeToken the metadata type token (English/Russian, singular/plural, any case)
+     * @param featureName the EMF containment feature name (e.g. {@code "columns"})
+     * @return {@code false} only when the type is modelled AND provably lacks the feature
+     */
+    public static boolean typeCanContain(String typeToken, String featureName)
+    {
+        String english = toEnglishSingular(typeToken);
+        if (english == null || featureName == null)
+        {
+            return true;
+        }
+        EClassifier classifier = MdClassPackage.eINSTANCE.getEClassifier(english);
+        if (!(classifier instanceof EClass))
+        {
+            return true;
+        }
+        EStructuralFeature feature = ((EClass)classifier).getEStructuralFeature(featureName);
+        // A CONTAINMENT reference, as the contract says - not any feature. A scalar like
+        // Catalog.uuid is a real EStructuralFeature but can never be a step in an address,
+        // and answering yes for it wrote the contract wider than the truth.
+        return feature instanceof EReference && ((EReference)feature).isContainment();
     }
 
     /**
