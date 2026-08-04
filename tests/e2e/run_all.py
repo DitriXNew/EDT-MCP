@@ -111,9 +111,11 @@ def abandon_workers(harness):
 def _run_test_unit(harness, t):
     """All EDT-touching work for ONE test, timed as a unit: the test fn plus, for a
     write-metadata test, its model cleanup (reset_fixture reverts disk; reset_model =
-    clean_project refreshes the in-memory model — the step that actually hung when EDT's
-    ProjectRestartJob wedged). The pre-test reset_fixture is fast local git and is done by
-    the caller OUTSIDE the timeout."""
+    settle + re-revert + clean_project refreshes the in-memory model and VERIFIES it is
+    back on the baseline — the step that actually hung when EDT's ProjectRestartJob
+    wedged). The pre-test reset_fixture is fast local git and is done by the caller
+    OUTSIDE the timeout; reset_model re-reverts inside it because a metadata write's disk
+    export is async and can land AFTER that pre-test revert."""
     try:
         t["func"]()
     except harness.E2ECallTimeout:

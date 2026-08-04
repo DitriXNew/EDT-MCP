@@ -78,6 +78,21 @@ MODEL_SETTLE_TIMEOUT = int(os.environ.get(
     "E2E_MODEL_SETTLE_TIMEOUT",
     str(max(int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180")), 300))))
 
+# reset_model's POST-CONDITION probe: an object the committed fixture always has and no
+# test may leave renamed or deleted (a rename test that targets it must be reverted by the
+# same reset). Resolving it is the only direct evidence that clean_project's re-import
+# actually landed — 'clean_project ok' + 'project ready' can both hold while the model
+# still carries the previous test's write (see reset_model). Override with
+# E2E_BASELINE_PROBE_FQN if the fixture's canonical object is ever renamed.
+BASELINE_PROBE_FQN = os.environ.get("E2E_BASELINE_PROBE_FQN", "Catalog.Catalog")
+
+# How many full revert + clean_project cycles reset_model may spend getting the model back
+# to the baseline before it gives up and stops the run. >1 because the lost race it recovers
+# from (an async disk export landing after the revert) is one-shot: the second cycle reverts
+# what that export wrote and re-imports it. Not a timeout knob — each cycle re-does the work,
+# it does not merely wait longer. Override with E2E_MODEL_RESET_ATTEMPTS.
+MODEL_RESET_ATTEMPTS = int(os.environ.get("E2E_MODEL_RESET_ATTEMPTS", "3"))
+
 # Transient "Project is building ... Please wait and retry" refusal: when a call arrives
 # while EDT is still recomputing derived data (heaviest right after a big write-metadata
 # test, and slow to drain on an under-powered CI runner), the server REFUSES it UPFRONT
@@ -503,6 +518,32 @@ def read_disk(relpath):
         return f.read()
 
 
+def _baseline_is_back():
+    """Did the model actually return to the committed baseline? (reset post-condition)
+
+    'clean_project returned ok' and 'the project reports ready' are both SIGNALS, not
+    proof: they say EDT finished the work it knew about, not that the model now matches
+    the committed fixture. Only reading the model says that. So probe the one object every
+    baseline is guaranteed to have and no test is allowed to leave renamed or deleted —
+    if BASELINE_PROBE_FQN resolves, the re-import landed.
+
+    Best-effort by construction: any failure to read it counts as 'not back' and the caller
+    retries the whole revert+clean cycle. A call TIMEOUT still propagates (see call()).
+    """
+    try:
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [BASELINE_PROBE_FQN]})
+    except E2ECallTimeout:
+        raise
+    except Exception:
+        return False
+    # Require POSITIVE evidence: a non-error result whose body actually says something and
+    # does not report the object missing. An empty body must not read as "baseline is back" —
+    # that is an unexplained response, and treating it as proof is how a stale model slips
+    # through into the next test.
+    text = (r.text or "").strip()
+    return (not r.is_error) and bool(text) and "not found" not in text.lower()
+
+
 def reset_model():
     """Re-sync EDT's in-memory BM model to the on-disk baseline after a write-metadata test.
 
@@ -521,37 +562,64 @@ def reset_model():
     timeout. So: wait for the project to SETTLE first (out-waiting that recompute) so the
     clean is accepted, THEN clean_project (which itself blocks on its own derived-data
     rebuild). Retry if a late-starting recompute re-flags BUILDING between the wait and the
-    call — a successful clean_project is the guarantee the model was actually reset.
+    call.
+
+    A successful clean_project is NOT that guarantee on its own, which is the second race
+    this function has to close. The orchestrator reverts the fixture on disk BEFORE the
+    test's model cleanup, but a metadata write's disk export is ASYNC: EDT can flush the
+    MUTATED state back out DURING the settle wait, i.e. AFTER that revert — and then
+    clean_project faithfully re-imports the mutated disk and still reports ok. Observed on
+    EDT 2026.2 (a renamed Catalog survived a green clean_project and the next test failed
+    on the baseline FQN). Hence, per attempt: settle FIRST so any lagging export has landed,
+    re-revert the disk, THEN clean, and finally VERIFY the baseline is actually back
+    (_baseline_is_back) instead of assuming it. Verification — not a longer timeout — is
+    what makes this correct: the failure is a lost write-back race, not slowness.
     """
-    cleaned = False
-    for _ in range(3):
-        wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
-        try:
-            if not call("clean_project", {"projectName": PROJECT}).is_error:
-                cleaned = True
-                break
-        except E2ECallTimeout:
-            # The one failure a best-effort catch must NOT swallow: the server is still running
-            # that call, so retrying - or reporting success - hides it from the runner, the only
-            # place that can stop the run before the next test reads a model it is still writing.
-            raise
-        except Exception:
-            pass
-    if not cleaned:
-        # Three refusals in a row: the model still carries the finished test's write, and the next
-        # test would read it. That is the cascade this reset exists to prevent, so stop the run
-        # instead of continuing on a model we know is stale.
-        raise E2EModelResetFailed(
-            "clean_project did not succeed in 3 attempts, so the in-memory model still carries "
-            "the last test's write. Continuing would hand it to the next test.")
-    # Final settle: clean_project's revalidation re-triggers derived data; make sure the
-    # next test starts on a fully-indexed model regardless of which branch above we took.
-    # A negative result here is the same hazard as the exhausted-retries branch above (the
-    # model is not guaranteed to be back in sync) and must not be swallowed either.
-    if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
-        raise E2EModelResetFailed(
-            "clean_project succeeded, but the final settle did not report the project ready "
-            "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
+    for _ in range(MODEL_RESET_ATTEMPTS):
+        cleaned = False
+        for _ in range(3):
+            # Settle BEFORE the revert: out-wait the recompute (so the clean is accepted) and
+            # give any lagging disk export time to land, so the revert below is the last write.
+            wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+            # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
+            # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
+            reset_fixture()
+            try:
+                if not call("clean_project", {"projectName": PROJECT}).is_error:
+                    cleaned = True
+                    break
+            except E2ECallTimeout:
+                # The one failure a best-effort catch must NOT swallow: the server is still running
+                # that call, so retrying - or reporting success - hides it from the runner, the only
+                # place that can stop the run before the next test reads a model it is still writing.
+                raise
+            except Exception:
+                pass
+        if not cleaned:
+            # Three refusals in a row: the model still carries the finished test's write, and the next
+            # test would read it. That is the cascade this reset exists to prevent, so stop the run
+            # instead of continuing on a model we know is stale.
+            raise E2EModelResetFailed(
+                "clean_project did not succeed in 3 attempts, so the in-memory model still carries "
+                "the last test's write. Continuing would hand it to the next test.")
+        # Final settle: clean_project's revalidation re-triggers derived data; make sure the
+        # next test starts on a fully-indexed model regardless of which branch above we took.
+        # A negative result here is the same hazard as the exhausted-retries branch above (the
+        # model is not guaranteed to be back in sync) and must not be swallowed either.
+        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+            raise E2EModelResetFailed(
+                "clean_project succeeded, but the final settle did not report the project ready "
+                "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
+        if _baseline_is_back():
+            return
+    # Every attempt reported success and the model STILL does not match the baseline. Continuing
+    # would hand the previous test's mutation to the next one (exactly the cascade this reset
+    # exists to prevent), and the next failure would be reported against an innocent test.
+    raise E2EModelResetFailed(
+        "the model still does not resolve the baseline object %s after %d revert+clean_project "
+        "cycles, even though every clean_project reported ok and the project reported ready. The "
+        "in-memory model does not match the committed fixture; the next test would read the last "
+        "test's write." % (BASELINE_PROBE_FQN, MODEL_RESET_ATTEMPTS))
 
 
 def all_fixtures_status():
