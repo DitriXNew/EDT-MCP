@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com._1c.g5.v8.dt.core.lifecycle.ProjectContext;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
@@ -162,6 +163,8 @@ public final class LifecycleWaiter
         private final CountDownLatch startedLatch = new CountDownLatch(1);
         private final IServiceContextLifecycleListener listener;
         private final long registrationTime;
+        /** Guards {@link #cleanup()} so abandoning a wait cannot double-remove the listener. */
+        private final AtomicBoolean cleaned = new AtomicBoolean(false);
         
         ProjectRestartWaiter(IServicesOrchestrator orchestrator, String projectName)
         {
@@ -260,6 +263,12 @@ public final class LifecycleWaiter
          */
         public void cleanup()
         {
+            // Idempotent: a caller that abandons the wait (clean timeout, early error) cleans up in
+            // a finally, which may run after await() already cleaned up on the normal path.
+            if (!cleaned.compareAndSet(false, true))
+            {
+                return;
+            }
             try
             {
                 orchestrator.removeListener(listener);

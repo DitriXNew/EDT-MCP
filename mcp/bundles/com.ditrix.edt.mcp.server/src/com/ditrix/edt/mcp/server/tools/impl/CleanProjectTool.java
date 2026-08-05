@@ -9,21 +9,23 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IncrementalProjectBuilder;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter.ProjectRestartWaiter;
@@ -37,10 +39,27 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 public class CleanProjectTool implements IMcpTool
 {
     public static final String NAME = "clean_project"; //$NON-NLS-1$
-    
+
     /** Default timeout for waiting project lifecycle restart (3 minutes) */
     private static final long DEFAULT_LIFECYCLE_TIMEOUT_MS = 3L * 60 * 1000;
-    
+
+    /** Input key: bound on the clean-build phase, in seconds. */
+    static final String KEY_TIMEOUT = "timeout"; //$NON-NLS-1$
+
+    /**
+     * Default bound on the clean-build phase (2 minutes). A healthy clean of the whole
+     * phase takes seconds; the bound only has to be far above that, because its job is to
+     * turn a wedged platform call into an honest error instead of an endless MCP request.
+     * Raise it (parameter or preference) for very large configurations.
+     */
+    static final int DEFAULT_CLEAN_TIMEOUT_SECONDS = 120;
+
+    /** Smallest accepted clean-build bound, in seconds. */
+    private static final int MIN_CLEAN_TIMEOUT_SECONDS = 10;
+
+    /** Largest accepted clean-build bound, in seconds. */
+    private static final int MAX_CLEAN_TIMEOUT_SECONDS = 3600;
+
     @Override
     public String getName()
     {
@@ -66,6 +85,11 @@ public class CleanProjectTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "Name of the project to clean (optional, cleans all EDT projects if not specified)") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty(KEY_TIMEOUT, "How long to wait for the clean build itself, in seconds (default " //$NON-NLS-1$
+                + DEFAULT_CLEAN_TIMEOUT_SECONDS + ", clamped to " + MIN_CLEAN_TIMEOUT_SECONDS + ".." //$NON-NLS-1$ //$NON-NLS-2$
+                + MAX_CLEAN_TIMEOUT_SECONDS + "). On expiry the call fails with a timeout error instead of " //$NON-NLS-1$
+                + "waiting forever; the clean may still be running in EDT afterwards. Does not cover the " //$NON-NLS-1$
+                + "subsequent revalidation wait.") //$NON-NLS-1$
             .build();
     }
 
@@ -102,23 +126,67 @@ public class CleanProjectTool implements IMcpTool
             }
         }
         
-        return cleanProject(projectName);
+        return cleanProject(projectName, resolveCleanTimeoutMs(params));
     }
-    
+
     /**
-     * Cleans project and triggers revalidation.
-     * 
-     * <p>To avoid race conditions, lifecycle listeners are registered BEFORE
-     * triggering the clean build operation.
-     * 
+     * Resolves the clean-build bound for this call: the explicit {@code timeout} argument
+     * when given, else the configured per-tool default, clamped to the accepted range.
+     *
+     * @param params the raw tool arguments
+     * @return the bound in milliseconds
+     */
+    static long resolveCleanTimeoutMs(Map<String, String> params)
+    {
+        int configuredDefault = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, KEY_TIMEOUT, DEFAULT_CLEAN_TIMEOUT_SECONDS);
+        int seconds = JsonUtils.extractIntArgument(params, KEY_TIMEOUT, configuredDefault);
+        return clampTimeoutSeconds(seconds) * 1000L;
+    }
+
+    /**
+     * Clamps a clean-build bound to the accepted range.
+     *
+     * @param seconds the requested bound in seconds
+     * @return the accepted bound in seconds
+     */
+    static int clampTimeoutSeconds(int seconds)
+    {
+        if (seconds < MIN_CLEAN_TIMEOUT_SECONDS)
+        {
+            return MIN_CLEAN_TIMEOUT_SECONDS;
+        }
+        return Math.min(seconds, MAX_CLEAN_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * Cleans project and triggers revalidation, bounding the clean build with the
+     * configured per-tool default.
+     *
      * @param projectName name of the project to clean (null for all projects)
      * @return JSON string with result
      */
     public static String cleanProject(String projectName)
     {
+        int configured = ToolParameterSettings.getInstance()
+            .getParameterValue(NAME, KEY_TIMEOUT, DEFAULT_CLEAN_TIMEOUT_SECONDS);
+        return cleanProject(projectName, clampTimeoutSeconds(configured) * 1000L);
+    }
+
+    /**
+     * Cleans project and triggers revalidation.
+     *
+     * <p>To avoid race conditions, lifecycle listeners are registered BEFORE
+     * triggering the clean build operation.
+     *
+     * @param projectName name of the project to clean (null for all projects)
+     * @param cleanTimeoutMs bound on the clean-build phase, in milliseconds
+     * @return JSON string with result
+     */
+    public static String cleanProject(String projectName, long cleanTimeoutMs)
+    {
         try
         {
-            IProgressMonitor monitor = new NullProgressMonitor();
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
 
             // Resolve the set of projects to clean (read-only: validates state and
@@ -135,29 +203,46 @@ public class CleanProjectTool implements IMcpTool
             // This avoids race condition where STOPPED event could be missed
             List<ProjectRestartWaiter> waiters = registerRestartWaiters(projectsToClean);
 
-            // Phase 2: Trigger clean build for all projects
-            for (ProjectCleanInfo info : projectsToClean)
+            try
             {
-                cleanSingleProject(info.project, monitor);
+                // Phase 2: Trigger clean build for all projects, under a hard deadline. Without it
+                // a single wedged platform call holds the MCP request open forever (#349): the
+                // caller eventually dies on its own transport timeout with no answer, no cleanup.
+                String cleanError = runCleanPhase(projectsToClean, cleanTimeoutMs,
+                    (info, monitor) -> cleanSingleProject(info.project, monitor));
+                if (cleanError != null)
+                {
+                    return cleanError;
+                }
+
+                // Phase 3: Wait for lifecycle restarts (STOPPED -> STARTED)
+                for (ProjectRestartWaiter waiter : waiters)
+                {
+                    waiter.await(DEFAULT_LIFECYCLE_TIMEOUT_MS);
+                }
+
+                // Phase 4: Wait for derived data computations
+                for (ProjectCleanInfo info : projectsToClean)
+                {
+                    BuildUtils.waitForDerivedData(info.project);
+                }
+
+                return ToolResult.success()
+                    .put("projectsCleaned", projectNamesList.size()) //$NON-NLS-1$
+                    .put("projects", projectNamesList) //$NON-NLS-1$
+                    .put("message", "Clean and revalidation completed.") //$NON-NLS-1$ //$NON-NLS-2$
+                    .toJson();
             }
-            
-            // Phase 3: Wait for lifecycle restarts (STOPPED -> STARTED)
-            for (ProjectRestartWaiter waiter : waiters)
+            finally
             {
-                waiter.await(DEFAULT_LIFECYCLE_TIMEOUT_MS);
+                // A path that never reaches await() (clean timeout, clean failure, an early return
+                // added later) would otherwise leave the lifecycle listener registered for the rest
+                // of the session. cleanup() is idempotent, so the normal await() path is unaffected.
+                for (ProjectRestartWaiter waiter : waiters)
+                {
+                    waiter.cleanup();
+                }
             }
-            
-            // Phase 4: Wait for derived data computations
-            for (ProjectCleanInfo info : projectsToClean)
-            {
-                BuildUtils.waitForDerivedData(info.project);
-            }
-            
-            return ToolResult.success()
-                .put("projectsCleaned", projectNamesList.size()) //$NON-NLS-1$
-                .put("projects", projectNamesList) //$NON-NLS-1$
-                .put("message", "Clean and revalidation completed.") //$NON-NLS-1$ //$NON-NLS-2$
-                .toJson();
         }
         catch (Exception e)
         {
@@ -225,7 +310,7 @@ public class CleanProjectTool implements IMcpTool
         IDtProject dtProject = dtProjectManager != null ?
             dtProjectManager.getDtProject(project) : null;
 
-        collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
+        collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject, projectName));
         collection.projectNamesList.add(projectName);
     }
 
@@ -248,7 +333,7 @@ public class CleanProjectTool implements IMcpTool
             IProject project = dtProject.getWorkspaceProject();
             if (project != null && project.isOpen())
             {
-                collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject));
+                collection.projectsToClean.add(new ProjectCleanInfo(project, dtProject, project.getName()));
                 collection.projectNamesList.add(project.getName());
             }
         }
@@ -278,6 +363,119 @@ public class CleanProjectTool implements IMcpTool
             }
         }
         return waiters;
+    }
+
+    /**
+     * Phase 2: runs the clean build for every project under a single hard deadline shared by
+     * the whole phase, and translates a missed deadline into an actionable error.
+     *
+     * <p>The work runs in a {@link BoundedJob}, so the platform calls receive a monitor that is
+     * cancelled on expiry AND the caller stops waiting regardless — cancellation alone cannot
+     * preempt a platform call that never polls its monitor.
+     *
+     * @param projectsToClean the projects to clean
+     * @param timeoutMs       the bound for the whole phase, in milliseconds
+     * @param action          the per-project clean action (test seam; production cleans for real)
+     * @return {@code null} when the phase completed, otherwise the error JSON to return as-is
+     */
+    static String runCleanPhase(List<ProjectCleanInfo> projectsToClean, long timeoutMs, ICleanAction action)
+    {
+        // Written by the job thread before each project, read by this thread only after the
+        // deadline elapsed — names the project the clean was sitting on when time ran out.
+        AtomicReference<String> current = new AtomicReference<>(null);
+
+        BoundedJob.Result result = BoundedJob.run(NAME + ": clean build", timeoutMs, monitor -> { //$NON-NLS-1$
+            for (ProjectCleanInfo info : projectsToClean)
+            {
+                // The deadline may have passed while the previous project was cleaning. Stop here
+                // rather than starting another project's clean after the caller already gave up.
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+                current.set(info.name);
+                action.clean(info, monitor);
+            }
+        });
+
+        switch (result.getOutcome())
+        {
+        case TIMED_OUT:
+            return timeoutError(current.get(), timeoutMs);
+        case INTERRUPTED:
+            return ToolResult.error("Project clean was interrupted while waiting for the clean build" //$NON-NLS-1$
+                + onProject(current.get()) + ". The clean may still be running in EDT — check the " //$NON-NLS-1$
+                + "project state with list_projects before retrying.").toJson(); //$NON-NLS-1$
+        case NOT_RUN:
+            return ToolResult.error("The clean build was cancelled before it started, so nothing was " //$NON-NLS-1$
+                + "cleaned. Retry; if it keeps happening, EDT is shutting down or another operation " //$NON-NLS-1$
+                + "is cancelling background jobs.").toJson(); //$NON-NLS-1$
+        default:
+            break;
+        }
+
+        Throwable failure = result.getFailure();
+        if (failure != null)
+        {
+            // Same shape as the surrounding catch: the clean build failed for a real reason.
+            Activator.logError("Error during project clean", failure); //$NON-NLS-1$
+            return ToolResult.error(failure.getMessage()).toJson();
+        }
+        return null;
+    }
+
+    /**
+     * Builds the timeout error: what did not finish, how long we waited, and the levers.
+     *
+     * @param projectName the project the clean was on when time ran out (may be {@code null})
+     * @param timeoutMs   the bound that elapsed, in milliseconds
+     * @return the error JSON
+     */
+    private static String timeoutError(String projectName, long timeoutMs)
+    {
+        long seconds = Math.max(1, Math.round(timeoutMs / 1000.0));
+        // At the ceiling there is no larger value to suggest — advising one would be an
+        // instruction the tool itself would reject.
+        String lever = seconds >= MAX_CLEAN_TIMEOUT_SECONDS
+            ? "This is already the largest accepted '" + KEY_TIMEOUT + "', so the clean is not merely " //$NON-NLS-1$ //$NON-NLS-2$
+                + "slow — look for a stuck build or an EDT operation holding the workspace." //$NON-NLS-1$
+            : "If this configuration legitimately needs longer, pass a larger '" + KEY_TIMEOUT //$NON-NLS-1$
+                + "' (seconds, up to " + MAX_CLEAN_TIMEOUT_SECONDS + ") or raise the default in " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Preferences > MCP Server > Tools > " + NAME + "."; //$NON-NLS-1$ //$NON-NLS-2$
+
+        return ToolResult.error("Clean build did not finish within " + seconds //$NON-NLS-1$
+            + (seconds == 1 ? " second" : " seconds") + onProject(projectName) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Cancellation was requested, but EDT may still be working on it, so the model can be " //$NON-NLS-1$
+            + "mid-rebuild: check list_projects until the project reports 'ready' before relying on " //$NON-NLS-1$
+            + "the model. " + lever).toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Renders the optional " on project 'X'" clause used by the phase-2 error messages.
+     *
+     * @param projectName the project name (may be {@code null} when the phase never started one)
+     * @return the clause, or an empty string when there is no project to name
+     */
+    private static String onProject(String projectName)
+    {
+        return projectName == null || projectName.isEmpty() ? "" : " on project '" + projectName + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The per-project clean action. Production passes {@link #cleanSingleProject}; tests
+     * substitute a controllable action to exercise the deadline without a live workspace.
+     */
+    @FunctionalInterface
+    interface ICleanAction
+    {
+        /**
+         * Cleans one project.
+         *
+         * @param info    the project to clean
+         * @param monitor the bounded job's monitor, cancelled when the deadline elapses
+         * @throws CoreException when the platform refuses the refresh or the build
+         */
+        void clean(ProjectCleanInfo info, IProgressMonitor monitor) throws CoreException;
     }
 
     /**
@@ -319,15 +517,21 @@ public class CleanProjectTool implements IMcpTool
     /**
      * Helper class to store project info for cleaning.
      */
-    private static class ProjectCleanInfo
+    static class ProjectCleanInfo
     {
         final IProject project;
         final IDtProject dtProject;
-        
-        ProjectCleanInfo(IProject project, IDtProject dtProject)
+        /**
+         * Project name captured up front, so a timeout message can name the project without
+         * touching a project the wedged clean may have left mid-lifecycle.
+         */
+        final String name;
+
+        ProjectCleanInfo(IProject project, IDtProject dtProject, String name)
         {
             this.project = project;
             this.dtProject = dtProject;
+            this.name = name;
         }
     }
 }

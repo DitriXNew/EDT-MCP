@@ -28,12 +28,19 @@ layer marks the result isError; assert_error returns that error string.
 
 Parameter shape (from CleanProjectTool.getInputSchema / execute)
 ----------------------------------------------------------------
-There is exactly ONE parameter: projectName (string, OPTIONAL). Omitting it cleans
-ALL open EDT projects (not an error — a real happy branch). There is NO enum, NO XOR
-pair, and NO conditional-required parameter, so the "invalid enum" /
-"mutually-exclusive" / "conditional-required" negatives from the matrix do not apply
-here (documented, not skipped). The reachable negatives are driven entirely by the
-project-state pre-check:
+Both parameters are OPTIONAL: projectName (string) and timeout (integer, seconds).
+Omitting projectName cleans ALL open EDT projects (not an error — a real happy
+branch). timeout bounds the CLEAN BUILD itself (default 120s, clamped to 10..3600):
+on expiry the call returns a timeout error instead of holding the MCP request open
+forever (issue #349); it does NOT bound the revalidation wait that follows. A live
+timeout is not forced here — the fixture cleans in seconds, so a test that tried to
+provoke it would be asserting on EDT's scheduling, not on our contract; the deadline
+itself is proven by CleanProjectToolTest against a controllable clean action. What
+e2e proves is that the parameter is accepted on the wire and does not change the
+success envelope. There is NO enum, NO XOR pair, and NO conditional-required
+parameter, so the "invalid enum" / "mutually-exclusive" / "conditional-required"
+negatives from the matrix do not apply here (documented, not skipped). The reachable
+negatives are driven entirely by the project-state pre-check:
 
   - non-existent project -> the readiness pre-check is now
     ProjectStateChecker.buildingErrorOrNull(projectName), which refuses ONLY the
@@ -189,6 +196,30 @@ def test_empty_projectname_falls_through_to_clean_all():
             'empty projectName must behave like clean-all and include %r: %r' % (PROJECT, projects))
 
     assert_no_diff("empty-name clean-all must not rewrite tracked project files")
+
+
+@e2e_test(tool="clean_project", kind="action")
+def test_explicit_timeout_is_accepted_and_keeps_the_success_envelope():
+    """An explicit `timeout` is accepted on the wire and does not alter the contract.
+
+    The bound exists so a wedged CLEAN_BUILD fails honestly instead of holding the MCP
+    request open forever (#349). A generous value cannot expire on the fixture (a clean
+    here takes seconds), so the observable contract is unchanged: the same success
+    envelope, the fixture among the cleaned projects, the tree untouched. A server that
+    rejected the new parameter as unknown, or that let it leak into the response, fails
+    here."""
+    r = call("clean_project", {"projectName": PROJECT, "timeout": 600})
+    assert_ok(r, "clean_project with an explicit timeout")
+
+    projects, cleaned = _success_envelope(r, "explicit timeout")
+    if PROJECT not in projects:
+        raise AssertionError(
+            "cleaned set must include the requested project %r: %r" % (PROJECT, projects))
+    if cleaned != 1:
+        raise AssertionError(
+            "cleaning a single named project must report projectsCleaned==1: %r" % cleaned)
+
+    assert_no_diff("a bounded clean must still not rewrite tracked project files")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

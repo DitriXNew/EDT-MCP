@@ -150,6 +150,10 @@
         "projectName": {
           "description": "Name of the project to clean (optional, cleans all EDT projects if not specified)",
           "type": "string"
+        },
+        "timeout": {
+          "description": "How long to wait for the clean build itself, in seconds (default 120, clamped to 10..3600). On expiry the call fails with a timeout error instead of waiting forever; the clean may still be running in EDT afterwards. Does not cover the subsequent revalidation wait.",
+          "type": "integer"
         }
       },
       "required": [],
