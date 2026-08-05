@@ -273,12 +273,27 @@ public class GetMetadataObjectsToolTest
     public void testNormalizeMetadataTypeRejectsRecognizedButUncollectedTypeName()
     {
         // MetadataTypeUtils recognizes far more type names than this tool has
-        // collectors for; a type it does NOT collect (Subsystem, XDTOPackage) must
-        // fall through to "not recognized" here rather than silently mis-mapping.
+        // collectors for; a type it does NOT collect (Subsystem, Role) must fall
+        // through to "not recognized" here rather than silently mis-mapping.
         GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
         assertNull(tool.normalizeMetadataType("Subsystem")); //$NON-NLS-1$
-        assertNull(tool.normalizeMetadataType("XDTOPackage")); //$NON-NLS-1$
         assertNull(tool.normalizeMetadataType("Role")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNormalizeMetadataTypeAcceptsXdtoPackageTokens()
+    {
+        // XDTO packages had NO listing route at all, which left the XDTO tools' own advice
+        // ("check the name with get_metadata_objects") pointing nowhere (issue #321).
+        // The configuration collection is "xDTOPackages", so the category token is its
+        // lowercase form - the type name resolves to the same category.
+        String ruXdtoPackage = // ПакетXDTO (XDTOPackage)
+            "\u041F\u0430\u043A\u0435\u0442XDTO"; //$NON-NLS-1$
+        GetMetadataObjectsTool tool = new GetMetadataObjectsTool();
+        assertEquals("xdtopackages", tool.normalizeMetadataType("xdtoPackages")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("xdtopackages", tool.normalizeMetadataType("XDTOPACKAGES")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("xdtopackages", tool.normalizeMetadataType("XDTOPackage")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("xdtopackages", tool.normalizeMetadataType(ruXdtoPackage)); //$NON-NLS-1$
     }
 
     @Test

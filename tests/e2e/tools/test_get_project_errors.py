@@ -11,24 +11,232 @@ the documented "# No Errors Found" branch, which still echoes the project / seve
 objects filter banner. That branch text is produced ONLY when the tool actually ran
 the marker stream and applied the filters, so a broken/no-op tool would fail it.
 
-Read tool => every test also asserts assert_no_diff(): reading problems must never
-mutate the project on disk.
+There are TWO object filters and they behave differently on purpose:
+  * `objects`    - a loose case-insensitive SUBSTRING match over the reported location, with
+                   every structural segment the filter knows normalized to both languages
+                   (the XDTO member grammar is the documented exception - it is English-only
+                   and is not a filter address at all). It makes NO existence claim: a
+                   fragment and a typo are indistinguishable there, so it never emits
+                   objectsNotFound.
+  * `objectFqns` - EXACT model addresses, resolved with the same resolvers the write tools
+                   use. This is the only input that reports back: the response is JSON with
+                   `report` (the Markdown for a human) plus `objectsResolved` /
+                   `objectsNotFound` / `objectsUnsupported`. "Exact" includes the KIND token
+                   of a form member (a FIELD does not answer to a `Button.` address) - the
+                   OWNER's kind in an item-level handler address included - and the
+                   ё/е retry the write tools use (a name typed with ё resolves against the
+                   stored е form).
+                   SELECTION is coarser than ADDRESSING on purpose: EDT indexes a marker on
+                   the object it belongs to, never on a member inside it (an attribute's
+                   problem is reported on `Catalog.X`, a form item's on
+                   `Catalog.X.Form.Y.Form`), so a resolved MEMBER address is scoped to that
+                   owning node. Scoping it to the member alone would match nothing and answer
+                   `objectsResolved` next to "# No Errors Found" - the false all-clear this
+                   input exists to prevent.
+
+Anything that must observe a REAL marker seeds it first (a syntax error written into a
+fixture module with write_module_source, then a forced revalidation): the live marker set
+is outside this file's control, so a test that merely hopes for one is a coin flip.
+Such tests are kind="write-metadata", so the runner reverts the module on disk AND resyncs
+the in-memory model afterwards.
+
+Read tool => every non-seeding test also asserts assert_no_diff(): reading problems must
+never mutate the project on disk. (The seeding tests dirty the module on purpose and are
+cleaned up by the runner instead.)
 
 Real error paths exercised by the negative matrix (read from GetProjectErrorsTool /
 ProjectStateChecker):
   - non-existent projectName -> ProjectStateChecker.buildingErrorOrNull guards only the
     transient BUILDING state, so it falls through to "Project not found: <name>" (names the value)
   - out-of-set severity     -> "severity must be one of: ERRORS, BLOCKER, ..."
+  - objects + objectFqns    -> refused (the two filters have different semantics)
 """
+
+import time
 
 from harness import (
     call, assert_ok, assert_contains, assert_not_contains, assert_error,
     assert_error_quality, assert_no_diff, e2e_test, PROJECT, _fail,
+    wait_for_project_ready,
 )
 
 # A checkId that cannot match any real check id or short UID, so EVERY marker is
 # filtered out and the tool is forced into the documented "# No Errors Found" branch.
 NO_MATCH_CHECK = "zzz_no_such_check_xyz_e2e"
+
+# A catalog that exists in the fixture, a form it owns, and the fixture's common form.
+FIXTURE_CATALOG = "Catalog"
+FIXTURE_FORM = "ItemForm"
+FIXTURE_COMMON_FORM = "Form"
+
+# Two items of that form, with the KIND each one really is. The kind token is part of the
+# address, so an item addressed with the other one's kind must be a miss.
+FIXTURE_FORM_FIELD = "Code"          # xsi:type form:FormField
+FIXTURE_FORM_DECORATION = "Decoration1"  # xsi:type form:Decoration
+
+# A catalog created by the ё-addressing test. create_metadata normalizes 'ё'->'е' in the Name
+# by default, so the object is STORED under the 'е' spelling while the caller may keep typing 'ё'.
+YO_CATALOG_YO = "Полёт"
+YO_CATALOG_YE = "Полет"
+
+# Names that cannot exist in the fixture, so the not-found verdicts are deterministic.
+NO_SUCH_OBJECT = "NoSuchObject_e2e_xyz"
+NO_SUCH_ATTRIBUTE = "NoSuchAttribute_e2e_xyz"
+
+# A handler procedure that is deliberately never written into the form module: binding an event to
+# it is a guaranteed EDT problem ON A FORM ITEM, which is how a form marker gets seeded on demand.
+GHOST_HANDLER_PROC = "E2eGpeGhostHandlerXyz"
+
+# The fixture common module the marker is seeded into. Its NAME is Cyrillic on purpose: the
+# programmatic name must survive the bilingual normalization untouched (only the STRUCTURAL
+# segments are translated), which is exactly what the language-symmetry test relies on.
+SEEDED_MODULE_NAME = "Вычисление"
+SEEDED_MODULE_PATH = "CommonModules/%s/Module.bsl" % SEEDED_MODULE_NAME
+# A bare identifier at module level is not a statement in BSL -> a hard syntax error, the
+# same shape the fixture's own CommonModules/Error/Module.bsl uses.
+SEEDED_BAD_SOURCE = "\nE2eSyntaxProbeXyz\n"
+
+# The address of the seeded module and the nested MODULE segment EDT appends to a BSL
+# problem's location, in both spellings.
+EN_MODULE_OWNER = "CommonModule.%s" % SEEDED_MODULE_NAME
+RU_MODULE_OWNER = "ОбщийМодуль.%s" % SEEDED_MODULE_NAME
+EN_MODULE_KIND = "Module"
+RU_MODULE_KIND = "Модуль"
+
+# The FORM kind token in both languages. Used as the LEADING segment of a loose fragment, which is
+# the shape that used to be looked up in the metadata-TYPE catalogue only.
+EN_FORM_KIND = "Form"
+RU_FORM_KIND = "Форма"
+
+# How long to wait for EDT to publish the seeded marker after the write + revalidation.
+MARKER_POLL_TIMEOUT = 120
+
+
+def _report(result):
+    """The Markdown report of a call, whichever channel carried it.
+
+    A plain call returns Markdown in the text channel; an `objectFqns` call returns the
+    machine payload, which carries the same Markdown in its `report` field.
+    """
+    structured = result.structured
+    if isinstance(structured, dict) and isinstance(structured.get("report"), str):
+        return structured["report"]
+    return result.text or ""
+
+
+def _rows(text):
+    """The problem-table rows of a report - the part that must NOT depend on the filter's
+    LANGUAGE (the banner echoes the requested address verbatim, so two spellings can never
+    produce byte-identical output)."""
+    return [ln for ln in text.splitlines() if ln.startswith("|")]
+
+
+def _rows_for(fqn):
+    """Run the loose `objects` filter for one address and return its problem rows."""
+    r = call("get_project_errors", {"projectName": PROJECT, "objects": [fqn]})
+    assert_ok(r, "objects filter %r" % fqn)
+    return _rows(_report(r))
+
+
+def _assert_verdicts(result, resolved, not_found, unsupported):
+    """Assert the MACHINE-readable address verdicts of an `objectFqns` call.
+
+    `unsupported` is given as a list of FQNs; the payload carries {fqn, reason} entries, and
+    the reason must be non-empty (an unsupported verdict without a reason is unactionable).
+    """
+    structured = result.structured
+    if not isinstance(structured, dict):
+        _fail("an objectFqns call must return structuredContent, got %r" % (structured,))
+    for key, expected in (("objectsResolved", resolved), ("objectsNotFound", not_found)):
+        actual = structured.get(key)
+        if actual != expected:
+            _fail("%s mismatch: expected %r, got %r (payload=%r)"
+                  % (key, expected, actual, structured))
+    actual_unsupported = structured.get("objectsUnsupported")
+    if not isinstance(actual_unsupported, list):
+        _fail("objectsUnsupported must always be emitted as a list, got %r"
+              % (actual_unsupported,))
+    if [e.get("fqn") for e in actual_unsupported] != unsupported:
+        _fail("objectsUnsupported mismatch: expected %r, got %r"
+              % (unsupported, actual_unsupported))
+    for entry in actual_unsupported:
+        if not entry.get("reason"):
+            _fail("an unsupported verdict must carry a reason: %r" % (entry,))
+
+
+def _seed_form_problem_and_wait():
+    """Bind an OnChange handler to a procedure that does not exist and wait for EDT's marker.
+
+    The fixture form has no module at all, so the binding is a guaranteed
+    `form-legacy-check-event-handler` problem - a problem that belongs to a form ITEM. Returns the
+    marker's reported LOCATION, which is the point of the exercise: EDT indexes it on the form
+    CONTENT object, not on the item.
+
+    Fails (rather than skipping) if no marker appears: the assertions that follow would be
+    vacuously true otherwise, which is the false-green this file exists to avoid.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    bound = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "%s.Field.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD),
+        "properties": [{"name": "procedure", "value": GHOST_HANDLER_PROC}],
+    })
+    assert_ok(bound, "binding an OnChange handler to a procedure that does not exist")
+    wait_for_project_ready()
+    call("revalidate_objects", {"projectName": PROJECT, "objects": [form]})
+
+    deadline = time.time() + MARKER_POLL_TIMEOUT
+    last = ""
+    while time.time() < deadline:
+        r = call("get_project_errors", {"projectName": PROJECT, "objects": [form]})
+        assert_ok(r, "polling for the seeded form marker")
+        last = _report(r)
+        for row in _rows(last)[2:]:
+            cells = [c.strip() for c in row.strip("|").split("|")]
+            if len(cells) > 1 and cells[1].startswith(form):
+                return cells[1]
+        time.sleep(2)
+    _fail("no marker appeared on %s within %ds; last report:\n%s"
+          % (form, MARKER_POLL_TIMEOUT, last[:600]))
+    return ""  # unreachable; _fail raises
+
+
+def _seed_bsl_error_and_wait():
+    """Write a syntax error into the fixture common module and wait for EDT's marker.
+
+    Returns the marker's reported LOCATION (the `Location` cell), so a test can build the
+    address spellings from what EDT really renders instead of assuming a script variant.
+
+    Fails (rather than skipping) if no marker appears: without one the assertions that
+    follow would be vacuously true, which is the false-green this file exists to avoid.
+    """
+    w = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": SEEDED_MODULE_PATH,
+        "mode": "append", "source": SEEDED_BAD_SOURCE,
+    })
+    assert_ok(w, "seeding a BSL syntax error into %s" % SEEDED_MODULE_PATH)
+    wait_for_project_ready()
+    # The tool reads EXISTING markers rather than forcing a compile; force one so the poll
+    # below converges instead of racing EDT's background validation.
+    call("revalidate_objects", {"projectName": PROJECT, "objects": [EN_MODULE_OWNER]})
+
+    deadline = time.time() + MARKER_POLL_TIMEOUT
+    last = ""
+    while time.time() < deadline:
+        r = call("get_project_errors", {"projectName": PROJECT, "objects": [EN_MODULE_OWNER]})
+        assert_ok(r, "polling for the seeded marker")
+        last = _report(r)
+        rows = _rows(last)
+        # rows[0] is the header, rows[1] the separator; the first data row is rows[2].
+        if "# Configuration Problems" in last and len(rows) > 2:
+            cells = [c.strip() for c in rows[2].strip("|").split("|")]
+            # Description | Location | Module path | Line | Check code
+            if len(cells) > 1 and cells[1]:
+                return cells[1]
+        time.sleep(2)
+    _fail("no marker appeared for %s within %ds; last report:\n%s"
+          % (EN_MODULE_OWNER, MARKER_POLL_TIMEOUT, last[:600]))
+    return ""  # unreachable; _fail raises
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -130,6 +338,431 @@ def test_fix_column_present_in_both_modes():
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_seeded_marker_is_found_by_both_language_spellings_of_the_filter():
+    """EN and RU spellings of the SAME address must select the SAME rows.
+
+    The live marker set is outside this file's control (see the module docstring), so the
+    marker is CREATED here: a syntax error is written into a fixture common module with the
+    regular write tool and validation is forced. Only then is the filter exercised.
+
+    Regression for the bug where only the leading type token was translated: the Russian
+    nested token was left untouched, matched nothing, and the tool answered "# No Errors
+    Found" - indistinguishable from a genuinely clean object.
+    """
+    location = _seed_bsl_error_and_wait()
+
+    # 1) The OBJECT-level address, in both languages: same rows, and non-empty (the seeded
+    #    marker is in there).
+    en_rows = _rows_for(EN_MODULE_OWNER)
+    ru_rows = _rows_for(RU_MODULE_OWNER)
+    if not en_rows:
+        _fail("the seeded marker must be selectable by %r, got no rows" % EN_MODULE_OWNER)
+    if en_rows != ru_rows:
+        _fail("English and Russian spellings of %r selected different rows:\nEN=%r\nRU=%r"
+              % (EN_MODULE_OWNER, en_rows, ru_rows))
+
+    # 2) The NESTED address, in both languages. The head is taken from the marker's OWN
+    #    reported location, so the pair is built from what EDT really renders rather than
+    #    from an assumption about the configuration's script variant.
+    head = ".".join(location.split(".")[:2])
+    nested_en = "%s.%s" % (head, EN_MODULE_KIND)
+    nested_ru = "%s.%s" % (head, RU_MODULE_KIND)
+    nested_en_rows = _rows_for(nested_en)
+    nested_ru_rows = _rows_for(nested_ru)
+    if not nested_en_rows:
+        _fail("the nested address %r must select the seeded marker at %r, got no rows"
+              % (nested_en, location))
+    if nested_en_rows != nested_ru_rows:
+        _fail("English and Russian spellings of the nested module segment selected different "
+              "rows:\nEN(%s)=%r\nRU(%s)=%r"
+              % (nested_en, nested_en_rows, nested_ru, nested_ru_rows))
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_loose_objects_filter_never_reports_a_fragment_as_missing():
+    """`objects` is a SUBSTRING filter, so it must never claim an entry matched no object.
+
+    A fragment and a typo are indistinguishable there, so the report carries no
+    objectsNotFound at all - not for the fragment that DID select rows, and not for a bogus
+    entry either (that question belongs to `objectFqns`). The seeded marker makes the
+    "selected rows" half deterministic.
+    """
+    _seed_bsl_error_and_wait()
+
+    # A deliberate fragment of the seeded module's address still selects its rows.
+    fragment = EN_MODULE_OWNER[:-2]
+    r = call("get_project_errors", {"projectName": PROJECT, "objects": [fragment]})
+    assert_ok(r, "substring objects filter")
+    assert_contains(_report(r), "Configuration Problems",
+                    "the fragment %r must still select the module's markers" % fragment)
+    assert_not_contains(_report(r), "objectsNotFound",
+                        "a fragment that selected rows must NOT be reported as missing")
+
+    # A bogus entry is equally silent: the loose filter makes no existence claim at all.
+    bogus = call("get_project_errors",
+                 {"projectName": PROJECT, "objects": ["Catalog.%s" % NO_SUCH_OBJECT]})
+    assert_ok(bogus, "objects filter naming a non-existent object")
+    assert_not_contains(_report(bogus), "objectsNotFound",
+                        "the loose filter must make no existence claim, even for a typo")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# objectFqns - the EXACT address filter
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_address_that_exists_is_not_reported_missing_and_a_typo_is():
+    """The core of the exact filter: a real address resolves silently, a typo is NAMED.
+
+    Both verdicts are asserted on the MACHINE-readable payload, not only on the prose, and
+    the existing object is queried with a severity that guarantees an empty result set - so
+    "resolved" cannot be inferred from rows that merely happen to exist.
+    """
+    good = "Catalog.%s" % FIXTURE_CATALOG
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [good], "severity": "NONE"})
+    assert_ok(r, "exact address that exists")
+    _assert_verdicts(r, resolved=[good], not_found=[], unsupported=[])
+    assert_not_contains(_report(r), "objectsNotFound",
+                        "an existing address must never be reported as missing")
+
+    typo = "Catalog.%s" % NO_SUCH_OBJECT
+    bad = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [typo]})
+    assert_ok(bad, "exact address that does not exist")
+    _assert_verdicts(bad, resolved=[], not_found=[typo], unsupported=[])
+    assert_contains(_report(bad), "objectsNotFound",
+                    "the human report must mirror the machine verdict")
+    assert_contains(_report(bad), "get_metadata_objects",
+                    "the report must point at the discovery tool")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_address_partial_success_reports_only_the_miss():
+    """One good address plus one typo: the good one scopes the scan, only the typo is named."""
+    good = "Catalog.%s" % FIXTURE_CATALOG
+    typo = "Catalog.%s" % NO_SUCH_OBJECT
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [good, typo]})
+    assert_ok(r, "exact addresses mixing a real and a non-existent one")
+    _assert_verdicts(r, resolved=[good], not_found=[typo], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_form_member_leaf_is_really_checked():
+    """A form MEMBER address is decided on its LEAF, not absolved by the form containing it.
+
+    The form itself resolves, so a build that judged a member address by its form would call
+    the ghost member found too. Only the real form may resolve.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(r, "the containing form itself")
+    _assert_verdicts(r, resolved=[form], not_found=[], unsupported=[])
+
+    ghost = "%s.Attribute.%s" % (form, NO_SUCH_ATTRIBUTE)
+    m = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost]})
+    assert_ok(m, "a form member that does not exist")
+    _assert_verdicts(m, resolved=[], not_found=[ghost], unsupported=[])
+
+    # A CommonForm member leaf is checked the same way (its members live in the content
+    # model too, while the CommonForm top object resolves on its own).
+    common_ghost = "CommonForm.%s.Attribute.%s" % (FIXTURE_COMMON_FORM, NO_SUCH_ATTRIBUTE)
+    c = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [common_ghost]})
+    assert_ok(c, "a common-form member that does not exist")
+    _assert_verdicts(c, resolved=[], not_found=[common_ghost], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_form_member_kind_must_match_the_element():
+    """A form member is addressed by KIND *and* name: the wrong kind is a MISS, not a clean report.
+
+    The member lookup finds a form item by NAME alone, so `...Form.ItemForm.Button.Code` (where
+    `Code` is a FIELD) would otherwise be called "resolved" and then filter the markers by a kind
+    segment no location ever carries - the caller gets an empty problem report for an address that
+    does not exist, which is exactly the false-clean this input exists to prevent.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+
+    # Each item with its OWN kind: these must resolve.
+    right = ["%s.Field.%s" % (form, FIXTURE_FORM_FIELD),
+             "%s.Decoration.%s" % (form, FIXTURE_FORM_DECORATION)]
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": right, "severity": "NONE"})
+    assert_ok(r, "form members addressed with their own kind")
+    _assert_verdicts(r, resolved=right, not_found=[], unsupported=[])
+
+    # The SAME names with the other item's kind, plus a misspelt kind token: all misses.
+    wrong = ["%s.Button.%s" % (form, FIXTURE_FORM_FIELD),
+             "%s.Field.%s" % (form, FIXTURE_FORM_DECORATION),
+             "%s.Fielld.%s" % (form, FIXTURE_FORM_FIELD)]
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": wrong})
+    assert_ok(w, "form members addressed with a foreign / misspelt kind")
+    _assert_verdicts(w, resolved=[], not_found=wrong, unsupported=[])
+    assert_contains(_report(w), "objectsNotFound",
+                    "the human report must name the wrong-kind addresses")
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_handler_address_must_name_the_owning_items_kind():
+    """An ITEM-LEVEL handler is addressed by the OWNER's kind too, not only by its name.
+
+    The owner lookup finds a form item by NAME alone, exactly like a leaf member lookup does, so
+    `...Form.ItemForm.Button.Code.Handler.OnChange` (where `Code` is a FIELD) and a misspelt
+    `...Fielld.Code...` would otherwise be called "resolved" and then scope the marker scan by a
+    kind segment no location ever carries - a clean problem report for an address that does not
+    exist. The handler is CREATED here (the baseline fixture binds none), so the positive half is
+    a real resolution and not an accident.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    right = "%s.Field.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)
+    bound = call("create_metadata", {
+        "projectName": PROJECT, "fqn": right,
+        "properties": [{"name": "procedure", "value": "E2eGpeCodeOnChange"}],
+    })
+    assert_ok(bound, "binding an OnChange handler on the fixture field")
+    wait_for_project_ready()
+
+    # The owner's OWN kind: the address resolves.
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [right], "severity": "NONE"})
+    assert_ok(r, "handler addressed through its owner's own kind")
+    _assert_verdicts(r, resolved=[right], not_found=[], unsupported=[])
+
+    # A FOREIGN owner kind (Code is a FormField, not a Button) and a misspelt one: both misses.
+    wrong = ["%s.Button.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD),
+             "%s.Fielld.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)]
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": wrong})
+    assert_ok(w, "handler addressed through a foreign / misspelt owner kind")
+    _assert_verdicts(w, resolved=[], not_found=wrong, unsupported=[])
+    assert_contains(_report(w), "objectsNotFound",
+                    "the human report must name the wrong-owner-kind addresses")
+
+    # The EVENT leaf keeps its own say: a real owner with a bogus event is still a miss.
+    ghost_event = "%s.Field.%s.Handler.NoSuchEvent_e2e_xyz" % (form, FIXTURE_FORM_FIELD)
+    g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost_event]})
+    assert_ok(g, "a handler address whose event is bound to nothing")
+    _assert_verdicts(g, resolved=[], not_found=[ghost_event], unsupported=[])
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_loose_fragment_starting_on_a_nested_kind_crosses_languages():
+    """A loose `objects` entry may START on a nested KIND - and must still be bilingual.
+
+    Fragments are documented to begin anywhere in a location, but only the LEADING segment was
+    translated, and only through the metadata-TYPE catalogue. `Форма.ItemForm` is a fragment whose
+    first segment is a nested KIND, so it stayed Russian, matched no English-rendered location, and
+    - because a loose entry deliberately reports no miss - answered with a silently empty report.
+    That is the #312 symptom in the loose mode.
+
+    The marker is seeded here, so "selected nothing" cannot be an accident of the live workspace.
+    """
+    location = _seed_form_problem_and_wait()
+
+    # The English fragment is a literal substring of the location EDT rendered, so it is the
+    # control: whatever it selects, the Russian spelling of the SAME fragment must select too.
+    en_fragment = "%s.%s" % (EN_FORM_KIND, FIXTURE_FORM)
+    ru_fragment = "%s.%s" % (RU_FORM_KIND, FIXTURE_FORM)
+    if en_fragment.lower() not in location.lower():
+        _fail("the control fragment %r must be a substring of the marker location %r"
+              % (en_fragment, location))
+
+    en_rows = _rows_for(en_fragment)
+    if not en_rows:
+        _fail("the control fragment %r selected no rows though the marker is at %r"
+              % (en_fragment, location))
+
+    ru_rows = _rows_for(ru_fragment)
+    if ru_rows != en_rows:
+        _fail("a fragment starting on a nested kind must select the same rows in both languages:\n"
+              "EN(%s)=%r\nRU(%s)=%r" % (en_fragment, en_rows, ru_fragment, ru_rows))
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_form_and_form_member_addresses_really_select_the_forms_problems():
+    """A resolved FORM and a resolved FORM MEMBER must both SELECT rows, not just resolve.
+
+    Every other positive selection test in this file runs on a CommonModule; for forms only the
+    resolution was covered, never the selection - and that is exactly where the addressing and the
+    marker granularity disagree. EDT indexes a form's problems on the form CONTENT object
+    (`<form>.Form`), never on the item that owns them, so a member address scoped to itself matches
+    NOTHING: `objectsResolved` next to "# No Errors Found" on an element that demonstrably has a
+    problem, which is the false all-clear this whole input exists to prevent.
+
+    The marker is part of the ARRANGE (an event bound to a procedure that does not exist), so this
+    does not depend on whatever the live workspace happens to carry.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    location = _seed_form_problem_and_wait()
+
+    # The premise, stated as an assertion: the problem of a form ITEM is reported on the form's
+    # CONTENT object, and the item is nowhere in that location.
+    if not location.startswith(form + "."):
+        _fail("expected the form's problem to be located under %r, got %r" % (form, location))
+    if FIXTURE_FORM_FIELD in location.split(".")[len(form.split(".")):]:
+        _fail("unexpected: the item appears in the marker location %r - re-check the scoping rule"
+              % location)
+
+    # 1) The FORM address selects it (its own address is a prefix of the location).
+    f = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(f, "exact address of the seeded form")
+    _assert_verdicts(f, resolved=[form], not_found=[], unsupported=[])
+    if (f.structured or {}).get("problemsFound", 0) < 1:
+        _fail("the form's own address must select its problem: %r" % (f.structured,))
+
+    # 2) The MEMBER and the item-level HANDLER address must select it too.
+    for member in ("%s.Field.%s" % (form, FIXTURE_FORM_FIELD),
+                   "%s.Field.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)):
+        m = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [member]})
+        assert_ok(m, "exact address of the form member %r" % member)
+        _assert_verdicts(m, resolved=[member], not_found=[], unsupported=[])
+        if (m.structured or {}).get("problemsFound", 0) < 1:
+            _fail("a resolved member must never answer 'no problems' while its form has one "
+                  "(address %r, marker at %r): %r" % (member, location, m.structured))
+        assert_contains(_report(m), location,
+                        "the member's rows must be the form's own rows, location included")
+
+    # 3) The widening must not blur the MISS verdicts: a ghost member and a wrong-kind member are
+    #    still reported missing and select nothing, even though their form has a problem.
+    misses = ["%s.Field.%s" % (form, NO_SUCH_ATTRIBUTE),
+              "%s.Button.%s" % (form, FIXTURE_FORM_FIELD)]
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": misses})
+    assert_ok(w, "ghost / wrong-kind members of a form that HAS a problem")
+    _assert_verdicts(w, resolved=[], not_found=misses, unsupported=[])
+    if (w.structured or {}).get("problemsFound", 0) != 0:
+        _fail("an address that resolved to nothing must select nothing: %r" % (w.structured,))
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_address_written_with_yo_resolves_against_the_stored_ye_name():
+    """An address whose name carries 'ё' resolves against the name stored with 'е'.
+
+    create_metadata normalizes 'ё'->'е' in Names by default, so the object the caller knows as
+    "Полёт" is stored as "Полет". The write/delete tools already retry the normalized spelling;
+    without the same retry here the exact filter declares an existing object missing. The object is
+    CREATED by the test (the baseline fixture has no ё-name), and the runner reverts it afterwards.
+    """
+    created = call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "Catalog." + YO_CATALOG_YO})
+    assert_ok(created, "creating a catalog whose Name carries ё")
+    if (created.structured or {}).get("name") != YO_CATALOG_YE:
+        _fail("the fixture for this test requires the ё->е normalized Name, got %r"
+              % (created.structured,))
+    wait_for_project_ready()
+
+    # BOTH spellings must resolve: the stored one directly, the ё one through the fallback.
+    for requested in ("Catalog." + YO_CATALOG_YE, "Catalog." + YO_CATALOG_YO):
+        r = call("get_project_errors",
+                 {"projectName": PROJECT, "objectFqns": [requested], "severity": "NONE"})
+        assert_ok(r, "exact address %r" % requested)
+        # The verdict keeps the caller's own spelling, whichever one resolved.
+        _assert_verdicts(r, resolved=[requested], not_found=[], unsupported=[])
+
+    # A ё name that exists in NEITHER spelling is still an ordinary miss: the fallback must not
+    # blur the verdict into "everything resolves".
+    ghost = "Catalog.Полёт" + NO_SUCH_OBJECT
+    g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost]})
+    assert_ok(g, "a ё address that exists in neither spelling")
+    _assert_verdicts(g, resolved=[], not_found=[ghost], unsupported=[])
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_form_member_kind_token_accepts_both_numbers_and_both_languages():
+    """Every kind spelling the filter ADVERTISES must also RESOLVE - plurals included.
+
+    The bilingual alias catalogue accepts the singular and the plural of each form kind in both
+    languages, but the form parser knew only a subset. `...Form.ItemForm.Fields.Code` therefore
+    resolved the element by NAME and was then rejected on its KIND, so a field that plainly exists
+    came back in objectsNotFound - the tool refusing an address it documents.
+
+    Severity NONE keeps the row set empty, so `resolved` is a real resolution and not an artefact of
+    rows that happen to exist.
+    """
+    form = "Catalog.%s.Form.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    for kind in ("Field", "Fields", "Поле", "Поля"):
+        address = "%s.%s.%s" % (form, kind, FIXTURE_FORM_FIELD)
+        r = call("get_project_errors",
+                 {"projectName": PROJECT, "objectFqns": [address], "severity": "NONE"})
+        assert_ok(r, "form member addressed with the %r kind token" % kind)
+        _assert_verdicts(r, resolved=[address], not_found=[], unsupported=[])
+
+    # The guarantee is about SPELLING, not about accepting anything: a wrong kind is still a miss,
+    # in the plural too.
+    wrong = "%s.Buttons.%s" % (form, FIXTURE_FORM_FIELD)
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [wrong]})
+    assert_ok(w, "a plural token of the WRONG kind")
+    _assert_verdicts(w, resolved=[], not_found=[wrong], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_exact_address_with_unknown_head_or_kind_is_reported_missing():
+    """An unknown TYPE token and a misspelt KIND token are both plain misses.
+
+    `Catalog.<real>.Fom.ItemForm` has a real head, so a build that judged the address by its
+    head would call it found while the filter matched nothing - the exact failure mode the
+    exact input exists to prevent.
+    """
+    bad_kind = "Catalog.%s.Fom.%s" % (FIXTURE_CATALOG, FIXTURE_FORM)
+    bad_head = "NoSuchType_e2e_xyz.Whatever"
+    r = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [bad_kind, bad_head]})
+    assert_ok(r, "exact addresses with an unknown kind / head")
+    _assert_verdicts(r, resolved=[], not_found=[bad_kind, bad_head], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_xdto_member_address_is_unsupported_not_missing():
+    """An XDTO MEMBER address must be UNSUPPORTED, never "not found".
+
+    EDT reports every problem of an XDTO package on the package itself, so a member address
+    cannot match a marker by construction. Calling it "not found" would be a claim about the
+    model that this tool never verified. The package level stays supported: it is an ordinary
+    resolution, so a non-existent package is an ordinary miss.
+    """
+    for member in ("XDTOPackage.P.ObjectType.T",
+                   "XDTOPackage.P.Property.N",
+                   "XDTOPackage.P.ObjectType.T.Property.N"):
+        r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [member]})
+        assert_ok(r, "XDTO member address %s" % member)
+        _assert_verdicts(r, resolved=[], not_found=[], unsupported=[member])
+        assert_contains(_report(r), "objectsUnsupported",
+                        "the human report must mirror the unsupported verdict")
+        assert_not_contains(_report(r), "objectsNotFound",
+                            "an unsupported address must never be called missing")
+
+    # The PACKAGE level is supported: this fixture has no XDTO package, so the honest verdict
+    # for a package address is an ordinary miss - NOT "unsupported".
+    pkg = "XDTOPackage.NoSuchPackage_e2e_xyz"
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [pkg]})
+    assert_ok(r, "XDTO package-level address")
+    _assert_verdicts(r, resolved=[], not_found=[pkg], unsupported=[])
+    assert_no_diff("reading project errors must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="write-metadata")
+def test_exact_address_scopes_to_problems_inside_the_node():
+    """Selection is "inside the resolved node", not equality with the whole location.
+
+    EDT reports a BSL problem on `CommonModule.X` at location `CommonModule.X.Module`, so an
+    exact filter demanding string equality would report ZERO problems for a module that
+    demonstrably has one. The seeded marker makes this deterministic.
+    """
+    _seed_bsl_error_and_wait()
+
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [EN_MODULE_OWNER]})
+    assert_ok(r, "exact address of the seeded module")
+    _assert_verdicts(r, resolved=[EN_MODULE_OWNER], not_found=[], unsupported=[])
+    assert_contains(_report(r), "Configuration Problems",
+                    "a problem INSIDE the resolved node must be reported")
+    if (r.structured or {}).get("problemsFound", 0) < 1:
+        _fail("problemsFound must count the seeded marker: %r" % (r.structured,))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # NEGATIVE MATRIX
 # ──────────────────────────────────────────────────────────────────────────────
@@ -177,5 +810,23 @@ def test_nonexistent_project_is_rejected():
     # unrelated reason or returns a generic failure).
     assert_contains(
         err.lower(), "project", "non-existent project error must mention the project"
+    )
+    assert_no_diff("a rejected read must not touch the project on disk")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_objects_and_object_fqns_together_are_rejected():
+    """The two object filters answer different questions; combining them is refused rather
+    than silently reinterpreted into one of the two semantics."""
+    r = call("get_project_errors", {
+        "projectName": PROJECT,
+        "objects": ["Catalog.Cat"],
+        "objectFqns": ["Catalog.%s" % FIXTURE_CATALOG],
+    })
+    err = assert_error(r, "both object filters at once")
+    assert_error_quality(
+        err,
+        names=["objects", "objectFqns"],
+        ctx="the refusal names both parameters",
     )
     assert_no_diff("a rejected read must not touch the project on disk")

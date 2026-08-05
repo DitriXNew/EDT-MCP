@@ -45,9 +45,11 @@ via `p2 director`) + the built plugin and boots EDT headless under Xvfb, so the
 conformance client can hit the local `:8765`. Protocol-only conformance needs no
 EDT project and no 1C platform license, so it runs unattended in the cloud.
 
-The plugin is compiled against the 2026.1 target, so this runs the plugin on the
-same EDT version it is built against. The gate stays parameterized by EDT version
-(a thin `conformance-2026.1.yml` caller) so a future matrix is a one-line add.
+The plugin is compiled against the 2026.1 target — the OLDEST supported EDT — so one
+artifact resolves on 2026.1 and 2026.2 alike, and this gate runs it on the NEWEST
+(2026.2: Eclipse 4.38 / Java 25). The gate stays parameterized by EDT version (a thin
+`conformance-2026.2.yml` caller) so a future matrix is a one-line add; EDT version ⇄
+Eclipse base ⇄ JDK is one tuple, so a caller pinning an older EDT passes its own trio.
 
 The headless-EDT boot is new — the first real CI run validates it end-to-end (the
 job uploads the EDT log as an artifact for diagnosis). Until it's confirmed green,

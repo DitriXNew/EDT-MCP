@@ -85,7 +85,7 @@ MCP-клиенты именуют инструменты по-разному. Р
 | Инструмент | Назначение | Когда использовать |
 |---|---|---|
 | `get_problem_summary` | Сводка по числу проблем по проектам и severity | **Первым** — даёт картину одним вызовом |
-| `get_project_errors` | Детальные ошибки. Фильтры: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (подстрока), `objects` (массив FQN), `limit` (default 100, max 1000) | После сводки — для целевого изучения |
+| `get_project_errors` | Детальные ошибки. Фильтры: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (подстрока), `objects` (массив FQN-фрагментов, неточный) ЛИБО `objectFqns` (точные адреса, возвращает `objectsNotFound` / `objectsUnsupported`; взаимоисключаются с `objects`), `limit` (default 100, max 1000) | После сводки — для целевого изучения |
 | `get_markers` | Маркеры workspace — закладки и/или TODO/FIXME-маркеры. Фильтры: `markerKind` (`bookmark`/`task`; без него — оба), `projectName`, `filePath`, `priority` (только для задач) | По запросу или при аудите технического долга |
 
 ### 3. Code Intelligence — навигация и подсказки (7)

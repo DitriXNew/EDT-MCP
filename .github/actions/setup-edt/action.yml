@@ -28,25 +28,33 @@ inputs:
     required: false
     default: "mcp/repositories/com.ditrix.edt.mcp.server.repository/target/repository"
   eclipse-archive:
-    description: "Eclipse Platform 4.30 (2023-12) linux-gtk-x86_64 archive URL"
+    description: >
+      Eclipse Platform linux-gtk-x86_64 archive URL. MUST match the Eclipse base the
+      EDT under test is built on (EDT 2026.2 ⇒ 4.38 / 2025-12; EDT 2026.1 ⇒ 4.30 / 2023-12).
     required: false
-    default: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.30-202312010110/eclipse-platform-4.30-linux-gtk-x86_64.tar.gz"
+    default: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.38-202512010920/eclipse-platform-4.38-linux-gtk-x86_64.tar.gz"
   edt-p2:
     description: "1C:EDT public p2 update-site"
     required: false
-    default: "https://edt.1c.ru/downloads/releases/ruby/2026.1/"
-  eclipse-p2:
-    description: "Eclipse release p2 (for the platform closure)"
+    default: "https://edt.1c.ru/downloads/releases/ruby/2026.2/"
+  java-runtime:
+    description: >
+      The JDK the EDT under test requires at RUNTIME (its p2 requiredJavaVersion):
+      EDT 2026.2 ⇒ 25, EDT 2026.1 ⇒ 17. The caller must have set that JDK up.
     required: false
-    default: "https://download.eclipse.org/releases/2023-12/"
+    default: "25"
+  eclipse-p2:
+    description: "Eclipse release p2 (for the platform closure), matching eclipse-archive"
+    required: false
+    default: "https://download.eclipse.org/releases/2025-12/"
   orbit-p2:
     description: "Eclipse Orbit p2 (commons-codec etc.)"
     required: false
     default: "https://download.eclipse.org/tools/orbit/downloads/drops/R20211213173813/repository/"
   orbit-simrel-p2:
-    description: "Eclipse Orbit aggregation p2 (Batik / SVG)"
+    description: "Eclipse Orbit aggregation p2 (Batik / SVG), matching eclipse-archive"
     required: false
-    default: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.37.0/"
+    default: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.38.0/"
   platform-support-iu:
     description: >
       EDT platform-support feature to also install (match the test config compat
@@ -96,11 +104,14 @@ runs:
         # Key on the inputs that define the IMMUTABLE Eclipse+EDT base (NOT the plugin, which is
         # rebuilt every run and overlaid afterwards) + the served EDT build qualifier. A new EDT
         # build / Eclipse archive / platform-support IU ⇒ a different key ⇒ a fresh install.
-        H=$(printf '%s|%s|%s|%s|%s|%s' \
+        # EVERY repository handed to the director below belongs here: one that changes without
+        # changing the key restores a base assembled from the OLD repo and skips the reinstall.
+        H=$(printf '%s|%s|%s|%s|%s|%s|%s' \
               "${{ inputs.eclipse-archive }}" \
               "${{ inputs.edt-p2 }}" \
               "${{ inputs.eclipse-p2 }}" \
               "${{ inputs.orbit-p2 }}" \
+              "${{ inputs.orbit-simrel-p2 }}" \
               "${{ inputs.platform-support-iu }}" \
               "$EDT_BUILD" | sha256sum | cut -c1-16)
         echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
@@ -231,19 +242,20 @@ runs:
           echo "[setup-edt] will import projects: $EDT_MCP_IMPORT_PROJECTS"
         fi
         echo "[setup-edt] launching EDT under Xvfb (workspace=$WS) ..."
-        # EDT uses Apache Ignite (its BM / derived-data store), which on JDK 17 must reflect
-        # into java.nio / sun.nio.ch (DirectByteBuffer.address) and needs the module system
+        # EDT uses Apache Ignite (its BM / derived-data store), which must reflect into
+        # java.nio / sun.nio.ch (DirectByteBuffer.address) and needs the module system
         # opened up. These --add-modules / --add-opens are exactly what EDT's own 1cedt.ini
-        # ships; WITHOUT them GridUnsafe fails to initialize, the DtProject lifecycle never
-        # completes its LINKING phase, and the imported projects stay 'not_available' forever
-        # (never index). Passing -vmargs on the command line REPLACES the eclipse.ini -vmargs
-        # block, so the required osgi/log4j flags are repeated here too.
+        # ships (unchanged in 2026.2 — only requiredJavaVersion moved 17 → 25); WITHOUT them
+        # GridUnsafe fails to initialize, the DtProject lifecycle never completes its LINKING
+        # phase, and the imported projects stay 'not_available' forever (never index). Passing
+        # -vmargs on the command line REPLACES the eclipse.ini -vmargs block, so the required
+        # osgi/log4j flags are repeated here too.
         xvfb-run -a -s "-screen 0 1920x1080x24" \
           "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \
           --launcher.suppressErrors \
           -vmargs \
           -Xmx4g \
-          -Dosgi.requiredJavaVersion=17 \
+          "-Dosgi.requiredJavaVersion=${{ inputs.java-runtime }}" \
           -Dorg.osgi.framework.bundle.parent=ext \
           -Dosgi.module.lock.timeout=240 \
           -Dlog4j.formatMsgNoLookups=true \

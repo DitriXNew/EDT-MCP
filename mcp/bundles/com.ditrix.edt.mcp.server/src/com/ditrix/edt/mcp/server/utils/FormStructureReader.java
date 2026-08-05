@@ -16,6 +16,8 @@ import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 
+import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 
@@ -39,6 +41,8 @@ public final class FormStructureReader
     private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
     /** EReference name holding the {@code FormAttribute}s on a {@code Form}. */
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
+    /** The columns of a collection-typed form attribute (issue #295). */
+    private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
     /** EReference name holding the {@code FormCommand}s on a {@code Form}. */
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
     /** EAttribute name carrying the programmatic name on a {@code NamedElement}. */
@@ -102,8 +106,13 @@ public final class FormStructureReader
     /** The Russian language CODE; selects the {@code nameRu} event name over the English {@code name}. */
     private static final String LANG_RU = "ru"; //$NON-NLS-1$
 
-    /** Upper bound on total visited item nodes for {@link #render}, guarding a pathological form. */
-    private static final int MAX_NODES = 5000;
+    /**
+     * Upper bound on total visited item nodes for {@link #render}, guarding a pathological form.
+     * Shared with the other whole-form walks (the delete prompt's content count) so one form-wide
+     * traversal budget is stated once: an unbounded recursion would raise a {@code StackOverflowError},
+     * which is an {@link Error} and would escape every {@code catch (Exception)} on the way out.
+     */
+    public static final int MAX_NODES = 5000;
 
     /** The root-owner label used in the Event handlers table for a form-level handler. */
     private static final String FORM_OWNER_LABEL = "(form)"; //$NON-NLS-1$
@@ -216,6 +225,7 @@ public final class FormStructureReader
         sb.append("# Form Structure: ").append(formPath).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
         renderItems(sb, formModel, language);
         renderAttributes(sb, formModel, language);
+        renderAttributeColumns(sb, formModel, language);
         renderCommands(sb, formModel, language);
         renderEventHandlers(sb, formModel, language);
         return sb.toString();
@@ -277,6 +287,43 @@ public final class FormStructureReader
             sb.append(MarkdownUtils.tableRow(nameOf(attribute), titleOf(attribute, language),
                 valueTypeOf(attribute), Boolean.toString(booleanFeature(attribute, FEATURE_MAIN)),
                 Boolean.toString(booleanFeature(attribute, FEATURE_SAVED_DATA))));
+        }
+        sb.append('\n');
+    }
+
+    /**
+     * Renders the {@code ## Attribute columns} table for every COLLECTION attribute (ValueTable /
+     * ValueTree) that has columns - the only place a column is visible, since the attributes table shows
+     * just the owner's own type. The section is OMITTED entirely when no attribute has columns, so a form
+     * without collections renders exactly as before. Issue #295.
+     *
+     * @param sb the output buffer
+     * @param formModel the form content model
+     * @param language the language code for the title column
+     */
+    private static void renderAttributeColumns(StringBuilder sb, EObject formModel, String language)
+    {
+        List<EObject> owners = new ArrayList<>();
+        for (EObject attribute : getReferenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            if (!getReferenceList(attribute, FEATURE_COLUMNS).isEmpty())
+            {
+                owners.add(attribute);
+            }
+        }
+        if (owners.isEmpty())
+        {
+            return;
+        }
+        sb.append("## Attribute columns\n\n"); //$NON-NLS-1$
+        sb.append(MarkdownUtils.tableHeader("Attribute", "Name", "Synonym", "Type")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (EObject owner : owners)
+        {
+            for (EObject column : getReferenceList(owner, FEATURE_COLUMNS))
+            {
+                sb.append(MarkdownUtils.tableRow(nameOf(owner), nameOf(column),
+                    titleOf(column, language), valueTypeOf(column)));
+            }
         }
         sb.append('\n');
     }
@@ -522,10 +569,38 @@ public final class FormStructureReader
         List<String> names = new ArrayList<>();
         for (EObject type : types)
         {
-            String name = stringValue(getValue(type, FEATURE_NAME));
-            names.add(name.isEmpty() ? type.eClass().getName() : name);
+            names.add(typeItemName(type));
         }
         return String.join(", ", names); //$NON-NLS-1$
+    }
+
+    /**
+     * The displayable platform name of one {@code TypeItem}. A type just assigned through
+     * {@code modify_metadata} is a PROXY created by {@code IEObjectProvider} whose raw EMF
+     * {@code name} feature can still be empty; reading it directly would render a perfectly good
+     * {@code Number} column as the bare EClass name {@code TypeItem} - defeating the point of showing
+     * the type at all. {@code McoreUtil} is the proxy-aware accessor the rest of the code uses for
+     * this, with the EClass name kept only as the last resort (issue #295 review).
+     *
+     * @param type one entry of a {@code TypeDescription}'s {@code types} list
+     * @return the platform type name, never {@code null}
+     */
+    private static String typeItemName(EObject type)
+    {
+        if (type instanceof TypeItem)
+        {
+            String resolved = McoreUtil.getTypeName((TypeItem)type);
+            if (resolved == null || resolved.isEmpty())
+            {
+                resolved = McoreUtil.getTypeNameRu((TypeItem)type);
+            }
+            if (resolved != null && !resolved.isEmpty())
+            {
+                return resolved;
+            }
+        }
+        String name = stringValue(getValue(type, FEATURE_NAME));
+        return name.isEmpty() ? type.eClass().getName() : name;
     }
 
     /**
@@ -558,8 +633,17 @@ public final class FormStructureReader
         return String.join(", ", names); //$NON-NLS-1$
     }
 
-    /** The value of a single-valued reference feature, or {@code null} when absent/unset. */
-    private static EObject getSingleReference(EObject object, String featureName)
+    /**
+     * The value of a single-valued reference feature, or {@code null} when absent/unset. Public
+     * alongside {@link #getReferenceList}: a caller walking a form has to reach the SINGULAR
+     * containments too (the auto command bar, a context menu, an extended tooltip), and reading them
+     * through a second hand-rolled accessor is how the two walks drift apart.
+     *
+     * @param object the owner to read from, may be {@code null}
+     * @param featureName the single-valued reference name
+     * @return the referenced object, or {@code null}
+     */
+    public static EObject getSingleReference(EObject object, String featureName)
     {
         if (object == null)
         {

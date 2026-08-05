@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -358,6 +359,25 @@ public class GetConfigurationPropertiesTool implements IMcpTool
             appendScalar(yaml, "defaultLanguage", configuration.getDefaultLanguage().getLanguageCode()); //$NON-NLS-1$
             appendScalar(yaml, "defaultLanguageName", configuration.getDefaultLanguage().getName()); //$NON-NLS-1$
         }
+        // EVERY declared language code, not just the default one: these are the only keys a
+        // localized value (synonym / title / toolTip / ...) may be written under, and a value stored
+        // under any other code is never displayed. Reading a native object's .mdo to learn them was
+        // the documented workaround. Issue #298.
+        List<String> declaredCodes = MetadataLanguageUtils.declaredLanguageCodes(configuration);
+        appendList(yaml, "languages", declaredCodes); //$NON-NLS-1$
+        // Being DECLARED is not the same as being IN USE: a declared code the configuration's own
+        // synonym has no text for is a language nobody is translating into yet, not one a caller
+        // should start filling in on its own say-so - including NStr() literals in BSL, which are
+        // just as invisible under an unused code as a synonym is. Split 'languages' into the two
+        // answers an agent actually needs before writing anything localized: fill in
+        // 'languagesInUse' freely; treat 'languagesNotInUse' as a question for the user, not a todo
+        // list. Reuses the same in-use rule modify_metadata's 'localeUnusedInConfiguration' is built
+        // on, so the two tools never disagree about what "in use" means.
+        List<String> languagesInUse = MetadataLanguageUtils.localesInUse(configuration, declaredCodes);
+        appendList(yaml, "languagesInUse", languagesInUse); //$NON-NLS-1$
+        List<String> languagesNotInUse = new ArrayList<>(declaredCodes);
+        languagesNotInUse.removeAll(languagesInUse);
+        appendList(yaml, "languagesNotInUse", languagesNotInUse); //$NON-NLS-1$
     }
 
     /**

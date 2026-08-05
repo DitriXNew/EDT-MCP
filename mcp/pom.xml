@@ -42,11 +42,14 @@
           <artifactId>sonar-maven-plugin</artifactId>
           <version>5.7.0.6970</version>
         </plugin>
-        <!-- Code-coverage agent + report; used by the tests fragment and the bundle -->
+        <!-- Code-coverage agent + report; used by the tests fragment and the bundle.
+             Kept in step with the agent/CLI the e2e gate uses (0.8.15+, required to
+             instrument the Java 25 class files EDT 2026.2 runs on) so the unit and e2e
+             .exec files merge into one report. -->
         <plugin>
           <groupId>org.jacoco</groupId>
           <artifactId>jacoco-maven-plugin</artifactId>
-          <version>0.8.13</version>
+          <version>0.8.15</version>
         </plugin>
       </plugins>
     </pluginManagement>

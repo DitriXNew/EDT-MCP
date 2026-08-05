@@ -127,8 +127,14 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "is what modify_metadata can set; FQNs may address members (e.g. " + //$NON-NLS-1$
                 "'Catalog.Products.Attribute.Weight'), but NOT a predefined item " + //$NON-NLS-1$
                 "('...Predefined.<Item>' is not resolvable in this mode - its settable surface is " + //$NON-NLS-1$
-                "fixed: description / code / isFolder, plus 'valueType' for a " + //$NON-NLS-1$
-                "ChartOfCharacteristicTypes item only).") //$NON-NLS-1$
+                "FIXED and depends on the OWNER: description / code everywhere; isFolder on a Catalog " + //$NON-NLS-1$
+                "/ ChartOfCharacteristicTypes; valueType (alias 'type') on a " + //$NON-NLS-1$
+                "ChartOfCharacteristicTypes; accountType / offBalance / order / accountingFlags / " + //$NON-NLS-1$
+                "extDimensionTypes on a ChartOfAccounts; base / displaced / leading / " + //$NON-NLS-1$
+                "actionPeriodIsBase on a ChartOfCalculationTypes; and 'parent' at CREATE time only " + //$NON-NLS-1$
+                "(Catalog / ChartOfCharacteristicTypes / ChartOfAccounts). " + //$NON-NLS-1$
+                "modify_metadata names the same set in its own description, and its guide says which " + //$NON-NLS-1$
+                "owner each belongs to).") //$NON-NLS-1$
             .stringProperty("language", //$NON-NLS-1$
                 "Synonym language code, e.g. 'en'/'ru' (default: configuration default)") //$NON-NLS-1$
             .build();
@@ -329,6 +335,30 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
+        // A FORM MEMBER FQN must not fall through to resolveObject either: like the predefined-item
+        // branch above, resolveObject reads only the first two segments, so it would silently render
+        // the OWNING object's details for an address the caller meant as a member - and would do so
+        // whatever the kind segment said, which is the very thing issue #343 is about. The member view
+        // lives behind assignable=true, so say that instead of answering about something else.
+        FormElementWriter.FormMemberRef defaultMemberRef =
+            FormElementWriter.parse(MetadataTypeUtils.normalizeFqn(fqn));
+        if (defaultMemberRef != null)
+        {
+            // A HANDLER address is not renderable by either view (the assignable view never renders
+            // handlers), so it must not be told to retry there - the form's structure is what lists
+            // handlers.
+            boolean handlerRef = FormElementWriter.isHandlerToken(defaultMemberRef.kindToken);
+            failures.add(new String[] { fqn, "this addresses a form " //$NON-NLS-1$
+                + (handlerRef ? "event HANDLER, which this tool renders as part of the form's " //$NON-NLS-1$
+                    + "structure - read the form's own FQN ('" + defaultMemberRef.formPath + "')" //$NON-NLS-1$ //$NON-NLS-2$
+                    : "MEMBER, whose properties render with assignable=true (which also names the " //$NON-NLS-1$
+                        + "kind when the FQN's kind segment is wrong); the whole form's structure " //$NON-NLS-1$
+                        + "renders from the form's own FQN ('" + defaultMemberRef.formPath + "')") //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Rendering the owning object's details instead would answer about something " //$NON-NLS-1$
+                + "else." }); //$NON-NLS-1$
+            return;
+        }
+
         MdObject mdObject = resolveObject(ctx.config, fqn);
         if (mdObject == null)
         {
@@ -391,12 +421,20 @@ public class GetMetadataDetailsTool implements IMcpTool
         FormElementWriter.FormMemberRef memberRef = FormElementWriter.parse(normFqn);
         if (memberRef != null)
         {
+            // The resolution is kind-aware (issue #343), so a wrong / misspelt kind segment is a MISS
+            // here too; the advice (read inside the transaction) names the kind the same-named element
+            // really has, so the reason is not "does not exist" about something the caller can see.
+            String[] kindAdvice = new String[] { "" }; //$NON-NLS-1$
             String memberAssignable =
-                renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef);
+                renderFormMemberAssignable(ctx.config, ctx.bmModel, normFqn, memberRef, kindAdvice);
             if (memberAssignable == null)
             {
-                failures.add(new String[] { fqn, "the form member could not be resolved (the form " //$NON-NLS-1$
-                    + "may have no editable content model, or the element does not exist)" }); //$NON-NLS-1$
+                // With advice the element DOES exist under another kind, so the generic "or the
+                // element does not exist" would contradict the very next clause - drop it there.
+                failures.add(new String[] { fqn, kindAdvice[0].isEmpty()
+                    ? "the form member could not be resolved (the form may have no editable content " //$NON-NLS-1$
+                        + "model, or the element does not exist)" //$NON-NLS-1$
+                    : "the form member could not be resolved" + kindAdvice[0] }); //$NON-NLS-1$
                 return;
             }
             sb.append(memberAssignable);
@@ -969,12 +1007,6 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /**
-     * Resolves a single FQN to its metadata object, or {@code null} when the FQN
-     * is malformed or the object does not exist. A {@code null} result is a
-     * per-object failure (recorded in the machine-readable failures table), never
-     * a whole-call failure.
-     */
-    /**
      * Renders a form's structure (items / attributes / commands) for a form FQN, reusing
      * {@code FormStructureReader}'s resolver + renderer: resolve the {@code BasicForm}, then inside a
      * BM READ transaction reach its editable {@code Form} content and render it to markdown (the
@@ -1102,11 +1134,14 @@ public class GetMetadataDetailsTool implements IMcpTool
      * @param bmModel the (best-effort) BM model; {@code null} yields {@code null}
      * @param normFqn the normalized member FQN, for the section heading
      * @param ref the parsed form-member reference (see {@link FormElementWriter#parse})
+     * @param kindAdviceOut a one-slot out-parameter that receives the kind-mismatch advice (issue
+     *     #343) when the member does not resolve; the model is tx-bound, so it must be read INSIDE the
+     *     read task. Left as the caller's empty default when there is nothing to add.
      * @return the Markdown assignable table, or {@code null} when the BM model is unavailable, the form
      *     has no editable content model, or the member does not exist
      */
     private static String renderFormMemberAssignable(Configuration config, IBmModel bmModel,
-        String normFqn, FormElementWriter.FormMemberRef ref)
+        String normFqn, FormElementWriter.FormMemberRef ref, String[] kindAdviceOut)
     {
         if (bmModel == null)
         {
@@ -1133,6 +1168,13 @@ public class GetMetadataDetailsTool implements IMcpTool
             EObject member = FormElementWriter.resolveFormMember(formModel, ref);
             if (member == null)
             {
+                // A handler FQN has no element kind segment at its leaf (the leaf is the EVENT), and
+                // this view never renders handlers anyway - only a MEMBER address gets kind advice.
+                if (!FormElementWriter.isHandlerToken(ref.kindToken))
+                {
+                    kindAdviceOut[0] = FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                        ref.name, normFqn);
+                }
                 return null;
             }
             return formatAssignable(normFqn, member);
@@ -1180,6 +1222,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         });
     }
 
+    /**
+     * Resolves a single FQN to its metadata object, or {@code null} when the FQN
+     * is malformed or the object does not exist. A {@code null} result is a
+     * per-object failure (recorded in the machine-readable failures table), never
+     * a whole-call failure.
+     */
     private MdObject resolveObject(Configuration config, String fqn)
     {
         // Parse FQN: Type.Name

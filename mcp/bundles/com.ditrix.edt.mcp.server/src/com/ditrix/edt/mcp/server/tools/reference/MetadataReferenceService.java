@@ -27,7 +27,7 @@ import com._1c.g5.v8.bm.core.IBmEngine;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
 import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.dt.common.Functions;
+import com._1c.g5.v8.dt.common.StringUtils;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.mcore.Field;
 import com._1c.g5.v8.dt.mcore.FieldSource;
@@ -1050,7 +1050,13 @@ public class MetadataReferenceService
 
         /**
          * Checks if path is internal/technical and should be filtered out.
-         * EDT doesn't show references from Value types, Form context, Db view defs, etc.
+         * EDT doesn't show references from produced types, form context, db view defs, etc.
+         *
+         * <p>The prefixes are the language-neutral {@link StringUtils#nameToText} renderings of
+         * the derived container features ({@code producedTypes}/{@code formContext}/{@code dbViewDefs}/
+         * {@code standardCommands}) — matched via {@link #getFeatureLabel}, which is also neutral.
+         * They must NOT be the IDE-locale-dependent labels, or the filter silently misses derived
+         * references on a non-English EDT (over-reporting the derived type-system / db-view usages).
          */
         private boolean isInternalPath(String path)
         {
@@ -1059,8 +1065,8 @@ public class MetadataReferenceService
                 return false;
             }
 
-            // Skip paths starting with technical features
-            return path.startsWith("Value types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
+            // Skip paths starting with technical/derived features
+            return path.startsWith("Produced types") || path.startsWith("Form context") //$NON-NLS-1$ //$NON-NLS-2$
                 || path.startsWith("Db view defs") || path.startsWith("Standard commands"); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
@@ -1219,7 +1225,15 @@ public class MetadataReferenceService
         }
 
         /**
-         * Gets the localized label for a feature, following EDT's Functions.featureToLabel() pattern.
+         * Gets a language-neutral label for a feature from its programmatic name.
+         *
+         * <p>Deliberately NOT {@code Functions.featureToLabel()}: that resolves through the IDE
+         * locale ({@code IFeatureNameLocalizationProvider}) and yields Russian labels on a Russian
+         * EDT, which (a) breaks the English-only tool surface and (b) makes {@link #isInternalPath}
+         * miss the derived containers (they stop matching the English prefixes), silently
+         * over-reporting derived type-system / db-view references. {@link StringUtils#nameToText}
+         * is the same neutral fallback EDT itself uses, so the rendering stays deterministic across
+         * locales (e.g. {@code producedTypes} -> "Produced types", {@code dataPath} -> "Data path").
          */
         private String getFeatureLabel(EStructuralFeature feature)
         {
@@ -1229,9 +1243,8 @@ public class MetadataReferenceService
             }
             try
             {
-                // Try to use EDT's localization
-                String label = Functions.featureToLabel().apply(feature);
-                if (label != null)
+                String label = StringUtils.nameToText(feature.getName());
+                if (label != null && !label.isEmpty())
                 {
                     return label;
                 }

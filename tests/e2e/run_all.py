@@ -32,22 +32,30 @@ def parse_args():
     ap.add_argument("--junit-xml", dest="junit", default=None)
     ap.add_argument("--filter", default=None, help="substring filter on test name or tool")
     ap.add_argument("--test-timeout", type=float,
-                    default=float(os.environ.get("MCP_TEST_TIMEOUT", "600")),
-                    help="per-test wall-clock timeout in seconds (default 600). Must exceed the "
-                         "slowest LEGIT test: a write-metadata unit chains the test call + "
-                         "clean_project + wait_for_project_ready, each bounded by MCP_CALL_TIMEOUT "
-                         "(~180s), so keep it well above ~3x that. If a test exceeds the timeout it "
-                         "is FAILED (timeout) and ALL remaining tests are SKIPPED (a hung EDT makes "
-                         "them hang too). No auto-relaunch - restart EDT and re-run.")
+                    default=float(os.environ.get("MCP_TEST_TIMEOUT", "3600")),
+                    help="per-test wall-clock timeout in seconds (default 3600). Must exceed the "
+                         "slowest LEGIT test, and that chain is long: the test call (up to "
+                         "MCP_CALL_TIMEOUT, 600 on CI) plus reset_model, which can spend "
+                         "MODEL_SETTLE_TIMEOUT (600 on CI, pinned there for exactly this reason) "
+                         "BEFORE and after its clean_project. The old 600 - and even 1200 - could report a "
+                         "legitimately slow test as a hang - and the CI maxima already sum to 2400 "
+                         "(call 600 + settle 600 + clean_project 600 + settle 600), so the cap has "
+                         "to sit ABOVE that chain, not on it. That is the one thing this timeout "
+                         "must never do: it FAILS the test and SKIPS all the rest. No auto-relaunch "
+                         "- restart EDT and re-run.")
     return ap.parse_args()
 
 
-def write_junit(results, path, final_clean):
+def write_junit(results, path, final_clean, cleanup_failed=False):
     # Skips are neither pass nor failure: they are reported as JUnit <skipped/> and
     # excluded from the failure count (the gated live-infobase suite skips in a
     # headless run and must not turn the report red).
-    total = len(results) + (0 if final_clean else 1)
-    fails = sum(1 for _, s, _, _ in results if s not in ("pass", "skip")) + (0 if final_clean else 1)
+    # A cleanup that failed is its own synthetic case: without it an all-green run whose
+    # final model sync never completed publishes a green report while the process exits
+    # non-zero, and the report is what the CI check reads.
+    extra = (0 if final_clean else 1) + (1 if cleanup_failed else 0)
+    total = len(results) + extra
+    fails = sum(1 for _, s, _, _ in results if s not in ("pass", "skip")) + extra
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
            '<testsuite name="edt-mcp-e2e" tests="%d" failures="%d">' % (total, fails)]
     for t, status, msg, dur in results:
@@ -69,18 +77,73 @@ def write_junit(results, path, final_clean):
     if not final_clean:
         out.append('  <testcase name="fixture::final_clean">'
                    '<failure>TestConfiguration left dirty after the run</failure></testcase>')
+    if cleanup_failed:
+        out.append('  <testcase name="fixture::final_cleanup">'
+                   '<failure>the final model sync did not complete: the workspace model may still '
+                   'differ from the committed disk</failure></testcase>')
     out.append('</testsuite>')
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
 
 
+# Set when the run is abandoning a worker (a per-test timeout). The worker thread is a daemon
+# that was never actually stopped: if its slow call returns before the process exits, it would
+# walk on into its own post-test cleanup and git-reset files the server may still be writing -
+# the very race the abort is avoiding. It checks this flag before touching anything.
+_ABANDONED = False
+
+
+def abandon_workers(harness):
+    """Give up on a worker we cannot stop: no more MCP calls, no cleanup, from anyone.
+
+    The flag alone is checked only AFTER the test function returns, which is too late for a
+    worker already inside reset_model or inside a test's own teardown - it would resume and
+    keep calling the server the moment its current request came back. So the harness latch is
+    armed as well: from here on every request is refused before it is sent.
+    """
+    global _ABANDONED
+    _ABANDONED = True
+    harness.abort_further_calls(
+        "the run abandoned a test that outlived its timeout, and the server may still be "
+        "working on it")
+
+
 def _run_test_unit(harness, t):
     """All EDT-touching work for ONE test, timed as a unit: the test fn plus, for a
     write-metadata test, its model cleanup (reset_fixture reverts disk; reset_model =
-    clean_project refreshes the in-memory model — the step that actually hung when EDT's
-    ProjectRestartJob wedged). The pre-test reset_fixture is fast local git and is done by
-    the caller OUTSIDE the timeout."""
-    t["func"]()
+    settle + re-revert + clean_project refreshes the in-memory model and VERIFIES it is
+    back on the baseline — the step that actually hung when EDT's ProjectRestartJob
+    wedged). The pre-test reset_fixture is fast local git and is done by the caller
+    OUTSIDE the timeout; reset_model re-reverts inside it because a metadata write's disk
+    export is async and can land AFTER that pre-test revert."""
+    try:
+        t["func"]()
+    except harness.E2ECallTimeout:
+        # Deliberately NO reset: the call may still be running server-side, and reset_model
+        # would race the very write we abandoned (clean_project against a live mutation).
+        # The runner aborts on this, so no later test inherits the state either.
+        raise
+    except harness.E2ESkip:
+        # A skip is not a failed write - it is a test that decided there was nothing to do
+        # (an unsupported seed that committed nothing). Paying the full cleanup budget for it
+        # would be waste at best, and at worst would turn a legitimate skip into a
+        # reset-failed / call-timeout if clean_project happens to be refused just then.
+        raise
+    except BaseException:
+        # Any OTHER failure still leaves the write applied, exactly like a passing test does.
+        # Skipping the reset there is how ONE real failure became two: the next test read a
+        # model that still carried the previous test's rename and reported "object not found".
+        _reset_after_write(harness, t)
+        raise
+    _reset_after_write(harness, t)
+
+
+def _reset_after_write(harness, t):
+    """reset_fixture (disk) + reset_model (in-memory) for a write-metadata test."""
+    if _ABANDONED:
+        # This worker was given up on; the main thread has already decided the fixtures are
+        # not safe to touch. Do not undo that decision from a thread nobody is waiting for.
+        return
     if t.get("kind") == "write-metadata":
         harness.reset_fixture()
         harness.reset_model()
@@ -103,6 +166,10 @@ def _run_with_timeout(harness, t, timeout_s):
         try:
             _run_test_unit(harness, t)
             box["r"] = ("pass", "")
+        except harness.E2ECallTimeout as e:
+            box["r"] = ("call-timeout", str(e))
+        except harness.E2EModelResetFailed as e:
+            box["r"] = ("reset-failed", str(e))
         except harness.E2ESkip as e:
             box["r"] = ("skip", str(e))
         except harness.E2EAssertion as e:
@@ -114,6 +181,9 @@ def _run_with_timeout(harness, t, timeout_s):
     th.start()
     th.join(timeout_s)
     if th.is_alive():
+        # The worker is still running and cannot be stopped. Tell it to skip its own cleanup
+        # before we return: from here on nobody may touch the fixtures, this thread included.
+        abandon_workers(harness)
         return ("timeout",
                 "TIMEOUT: test exceeded %gs and was considered FAILED. EDT is likely hung "
                 "(e.g. clean_project / ProjectRestartJob wedged); the remaining tests are "
@@ -165,8 +235,20 @@ def main():
         except Exception as e:  # noqa: BLE001
             print("(could not read list_projects: %s)" % e)
         sys.exit(2)
-    harness.final_cleanup()  # clean start: revert BOTH fixtures + sync EDT model so the run
-                             # does not begin on a stale extension edit (e.g. a manual experiment)
+    try:
+        harness.final_cleanup()  # clean start: revert BOTH fixtures + sync EDT model so the run
+                                 # does not begin on a stale extension edit (e.g. a manual run)
+    except harness.E2ECallTimeout as e:
+        # The server did not answer the very first call: nothing to run against, and a traceback
+        # here would bury the reason.
+        print("!! setup cleanup timed out: %s" % e)
+        sys.exit(2)
+    except harness.E2EModelResetFailed as e:
+        # Every call RETURNED (nothing hung), but clean_project could not be gotten to succeed,
+        # so the model is not verifiably in sync before a single test has run - nothing to run
+        # against that would be trustworthy either.
+        print("!! setup cleanup could not sync the model: %s" % e)
+        sys.exit(2)
 
     # Each test (incl. its write-metadata model cleanup, see _run_test_unit) runs under a
     # per-test wall-clock timeout. If a test exceeds it, EDT is almost certainly hung (the
@@ -175,11 +257,20 @@ def main():
     # full timeout. No EDT auto-relaunch — restart it and re-run.
     results = []
     aborted_after = None
+    # Set for EITHER race that can leave a live worker behind: a per-CALL timeout (the server
+    # never answered) or a per-TEST timeout (the worker THREAD is still alive when --test-timeout
+    # elapses - it was only abandoned, never actually stopped, so it may still be blocked inside
+    # that same kind of unresponsive call, or inside its own reset_model()). Both mean the same
+    # thing to the cleanup below: a git reset now could race a write the server may still be
+    # performing. "reset-failed" is NOT one of these - every call involved already RETURNED
+    # (clean_project came back isError, not hung), so there is no live worker to race.
+    still_running_in = None
+    cleanup_failed = False
     for t in tests:
         if aborted_after is not None:
             results.append((t, "skip",
-                            "skipped: run aborted after a TIMEOUT in %s (EDT likely hung; "
-                            "restart it and re-run)" % aborted_after, 0.0))
+                            "skipped: run aborted after a TIMEOUT in %s (EDT is still busy or "
+                            "hung; restart it and re-run)" % aborted_after, 0.0))
             print("[%-7s] %s::%s - aborted after timeout in %s"
                   % ("SKIP", t["tool"], t["name"], aborted_after))
             continue
@@ -191,16 +282,43 @@ def main():
         head = msg.splitlines()[0] if msg else ""
         print("[%-7s] %s::%s (%.2fs)%s" % (status.upper(), t["tool"], t["name"], dur,
                                            " - " + head if head else ""))
-        if timed_out:
+        # A per-CALL timeout aborts the run for the same reason a per-TEST one does: the server
+        # is still busy with work we cannot cancel, and every later test would be reading a
+        # model it is still writing.
+        if timed_out or status in ("call-timeout", "reset-failed"):
             aborted_after = "%s::%s" % (t["tool"], t["name"])
+            if timed_out or status == "call-timeout":
+                still_running_in = aborted_after
 
     # Final cleanliness guarantee across BOTH fixtures (base + extension). On a normal run,
     # full cleanup (revert + EDT model sync) so a stale model can't autosave changes back
-    # after the run. On an ABORT the EDT is wedged, so model-sync would hang — do git-only.
-    if aborted_after:
+    # after the run. When a live worker may still be running (a per-CALL OR per-TEST timeout),
+    # any reset - even git-only - would race it, so leave the tree alone. Any OTHER abort (e.g.
+    # reset-failed: clean_project came back isError, not hung) has no live worker to race, so a
+    # git-only reset is still safe.
+    if still_running_in is not None and aborted_after == still_running_in:
+        # The server may still be writing these very files (or the abandoned worker may still be
+        # inside its own reset_model()): a git reset now races EDT (it can rename/overwrite
+        # underneath us, or re-dirty right after). Leave the tree alone - the run is over, and
+        # the workspace is disposable.
+        print("!! left the fixtures untouched: %s may still be running server-side" % aborted_after)
+    elif aborted_after:
         harness.reset_all_fixtures()
     else:
-        harness.final_cleanup()
+        try:
+            harness.final_cleanup()
+        except harness.E2ECallTimeout as e:
+            # Do not lose the summary and the JUnit report over a cleanup that hung - but do not
+            # call the run green either: the server may still be finishing that clean_project and
+            # can re-dirty the fixture right after the status check below.
+            print("!! final cleanup timed out (fixtures may be dirty): %s" % e)
+            cleanup_failed = True
+        except harness.E2EModelResetFailed as e:
+            # Same idea, different failure mode: every call RETURNED (nothing hung), but
+            # clean_project kept refusing (or the final settle never reported ready), so the
+            # model may still be out of sync. Do not call the run green over that either.
+            print("!! final cleanup could not sync the model: %s" % e)
+            cleanup_failed = True
     final_clean = (harness.all_fixtures_status() == "")
 
     npass = sum(1 for _, s, _, _ in results if s == "pass")
@@ -218,12 +336,14 @@ def main():
         print("!! fixtures left dirty after cleanup:\n%s" % harness.all_fixtures_status()[:500])
 
     if args.junit:
-        write_junit(results, args.junit, final_clean)
+        write_junit(results, args.junit, final_clean, cleanup_failed)
         print("junit -> %s" % args.junit)
 
     # A skip is neither pass nor fail: the run is green when nothing FAILED and the
     # fixture is clean (skipped gated tests do not block a headless green run).
-    sys.exit(0 if (nfail == 0 and final_clean) else 1)
+    # A cleanup that timed out is a failed run even when every test passed and the tree LOOKS
+    # clean: the server may still be finishing that call and can re-dirty it after this check.
+    sys.exit(0 if (nfail == 0 and final_clean and not cleanup_failed) else 1)
 
 
 if __name__ == "__main__":

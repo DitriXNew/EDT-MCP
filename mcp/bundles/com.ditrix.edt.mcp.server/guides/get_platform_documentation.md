@@ -4,7 +4,23 @@ Returns 1C:Enterprise *platform* API documentation (the built-in language and ty
 
 - You need the exact signature, parameters or return value of a platform method or property.
 - You are unsure which members a platform type exposes.
+- You need the VALUES of a system enumeration (e.g. `DateFractions`, `AccessTokenSignAlgorithm`).
 - You need a global built-in function's description.
+
+## What the output carries
+
+A **system enumeration** renders a `Values` section listing every value as `<Enum>.<Value>` (with the
+Russian equivalent when it differs). Such a type is not constructible, so it has no `Constructors`
+section.
+
+`detailed` output is enriched from the platform's own documentation (the syntax helper) when it is
+available: the description of the type, of each method and of each property, plus what a method
+returns. A documented return is rendered next to the modelled type (`**Returns:** ChartValue - <what
+it means>`); when the model records no return at all but the documentation describes one, it is
+labelled `**Returns (from the platform documentation):**` so a documented sentence is never mistaken
+for a modelled type. A method the documentation describes as a procedure has neither, and nothing is
+invented for it. On an EDT where the syntax helper is unavailable the output is exactly the
+model-only one.
 
 ## Parameter details
 

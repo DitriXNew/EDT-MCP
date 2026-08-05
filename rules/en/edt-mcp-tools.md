@@ -84,7 +84,7 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_problem_summary` | Problem counts by project and severity | **First** — gives the full picture in one call |
-| `get_project_errors` | Detailed errors. Filters: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (substring), `objects` (FQN array), `limit` (default 100, max 1000) | After the summary — for targeted investigation |
+| `get_project_errors` | Detailed errors. Filters: `projectName`, `severity` (ERRORS/BLOCKER/CRITICAL/MAJOR/MINOR/TRIVIAL), `checkId` (substring), `objects` (loose FQN-fragment array) OR `objectFqns` (exact addresses, reports `objectsNotFound` / `objectsUnsupported`; mutually exclusive with `objects`), `limit` (default 100, max 1000) | After the summary — for targeted investigation |
 | `get_markers` | Workspace markers — bookmarks and/or TODO/FIXME task markers. Filters: `markerKind` (`bookmark`/`task`; omit = both), `projectName`, `filePath`, `priority` (task-only) | On request or during a technical-debt audit |
 
 ### 3. Code Intelligence (7)

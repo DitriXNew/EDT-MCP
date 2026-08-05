@@ -28,6 +28,15 @@ bash source/compile.sh --skip-tests
 - **The first build is slow**: Tycho pulls the EDT p2 repository (`edt.1c.ru`) + the Eclipse SDK (hundreds of MB). Once the caches are warm (`~/.m2/repository/p2`, `.cache/tycho`) it runs in ~1 minute. If the caches are absent and there's no network, the build legitimately can't run — say so, don't fake "green".
 - **Unit tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` is the real proof for Java edits; grep only catches anchor/text problems.
 
+## Live redeploy (Tier 2 — the only proof of runtime behaviour)
+
+A green build proves Java logic; only a redeploy proves a tool's schema, description, response and behaviour. The loop itself (non-elevated EDT copy, `edt-redeploy.ps1`, `MCP server UP on 8765`, exit 1 ≠ failure, anti-stale jar check, kill + `-clean` when EDT wedges) is in `edt-mcp-testing` and `edt-mcp-ready-to-deploy`. The traps that belong to the build:
+
+- **Redeploy without a `-Build` flag only swaps the LAST built jar** — run `compile.sh` first (or pass `-Build`), else you ship stale code and validate the previous build.
+- **Kill the whole stand before swapping**: `taskkill /IM 1cedt.exe /T /F`, plus `1cv8.exe` if an infobase is running. Terminate both again when done.
+- **Inspect payloads with `Invoke-RestMethod`** (PowerShell), not `curl` — curl mangles nested JSON. Tools with a JSON responseType put the data in `result.structuredContent`; `content[0].text` is only a `Done`/`Error` placeholder.
+- **Infobase-dependent tools** (debug / run / YAXUnit / profiling) need the infobase (or a `debug_launch`) started first.
+
 ## Unit tests — conventions
 
 - One `XxxToolTest` per tool (`tools/impl/`), JUnit4.

@@ -6,9 +6,11 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 
@@ -17,11 +19,15 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
+import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -63,12 +69,80 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
 /**
  * Deletes a metadata node (a top-level object or a subordinate member) addressed by a 1C full-name
- * FQN, cascading the cleanup of every reference (BSL code, forms, other metadata) via EDT's
- * md-refactoring service. Two-phase: a bare call previews the affected references; {@code confirm=true}
+ * FQN. A TOP-LEVEL object, and an mdclass MEMBER of one, goes through EDT's md-refactoring
+ * service, which cascades the cleanup of every reference it CAN clean (BSL code, forms, other
+ * metadata); one it cannot blocks the delete instead. A member living inside another object's own
+ * content (an owned form object, a form member, an XDTO package member) is removed from that
+ * container directly, with no CROSS-object cascade - only the owner's own pointers (a default-form
+ * setting naming the deleted form) are cleaned.
+ * Two-phase: a bare call previews the affected references; {@code confirm=true}
  * performs the delete. Replaces the former {@code delete_metadata_object}.
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /**
+     * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
+     * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
+     * a unit test substitutes a requester answering REJECT / TIMEOUT to prove the write never runs
+     * (issue #331 / #295 review).
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
+    private final ConsentRequester consentRequester;
+
+    /** Production instance: consent goes to the real gate. */
+    public DeleteMetadataTool()
+    {
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+    }
+
+    /**
+     * Test seam constructor.
+     *
+     * @param consentRequester the consent source to use instead of the singleton gate
+     */
+    DeleteMetadataTool(ConsentRequester consentRequester)
+    {
+        this.consentRequester = consentRequester;
+    }
+
+    /**
+     * The authorization point of the FORM delete branches: asks, and invokes {@code write} ONLY on
+     * ALLOW, so "did we ask before mutating?" is one question for both of them instead of one per
+     * call site.
+     *
+     * <p>It is NOT the tool's only gate, and this javadoc used to claim it was: the mdclass
+     * top-object / member deletes and the XDTO delete still call
+     * {@link DestructiveConsentGate#getInstance()} directly (see the {@code requireConsent} call
+     * sites below). Those paths are older than the form branches and are not routed through here
+     * yet; at least the XDTO one asks BEFORE it looks its target up, so a typo raises a destructive
+     * prompt and only then answers "not found" - the ordering defect this branch fixed for the form
+     * paths. Recorded rather than quietly widened: rerouting them is a change to code this branch
+     * does not otherwise touch.</p>
+     *
+     * @param preview what the user is being asked to authorize
+     * @param write the mutation, invoked only when consent is granted
+     * @return the mutation's result, or the refusal error
+     */
+    String deleteWithConsent(ConsentPreview preview, java.util.function.Supplier<String> write)
+    {
+        DestructiveConsentGate.ConsentDecision decision = consentRequester.request(NAME, preview);
+        if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+        }
+        return write.get();
+    }
+
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
 
     /** Output key: title of the delete refactoring (preview). */
@@ -107,12 +181,21 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "'...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item " //$NON-NLS-1$
             + "'<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / " //$NON-NLS-1$
             + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
-            + "addressed by a 1C full-name FQN, cascading the cleanup of all " //$NON-NLS-1$
-            + "references in BSL code, forms and other metadata. Two-phase: call without confirm to " //$NON-NLS-1$
+            + "addressed by a 1C full-name FQN. Two-phase: call without confirm to " //$NON-NLS-1$
             + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
-            + "If the node is still referenced by metadata the refactoring cannot auto-clean, a " //$NON-NLS-1$
-            + "confirm=true delete is BLOCKED and the referencing objects are listed; pass force=true " //$NON-NLS-1$
-            + "to delete anyway (those references are left dangling). " //$NON-NLS-1$
+            + "A top-level object - and equally an mdclass MEMBER of one (attribute / tabular " //$NON-NLS-1$
+            + "section / dimension / resource / enum value) - goes through EDT's md-refactoring, " //$NON-NLS-1$
+            + "which CASCADES the cleanup of " //$NON-NLS-1$
+            + "references in BSL code, forms and other metadata; when a reference cannot be " //$NON-NLS-1$
+            + "auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed " //$NON-NLS-1$
+            + "- pass force=true to delete anyway and leave those references dangling. A PREDEFINED " //$NON-NLS-1$
+            + "item is checked for incoming references the same way. An owned FORM object, a FORM " //$NON-NLS-1$
+            + "member and an XDTO package member are removed from their own container instead: " //$NON-NLS-1$
+            + "nothing blocks them (force is ignored), and no CROSS-object cascade runs - a " //$NON-NLS-1$
+            + "reference from elsewhere (a field's dataPath, a Property whose type points at the " //$NON-NLS-1$
+            + "deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details. Only the " //$NON-NLS-1$
+            + "owner's OWN pointers are cleaned: deleting an owned form clears the default-form " //$NON-NLS-1$
+            + "settings that named it. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
@@ -188,6 +271,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
+            String columnErr = FormElementWriter.columnAddressingError(formRef);
+            if (columnErr != null)
+            {
+                return ToolResult.error(columnErr).toJson();
+            }
             return deleteFormMember(ctx, normFqn, formRef, confirm);
         }
 
@@ -526,6 +614,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     // ==================== FORM members (cross-model hop) ====================
 
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager manager = Activator.getDefault().getV8ProjectManager();
+        IV8Project project = manager != null ? manager.getProject(ctx.project) : null;
+        return project != null ? project.getVersion() : null;
+    }
+
     /**
      * Deletes a FORM member (item / attribute / command / handler) addressed by a form FQN. The member
      * lives on the editable Form content model, so it is removed directly with {@link EcoreUtil#remove}
@@ -547,10 +643,26 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 "Form not found for '" + normFqn + "'. Address a form member as " //$NON-NLS-1$ //$NON-NLS-2$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
                     + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table / " //$NON-NLS-1$
+                    + "Column on a collection attribute / " //$NON-NLS-1$
                     + "Handler)."); //$NON-NLS-1$
-            return confirm
-                ? performFormDelete(fctx, normFqn, ref, handler)
-                : buildFormDeletePreview(fctx, normFqn, ref, handler);
+            // The #343 advice may quote a corrected handler address, and whether the corrected
+            // owner really carries that event is a question only the platform type can answer.
+            final Version version = platformVersionOf(ctx);
+            if (!confirm)
+            {
+                return buildFormDeletePreview(fctx, normFqn, ref, handler, version);
+            }
+            // Resolve and read the real preview BEFORE asking: a typo must answer "not found"
+            // without ever raising a destructive dialog, and the prompt must list what will actually
+            // be removed. The gate is the LAST check before the write, and runs outside any
+            // transaction because it may block on a UI dialog (issue #331 / #295 review).
+            FormDeletePreview data = readFormDeletePreview(fctx, ref, handler, normFqn, version);
+            if (!data.found)
+            {
+                return formMemberNotFound(ref, handler, data.kindAdvice);
+            }
+            return gateFormMemberDelete(normFqn, ref, handler, data,
+                () -> performFormDelete(fctx, normFqn, ref, handler, version));
         }
         catch (Exception e)
         {
@@ -578,43 +690,228 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return FormElementWriter.resolveFormMember(formModel, ref);
     }
 
-    private static String formMemberNotFound(FormElementWriter.FormMemberRef ref, boolean handler)
+    /**
+     * The "not found" error for a form delete target. {@code advice} is the kind-mismatch tail computed
+     * INSIDE the transaction (see {@link FormElementWriter#kindMismatchAdvice}): the resolution is
+     * kind-aware (issue #343), so an address whose kind segment names another element's kind must say
+     * which kind the same-named element really has instead of a bare "not found". Empty when there is
+     * nothing to add, in which case the generic pointer is kept verbatim.
+     */
+    private static String formMemberNotFound(FormElementWriter.FormMemberRef ref, boolean handler,
+        String advice)
     {
         if (handler)
         {
+            // A non-empty advice here is only produced when the OWNER itself did not resolve (see
+            // formTargetAdvice), so the miss is the owner's, not the handler's - saying "no event
+            // handler" would blame the wrong thing about an element that does have one. The subject
+            // follows the OWNER's token: a Command address misses a form COMMAND, not an item.
+            if (!advice.isEmpty())
+            {
+                boolean commandOwner = FormElementWriter.kindForToken(ref.itemKindToken)
+                    == FormElementWriter.Kind.COMMAND;
+                return ToolResult.error((commandOwner ? "Form command not found: " //$NON-NLS-1$
+                    : "Form item not found: ") + ref.itemName + " (kind '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + ref.itemKindToken + "') on " + ref.formPath + advice).toJson(); //$NON-NLS-1$
+            }
             return ToolResult.error("No event handler for '" + ref.name + "' on " //$NON-NLS-1$ //$NON-NLS-2$
                 + (ref.isItemLevel() ? ref.formPath + "." + ref.itemName : ref.formPath) //$NON-NLS-1$
                 + ". Use get_metadata_details to list the handlers.").toJson(); //$NON-NLS-1$
         }
         return ToolResult.error("Form member not found: " + ref.name + " (kind '" + ref.kindToken //$NON-NLS-1$ //$NON-NLS-2$
-            + "') on " + ref.formPath + ". Use get_metadata_details to list the members.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            + "') on " + ref.formPath //$NON-NLS-1$
+            + (advice.isEmpty() ? ". Use get_metadata_details to list the members." : advice)) //$NON-NLS-1$
+            .toJson();
     }
 
-    /** Preview inside a READ transaction (no mutation): capture the target type + item descendants. */
-    private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+    /**
+     * The kind-mismatch advice for a delete target that did not resolve, computed on the tx-bound form
+     * model: for an ITEM-LEVEL handler address the OWNER's kind segment is the one that can be wrong,
+     * for a member address the leaf's. A FORM-LEVEL handler address ({@code ...Form.F.Handler.OnOpen})
+     * carries no element kind segment at all - its leaf is an EVENT name - so it has no advice.
+     *
+     * <p>For a handler the advice is asked for ONLY when the owner itself did not resolve. Otherwise a
+     * genuinely missing handler on a resolved owner would pick up advice about a same-named element of
+     * another kind ({@code ...Command.Sync.Handler.Action} on an existing command {@code Sync} while a
+     * BUTTON {@code Sync} also exists) and report an owner miss that did not happen.</p>
+     */
+    private static String formTargetAdvice(EObject formModel, FormElementWriter.FormMemberRef ref,
+        boolean handler, String normFqn, Version version)
     {
-        FormDeletePreview data = FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
+        if (handler)
+        {
+            return FormElementWriter.resolveHandlerContainer(formModel, ref) != null
+                ? "" //$NON-NLS-1$
+                : FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref, normFqn, version);
+        }
+        return FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken, ref.name, normFqn);
+    }
+
+    /**
+     * The FORM-MEMBER branch's authorization step: builds the prompt from what the preview actually
+     * found and hands the branch's write to {@link #deleteWithConsent}. Package-private and taking the
+     * write as a parameter so a unit test can drive THIS branch's dispatch without an EDT context -
+     * proving the branch is wired to the gate, not merely that the gate works (issue #331 review).
+     *
+     * @param normFqn the normalized FQN being deleted
+     * @param ref the parsed form-member ref
+     * @param handler whether the FQN addresses an event handler
+     * @param data what the read preview found
+     * @param write this branch's mutation
+     * @return the mutation's result, or the refusal error
+     */
+    String gateFormMemberDelete(String normFqn, FormElementWriter.FormMemberRef ref, boolean handler,
+        FormDeletePreview data, java.util.function.Supplier<String> write)
+    {
+        // The breakdown is DERIVED from what the walk actually found, not a fixed phrase naming the
+        // kinds the walk used to follow: the prompt named "nested items, attribute columns" while an
+        // event handler and a command's action went along unmentioned (issue #295 review).
+        ConsentPreview preview = new ConsentPreview(
+            handler ? "Delete form event handler" : "Delete form member", //$NON-NLS-1$ //$NON-NLS-2$
+            data.descendants.isEmpty()
+                ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
+                : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
+                    + " contained member(s) (" + data.describeDescendants() + ")" //$NON-NLS-1$ //$NON-NLS-2$
+                    + data.truncationNote() + " from " + ref.formPath + '.', //$NON-NLS-1$
+            1 + data.descendants.size(), Collections.singletonList(normFqn));
+        return deleteWithConsent(preview, write);
+    }
+
+    /**
+     * The owned-FORM branch's authorization step, the twin of {@link #gateFormMemberDelete}: the
+     * prompt is built from what the form's content ACTUALLY holds, read before this is called. A
+     * constant "1" understated every form delete - the user authorized one element while the whole
+     * {@code Form.form} (its items, attributes, columns and commands) went with it, which is exactly
+     * what issue #331's acceptance criteria ask the prompt to say.
+     *
+     * @param normFqn the normalized form FQN being deleted
+     * @param content what the form's content model holds
+     * @param write this branch's mutation
+     * @return the mutation's result, or the refusal error
+     */
+    String gateFormObjectDelete(String normFqn, FormContentSummary content,
+        java.util.function.Supplier<String> write)
+    {
+        return deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
+            "Removes the form and its content" //$NON-NLS-1$
+                + (content.isEmpty() ? "" : " (" + content.describe() + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + content.truncationNote()
+                + " from the owner, clearing any default-form setting " //$NON-NLS-1$
+                + "that pointed at it. Call confirm=false first to see the details.", //$NON-NLS-1$
+            1 + content.total(), Collections.singletonList(normFqn)), write);
+    }
+
+    /**
+     * Reads what the form's content model holds, inside a READ transaction, so the consent prompt can
+     * name the real blast radius instead of a constant. Best-effort: a form whose editable content
+     * cannot be read (no content model at all) answers an EMPTY summary, so the delete still proceeds
+     * with a prompt that names the form alone - degrading the wording, never the operation.
+     *
+     * @param project the owning EDT project
+     * @param mdForm the resolved MD form
+     * @return what the content holds; empty when it could not be read
+     */
+    private static FormContentSummary readFormObjectContent(IProject project, MdObject mdForm)
+    {
+        // Resolving the BM services is NOT best-effort: when they are unavailable the delete cannot
+        // happen either, so that is a DETERMINISTIC refusal and it must reach the caller before the
+        // consent gate. Swallowing it here asked the user to authorize a delete that would then fail
+        // below the authorization point with the very error the prompt had hidden (issue #295 review).
+        FormElementWriter.FormEditContext fctx = FormElementWriter.editContextFor(project, mdForm);
+        try
+        {
+            return FormElementWriter.readEditableForm(fctx, "DeleteFormContentPreview", //$NON-NLS-1$
+                (formModel, tx) -> summarizeFormContent(formModel));
+        }
+        catch (Exception e) // NOSONAR only the CONTENT read degrades - see above
+        {
+            // A form with no editable content model still deletes; only the prompt's wording degrades.
+            Activator.logWarning("Could not read the form content for the delete prompt: " //$NON-NLS-1$
+                + unwrapCauseMessage(e));
+            return new FormContentSummary();
+        }
+    }
+
+    /**
+     * Test seam for {@link #summarizeFormContent}: the same summary feeds BOTH the consent prompt's
+     * counts and the {@code confirm=false} preview's item list, so what it collects is asserted
+     * directly.
+     *
+     * @param formModel the form content model
+     * @return the summary
+     */
+    static FormContentSummary summarizeFormContentForTest(EObject formModel)
+    {
+        return summarizeFormContent(formModel);
+    }
+
+    /**
+     * Everything a whole-form delete removes, read with {@link #collectRemovedMembers} - the SAME
+     * containment walk the member delete uses, for the same reason: the radius of
+     * {@code EcoreUtil.remove} is the containment closure, and any list of features to visit is a
+     * list that will fall behind it.
+     *
+     * @param formModel the tx-bound form model
+     * @return the summary
+     */
+    private static FormContentSummary summarizeFormContent(EObject formModel)
+    {
+        // THE SAME containment walk the member delete uses. Counting by feature name here - the items
+        // tree, `attributes`, their `columns`, `formCommands` - understated a whole-form delete in
+        // exactly the way it understated a member delete: EcoreUtil.remove also takes the named
+        // non-FormItem containments (the form's own `handlers`, every element's `handlers`, a
+        // command's `action`), and none of them was counted. Adding those three features would have
+        // left the next one to be found the same way (issue #295 review).
+        FormContentSummary summary = new FormContentSummary();
+        summary.truncated = collectRemovedMembers(formModel, summary.elements);
+        return summary;
+    }
+
+    /**
+     * Reads what a form delete would remove, inside a READ transaction: the target's type and, for a
+     * non-handler, every contained descendant (items subtree AND attribute columns). Shared by the
+     * {@code confirm=false} preview and by the consent prompt, so the dialog lists exactly what the
+     * preview promised - and so a typo answers "not found" without ever raising a destructive dialog
+     * (issue #295 review).
+     *
+     * @param fctx the resolved form edit context
+     * @param ref the parsed form-member ref
+     * @param handler whether the FQN addresses an event handler
+     * @return the preview data; {@code found} is false when the target does not exist
+     */
+    private FormDeletePreview readFormDeletePreview(FormElementWriter.FormEditContext fctx,
+        FormElementWriter.FormMemberRef ref, boolean handler, String normFqn, Version version)
+    {
+        return FormElementWriter.readEditableForm(fctx, "DeleteFormMemberPreview", //$NON-NLS-1$
             (formModel, tx) ->
             {
                 EObject target = resolveFormTarget(formModel, ref, handler);
                 if (target == null)
                 {
-                    return new FormDeletePreview(); // found stays false
+                    FormDeletePreview miss = new FormDeletePreview(); // found stays false
+                    // The advice must be read HERE: the model is tx-bound and must not escape.
+                    miss.kindAdvice = formTargetAdvice(formModel, ref, handler, normFqn, version);
+                    return miss;
                 }
                 FormDeletePreview d = new FormDeletePreview();
                 d.found = true;
                 d.type = target.eClass().getName();
                 if (!handler)
                 {
-                    collectItemDescendants(target, d.descendants);
+                    d.truncated = collectRemovedMembers(target, d.descendants);
                 }
                 return d;
             });
+    }
+
+    private String buildFormDeletePreview(FormElementWriter.FormEditContext fctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
+    {
+        FormDeletePreview data = readFormDeletePreview(fctx, ref, handler, normFqn, version);
 
         if (!data.found)
         {
-            return formMemberNotFound(ref, handler);
+            return formMemberNotFound(ref, handler, data.kindAdvice);
         }
 
         List<Map<String, Object>> removed = new ArrayList<>();
@@ -636,7 +933,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + ref.formPath + " would remove " //$NON-NLS-1$
                 + (data.descendants.isEmpty()
                     ? "the " + memberWord + " itself." //$NON-NLS-1$ //$NON-NLS-2$
-                    : "it and its " + data.descendants.size() + " contained item(s).") //$NON-NLS-1$ //$NON-NLS-2$
+                    : "it and its " + data.descendants.size() + " contained member(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+                        + data.describeDescendants() + ")" + data.truncationNote() + ".") //$NON-NLS-1$ //$NON-NLS-2$
                 + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
                 + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
                 + "to apply.") //$NON-NLS-1$
@@ -645,7 +943,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Delete inside a WRITE transaction: EcoreUtil.remove the target, then export the content form. */
     private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler)
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
         final String[] capturedType = new String[1];
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "DeleteFormMember", //$NON-NLS-1$
@@ -655,7 +953,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 if (target == null)
                 {
                     // Thrown (not flagged): rolls the unchanged tx back and skips the export.
-                    throw new FormValidationException(formMemberNotFound(ref, handler));
+                    throw new FormValidationException(formMemberNotFound(ref, handler,
+                        formTargetAdvice(formModel, ref, handler, normFqn, version)));
                 }
                 capturedType[0] = target.eClass().getName();
                 // items is containment, so removing a Group/Table cascades its contained subtree.
@@ -707,6 +1006,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         if (!confirm)
         {
+            // The SAME content read the consent prompt uses, so the two phases cannot disagree: the
+            // prompt counted the content and told the caller to run confirm=false for the details,
+            // while this branch still answered with the BasicForm alone (issue #295 review).
+            FormContentSummary content = readFormObjectContent(project, mdForm);
+            List<Map<String, Object>> removed = new ArrayList<>();
+            removed.add(formItem(ref.formName, mdForm.eClass().getName()));
+            removed.addAll(content.elements);
             // blocking is hardcoded false: an owned form is removed by cascade (not through the
             // md-refactoring service), so unlike top-object previews NO incoming-reference scan
             // runs here — the message says so to keep the preview honest (deep scan is follow-up).
@@ -714,11 +1020,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .put(McpKeys.ACTION, VAL_PREVIEW)
                 .put("fqn", normFqn) //$NON-NLS-1$
                 .put(KEY_REFACTORING_TITLE, "Delete form " + ref.formName) //$NON-NLS-1$
-                .put(KEY_ITEMS, Collections.singletonList(formItem(ref.formName, mdForm.eClass().getName())))
+                .put(KEY_ITEMS, removed)
                 .put(KEY_BLOCKING, false);
             return putBlockingReferences(preview, Collections.emptyList())
                 .put(McpKeys.MESSAGE, "Preview: deleting form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
-                    + " would remove the form and its content Form.form. Cross-references to it " //$NON-NLS-1$
+                    + " would remove the form and its content Form.form" //$NON-NLS-1$
+                    + (content.isEmpty() ? "" : " (" + content.describe() + ", listed above)") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + content.truncationNote()
+                    + ". Cross-references to it " //$NON-NLS-1$
                     + "(a default-form setting) are cleared on the owner. Note: incoming references " //$NON-NLS-1$
                     + "from OTHER top objects (e.g. BSL code opening this form by name) are NOT " //$NON-NLS-1$
                     + "checked for owned forms — verify with find_references if unsure. " //$NON-NLS-1$
@@ -726,6 +1035,33 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
+        // The authorization point: the whole mutation below is the callback, so nothing this branch
+        // writes can run without ALLOW - the guarantee is structural, not a matter of statement order
+        // (issue #331 review). The form is resolved and its content is READ first, so the prompt names
+        // what is really removed; this is the LAST check before the write, outside any transaction.
+        return gateFormObjectDelete(normFqn, readFormObjectContent(project, mdForm),
+            () -> performFormObjectDelete(project, normFqn, ref, mdForm));
+    }
+
+
+    /**
+     * Applies the owned-form delete: the BM write transaction, the owner force-export and the physical
+     * removal of the form's resource folder, ending in the success payload. Extracted so the WHOLE
+     * mutation is the callback {@link #deleteWithConsent} invokes - previously the gate was consulted
+     * with an empty callback and the real work sat below it, which left the "nothing is written
+     * without ALLOW" guarantee true only by the order of statements (issue #331 review).
+     *
+     * <p>Call only after consent was granted.</p>
+     *
+     * @param project the owning EDT project
+     * @param normFqn the normalized form FQN being deleted
+     * @param ref the parsed form-object ref
+     * @param mdForm the resolved MD form
+     * @return the tool's JSON result
+     */
+    private String performFormObjectDelete(IProject project, String normFqn,
+        FormElementWriter.FormObjectRef ref, MdObject mdForm)
+    {
         // The owner is a top object whose .mdo registers the form; force-export it after the removal so
         // the <forms> entry (and any cleared default-form ref) lands on disk. eContainer() is the owner.
         EObject ownerObj = mdForm.eContainer();
@@ -1099,16 +1435,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Outcome of {@link #collectPredefinedItemBlockingReferences} (issue #296 P1 fix): the
-     * blocking-reference rows gathered so far, AND whether the scan ran to completion.
-     * {@code completed=false} means the incoming-reference state is UNVERIFIED - a null BM model /
-     * model manager, a missing owner/item once re-fetched inside the transaction, a per-item
-     * {@code getBackReferences} failure, or any other exception - and must NEVER be read as "genuinely
-     * zero references": {@code refs} may still carry a partial list gathered before the failure, but
-     * callers must fail CLOSED (block unless {@code force=true}), never silently proceed. See
-     * {@link #deletePredefinedItem}.
-     */
-    /**
      * Result of the predefined-item incoming-reference scan: the collected blocking-reference rows,
      * and whether the scan RAN TO COMPLETION. {@code completed=false} (a partial/failed scan) is NOT
      * the same as "genuinely zero references" - it means the reference state is UNVERIFIED, which
@@ -1159,7 +1485,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Collects incoming references to the predefined item {@code ref.itemName} on {@code owner} AND -
-     * when it is a FOLDER - every descendant it would cascade (issue #296 P1), REUSING the exact same
+     * when it has children (a FOLDER, or a ChartOfAccounts parent account) - every descendant it would
+     * cascade (issue #296 P1), REUSING the exact same
      * reference-collection engine {@code find_references} uses ({@link
      * MetadataReferenceService#collectReferencesForObjectStrict}, issue #293) rather than a hand-rolled
      * subset of it. This closes two gaps the former hand-rolled scan had: (1) it now ALSO covers BSL
@@ -1820,27 +2147,248 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Walks the item's contained {@code items} subtree depth-first, appending each descendant as a
-     * {name, type} map (the same {@code getReferenceList} / {@code nameOf} walk the form reader uses),
-     * so the preview lists what a container delete cascades. The item ITSELF is not added.
+     * Test seam for {@link #collectRemovedMembers}: the walk decides what a destructive preview
+     * promises, so it is verified directly instead of through a live form.
+     *
+     * @param item the element to descend from
+     * @param out receives one {name, type} entry per contained descendant
      */
-    private static void collectItemDescendants(EObject item, List<Map<String, Object>> out)
+    static void collectDescendantsForTest(EObject item, List<Map<String, Object>> out)
     {
-        for (EObject child : FormStructureReader.getReferenceList(item, KEY_ITEMS))
+        collectRemovedMembers(item, out);
+    }
+
+    /**
+     * Walks what a delete of {@code item} takes with it, appending each removed member as a
+     * {name, type} map, so the preview and the consent prompt describe the real blast radius. The item
+     * ITSELF is not added.
+     *
+     * <p>The radius is DERIVED, not listed: {@code EcoreUtil.remove} takes the whole containment
+     * subtree, so every containment reference of the object's EClass is followed - many-valued and
+     * single-valued alike. Naming the features to follow ({@code items}, {@code columns}, plus the
+     * singular containments that hold a {@code FormItem}) left out the two containments that hold
+     * something else: an element's {@code handlers} list and a command's {@code action}. Both go with
+     * their owner, so deleting a field, a button or a command was authorized and previewed as "one
+     * member" while it silently carried off the procedure binding (issue #295 review).</p>
+     *
+     * <p>What gets REPORTED is likewise a property, not a list: a contained object that carries its
+     * own non-empty {@code name} is a member the caller can address and therefore loses (a nested
+     * item, an attribute column, an event handler, a command's action handler); one that carries none
+     * is a property holder of its owner (a data path, a title, an extInfo, a type description) and is
+     * descended THROUGH, not listed - which is how a command's action, an unnamed container, still
+     * yields the named {@code CommandHandler} inside it.</p>
+     *
+     * <p>Only the PERSISTED containments are followed - a derived / transient one is skipped, again
+     * by asking EMF rather than by naming classes. It matters on the form ROOT: a content form also
+     * contains its DERIVED data (the form-data structure of every attribute, the BSL context with its
+     * types, properties, methods, parameters and events, the standard commands, the ChildItems
+     * views). None of that is authored, none of it is written to {@code Form.form}, and it is
+     * recomputed after any edit - counting it turned a 15-member form into a 450-entry prompt when
+     * this walk first replaced the old one. What a delete really costs the caller is what was
+     * persisted (found by the live probe of this round).</p>
+     *
+     * <p>The traversal is an explicit stack, not recursion: a {@code StackOverflowError} is an
+     * {@link Error} that no {@code catch (Exception)} above would stop. The
+     * {@link FormStructureReader#MAX_NODES} bound counts VISITS, not matches, so a subtree full of
+     * unnamed property holders cannot walk unboundedly while this claims a cap.</p>
+     *
+     * @param root the element (or the form root) to descend from; it is NOT itself added
+     * @param out receives one {name, type} entry per removed member, depth-first in metamodel order
+     * @return {@code true} when the walk hit its bound and stopped, so {@code out} is a PREFIX
+     */
+    private static boolean collectRemovedMembers(EObject root, List<Map<String, Object>> out)
+    {
+        int visits = FormStructureReader.MAX_NODES;
+        Deque<EObject> pending = new ArrayDeque<>();
+        pushPersistedChildren(root, pending);
+        while (!pending.isEmpty() && visits > 0)
         {
-            Map<String, Object> entry = new java.util.LinkedHashMap<>();
-            entry.put("name", FormStructureReader.nameOf(child)); //$NON-NLS-1$
-            entry.put("type", child.eClass().getName()); //$NON-NLS-1$
-            out.add(entry);
-            collectItemDescendants(child, out);
+            visits--;
+            EObject child = pending.pop();
+            String name = ownNameOf(child);
+            if (name != null)
+            {
+                out.add(formItem(name, child.eClass().getName()));
+            }
+            pushPersistedChildren(child, pending);
+        }
+        // A cut walk is FLAGGED, not padded with a pseudo-element: adding a marker to the list would
+        // make it disagree with the count that summarizes the very same entries.
+        return !pending.isEmpty();
+    }
+
+    /**
+     * Pushes {@code parent}'s PERSISTED contained objects so they pop in metamodel order (so the walk
+     * above stays depth-first, left to right).
+     *
+     * @param parent the object whose containments to follow
+     * @param pending the traversal stack
+     */
+    private static void pushPersistedChildren(EObject parent, Deque<EObject> pending)
+    {
+        List<EObject> children = new ArrayList<>();
+        for (EReference reference : parent.eClass().getEAllReferences())
+        {
+            // Derived / transient BEFORE eGet: a derived feature can compute a whole model on read.
+            if (!reference.isContainment() || reference.isDerived() || reference.isTransient())
+            {
+                continue;
+            }
+            Object value = parent.eGet(reference);
+            if (value instanceof List<?>)
+            {
+                for (Object child : (List<?>)value)
+                {
+                    if (child instanceof EObject)
+                    {
+                        children.add((EObject)child);
+                    }
+                }
+            }
+            else if (value instanceof EObject)
+            {
+                children.add((EObject)value);
+            }
+        }
+        for (int i = children.size() - 1; i >= 0; i--)
+        {
+            pending.push(children.get(i));
         }
     }
 
+    /**
+     * The object's OWN name, asked of its EClass, or {@code null} when it carries none. Deliberately
+     * NOT {@link FormStructureReader#nameOf}: that one answers {@code "(unnamed)"} so a renderer never
+     * prints a blank cell, which here would turn every property holder into a reported member.
+     *
+     * @param object the contained object to inspect
+     * @return its non-empty {@code name}, or {@code null}
+     */
+    private static String ownNameOf(EObject object)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature("name"); //$NON-NLS-1$
+        if (!(feature instanceof EAttribute))
+        {
+            return null;
+        }
+        Object value = object.eGet(feature);
+        return (value instanceof String && !((String)value).isEmpty()) ? (String)value : null;
+    }
+
     /** Mutable carrier for the form-delete preview read task so tx-bound EObjects never escape. */
-    private static final class FormDeletePreview
+    static final class FormDeletePreview
     {
         boolean found;
         String type;
+        /** The kind-mismatch advice for a MISS, read inside the transaction (issue #343); never null. */
+        String kindAdvice = ""; //$NON-NLS-1$
         final List<Map<String, Object>> descendants = new ArrayList<>();
+
+        /**
+         * Whether the walk hit its node bound: {@code descendants} is then a PREFIX of what the
+         * delete removes, and the message says so rather than presenting a cut list as complete.
+         */
+        boolean truncated;
+
+        /**
+         * The descendants grouped by their model type, e.g. {@code "2 FormField, 1 EventHandler"} -
+         * read off the entries the walk produced, so the prompt cannot name a category the walk does
+         * not actually follow (issue #295 review).
+         *
+         * @return the breakdown, or {@code ""} when nothing is contained
+         */
+        String describeDescendants()
+        {
+            return describeByType(descendants);
+        }
+
+        /** The "and there is more" note for the message, or {@code ""} when the walk finished. */
+        String truncationNote()
+        {
+            return truncationNoteFor(truncated);
+        }
+    }
+
+    /**
+     * Groups {@code entries} by their {@code type}, e.g. {@code "2 FormField, 1 EventHandler"}. ONE
+     * renderer for both delete previews, so the member prompt and the whole-form prompt cannot start
+     * describing the same walk differently.
+     *
+     * @param entries the {name, type} entries a removal walk produced
+     * @return the breakdown in first-seen order, or {@code ""} when there are none
+     */
+    private static String describeByType(List<Map<String, Object>> entries)
+    {
+        Map<String, Integer> byType = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> entry : entries)
+        {
+            String type = String.valueOf(entry.get("type")); //$NON-NLS-1$
+            byType.merge(type, Integer.valueOf(1), (a, b) -> Integer.valueOf(a.intValue() + 1));
+        }
+        List<String> parts = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : byType.entrySet())
+        {
+            parts.add(entry.getValue() + " " + entry.getKey()); //$NON-NLS-1$
+        }
+        return String.join(", ", parts); //$NON-NLS-1$
+    }
+
+    /** The shared "the walk was cut" note, so both previews word the same fact the same way. */
+    private static String truncationNoteFor(boolean truncated)
+    {
+        return truncated
+            ? " (first " + FormStructureReader.MAX_NODES + " nodes only - the form is larger)" //$NON-NLS-1$ //$NON-NLS-2$
+            : ""; //$NON-NLS-1$
+    }
+
+    /**
+     * What a form's content model holds, counted for the delete prompt so it cannot understate the
+     * blast radius (issue #331). A plain counter carrier - no tx-bound EObject escapes the read.
+     */
+    static final class FormContentSummary
+    {
+        /**
+         * Every named member the containment walk found under the form - the ONE source of both the
+         * consent prompt's count and the {@code confirm=false} preview's list, so the dialog cannot
+         * promise a number the preview does not itemize.
+         *
+         * <p>Deliberately no per-category counters any more: they were filled by walking a named list
+         * of features ({@code items} / {@code attributes} / {@code columns} / {@code formCommands}),
+         * which is exactly what left the form's own {@code handlers}, every element's
+         * {@code handlers} and a command's {@code action} uncounted - all removed with the form
+         * (issue #295 review). The breakdown is derived from the entries instead.</p>
+         */
+        final List<Map<String, Object>> elements = new ArrayList<>();
+
+        /**
+         * Whether the walk hit its node bound and stopped: the count and the list then describe a
+         * PREFIX of what the delete removes, and both phases must say so rather than present a cut
+         * list as complete.
+         */
+        boolean truncated;
+
+        /** The "and there is more" note for the message, or {@code ""} when the walk finished. */
+        String truncationNote()
+        {
+            return truncationNoteFor(truncated);
+        }
+
+        /** @return every member the content form carries */
+        int total()
+        {
+            return elements.size();
+        }
+
+        /** @return whether the form's content holds nothing (or could not be read) */
+        boolean isEmpty()
+        {
+            return elements.isEmpty();
+        }
+
+        /** @return the breakdown by model type, e.g. {@code "4 FormField, 2 FormAttribute"} */
+        String describe()
+        {
+            return describeByType(elements);
+        }
     }
 }

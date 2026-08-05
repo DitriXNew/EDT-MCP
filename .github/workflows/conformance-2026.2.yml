@@ -1,7 +1,7 @@
-name: Conformance 2026.1
+name: Conformance 2026.2
 
 # Thin per-version caller of the reusable MCP conformance gate (conformance.yml) so EDT
-# 2026.1 gets its OWN status badge. See conformance.yml for what the gate does.
+# 2026.2 gets its OWN status badge. See conformance.yml for what the gate does.
 
 on:
   pull_request:
@@ -17,4 +17,4 @@ jobs:
   conformance:
     uses: ./.github/workflows/conformance.yml
     with:
-      edt: "2026.1"
+      edt: "2026.2"

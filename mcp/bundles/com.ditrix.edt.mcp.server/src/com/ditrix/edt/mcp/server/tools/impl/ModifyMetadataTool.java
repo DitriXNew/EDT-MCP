@@ -7,8 +7,11 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.eclipse.core.resources.IProject;
@@ -42,6 +45,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
+import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Report;
@@ -110,11 +114,95 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "modify_metadata"; //$NON-NLS-1$
 
+    /**
+     * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
+     * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
+     * a unit test substitutes a requester answering REJECT / TIMEOUT (or recording that it was never
+     * asked at all) to prove the branch's dispatch. Mirrors the seam {@code DeleteMetadataTool} uses
+     * (issue #295 review).
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
+    private final ConsentRequester consentRequester;
+
+    /** Production instance: consent goes to the real gate. */
+    public ModifyMetadataTool()
+    {
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+    }
+
+    /**
+     * Test seam constructor.
+     *
+     * @param consentRequester the consent source to use instead of the singleton gate
+     */
+    ModifyMetadataTool(ConsentRequester consentRequester)
+    {
+        this.consentRequester = consentRequester;
+    }
+
+    /**
+     * THE single point where a destructive FORM RETYPE is authorized, and the only place that decides
+     * the ORDER of the three steps: the deterministic pre-check runs FIRST, the gate is asked only when
+     * the write could actually be applied, and the write runs only on ALLOW. A retype the tool is going
+     * to refuse anyway (columns that would be stranded, a main table that does not resolve) must never
+     * raise a destructive dialog, because a denial or a timeout would come back INSTEAD of the
+     * actionable validation error (issue #295 review).
+     *
+     * @param preview what the user is being asked to authorize
+     * @param preflight the deterministic pre-check, run BEFORE any prompt: a ready JSON error refuses
+     *            the write with no prompt at all, {@code ""} means nothing destructive happens (write
+     *            without asking), {@code null} means a real retype - ask
+     * @param write the mutation, invoked only when the pre-check passed and consent was granted
+     * @return the mutation's result, the pre-check's refusal, or the consent refusal
+     */
+    String gateFormRetype(ConsentPreview preview, java.util.function.Supplier<String> preflight,
+        java.util.function.Supplier<String> write)
+    {
+        String verdict = preflight.get();
+        if (verdict != null && !verdict.isEmpty())
+        {
+            // A deterministic refusal: the write can never be applied, so nothing is asked.
+            return verdict;
+        }
+        if (verdict == null)
+        {
+            ConsentDecision decision = consentRequester.request(NAME, preview);
+            if (decision != ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(
+                    DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+            }
+        }
+        return write.get();
+    }
+
     /** Output result key: names of the properties that were set. */
     private static final String KEY_APPLIED = "applied"; //$NON-NLS-1$
 
     /** Output result key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
+    /** Echoes the locale a localized property was actually written under (#298). */
+    private static final String KEY_LANGUAGE = "language"; //$NON-NLS-1$
+
+    /** Locales IN USE that still have no value for a localized property just written (#298). */
+    private static final String KEY_LOCALES_MISSING = "localesMissing"; //$NON-NLS-1$
+
+    /** Set when a write targets a declared language the configuration's own synonym does not use. */
+    private static final String KEY_LOCALE_UNUSED = "localeUnusedInConfiguration"; //$NON-NLS-1$
+
+    /** Locales whose EXISTING text this call did not touch - they now describe the old value. */
+    private static final String KEY_LOCALES_STALE = "localesStale"; //$NON-NLS-1$
 
     /** Output value for {@link McpKeys#ACTION}: the node was modified. */
     private static final String VAL_MODIFIED = "modified"; //$NON-NLS-1$
@@ -255,15 +343,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "(string). " //$NON-NLS-1$
             + "Set a PREDEFINED item's properties with 'properties' on its own FQN " //$NON-NLS-1$
             + "('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, " //$NON-NLS-1$
-            + "ChartOfAccounts or ChartOfCalculationTypes): common description / code / isFolder / " //$NON-NLS-1$
-            + "parent (folder->item with existing children is refused; moving to a different 'parent' " //$NON-NLS-1$
-            + "is not yet supported - delete and re-create) plus owner-specific properties - " //$NON-NLS-1$
+            + "ChartOfAccounts or ChartOfCalculationTypes): description / code on every owner, " //$NON-NLS-1$
+            + "isFolder on a Catalog / ChartOfCharacteristicTypes only (folder->item with existing " //$NON-NLS-1$
+            + "children is refused), plus owner-specific properties - " //$NON-NLS-1$
             + "'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; a " //$NON-NLS-1$
             + "JSON null clears it) on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' " //$NON-NLS-1$
             + "/ 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
             + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see " //$NON-NLS-1$
             + "the guide for which apply to each owner) - the documented set, no assignable-schema " //$NON-NLS-1$
-            + "round-trip needed. " //$NON-NLS-1$
+            + "round-trip needed. 'parent' is CREATE-time only: moving an item to a different folder " //$NON-NLS-1$
+            + "(or an account under a different parent account) is refused here - delete and " //$NON-NLS-1$
+            + "re-create it with the new 'parent'. " //$NON-NLS-1$
             + "For other nodes, discover assignable properties + allowed values with " //$NON-NLS-1$
             + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
@@ -359,6 +449,31 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
                 + "the applied counts)") //$NON-NLS-1$
+            .stringProperty(KEY_LANGUAGE, "Language code a localized property was written under; " //$NON-NLS-1$
+                + "present only when this call wrote localized properties under exactly ONE code") //$NON-NLS-1$
+            .stringArrayProperty(KEY_LOCALES_MISSING,
+                "Language codes the configuration USES - the ones its OWN synonym is filled in for - " //$NON-NLS-1$
+                + "that still have NO value for at least one of the localized properties just " //$NON-NLS-1$
+                + "written (empty when every such language is translated); present only when a " //$NON-NLS-1$
+                + "localized property was written. A declared language the configuration itself does " //$NON-NLS-1$
+                + "not use is NOT reported: a multilingual configuration worked on in a " //$NON-NLS-1$
+                + "single-language branch must not nag about the others") //$NON-NLS-1$
+            .stringArrayProperty(KEY_LOCALES_STALE,
+                "Language codes whose value this call did NOT write while it REPLACED the text of " //$NON-NLS-1$
+                + "the same property in another language - they still carry the PREVIOUS text, so " //$NON-NLS-1$
+                + "they now describe the old state (rename the synonym in 'en' and the 'fr' one " //$NON-NLS-1$
+                + "keeps the old name). Reported for every DECLARED language that carries text - " //$NON-NLS-1$
+                + "unlike 'localesMissing', which asks whether the configuration USES the language, " //$NON-NLS-1$
+                + "because text that already exists is not work being demanded of anyone: it is " //$NON-NLS-1$
+                + "there, and this call just made it wrong. Decided per PROPERTY, so a language " //$NON-NLS-1$
+                + "written into that same property by this call is not listed. Absent when there " //$NON-NLS-1$
+                + "are none") //$NON-NLS-1$
+            .booleanProperty(KEY_LOCALE_UNUSED,
+                "Set when a value was written under a language the configuration itself does not " //$NON-NLS-1$
+                + "use (its own synonym has no text for that language). NOT an error - the language " //$NON-NLS-1$
+                + "IS declared, so the value will display - but a prompt to ASK the user whether " //$NON-NLS-1$
+                + "translating into it is really wanted: it may be a single-language build, or a " //$NON-NLS-1$
+                + "language this configuration does not support yet") //$NON-NLS-1$
             .objectProperty(KEY_CONTENT, "For a membership-list content change: the counts object. A " //$NON-NLS-1$
                 + "CommonAttribute / ExchangePlan change reports {added, updated, removed} (members " //$NON-NLS-1$
                 + "attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a " //$NON-NLS-1$
@@ -401,6 +516,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(normFqn);
         if (formRef != null)
         {
+            String columnErr = FormElementWriter.columnAddressingError(formRef);
+            if (columnErr != null)
+            {
+                return ToolResult.error(columnErr).toJson();
+            }
             return dispatchFormMemberFqn(ctx, normFqn, formRef, args);
         }
 
@@ -628,7 +748,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("'rights'/'templates'/'roleProperties'/'content' do not apply to " //$NON-NLS-1$
                 + "a predefined item; '" + normFqn + "' addresses a predefined item. Use 'properties' " //$NON-NLS-1$ //$NON-NLS-2$
-                + "(description / code / isFolder / valueType).").toJson(); //$NON-NLS-1$
+                + "(description / code on every owner, isFolder on a Catalog / " //$NON-NLS-1$ //$NON-NLS-2$
+                + "ChartOfCharacteristicTypes, plus the owner-specific properties named in this " //$NON-NLS-1$
+                + "tool's description).").toJson(); //$NON-NLS-1$
         }
 
         String ownerTypeErr = PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType);
@@ -1181,7 +1303,251 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return mixError;
         }
-        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec);
+        // A dcs payload writes localized titles ({code: text}) straight into the DCS model, without
+        // going through the property pipeline where the undeclared-locale guard lives - so without
+        // this the very hole issue #298 closes stayed open on this route. Checked HERE, before any
+        // write, so a bad code fails the call with nothing applied.
+        Set<String> titleLocales = new LinkedHashSet<>();
+        String localeError = dcsTitleLocaleError(ctx.config, args.dcsSpec, titleLocales);
+        if (localeError != null)
+        {
+            return localeError;
+        }
+        // A dcs title is a localized write like any other, so the same question applies: is the
+        // configuration even translated into that language? The report's per-property missing list
+        // has no meaning here (a payload writes many titles at once), but the prompt to ASK does.
+        boolean localeUnused = titleLocales.stream()
+            .anyMatch(code -> MetadataLanguageUtils.isDeclaredButUnused(ctx.config, code));
+        return modifyDcsContent(ctx, normFqn, (Report)target, args.dcsSpec, localeUnused);
+    }
+
+
+    /**
+     * Rejects a localized {@code title} in a {@code dcs} payload whose language code the
+     * configuration does not declare - the same rule the property pipeline applies, on the route
+     * that bypasses it. Issue #298.
+     *
+     * <p>Walks the payload for every {@code title} that is an OBJECT (a {@code {code: text}} map); a
+     * plain-string title is language-neutral and needs no check. Returns a ready JSON error naming
+     * the offending code and the declared ones, or {@code null} when every code is fine (or the
+     * configuration declares none, which leaves nothing to validate against).
+     *
+     * @param config the configuration
+     * @param dcsSpec the raw dcs payload
+     * @param used collects the canonical codes the payload's titles write under
+     * @return a JSON error, or {@code null} when the payload's locales are acceptable
+     */
+    private static String dcsTitleLocaleError(Configuration config, JsonObject dcsSpec,
+        Set<String> used)
+    {
+        if (dcsSpec == null)
+        {
+            return null;
+        }
+        List<String> declared = MetadataLanguageUtils.declaredLanguageCodes(config);
+        if (declared.isEmpty())
+        {
+            // No declared code makes EVERY code undeclared, so a localized title here would be
+            // stored where nothing can display it. The property pipeline refuses this case; the
+            // dcs route must not be the hole it slips through. A payload with no localized title
+            // is untouched - only an actual {code: text} map is refused.
+            String firstLocale = firstDcsTitleLocale(dcsSpec);
+            if (firstLocale == null)
+            {
+                return null;
+            }
+            return ToolResult.error("This configuration declares no language codes, so '" //$NON-NLS-1$ //$NON-NLS-2$
+                + firstLocale + "' in a dcs title cannot be stored where anything would display " //$NON-NLS-1$
+                + "it. Add a Language object with a 'languageCode' first (create_metadata " //$NON-NLS-1$
+                + "'Language.<Name>' + modify_metadata 'languageCode'), then write the title.") //$NON-NLS-1$
+                    .toJson();
+        }
+        return normalizeDcsTitleLocales(config, declared, dcsSpec, used);
+    }
+
+    /**
+     * The first language code any STORED dcs title is keyed by, or {@code null} when the payload
+     * carries no localized title at all. Used only to name a value in the no-declared-language
+     * refusal - the walk itself is {@link #normalizeDcsTitleLocales}.
+     */
+    private static String firstDcsTitleLocale(JsonObject dcsSpec)
+    {
+        for (String member : new String[] {KEY_DCS_PARAMETERS, KEY_DCS_CALCULATED_FIELDS})
+        {
+            String code = firstTitleLocaleOfEntries(dcsSpec.get(member));
+            if (code != null)
+            {
+                return code;
+            }
+        }
+        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
+        if (dataSets == null || !dataSets.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement dataSet : dataSets.getAsJsonArray())
+        {
+            if (dataSet != null && dataSet.isJsonObject())
+            {
+                String code = firstTitleLocaleOfEntries(dataSet.getAsJsonObject().get(KEY_DCS_FIELDS));
+                if (code != null)
+                {
+                    return code;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The first language key of the first object-valued {@code title} in one array of entries. */
+    private static String firstTitleLocaleOfEntries(JsonElement entries)
+    {
+        if (entries == null || !entries.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement entry : entries.getAsJsonArray())
+        {
+            if (entry == null || !entry.isJsonObject())
+            {
+                continue;
+            }
+            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
+            if (title != null && title.isJsonObject() && !title.getAsJsonObject().keySet().isEmpty())
+            {
+                return title.getAsJsonObject().keySet().iterator().next();
+            }
+        }
+        return null;
+    }
+
+    /** The dcs payload members the writer reads a storable {@code title} from (see DcsWriter). */
+    private static final String DCS_DATA_SETS = "dataSets"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_FIELDS = "fields"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_PARAMETERS = "parameters"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_CALCULATED_FIELDS = "calculatedFields"; //$NON-NLS-1$
+
+    private static final String KEY_DCS_TITLE = "title"; //$NON-NLS-1$
+
+    /**
+     * Validates and CANONICALIZES the language keys of every {@code title} the DCS writer actually
+     * stores, rejecting a code the configuration does not declare.
+     * <p>
+     * The rewrite matters as much as the rejection: the DCS writer stores the payload's key verbatim,
+     * so accepting {@code EN} against a configuration that declares {@code en_CA} - which the
+     * case-insensitive match does - would store a second, never-displayed key. That is the same
+     * canonicalization the property pipeline performs; the two paths must not disagree.
+     * <p>
+     * The walk follows the writer's OWN shape - a dataset's {@code fields}, the schema
+     * {@code parameters} and the {@code calculatedFields}, mirroring DcsWriter's three
+     * {@code parseTitle} call sites - rather than hunting for any member named {@code title}. A title
+     * the writer never reads (on a data SOURCE, or nested in a member it ignores) reaches no model
+     * object: rejecting its code would fail a call over a value that was never going to be stored,
+     * and counting it would raise a question about a translation that never happened.
+     *
+     * @param used collects the canonical codes the stored titles write under
+     * @return a ready JSON error for the first undeclared code, or {@code null} when all are fine
+     */
+    private static String normalizeDcsTitleLocales(Configuration config, List<String> declared,
+        JsonObject dcsSpec, Set<String> used)
+    {
+        String error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_PARAMETERS), used);
+        if (error != null)
+        {
+            return error;
+        }
+        error = normalizeEntryTitles(config, declared, dcsSpec.get(KEY_DCS_CALCULATED_FIELDS), used);
+        if (error != null)
+        {
+            return error;
+        }
+        JsonElement dataSets = dcsSpec.get(DCS_DATA_SETS);
+        if (dataSets == null || !dataSets.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement dataSet : dataSets.getAsJsonArray())
+        {
+            if (dataSet == null || !dataSet.isJsonObject())
+            {
+                continue;
+            }
+            error = normalizeEntryTitles(config, declared,
+                dataSet.getAsJsonObject().get(KEY_DCS_FIELDS), used);
+            if (error != null)
+            {
+                return error;
+            }
+        }
+        return null;
+    }
+
+    /** Validates the object-valued {@code title} of every entry in one array of writer entries. */
+    private static String normalizeEntryTitles(Configuration config, List<String> declared,
+        JsonElement entries, Set<String> used)
+    {
+        if (entries == null || !entries.isJsonArray())
+        {
+            return null;
+        }
+        for (JsonElement entry : entries.getAsJsonArray())
+        {
+            if (entry == null || !entry.isJsonObject())
+            {
+                continue;
+            }
+            JsonElement title = entry.getAsJsonObject().get(KEY_DCS_TITLE);
+            if (title == null || !title.isJsonObject())
+            {
+                // A plain-string title is language-neutral, and anything else is the writer's own
+                // error to report - this guard only judges LANGUAGE keys.
+                continue;
+            }
+            String error = canonicalizeTitleKeys(config, declared, title.getAsJsonObject(), used);
+            if (error != null)
+            {
+                return error;
+            }
+        }
+        return null;
+    }
+
+    /** Validates and canonicalizes the keys of ONE {@code {code: text}} title object, in place. */
+    private static String canonicalizeTitleKeys(Configuration config, List<String> declared,
+        JsonObject title, Set<String> used)
+    {
+        java.util.Map<String, JsonElement> rewritten = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, JsonElement> entry : title.entrySet())
+        {
+            String code = entry.getKey();
+            String canonical = MetadataLanguageUtils.canonicalLanguageCode(config, code);
+            if (canonical == null)
+            {
+                return ToolResult.error("Unknown language '" + code + "' for a dcs title. This " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "configuration declares: " + String.join(", ", declared) //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". A value stored under an undeclared code is never displayed.").toJson(); //$NON-NLS-1$
+            }
+            if (rewritten.containsKey(canonical))
+            {
+                // Two spellings of one declared code, e.g. {"en": ..., "EN": ...}. Canonicalizing
+                // would silently drop one translation - and which one survived would depend on map
+                // order. Say so instead: only the caller knows which text was meant.
+                return ToolResult.error("A dcs title names the language '" + canonical //$NON-NLS-1$
+                    + "' twice (as '" + code + "' and again in another spelling). Give it once.") //$NON-NLS-1$
+                        .toJson();
+            }
+            rewritten.put(canonical, entry.getValue());
+            used.add(canonical);
+        }
+        for (String key : new ArrayList<>(title.keySet()))
+        {
+            title.remove(key);
+        }
+        rewritten.forEach(title::add);
+        return null;
     }
 
     /**
@@ -1841,7 +2207,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * {@link #dcsMixError} / {@link #dcsOnlyForReportFqnError}), so this method is entered only for a Report
      * FQN with a lone {@code dcs} payload.</p>
      */
-    private String modifyDcsContent(ProjectContext ctx, String normFqn, Report report, JsonObject dcsSpec)
+    private String modifyDcsContent(ProjectContext ctx, String normFqn, Report report, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        JsonObject dcsSpec, boolean localeUnused)
     {
         // The Report is a top BM object - capture its bmGetId up front, re-fetch inside the tx (a top
         // object's eContainer() does not reliably climb).
@@ -1892,7 +2259,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted =
             !exportFqns.isEmpty() && BmTransactions.forceExportToDisk(ctx.project, exportFqns);
-        return buildDcsResult(normFqn, result, persisted);
+        return buildDcsResult(normFqn, result, persisted, localeUnused);
     }
 
     /**
@@ -1977,7 +2344,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return DcsWriter.TypeResolution.failed(
                     "Cannot resolve the platform version needed to build the parameter type."); //$NON-NLS-1$
             }
-            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version);
+            // DCS_PARAMETER, not the METADATA default: a parameter's type is not a stored feature, so
+            // an in-memory collection must be refused with wording that is true HERE (issue #295 review).
+            MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(valueTypeSpec, dcsConfig, version,
+                false, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
             return tr.error != null
                 ? DcsWriter.TypeResolution.failed(tr.error)
                 : DcsWriter.TypeResolution.of(tr.typeDescription);
@@ -2109,7 +2479,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * ({@code dataSources} / {@code dataSets} / {@code fields} / {@code parameters}) plus {@code persisted}
      * and a confirmation message. Pure helper.
      */
-    private static String buildDcsResult(String normFqn, DcsWriter.Result result, boolean persisted)
+    private static String buildDcsResult(String normFqn, DcsWriter.Result result, boolean persisted,
+        boolean localeUnused)
     {
         JsonObject applied = new JsonObject();
         applied.addProperty("dataSources", result.dataSources); //$NON-NLS-1$
@@ -2117,11 +2488,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         applied.addProperty("fields", result.fields); //$NON-NLS-1$
         applied.addProperty("parameters", result.parameters); //$NON-NLS-1$
         applied.addProperty("calculatedFields", result.calculatedFields); //$NON-NLS-1$
-        return ToolResult.success()
+        ToolResult dcsResult = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_DCS, applied)
-            .put(KEY_PERSISTED, persisted)
+            .put(KEY_PERSISTED, persisted);
+        if (localeUnused)
+        {
+            dcsResult.put(KEY_LOCALE_UNUSED, true);
+        }
+        return dcsResult
             .put(McpKeys.MESSAGE, "Modified DCS of report " + normFqn + " (dataSources: " //$NON-NLS-1$ //$NON-NLS-2$
                 + result.dataSources + ", dataSets: " + result.dataSets + ", fields: " + result.fields //$NON-NLS-1$ //$NON-NLS-2$
                 + ", parameters: " + result.parameters + ", calculatedFields: " //$NON-NLS-1$ //$NON-NLS-2$
@@ -2350,6 +2726,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final long configBmId =
             xdtoNamespaceChange && config instanceof IBmObject ? ((IBmObject)config).bmGetId() : -1L;
         final String[] contentFqnHolder = { null };
+        // Read OUTSIDE the write transaction (a plain configuration read, like the language
+        // resolution the prepare step already did); only the per-object present locales are
+        // collected inside. Issue #298.
+        final List<String> declaredCodes = MetadataLanguageUtils.declaredOrOverride(config,
+            declaredCodesAfterBatch(config, target, properties));
+        final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
 
@@ -2362,10 +2744,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // namespace change - null otherwise, so the cascade below never fires).
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
                     ? ((XDTOPackage)applyTo).getNamespace() : null;
+                localizedReport.rememberPreState(applyTo, changes);
                 for (PreparedChange change : changes)
                 {
                     change.applyTo(applyTo, tx);
                 }
+                localizedReport.collect(applyTo, changes, declaredCodes, config);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
                     XDTOPackage changedPkg = (XDTOPackage)applyTo;
@@ -2437,7 +2821,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
-        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames);
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+            localizedReport);
     }
 
     /**
@@ -2587,18 +2972,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
-     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
-     * attribute can drop stored values on the next database update, so it is the destructive case a plain
-     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
-     *
-     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
-     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
-     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
-     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
-     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
-     */
-    /**
      * The predefined-item counterpart of {@link #consentForTypeChanges}: a
      * {@code ChartOfCharacteristicTypes} predefined item's {@code valueType} is a real RETYPE (or a
      * clear), so it must pass the same destructive-consent gate an ordinary attribute retype does,
@@ -2622,6 +2995,33 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
+    /**
+     * The tail of a form "not found" message: the kind-mismatch advice when there is one (issue
+     * #343), otherwise the branch's own generic pointer. Keeps every form miss in this tool phrased
+     * the same way - name the kind that found nothing, then either explain what DOES bear the name or
+     * point at {@code get_metadata_details}.
+     *
+     * @param advice the advice from {@code FormElementWriter} (never {@code null}, possibly empty)
+     * @param fallback the generic tail to use when there is no advice
+     * @return the tail to append
+     */
+    private static String advisedOr(String advice, String fallback)
+    {
+        return advice.isEmpty() ? fallback : advice;
+    }
+
+    /**
+     * Runs the destructive-consent gate for a modify BEFORE the mutation, but ONLY when at least one
+     * prepared change RETYPES data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set): retyping an
+     * attribute can drop stored values on the next database update, so it is the destructive case a plain
+     * property edit is not. A benign change list skips the gate entirely (no prompt, byte-identical path).
+     *
+     * <p>The gate itself decides whether to block on a UI dialog (env / headless / preference-driven — see
+     * {@link DestructiveConsentGate}); this method just supplies the object FQN + the retyped features as
+     * the preview. Returns a ready JSON error when the human REJECTS, or when nobody answers within the
+     * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
+     * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
+     */
     private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
     {
         List<String> retyped = new ArrayList<>();
@@ -2649,43 +3049,120 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Runs the destructive-consent gate for a FORM member modify BEFORE the write transaction, but ONLY
-     * when it retypes a form ATTRIBUTE (a {@code type} / {@code valueType} property on an Attribute ref).
-     * Scoped to the ATTRIBUTE kind (like the dynamic-list-query branch) so a decoration's benign enum
-     * {@code type} never prompts, and run here - not inside the tx callback - because the gate may block
-     * on a UI dialog and a transaction must not be held open across it. Returns a ready JSON error on
-     * REJECT or TIMEOUT (see {@link DestructiveConsentGate#consentDeniedMessage}), or {@code null} to
-     * proceed.
+     * Whether this form-member modify RETYPES it: a {@code type} / {@code valueType} property on an
+     * Attribute (or on one of its Columns, which is retyped exactly like an attribute - skipping it
+     * would let a column silently change type unprompted, issue #295). Scoped to those two kinds so a
+     * decoration's benign enum {@code type} never prompts, mirroring the ATTRIBUTE guard the
+     * dynamic-list-query branch uses. Reads only the request (no model access).
+     *
+     * @param ref the parsed form-member ref
+     * @param properties the requested property changes
+     * @return {@code true} when the request changes the member's data type
      */
-    private static String consentForFormTypeChange(String normFqn, FormElementWriter.FormMemberRef ref,
+    private static boolean isFormRetypeRequest(FormElementWriter.FormMemberRef ref,
         List<JsonObject> properties)
     {
-        if (FormElementWriter.kindForToken(ref.kindToken) != FormElementWriter.Kind.ATTRIBUTE)
+        FormElementWriter.Kind typedKind = FormElementWriter.kindForToken(ref.kindToken);
+        if (typedKind != FormElementWriter.Kind.ATTRIBUTE && typedKind != FormElementWriter.Kind.COLUMN)
         {
-            return null;
+            return false;
         }
-        boolean retype = false;
         for (JsonObject prop : properties)
         {
             String name = asString(prop.get("name")); //$NON-NLS-1$
             if ("type".equalsIgnoreCase(name) || PROP_VALUE_TYPE.equalsIgnoreCase(name)) //$NON-NLS-1$
             {
-                retype = true;
-                break;
+                return true;
             }
         }
-        if (!retype)
-        {
-            return null;
-        }
-        ConsentPreview preview = new ConsentPreview(
+        return false;
+    }
+
+    /** The project's platform version (the type payload is built for it), or {@code null}. */
+    private static Version platformVersionOf(ProjectContext ctx)
+    {
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project =
+            v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
+        return v8Project != null ? v8Project.getVersion() : null;
+    }
+
+    /** What the user authorizes when a form attribute (or column) changes its data type. */
+    private static ConsentPreview formRetypePreview(String normFqn)
+    {
+        return new ConsentPreview(
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
             1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
-        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (consentDecision != ConsentDecision.ALLOW)
+    }
+
+    /**
+     * The form-member property branch's PRE-CHECK, run before the consent gate (see
+     * {@link #gateFormRetype}): ONE read transaction decides whether a prompt is warranted at all.
+     * These cases must NOT prompt, because the write is refused or unchanged in each and a denial
+     * would be returned INSTEAD of the actionable error: the request retypes nothing, the member does
+     * not exist (the write path answers "not found"), or ANY of the requested property changes fails
+     * to validate - a retype that would strand the attribute's columns, an unbuildable {@code type}
+     * payload, an unknown property, an out-of-range value. Issue #295 review.
+     *
+     * @param ctx the resolved project context (the configuration references resolve against)
+     * @param version the platform version the type payload is built for
+     * @param fctx the resolved form edit context
+     * @param ref the parsed form-member ref
+     * @param properties the requested property changes
+     * @return a ready JSON error to return as-is, {@code ""} to write without prompting, or
+     *         {@code null} to ask
+     */
+    private String formRetypePreflight(ProjectContext ctx, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        FormElementWriter.FormEditContext fctx, FormElementWriter.FormMemberRef ref,
+        List<JsonObject> properties, MdNameNormalizer.Report normReport)
+    {
+        if (!isFormRetypeRequest(ref, properties))
         {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+            return ""; //$NON-NLS-1$
+        }
+        return FormElementWriter.readEditableForm(fctx, "FormRetypePreflight", //$NON-NLS-1$
+            (formModel, tx) -> formRetypeVerdict(ctx.config, version,
+                FormElementWriter.resolveFormMember(formModel, ref), properties, normReport));
+    }
+
+    /**
+     * The property branch's pre-check verdict for an ALREADY-RESOLVED member - the body of
+     * {@link #formRetypePreflight}'s read, package-private so a unit test can drive the decision
+     * itself without an EDT context.
+     *
+     * <p>It runs the SAME preparation the write runs ({@link #prepareFormMemberChanges}) and throws
+     * the result away: every refusal that pass can produce is decided by the request and the current
+     * model, never by the user's answer, so ALL of it belongs above the consent gate. Doing only part
+     * of it here is exactly the defect the review found twice - the stranded-columns guard was lifted
+     * while the {@code type} payload stayed below the gate, so an unbuildable type still raised a
+     * destructive prompt and answered a consent denial instead of "Unknown type kind".</p>
+     *
+     * <p>The normalization report is a THROWAWAY: the write repeats the preparation with the real
+     * one, and sharing it would report every renamed name twice.</p>
+     *
+     * @param config the configuration reference targets resolve against
+     * @param version the platform version the type payload is built for
+     * @param member the resolved form member, or {@code null} when it does not exist
+     * @param properties the requested property changes
+     * @param normReport the caller's report - only its SETTING is used, via
+     *            {@link MdNameNormalizer.Report#emptyCopy()}, so this pass reports nothing twice
+     * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
+     */
+    String formRetypeVerdict(Configuration config, Version version, EObject member,
+        List<JsonObject> properties, MdNameNormalizer.Report normReport)
+    {
+        if (member == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        try
+        {
+            prepareFormMemberChanges(config, version, member, properties, normReport.emptyCopy());
+        }
+        catch (FormValidationException e)
+        {
+            return FormValidationException.jsonOf(e);
         }
         return null;
     }
@@ -2712,11 +3189,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted,
         MdNameNormalizer.Report normReport, List<String> cascadedPackageNames)
     {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames, null);
+    }
+
+    /**
+     * The {@link #buildModifiedResult(String, List, boolean, MdNameNormalizer.Report, List)} variant
+     * that also reports the localized write: the locale actually used and the declared locales that
+     * still have no translation. Issue #298.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
+        LocalizedWriteReport localizedReport)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        if (localizedReport != null)
+        {
+            localizedReport.addTo(result);
+        }
         normReport.addTo(result);
         String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!cascadedPackageNames.isEmpty())
@@ -3160,7 +3653,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        PrepareContext ctx = new PrepareContext(project, config, version);
+        PrepareContext ctx = new PrepareContext(project, config, version,
+            declaredCodesAfterBatch(config, target, properties));
         for (JsonObject prop : properties)
         {
             // The mdclass path has no <extInfo> (extInfo == null): findFeature then classifies only the
@@ -3254,60 +3748,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport)
     {
-        // Retyping a form ATTRIBUTE ('type' / 'valueType') is the destructive case for a form member -
-        // ask the human BEFORE opening the write transaction (never block while a tx is held). A benign
-        // property edit, and any 'type' feature on a non-attribute member (a decoration's enum 'type'),
-        // do NOT prompt: the gate is scoped to a form attribute's data type, mirroring the ATTRIBUTE
-        // guard the dynamic-list-query branch uses.
-        String formConsentErr = consentForFormTypeChange(normFqn, ref, properties);
-        if (formConsentErr != null)
-        {
-            return formConsentErr;
-        }
-
-        Configuration config = ctx.config;
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
-        final Version version = v8Project != null ? v8Project.getVersion() : null;
-
-        final List<String> applied = new ArrayList<>();
-
-        // Validate + apply inside ONE BM write transaction: resolve the member, validate every
-        // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
-        // so the tx rolls back with no partial mutation), then apply. The member is re-navigated by
-        // name inside the tx (only the form top object is re-fetchable by bmId). Building the change
-        // values and setting them in the SAME tx avoids any cross-transaction detached-object concern.
-        final boolean persisted;
         try
         {
+            // Retyping a form ATTRIBUTE ('type' / 'valueType') is the destructive case for a form
+            // member, so the order is resolve -> read/validate -> ask -> write: the form is resolved
+            // first (a typo answers "form not found" without a dialog), the retype is validated against
+            // the CURRENT model, and only a retype that can really be applied reaches the gate - which
+            // runs outside any transaction, because it may block on a UI dialog (issue #295 review).
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
-                config, ref.formPath,
+                ctx.config, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address a form member as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name' " //$NON-NLS-1$
-                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table)."); //$NON-NLS-1$
-            persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
-                (formModel, tx) ->
-                {
-                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                    if (member == null)
-                    {
-                        throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
-                            + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                            + ". Use get_metadata_details to list the members.").toJson()); //$NON-NLS-1$
-                    }
-                    List<HolderChange> changes =
-                        prepareFormMemberChanges(config, version, member, properties, normReport);
-                    for (HolderChange hc : changes)
-                    {
-                        // A direct feature lands on the member; a property on the nested <extInfo> lands
-                        // on the extInfo holder, created (or reused) here now that every property has
-                        // validated. Mixing both in one call routes each change to its correct receiver.
-                        EObject holder = hc.onExtInfo
-                            ? FormElementWriter.ensureExtInfo(formModel, member) : member;
-                        hc.change.applyTo(holder, tx);
-                        applied.add(hc.change.featureName());
-                    }
-                });
+                    + "(Kind = Attribute / Command / Field / Button / Group / Decoration / Table, " //$NON-NLS-1$
+                    + "or a collection attribute's Column: '...Attribute.AttrName.Column.ColName')."); //$NON-NLS-1$
+            // The version the type payload is built for: resolved BEFORE the gate, because the
+            // pre-check validates that payload (it is the same one the write then uses).
+            final Version version = platformVersionOf(ctx);
+            return gateFormRetype(formRetypePreview(normFqn),
+                () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport),
+                () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx,
+                    version));
         }
         catch (Exception e)
         {
@@ -3321,12 +3781,96 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Error modifying form member", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Applies the validated form-member property changes: ONE BM write transaction (resolve the member,
+     * validate every property, apply) plus the force-export and the success payload. Split out of
+     * {@link #modifyFormMemberProperties} so the WHOLE mutation is the callback
+     * {@link #gateFormRetype} invokes - a destructive retype cannot be written by statement order
+     * alone (issue #295 review). Throws like the code it was extracted from; the caller maps the
+     * exception.
+     *
+     * @param ctx the resolved project context
+     * @param normFqn the normalized member FQN
+     * @param ref the parsed form-member ref
+     * @param properties the requested property changes
+     * @param normReport the name-normalization report
+     * @param fctx the already-resolved form edit context
+     * @param version the platform version the pre-check already validated the type payload against
+     * @return the tool's JSON result
+     */
+    private String applyFormMemberProperties(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
+    {
+        Configuration config = ctx.config;
+        final List<String> applied = new ArrayList<>();
+        // A form member's title is a localized property too, so it gets the same report the mdclass
+        // path gives (issue #298). The declared codes are read OUTSIDE the write transaction.
+        final List<String> declaredCodes = MetadataLanguageUtils.declaredLanguageCodes(config);
+        final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
+
+        // Validate + apply inside ONE BM write transaction: resolve the member, validate every
+        // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
+        // so the tx rolls back with no partial mutation), then apply. The member is re-navigated by
+        // name inside the tx (only the form top object is re-fetchable by bmId). Building the change
+        // values and setting them in the SAME tx avoids any cross-transaction detached-object concern.
+        final boolean persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    // The KIND is part of the resolution (issue #343), so a member that exists under
+                    // another kind is reported as exactly that, with the corrected address -
+                    // otherwise "not found" contradicts what get_metadata_details lists.
+                    throw new FormValidationException(ToolResult.error("Form member not found: " //$NON-NLS-1$
+                        + ref.name + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                            ref.name, normFqn),
+                            ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
+                }
+                List<HolderChange> changes =
+                    prepareFormMemberChanges(config, version, member, properties, normReport);
+                // (receiver, change) of every localized write, reported only AFTER the whole
+                // batch is applied: reading a map mid-batch would report a locale as missing that
+                // a LATER change in the same call fills in.
+                List<EObject> localizedHolders = new ArrayList<>();
+                List<PreparedChange> localizedChanges = new ArrayList<>();
+                for (HolderChange hc : changes)
+                {
+                    // A direct feature lands on the member; a property on the nested <extInfo> lands
+                    // on the extInfo holder, created (or reused) here now that every property has
+                    // validated. Mixing both in one call routes each change to its correct receiver.
+                    EObject holder = hc.onExtInfo
+                        ? FormElementWriter.ensureExtInfo(formModel, member) : member;
+                    // BEFORE the write: whether this locale already held text decides if the
+                    // OTHER locales go stale (see LocalizedWriteReport.rememberPreState).
+                    localizedReport.rememberPreState(holder, List.of(hc.change));
+                    hc.change.applyTo(holder, tx);
+                    applied.add(hc.change.featureName());
+                    if (hc.change.isLocalized())
+                    {
+                        // Remember the receiver the change actually landed on: a title on the
+                        // member and one on its <extInfo> live in different objects.
+                        localizedHolders.add(holder);
+                        localizedChanges.add(hc.change);
+                    }
+                }
+                for (int i = 0; i < localizedChanges.size(); i++)
+                {
+                    localizedReport.collect(localizedHolders.get(i),
+                        List.of(localizedChanges.get(i)), declaredCodes, config);
+                }
+            });
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(KEY_APPLIED, applied)
             .put(KEY_PERSISTED, persisted);
+        localizedReport.addTo(result);
         normReport.addTo(result);
         return result
             .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -3411,38 +3955,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return req.error;
         }
-        final String queryText = req.queryText;
-        final Boolean customQuery = req.customQuery;
-        final String mainTable = req.mainTable;
+        final String qt = req.queryText;
+        final Boolean cq = req.customQuery;
+        final String mt = req.mainTable;
 
-        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
-        IV8Project v8Project = v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project) : null;
-        final Version version = v8Project != null ? v8Project.getVersion() : null;
-
-        final List<String> applied = new ArrayList<>();
-        final String qt = queryText;
-        final Boolean cq = customQuery;
-        final String mt = mainTable;
-        final boolean persisted;
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
                 ctx.config, ref.formPath,
                 ERR_FORM_NOT_FOUND_PREFIX + normFqn + "'. Address the dynamic-list attribute as " //$NON-NLS-1$
                     + "'Type.Object.Form.FormName.Attribute.Name'."); //$NON-NLS-1$
-            persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
-                (formModel, tx) ->
-                {
-                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                    if (member == null)
-                    {
-                        throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
-                            + ref.name + " on " + ref.formPath //$NON-NLS-1$
-                            + ". Create it with create_metadata, then set its query.").toJson()); //$NON-NLS-1$
-                    }
-                    applied.addAll(FormElementWriter.configureDynamicListQuery(
-                        formModel, member, qt, cq, mt, ctx.config, version));
-                });
+            // Converting a plain (or collection-typed) attribute into a dynamic list REPLACES its
+            // valueType, exactly like the `type` property does - and that path asks the consent gate.
+            // The order is resolve -> read/validate -> ask -> write (see gateFormRetype); the gate may
+            // block on a dialog, so it never runs inside a transaction (issue #295 review).
+            // Resolved BEFORE the gate: the conversion needs the DynamicList value type for this
+            // version, and failing to build it refuses the write whatever the user answers.
+            final Version version = platformVersionOf(ctx);
+            return gateFormRetype(dynamicListRetypePreview(normFqn),
+                () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
+                () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
         }
         catch (Exception e)
         {
@@ -3455,6 +3987,57 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to set the dynamic-list query: " //$NON-NLS-1$
                 + unwrapCauseMessage(e)).toJson();
         }
+    }
+
+    /**
+     * Applies the dynamic-list query change: ONE BM write transaction plus the success payload. Split
+     * out of {@link #configureDynamicListQuery} so the WHOLE mutation is the callback
+     * {@link #gateFormRetype} invokes (issue #295 review). Throws like the code it was extracted from;
+     * the caller maps the exception.
+     *
+     * @param ctx the resolved project context
+     * @param normFqn the normalized attribute FQN
+     * @param ref the parsed form-member ref
+     * @param qt the custom query text, or {@code null}
+     * @param cq the {@code customQuery} toggle, or {@code null}
+     * @param mt the main-table FQN, or {@code null}
+     * @param normReport the name-normalization report
+     * @param fctx the already-resolved form edit context
+     * @return the tool's JSON result
+     */
+    private String applyDynamicListQuery(ProjectContext ctx, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        FormElementWriter.FormMemberRef ref, String qt, Boolean cq, String mt,
+        MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
+    {
+        final List<String> applied = new ArrayList<>();
+        boolean persisted = FormElementWriter.writeEditableForm(fctx, "ConfigureDynamicListQuery", //$NON-NLS-1$
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                if (member == null)
+                {
+                    // A dynamic list lives on a form ATTRIBUTE; when the name belongs to an element
+                    // of another kind, say so instead of advising a create that would collide.
+                    throw new FormValidationException(ToolResult.error("Form attribute not found: " //$NON-NLS-1$
+                        + ref.name + " on " + ref.formPath //$NON-NLS-1$
+                        + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                            ref.name, normFqn),
+                            ". Create it with create_metadata, then set its query.")).toJson()); //$NON-NLS-1$
+                }
+                // This branch retypes the attribute to DynamicList without going through the
+                // property path, so it needs the SAME stranded-columns guard (issue #295 review) -
+                // but ONLY when a conversion is actually on the table. A customQuery-only request
+                // converts nothing, and answering it with "delete the columns first" hid the real
+                // problem ("provide a queryText"), which the writer raises just below.
+                boolean converts = (qt != null && !qt.isEmpty()) || (mt != null && !mt.isEmpty());
+                String orphanErr = converts ? orphanColumnsError(member) : null;
+                if (orphanErr != null)
+                {
+                    throw new FormValidationException(orphanErr);
+                }
+                applied.addAll(FormElementWriter.configureDynamicListQuery(
+                    formModel, member, qt, cq, mt, ctx.config, version));
+            });
 
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
@@ -3731,6 +4314,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
         JsonObject normProp = normalizeFormProperty(member, prop);
+        String orphanErr = refuseRetypeThatOrphansColumns(member, normProp);
+        if (orphanErr != null)
+        {
+            throw new FormValidationException(orphanErr);
+        }
+        String listErr = refuseCollectionRetypeOnADynamicList(member, normProp);
+        if (listErr != null)
+        {
+            throw new FormValidationException(listErr);
+        }
+        String boundItemsErr = refuseRetypeThatOrphansItems(member, normProp);
+        if (boundItemsErr != null)
+        {
+            throw new FormValidationException(boundItemsErr);
+        }
         FormHolder holder = resolveFormHolder(member, asString(normProp.get("name"))); //$NON-NLS-1$
         List<PreparedChange> built = new ArrayList<>();
         // The extension-adopt hint (issue #262) is scoped to the mdclass 'type' property path
@@ -3738,7 +4336,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // 'type' is a platform-type classifier (group/field/decoration kind), never a metadata reference,
         // so there is no unresolved-reference case here to hint. `project` is null: a form member is
         // never a ScheduledJob / EventSubscription, so validateMethodReference never dereferences it.
-        String pErr = prepare(new PrepareContext(null, config, version), member, holder.classifyExtInfo, normProp,
+        String pErr = prepare(PrepareContext.forFormMember(config, version), member, holder.classifyExtInfo, normProp,
             built, normReport, false);
         if (pErr != null)
         {
@@ -3746,6 +4344,349 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         // prepare() appends exactly one change on success.
         return new HolderChange(holder.onExtInfo, built.get(0));
+    }
+
+    /** What the user authorizes when a plain attribute is converted into a dynamic list. */
+    private static ConsentPreview dynamicListRetypePreview(String normFqn)
+    {
+        return new ConsentPreview(
+            "Convert a form attribute into a dynamic list", //$NON-NLS-1$
+            "This replaces the attribute's data type with DynamicList. Any value the form held " //$NON-NLS-1$
+                + "through it is dropped on the next database update.", //$NON-NLS-1$
+            1, List.of(normFqn));
+    }
+
+    /**
+     * The dynamic-list branch's PRE-CHECK, run before the consent gate (see {@link #gateFormRetype}).
+     * ONE read transaction decides whether a prompt is warranted at all, because every case below
+     * either cannot convert or is refused outright - and a denial would come back INSTEAD of the
+     * actionable validation error (issue #295 review):
+     *
+     * <ul>
+     * <li>the request carries neither {@code queryText} nor {@code mainTable}, so no list can be
+     * created (a {@code customQuery}-only request is rejected downstream);</li>
+     * <li>the attribute is absent (the write answers "attribute not found");</li>
+     * <li>the {@code mainTable} FQN does not resolve - the same refusal the write would raise, only
+     * without a dialog in front of it;</li>
+     * <li>the attribute is ALREADY a dynamic list, so nothing is retyped;</li>
+     * <li>it still owns columns the conversion would strand.</li>
+     * </ul>
+     *
+     * @param fctx the resolved form edit context
+     * @param config the configuration the main table is resolved against
+     * @param ref the parsed form-member ref
+     * @param queryText the requested custom query text, or {@code null}
+     * @param mainTable the requested main-table FQN, or {@code null}
+     * @return a ready JSON error to return as-is, {@code ""} to write without prompting, or
+     *         {@code null} to ask
+     */
+    private static String dynamicListRetypePreflight(FormElementWriter.FormEditContext fctx, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        Configuration config, Version version, FormElementWriter.FormMemberRef ref, String queryText,
+        String mainTable)
+    {
+        boolean couldConvert = (queryText != null && !queryText.isEmpty())
+            || (mainTable != null && !mainTable.isEmpty());
+        if (!couldConvert)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return FormElementWriter.readEditableForm(fctx, "DynamicListRetypeProbe", //$NON-NLS-1$
+            (formModel, tx) -> dynamicListRetypeVerdict(config, version, formModel,
+                FormElementWriter.resolveFormMember(formModel, ref), mainTable));
+    }
+
+    /**
+     * The dynamic-list branch's pre-check verdict for an ALREADY-RESOLVED attribute - the body of
+     * {@link #dynamicListRetypePreflight}'s read, package-private so a unit test can drive the
+     * decision itself without an EDT context. Must run inside the read transaction: it resolves the
+     * main table against the model.
+     *
+     * @param config the configuration the main table is resolved against
+     * @param formModel the tx-bound form model (its metamodel decides whether a list is possible)
+     * @param member the resolved form attribute, or {@code null} when it does not exist
+     * @param mainTable the requested main-table FQN, or {@code null}
+     * @return a ready JSON error, {@code ""} for "do not prompt", or {@code null} to ask
+     */
+    static String dynamicListRetypeVerdict(Configuration config, Version version, EObject formModel, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        EObject member, String mainTable)
+    {
+        if (member == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        // A form model that cannot represent a dynamic list at all refuses the conversion no matter
+        // what the user answers - the write raised it from inside the transaction (issue #295 review).
+        String unsupported = FormElementWriter.dynamicListUnsupportedError(formModel);
+        if (unsupported != null)
+        {
+            return unsupported;
+        }
+        // The main table is resolved HERE, in the same read, because the write callback resolves it
+        // too late: an FQN that names nothing would raise the destructive prompt first and answer the
+        // resolution failure only after ALLOW (issue #295 review).
+        String mainTableErr = FormElementWriter.mainTableResolutionError(config, mainTable);
+        if (mainTableErr != null)
+        {
+            return mainTableErr;
+        }
+        if (FormElementWriter.isDynamicListAttribute(member))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String orphan = orphanColumnsError(member);
+        if (orphan != null)
+        {
+            return orphan;
+        }
+        // LAST, because it only matters once a conversion is really going to happen: the value type
+        // the conversion must build. Unbuildable = the write refuses whatever the user answers, and it
+        // refuses only AFTER having set the ext-info classifier - so this belongs above the gate, and
+        // the version is resolved before it (issue #295 review).
+        return FormElementWriter.dynamicListTypeUnavailableError(version);
+    }
+
+    /**
+     * Refuses a form-attribute retype that would strand its COLUMNS. Retyping a collection attribute
+     * to a non-collection leaves its {@code FormAttributeColumn} children hanging off something that
+     * cannot own them - the very shape {@code create_metadata} refuses to build - and EDT does not
+     * flag it. Collection-to-collection (ValueTable to ValueTree) stays allowed. Issue #295.
+     *
+     * <p>The three things a retype can strand are refused on DIFFERENT conditions, because they break
+     * for different reasons: columns and a table's row source need the attribute to keep holding ROWS,
+     * so any non-collection type strands them; an item bound BELOW the attribute only breaks when the
+     * new type has no members to resolve against, which is asked of
+     * {@link #requestsOnlyMemberlessTypes} (issue #295 review).</p>
+     *
+     * @param member the form member being modified
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return a ready JSON error, or {@code null} when the change strands nothing
+     */
+    private static String refuseRetypeThatOrphansColumns(EObject member, JsonObject normProp)
+    {
+        if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name")))) //$NON-NLS-1$
+        {
+            return null;
+        }
+        // Collection-to-collection (ValueTable to ValueTree) keeps an owner the columns can live on,
+        // and keeps every path through the attribute resolving - nothing is stranded either way.
+        if (requestsCollectionType(normProp))
+        {
+            return null;
+        }
+        if (!FormElementWriter.attributeColumnNames(member).isEmpty())
+        {
+            return orphanColumnsError(member);
+        }
+        // A collection with NO columns could still be the row source of a table, and the early return
+        // on "no columns" let that through: the table stayed bound to something that no longer has
+        // rows - the state createTable refuses to build, so the tool was stricter about creating a
+        // form than about editing one into the same shape (issue #295 review).
+        List<String> rowConsumers = FormElementWriter.rowConsumersBoundToAttribute(member);
+        if (!rowConsumers.isEmpty())
+        {
+            return ToolResult.error("Form attribute '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
+                + "' is the row source of " + rowConsumers.size() + " table(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+                + String.join(", ", rowConsumers) + "), which a non-collection type cannot be. Delete " //$NON-NLS-1$ //$NON-NLS-2$
+                + "them with delete_metadata (or re-point them with modify_metadata 'dataPath') " //$NON-NLS-1$
+                + "first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
+        }
+        // ...and the same for items bound BELOW it - but ONLY when the requested type is terminal: a
+        // field on 'Rows.Price' survives the retype and keeps pointing at a name a String does not
+        // have, while a REFERENCE type carries its members in the metadata, so 'Rows.Product.
+        // Description' keeps resolving and createField deliberately builds exactly that. Firing on the
+        // mere presence of a tail made this tool refuse a retype it was happy to create - creation
+        // allowed, editing forbade (issue #295 review). The verdict is the requested TYPE's, asked of
+        // the same MetadataTypeBuilder that decides what the retype will build.
+        if (!requestsOnlyMemberlessTypes(normProp))
+        {
+            return null;
+        }
+        List<String> below = FormElementWriter.itemsBoundBelowAttribute(member);
+        if (!below.isEmpty())
+        {
+            return ToolResult.error("Retyping '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
+                + "' would leave " + below.size() + " form item(s) (" + String.join(", ", below) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ") bound below it to a name the new type does not have. Delete them with " //$NON-NLS-1$
+                + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.") //$NON-NLS-1$
+                .toJson();
+        }
+        return null;
+    }
+
+    /**
+     * Whether a {@code valueType} spec names an IN-MEMORY collection kind (ValueTable / ValueTree).
+     * One reader for the two guards that both turn on "is the caller asking for a collection".
+     *
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return {@code true} when at least one requested type item is a collection kind
+     */
+    private static boolean requestsCollectionType(JsonObject normProp)
+    {
+        for (String kind : requestedTypeKinds(normProp))
+        {
+            if (MetadataTypeBuilder.isCollectionKind(kind))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a {@code valueType} spec asks for types that ALL own no addressable member - the only
+     * shape that really strands a data path running through the attribute. The twin of
+     * {@link #requestsCollectionType}: both answer a question about the REQUESTED type, and both put
+     * it to {@link MetadataTypeBuilder}, the place that decides what the retype will actually build.
+     *
+     * <p>An unrecognizable spec (no {@code types} array, an empty one, a kind this tool cannot build)
+     * answers {@code false}: the guard refuses only what is PROVABLY stranded, and the payload's own
+     * validation answers the malformed case with a type error.</p>
+     *
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return {@code true} when at least one type is requested and every one of them is memberless
+     */
+    private static boolean requestsOnlyMemberlessTypes(JsonObject normProp)
+    {
+        List<String> kinds = requestedTypeKinds(normProp);
+        if (kinds.isEmpty())
+        {
+            return false;
+        }
+        for (String kind : kinds)
+        {
+            if (!MetadataTypeBuilder.isMemberlessType(kind))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The {@code kind} tokens a {@code valueType} spec asks for, in spec order, or an EMPTY list when
+     * the spec carries no {@code types} array. One reader for every guard that turns on WHAT the
+     * caller asked for, so they cannot read the payload differently.
+     *
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return the requested kinds; an entry is {@code null} when the item declares none
+     */
+    private static List<String> requestedTypeKinds(JsonObject normProp)
+    {
+        List<String> kinds = new ArrayList<>();
+        JsonElement spec = normProp.get(KEY_VALUE);
+        if (spec == null || !spec.isJsonObject())
+        {
+            return kinds;
+        }
+        JsonElement types = spec.getAsJsonObject().get("types"); //$NON-NLS-1$
+        if (types == null || !types.isJsonArray())
+        {
+            return kinds;
+        }
+        for (JsonElement item : types.getAsJsonArray())
+        {
+            kinds.add(item.isJsonObject() ? asString(item.getAsJsonObject().get("kind")) : null); //$NON-NLS-1$
+        }
+        return kinds;
+    }
+
+    /**
+     * Refuses a retype to a collection that would leave EXISTING form items bound below the attribute
+     * to a name it will not own as a column. The mirror of
+     * {@link #refuseRetypeThatOrphansColumns}: that one guards what hangs BELOW the attribute, this
+     * one what already points INTO it. Once the attribute holds rows a dotted path under it names a
+     * COLUMN, so a field carrying {@code Object.Number} across a retype of {@code Object} to
+     * ValueTable ends up in exactly the shape {@code createField} refuses to build - silently, since
+     * nothing revalidates existing items (issue #295 review).
+     *
+     * <p>A COMPOSITE spec is not that shape. {@code {ValueTable, CatalogRef.Products}} keeps
+     * {@code Rows.Product.Description} resolving through its REFERENCE half - which is exactly why
+     * {@code createField} accepts that path - so firing on "a collection is mentioned" refused a
+     * retype the creator is happy to build, one level below the same defect this branch already
+     * fixed for terminal types. The question is put to
+     * {@link FormElementWriter#carriesMembersOutsideThisModel}, the per-type rule the nested-address
+     * classifier itself applies, so creating and editing cannot answer it differently (issue #295
+     * review).</p>
+     *
+     * @param member the form member being modified
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return a ready JSON error naming the items, or {@code null}
+     */
+    private static String refuseRetypeThatOrphansItems(EObject member, JsonObject normProp)
+    {
+        if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name"))) //$NON-NLS-1$
+            || !requestsCollectionType(normProp)
+            || FormElementWriter.carriesMembersOutsideThisModel(requestedTypeKinds(normProp)))
+        {
+            return null;
+        }
+        List<String> bound = FormElementWriter.itemsBoundBelowAttribute(member);
+        if (bound.isEmpty())
+        {
+            return null;
+        }
+        return ToolResult.error("Retyping '" + FormStructureReader.nameOf(member) + "' to a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "collection would leave " + bound.size() + " form item(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+            + String.join(", ", bound) + ") bound to a name the collection does not own: under a " //$NON-NLS-1$ //$NON-NLS-2$
+            + "ValueTable / ValueTree a dotted data path addresses a COLUMN. Delete those items with " //$NON-NLS-1$
+            + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Refuses giving a collection type to an attribute that is already a DYNAMIC LIST. Writing only
+     * the {@code valueType} would leave the {@code DynamicListExtInfo} attached, so the exported
+     * attribute would be a collection AND still answer {@code isDynamicListAttribute} - it could then
+     * take columns while a stale query / main table kept describing it. That state cannot exist in the
+     * designer, and this branch is what made it reachable at all (issue #295 review).
+     *
+     * <p>The tool REFUSES rather than dropping the list configuration silently, for the same reason
+     * {@link #refuseRetypeThatOrphansColumns} refuses instead of deleting columns: the ext-info holds
+     * content the caller authored (the query text, the main table), the request says "make it a
+     * collection" and not "discard my query", and the consent prompt the caller answered speaks of a
+     * type change only - stripping the list under it would destroy something nobody authorized.</p>
+     *
+     * @param member the form member being modified
+     * @param normProp the normalized property (its name already aliased to {@code valueType})
+     * @return a ready JSON error, or {@code null} when nothing conflicts
+     */
+    private static String refuseCollectionRetypeOnADynamicList(EObject member, JsonObject normProp)
+    {
+        if (!PROP_VALUE_TYPE.equalsIgnoreCase(asString(normProp.get("name"))) //$NON-NLS-1$
+            || !requestsCollectionType(normProp)
+            || !FormElementWriter.isDynamicListAttribute(member))
+        {
+            return null;
+        }
+        String name = FormStructureReader.nameOf(member);
+        return ToolResult.error("Form attribute '" + name + "' is configured as a DYNAMIC LIST (it " //$NON-NLS-1$ //$NON-NLS-2$
+            + "carries a DynamicListExtInfo with its query / main table), and a dynamic list cannot " //$NON-NLS-1$
+            + "also hold an in-memory collection type: the attribute would be exported as a collection " //$NON-NLS-1$
+            + "while still counting as a list, with the old query left describing it. The list " //$NON-NLS-1$
+            + "configuration is not dropped for you - delete the attribute with delete_metadata " //$NON-NLS-1$
+            + "('...Attribute." + name + "') and create it again with the collection type, or keep the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "dynamic list and set its data with 'queryText' / 'mainTable'.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The stranded-columns refusal for {@code member}, or {@code null} when it owns no columns. Single
+     * owner of the wording, because TWO paths can retype a form attribute: the ordinary property path
+     * and the dynamic-list branch, which swaps the value type for {@code DynamicList} without ever
+     * building a {@code TypeDescription}. Issue #295.
+     *
+     * @param member the form member about to be retyped
+     * @return a ready JSON error naming the columns, or {@code null}
+     */
+    private static String orphanColumnsError(EObject member)
+    {
+        List<String> columns = FormElementWriter.attributeColumnNames(member);
+        if (columns.isEmpty())
+        {
+            return null;
+        }
+        return ToolResult.error("This form attribute still has " + columns.size() + " column(s) (" //$NON-NLS-1$ //$NON-NLS-2$
+            + String.join(", ", columns) + "), which only a collection type can own. Delete the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "columns first with delete_metadata, or keep a collection type (ValueTable / " //$NON-NLS-1$
+            + "ValueTree).").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -3920,7 +4861,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // A move addresses a form ITEM only - never an attribute / command (which are not in the items
         // tree and have no position / parent).
         FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
-        if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND)
+        if (kind == FormElementWriter.Kind.ATTRIBUTE || kind == FormElementWriter.Kind.COMMAND
+            || kind == FormElementWriter.Kind.COLUMN)
         {
             return ToolResult.error("'parent' / 'position' move a form ITEM (field / group / " //$NON-NLS-1$
                 + "decoration / button / table); a form " + ref.kindToken + " is not positioned. " //$NON-NLS-1$ //$NON-NLS-2$
@@ -3981,8 +4923,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name'."); //$NON-NLS-1$
             final String mdFormName = fctx.mdForm.getName();
             persisted = FormElementWriter.writeEditableForm(fctx, "MoveFormItem", //$NON-NLS-1$
-                (formModel, tx) -> destination[0] = FormElementWriter.moveItem(formModel, itemName,
-                    targetParentFinal, positionFinal, mdFormName));
+                (formModel, tx) ->
+                {
+                    // The addressed move goes through the SAME kind-aware resolver the property /
+                    // delete / read paths use (issue #343): 'Button.<a field>' with a 'parent'
+                    // property must not move the field. The strict variant additionally rejects an
+                    // ambiguous name instead of moving the first match.
+                    EObject item = FormElementWriter.resolveUniqueFormMember(formModel, ref);
+                    if (item == null)
+                    {
+                        throw new FormValidationException(ToolResult.error("Form item not found: " //$NON-NLS-1$
+                            + itemName + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                                itemName, normFqn),
+                                ". Use get_metadata_details on the form to inspect its items.")) //$NON-NLS-1$
+                            .toJson());
+                    }
+                    destination[0] = FormElementWriter.moveResolvedItem(formModel, item, itemName,
+                        targetParentFinal, positionFinal, mdFormName);
+                });
         }
         catch (Exception e)
         {
@@ -4043,6 +5002,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final String eventName = ref.name;
         final boolean commandOwner = ref.isItemLevel()
             && FormElementWriter.kindForToken(ref.itemKindToken) == FormElementWriter.Kind.COMMAND;
+        // The advice may quote a corrected handler address, and whether the corrected owner really
+        // carries that event is a question only the platform type can answer - hence the version.
+        final Version version = platformVersionOf(ctx);
         final boolean persisted;
         try
         {
@@ -4060,9 +5022,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EObject container = FormElementWriter.resolveHandlerContainer(formModel, ref);
                     if (container == null)
                     {
+                        // The OWNER's kind is resolved too (issue #343): an item of that name under
+                        // another kind is named, with the corrected address. The message then names
+                        // the KIND that found nothing, so it cannot read as a lie about the element.
+                        String advice =
+                            FormElementWriter.handlerOwnerKindMismatchAdvice(formModel, ref,
+                                normFqn, version);
                         throw new FormValidationException(ToolResult.error((commandOwner
                             ? "Form command not found: " : "Form item not found: ") + ref.itemName //$NON-NLS-1$ //$NON-NLS-2$
-                            + ". Use get_metadata_details to inspect the form items.").toJson()); //$NON-NLS-1$
+                            + (advice.isEmpty()
+                                ? ". Use get_metadata_details to inspect the form items." //$NON-NLS-1$
+                                : " (kind '" + ref.itemKindToken + "')" + advice)).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                     String err = FormElementWriter.rebindHandler(container, eventName, procName);
                     if (err != null)
@@ -4138,15 +5108,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             persisted = FormElementWriter.writeEditableForm(fctx, "RebindButtonCommand", //$NON-NLS-1$
                 (formModel, tx) ->
                 {
-                    // Strict resolution: an AMBIGUOUS button name (several items by that name anywhere
-                    // in the form-item tree) is rejected with a clear error instead of silently
-                    // re-pointing the first match (findUniqueFormItem throws; the tx rolls back).
-                    EObject button = FormElementWriter.findUniqueFormItem(formModel, buttonName);
+                    // Strict resolution: the KIND is verified by the shared resolver (issue #343), so
+                    // 'Button.<a field>' with a 'command' property cannot reach the field, and an
+                    // AMBIGUOUS button name (several items by that name anywhere in the form-item
+                    // tree) is rejected instead of silently re-pointing the first match (the strict
+                    // lookup throws; the tx rolls back).
+                    EObject button = FormElementWriter.resolveUniqueFormMember(formModel, ref);
                     if (button == null)
                     {
                         throw new FormValidationException(ToolResult.error("Form button not found: " //$NON-NLS-1$
-                            + buttonName + ". Use get_metadata_details to inspect the form items.") //$NON-NLS-1$
-                            .toJson());
+                            + buttonName + " (kind '" + ref.kindToken + "') on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+                            + advisedOr(FormElementWriter.kindMismatchAdvice(formModel, ref.kindToken,
+                                buttonName, normFqn),
+                                ". Use get_metadata_details to inspect the form items.")).toJson()); //$NON-NLS-1$
                     }
                     String err =
                         FormElementWriter.rebindButtonCommand(formModel, button, commandNameFinal);
@@ -4213,6 +5187,156 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
+     * model context every {@code ValueKind} branch resolves references / types against. Folded together
+     * purely to bring {@link #prepare}'s parameter count under the 7-parameter threshold (S107); no
+     * behaviour change. {@code project} is nullable: it is {@code null} on the form-member path (a form
+     * member is never a ScheduledJob / EventSubscription, so {@link #validateMethodReference} never
+     * dereferences it there) and only non-null on the mdclass path.
+     */
+    private static final class PrepareContext
+    {
+        final IProject project;
+
+        final Configuration config;
+
+        final Version version;
+
+        /** Codes declared AFTER this batch; {@code null} when it changes no language code. */
+        final List<String> declaredAfterBatch;
+
+        /**
+         * What a {@code TYPE_DESCRIPTION} property prepared in this context will be attached to. It is
+         * the CALL SITE that knows this (the form-member path vs the mdclass path), so the answer is
+         * carried here rather than sniffed off the resolved feature - issue #295.
+         */
+        final MetadataTypeBuilder.TypeTarget typeTarget;
+
+        PrepareContext(IProject project, Configuration config, Version version,
+            List<String> declaredAfterBatch)
+        {
+            this(project, config, version, declaredAfterBatch, MetadataTypeBuilder.TypeTarget.METADATA);
+        }
+
+        private PrepareContext(IProject project, Configuration config, Version version,
+            List<String> declaredAfterBatch, MetadataTypeBuilder.TypeTarget typeTarget)
+        {
+            this.project = project;
+            this.config = config;
+            this.version = version;
+            this.declaredAfterBatch = declaredAfterBatch;
+            this.typeTarget = typeTarget;
+        }
+
+        /**
+         * The FORM-member variant. A form attribute is the one place the platform holds an in-memory
+         * collection type (ValueTable / ValueTree), so only this context admits those kinds (#295).
+         * {@code project} is {@code null} here, as the class doc explains.
+         *
+         * @param config the configuration the member belongs to
+         * @param version the platform version
+         * @return a context whose type target is a form attribute
+         */
+        static PrepareContext forFormMember(Configuration config, Version version)
+        {
+            return new PrepareContext(null, config, version, null,
+                MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+        }
+    }
+
+    /**
+     * The language codes the configuration will declare AFTER this batch is applied, or {@code null}
+     * when the batch changes no language code (the caller then uses the model's current set).
+     * Issue #298.
+     *
+     * <p>The set is the configuration's languages with the TARGET language's code REPLACED by the
+     * one this batch assigns - not the union of old and new. A batch that renames a code
+     * ({@code en} -&gt; {@code fr}) leaves no {@code en} behind, so a value written under {@code en}
+     * in that same batch would be invisible and must be refused, exactly like any other undeclared
+     * code. A batch that gives a NEW language its first code adds it, because the target's old code
+     * is empty.
+     *
+     * <p>Safe by construction: the whole batch is prepared before anything is written, so if the
+     * {@code languageCode} entry is itself rejected the call fails and nothing is applied.
+     *
+     * @param config the configuration
+     * @param target the object being modified
+     * @param properties the raw properties array (may be {@code null})
+     * @return the post-batch codes, or {@code null} when this batch changes no language code
+     */
+    private static List<String> declaredCodesAfterBatch(Configuration config, MdObject target,
+        List<JsonObject> properties)
+    {
+        if (config == null || !(target instanceof Language) || properties == null)
+        {
+            return null;
+        }
+        String newCode = null;
+        for (JsonObject prop : properties)
+        {
+            if ("languageCode".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                String value = asString(prop.get(KEY_VALUE));
+                if (value != null && !value.isEmpty())
+                {
+                    newCode = value;
+                }
+            }
+        }
+        if (newCode == null)
+        {
+            return null;
+        }
+        List<String> codes = new ArrayList<>();
+        boolean targetSeen = false;
+        String defaultAfter = null;
+        Language defaultLanguage = config.getDefaultLanguage();
+        for (Language lang : config.getLanguages())
+        {
+            if (lang == null)
+            {
+                continue;
+            }
+            boolean isTarget = lang == target || lang.getName() != null
+                && lang.getName().equals(((Language)target).getName());
+            targetSeen |= isTarget;
+            String code = isTarget ? newCode : lang.getLanguageCode();
+            if (isDefaultLanguage(defaultLanguage, lang))
+            {
+                defaultAfter = code;
+            }
+            if (code != null && !code.isEmpty() && !codes.contains(code))
+            {
+                codes.add(code);
+            }
+        }
+        if (!targetSeen && !codes.contains(newCode))
+        {
+            codes.add(newCode);
+        }
+        // The DEFAULT language's post-edit code goes FIRST: it is what a localized value with no
+        // explicit 'language' must fall back to once the batch has renamed the old default code
+        // away. Counting what is left cannot answer that - a second, untouched language leaves two
+        // codes and neither of them is "the default" by position alone.
+        if (defaultAfter != null && !defaultAfter.isEmpty() && codes.remove(defaultAfter))
+        {
+            codes.add(0, defaultAfter);
+        }
+        return codes;
+    }
+
+    /** Whether {@code lang} IS the configuration's default language (by identity, else by name). */
+    private static boolean isDefaultLanguage(Language defaultLanguage, Language lang)
+    {
+        if (defaultLanguage == null || lang == null)
+        {
+            return false;
+        }
+        return defaultLanguage == lang
+            || defaultLanguage.getName() != null && defaultLanguage.getName().equals(lang.getName());
+    }
+
+    /**
      * Validates one property against the introspected schema and, on success, appends a
      * {@link PreparedChange}. Returns a JSON error string on failure, or {@code null} on success.
      * Accepts any {@link EObject} so it serves both mdclass nodes and form members (the introspector
@@ -4229,30 +5353,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * #262) to an unresolved {@code TYPE_DESCRIPTION} reference; every other {@code ValueKind} ignores
      * it.</p>
      */
-    /**
-     * Immutable bundle of {@link #prepare}'s {@link Configuration} + {@link Version} parameters - the
-     * model context every {@code ValueKind} branch resolves references / types against. Folded together
-     * purely to bring {@link #prepare}'s parameter count under the 7-parameter threshold (S107); no
-     * behaviour change. {@code project} is nullable: it is {@code null} on the form-member path (a form
-     * member is never a ScheduledJob / EventSubscription, so {@link #validateMethodReference} never
-     * dereferences it there) and only non-null on the mdclass path.
-     */
-    private static final class PrepareContext
-    {
-        final IProject project;
-
-        final Configuration config;
-
-        final Version version;
-
-        PrepareContext(IProject project, Configuration config, Version version)
-        {
-            this.project = project;
-            this.config = config;
-            this.version = version;
-        }
-    }
-
     private String prepare(PrepareContext ctx, EObject target, EObject extInfo,
         JsonObject prop, List<PreparedChange> out, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
@@ -4311,7 +5411,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         switch (info.valueKind)
         {
             case LOCALIZED_STRING:
-                return prepareLocalized(ctx.config, name, value, prop, info, out, normReport);
+                return prepareLocalized(ctx, name, value, prop, info, out, normReport);
             case ENUM:
                 return prepareEnum(name, value, info, out);
             case BOOLEAN:
@@ -4319,7 +5419,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case INTEGER:
                 return prepareInteger(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(ctx.config, ctx.version, name, prop, info, out, isExtensionProject);
+                return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
             case REFERENCE:
                 return prepareReference(ctx.config, target, name, value, info, out);
             case MANY_REFERENCE:
@@ -4465,7 +5565,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * success, appends the prepared localized change to {@code out}. Returns a JSON error on failure,
      * or {@code null} on success. Read-only: it only builds and queues the change (no model mutation).
      */
-    private String prepareLocalized(Configuration config, String name, String value, JsonObject prop,
+    private String prepareLocalized(PrepareContext ctx, String name, String value, JsonObject prop,
         PropertyInfo info, List<PreparedChange> out, MdNameNormalizer.Report normReport)
     {
         if (value == null || value.isEmpty())
@@ -4475,8 +5575,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         String code;
         try
         {
-            code = MetadataLanguageUtils.resolveSynonymLanguage(config, value,
-                asString(prop.get("language")), "'" + name + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            // Validate against what the configuration will declare AFTER this batch: an edit that
+            // sets a Language's 'languageCode' and a localized value under it must not reject its own
+            // second half, and one that RENAMES a code must not accept the code it removes.
+            code = MetadataLanguageUtils.resolveSynonymLanguage(ctx.config, value,
+                asString(prop.get("language")), "'" + name + "'", ctx.declaredAfterBatch); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
         catch (IllegalArgumentException e)
         {
@@ -4491,19 +5594,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * platform version) and, on success, appends the prepared scalar change to {@code out}. Returns a
      * JSON error on failure, or {@code null} on success. Read-only: it only builds and queues the
      * change (no model mutation). {@code isExtensionProject} is forwarded to
-     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean)} so an unresolved
-     * reference target's error can append the extension-adopt hint (issue #262).
+     * {@link MetadataTypeBuilder#build(JsonElement, Configuration, Version, boolean,
+     * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
+     * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
+     * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295).
      */
-    private String prepareTypeDescription(Configuration config, Version version, String name,
+    private String prepareTypeDescription(PrepareContext ctx, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
     {
-        if (version == null)
+        if (ctx.version == null)
         {
             return ToolResult.error("Cannot resolve the platform version needed to build a " //$NON-NLS-1$
                 + "type for '" + name + "'.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        MetadataTypeBuilder.Result tr =
-            MetadataTypeBuilder.build(prop.get(KEY_VALUE), config, version, isExtensionProject);
+        MetadataTypeBuilder.Result tr = MetadataTypeBuilder.build(prop.get(KEY_VALUE), ctx.config,
+            ctx.version, isExtensionProject, ctx.typeTarget);
         if (tr.error != null)
         {
             return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
@@ -4881,6 +5986,22 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return typeChange;
         }
 
+        boolean isLocalized()
+        {
+            return kind == Kind.LOCALIZED;
+        }
+
+        EStructuralFeature feature()
+        {
+            return feature;
+        }
+
+        /** The locale a {@code LOCALIZED} change was written under; {@code null} for other kinds. */
+        String language()
+        {
+            return localizedLanguage;
+        }
+
         @SuppressWarnings("unchecked")
         void applyTo(EObject target, IBmTransaction tx)
         {
@@ -5010,5 +6131,231 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         return parts.length >= 2 ? parts[0] + "." + parts[1] : normFqn; //$NON-NLS-1$
+    }
+
+    /**
+     * Collects what a modify wrote to LOCALIZED properties, so the result can tell the caller which
+     * locale was actually used and which declared locales still owe a translation. Issue #298.
+     *
+     * <p>A locale counts as MISSING when the configuration USES it (its own synonym is filled in
+     * for it) and AT LEAST ONE of the localized properties written by this call has no value for it -
+     * the caller is told there is work left, without having to re-read the object. The present locales are read from the model right after the changes are applied, so an
+     * object that already carried other translations is reported correctly (unlike a create, where
+     * the map is necessarily fresh).
+     */
+    private static final class LocalizedWriteReport
+    {
+        private final Set<String> languagesUsed = new LinkedHashSet<>();
+        private final Set<String> missing = new LinkedHashSet<>();
+        /** Per PROPERTY (one receiver's one feature): the locales this call left holding old text. */
+        private final Map<String, Set<String>> staleByProperty = new LinkedHashMap<>();
+        /** Per PROPERTY: the locales this call actually wrote - the ones that are NOT left behind. */
+        private final Map<String, Set<String>> writtenByProperty = new LinkedHashMap<>();
+        /** (receiver, feature, language) -> the text that was there BEFORE this call touched it. */
+        private final Map<String, String> textBefore = new LinkedHashMap<>();
+        /** (receiver, feature, language) -> the text the LAST change in this call writes there. */
+        private final Map<String, String> textAfter = new LinkedHashMap<>();
+        private boolean wrote;
+        private boolean unusedLocale;
+
+        /**
+         * Records which of the localized changes will OVERWRITE existing text. Call INSIDE the write
+         * transaction, BEFORE the changes are applied.
+         * <p>
+         * The distinction decides whether the OTHER languages went stale. Overwriting the 'en' text
+         * of a property leaves the 'fr' one describing the previous value - that is the case worth
+         * reporting. FILLING IN a previously missing 'fr' does not touch 'en' at all: the English
+         * text is as current as it was, and calling it stale would be an invented warning.
+         *
+         * @param target the object the changes are about to be applied to
+         * @param changes the prepared changes
+         */
+        @SuppressWarnings("unchecked")
+        void rememberPreState(EObject target, List<PreparedChange> changes)
+        {
+            for (PreparedChange change : changes)
+            {
+                if (!change.isLocalized())
+                {
+                    continue;
+                }
+                Object map = target.eGet(change.feature());
+                if (!(map instanceof EMap))
+                {
+                    continue;
+                }
+                String had = ((EMap<String, String>)map).map().get(change.language());
+                String key = preStateKey(target, change);
+                // The FIRST pre-state seen for a key is the real "before": a batch may write the
+                // same property and language more than once, and the later writes see what the
+                // earlier ones left, not what the call started from.
+                textBefore.putIfAbsent(key, had == null ? "" : had); //$NON-NLS-1$
+                // The LAST write is what the model ends up with, and only the end state can make
+                // another language out of date. Writing 'New' and then putting 'Old' back leaves
+                // the property exactly as it was, so nothing behind it went stale.
+                textAfter.put(key, change.localizedValue == null ? "" : change.localizedValue); //$NON-NLS-1$
+            }
+        }
+
+        /**
+         * Identity of one (receiver, feature, language) triple.
+         * <p>
+         * The receiver is part of it because a form call writes the same feature name on DIFFERENT
+         * objects (a title on the member and one on its extInfo, or on two different items), and the
+         * language because that is what a single change writes.
+         */
+        private static String preStateKey(EObject target, PreparedChange change)
+        {
+            return propertyKey(target, change) + "/" + change.language(); //$NON-NLS-1$
+        }
+
+        /**
+         * Whether this call left that (receiver, feature, language) holding DIFFERENT text than it
+         * found there. Empty before means there was nothing to make out of date; equal before and
+         * after means the value never moved, however many writes passed through it.
+         */
+        private boolean replaced(String key)
+        {
+            String before = textBefore.get(key);
+            return before != null && !before.isEmpty() && !before.equals(textAfter.get(key));
+        }
+
+        /** Identity of one PROPERTY - one receiver's one feature; staleness is decided per property. */
+        private static String propertyKey(EObject target, PreparedChange change)
+        {
+            return System.identityHashCode(target) + "#" + change.feature().getName(); //$NON-NLS-1$
+        }
+
+        /**
+         * Reads the localized maps of the just-applied changes. Call INSIDE the write transaction,
+         * AFTER the changes are applied.
+         */
+        @SuppressWarnings("unchecked")
+        void collect(EObject target, List<PreparedChange> changes, List<String> declaredCodes,
+            Configuration config)
+        {
+            // Only the languages the configuration ACTUALLY uses are owed a translation; a declared
+            // one it never fills in is a language nobody is translating into (see localesInUse).
+            // The question is asked about declaredCodes - the AFTER-batch set this call reports on -
+            // so a code this very batch declares is judged by the same rule as any other.
+            List<String> inUse = MetadataLanguageUtils.localesInUse(config, declaredCodes);
+            for (PreparedChange change : changes)
+            {
+                if (!change.isLocalized())
+                {
+                    continue;
+                }
+                wrote = true;
+                languagesUsed.add(change.language());
+                writtenByProperty.computeIfAbsent(propertyKey(target, change), k -> new LinkedHashSet<>())
+                    .add(change.language());
+                unusedLocale |= declaredCodes.contains(change.language())
+                    && !inUse.contains(change.language());
+                Object map = target.eGet(change.feature());
+                if (!(map instanceof EMap))
+                {
+                    continue;
+                }
+                Map<String, String> present = ((EMap<String, String>)map).map();
+                // MISSING and STALE ask different questions, so they read different sets. Owing a
+                // NEW translation is what the in-use rule is about: a language the configuration
+                // itself is not named in is one nobody is translating into, and nagging about it
+                // is what the rule forbids. Text that is ALREADY THERE is not owed - it exists,
+                // and this call just made it describe the old value - so staleness is asked about
+                // every DECLARED language: whoever wrote that text is translating into it,
+                // whatever the configuration's own synonym says.
+                for (String declared : declaredCodes)
+                {
+                    String value = present.get(declared);
+                    if (value == null || value.isEmpty())
+                    {
+                        if (inUse.contains(declared))
+                        {
+                            missing.add(declared);
+                        }
+                    }
+                    else if (!declared.equals(change.language()) && replaced(preStateKey(target, change)))
+                    {
+                        // It HAS text, this call did not write it, and the language it DID write
+                        // already had text of its own: the value CHANGED, so the others now say
+                        // what the object used to be called. Invisible to a "missing" list - the
+                        // value is there, it is just the OLD one. (Had this call merely filled in a
+                        // language that was empty, nothing would have gone stale - see
+                        // rememberPreState.)
+                        staleByProperty.computeIfAbsent(propertyKey(target, change),
+                            k -> new LinkedHashSet<>()).add(declared);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Appends the report to a result: the locale used (only when this call used exactly ONE -
+         * see {@link #singleLanguage()}) and the declared locales still without a translation. A
+         * no-op when no localized property was written, so the ABSENCE of both fields is what tells
+         * a caller nothing localized was touched.
+         */
+        void addTo(ToolResult result)
+        {
+            if (!wrote)
+            {
+                return;
+            }
+            String only = singleLanguage();
+            if (only != null)
+            {
+                result.put(KEY_LANGUAGE, only);
+            }
+            result.put(KEY_LOCALES_MISSING, missing());
+            List<String> stillOld = staleLocales();
+            if (!stillOld.isEmpty())
+            {
+                result.put(KEY_LOCALES_STALE, stillOld);
+            }
+            if (unusedLocale)
+            {
+                // Legal, but worth a question: the configuration's own synonym has no text for that
+                // language, so this may be a single-language build or one that does not support it
+                // yet. The caller's agent should ask rather than quietly populate it.
+                result.put(KEY_LOCALE_UNUSED, true);
+            }
+        }
+
+        /**
+         * The locales that CARRY TEXT this call did not rewrite - the old wording of a property
+         * whose other language just changed.
+         * <p>
+         * Decided PER PROPERTY. A call that changes {@code title} in en and {@code toolTip} in fr
+         * leaves title.fr and toolTip.en behind: excluding every language the call touched anywhere
+         * would hide both. Only the property's OWN written locales are excluded, so translating en
+         * and fr of the SAME property in one call still leaves neither of them behind.
+         *
+         * @return the codes, deduplicated across properties, never {@code null}
+         */
+        List<String> staleLocales()
+        {
+            Set<String> out = new LinkedHashSet<>();
+            for (Map.Entry<String, Set<String>> entry : staleByProperty.entrySet())
+            {
+                Set<String> left = new LinkedHashSet<>(entry.getValue());
+                left.removeAll(writtenByProperty.getOrDefault(entry.getKey(), Set.of()));
+                out.addAll(left);
+            }
+            return new ArrayList<>(out);
+        }
+
+        /**
+         * The single locale every localized property was written under, or {@code null} when this
+         * call used more than one (echoing one of them would misdescribe the others).
+         */
+        String singleLanguage()
+        {
+            return languagesUsed.size() == 1 ? languagesUsed.iterator().next() : null;
+        }
+
+        List<String> missing()
+        {
+            return new ArrayList<>(missing);
+        }
     }
 }
