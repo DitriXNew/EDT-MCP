@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.function.UnaryOperator;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
@@ -41,6 +42,9 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Bulk re-synchronizes the in-memory BM model to the on-disk {@code src/}
@@ -377,11 +381,30 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      */
     private String runOptionalRevalidation(String projectName, boolean revalidate, boolean exported)
     {
+        return runOptionalRevalidation(projectName, revalidate, exported, CleanProjectTool::cleanProject);
+    }
+
+    /**
+     * Same as {@link #runOptionalRevalidation(String, boolean, boolean)} with the revalidation
+     * delegate injected, so the reporting contract can be tested without a live workspace.
+     *
+     * @param projectName the project to revalidate
+     * @param revalidate whether revalidation was requested
+     * @param exported whether the export succeeded
+     * @param revalidator the delegate that revalidates and returns a tool result envelope
+     * @return the warning message when revalidation failed or was reported as failed, else {@code null}
+     */
+    static String runOptionalRevalidation(String projectName, boolean revalidate, boolean exported,
+        UnaryOperator<String> revalidator)
+    {
         if (revalidate && exported)
         {
             try
             {
-                CleanProjectTool.cleanProject(projectName);
+                // clean_project REPORTS most failures instead of throwing (a missed clean-build
+                // deadline, a project that went missing/closed). Ignoring the returned envelope
+                // would let resync_to_disk claim success while EDT is still mid-rebuild.
+                return revalidateWarningFrom(revalidator.apply(projectName));
             }
             catch (Exception e)
             {
@@ -390,6 +413,52 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
         }
         return null;
+    }
+
+    /**
+     * Extracts the warning to surface from a {@code clean_project} result envelope.
+     *
+     * <p>Uses the same error rule as the protocol layer: ONLY an explicit {@code success == false}
+     * boolean marks an error payload, so a successful result that happens to carry an
+     * {@code error}-named field is not mistaken for a failure.
+     *
+     * @param cleanResultJson the JSON returned by {@link CleanProjectTool#cleanProject(String)}
+     * @return the message to report as {@code revalidateWarning}, or {@code null} when the
+     *     revalidation succeeded (or the payload is not a readable envelope)
+     */
+    static String revalidateWarningFrom(String cleanResultJson)
+    {
+        if (cleanResultJson == null || cleanResultJson.isEmpty())
+        {
+            return null;
+        }
+        try
+        {
+            JsonElement element = JsonParser.parseString(cleanResultJson);
+            if (!element.isJsonObject())
+            {
+                return null;
+            }
+            JsonObject obj = element.getAsJsonObject();
+            JsonElement success = obj.get("success"); //$NON-NLS-1$
+            boolean isError = success != null && success.isJsonPrimitive()
+                && success.getAsJsonPrimitive().isBoolean() && !success.getAsBoolean();
+            if (!isError)
+            {
+                return null;
+            }
+            JsonElement error = obj.get("error"); //$NON-NLS-1$
+            if (error != null && error.isJsonPrimitive())
+            {
+                return "Revalidation after resync did not complete: " + error.getAsString(); //$NON-NLS-1$
+            }
+            return "Revalidation after resync did not complete."; //$NON-NLS-1$
+        }
+        catch (Exception e) // NOSONAR an unreadable envelope must not fail the resync itself
+        {
+            Activator.logError("Could not read the revalidation result envelope", e); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**
