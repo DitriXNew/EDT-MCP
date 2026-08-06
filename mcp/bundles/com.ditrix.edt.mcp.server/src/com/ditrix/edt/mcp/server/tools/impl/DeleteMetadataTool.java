@@ -119,9 +119,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * The mutation one delete branch performs once the gate has answered ALLOW. A dedicated type
      * rather than a bare {@code Supplier<String>} because it is load-bearing for the enforcement:
      * it is the ONE thing {@link #deleteWithConsent} invokes, and {@code
-     * DeleteMetadataConsentSinglePointRatchetTest} reads the compiled class to prove that no other
-     * method of this tool invokes it - which turns "nothing is written without ALLOW" into something
-     * checkable instead of something a reviewer has to re-read every time a branch is added.
+     * DeleteMetadataConsentSinglePointRatchetTest} reads the compiled classes - this one and every
+     * class compiled inside it - to prove that nothing else reaches it, by call OR by method handle,
+     * and that a callback nobody hands to the gate is not exempt from its walk. That turns "nothing is
+     * written without ALLOW" into something checkable instead of something a reviewer has to re-read
+     * every time a branch is added.
      */
     @FunctionalInterface
     interface DeleteWrite
@@ -1955,8 +1957,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * owe the caller different errors: the confirm path must be able to report the package-level
      * failure with the SAME message the write transaction would have produced, instead of collapsing
      * it into "member not found" (issue #331 review).
+     *
+     * <p>Package-visible so a unit test can hand each of the three states to
+     * {@link #gateXdtoMemberDelete} and check what the caller is told - and, above all, that the two
+     * miss states are told it without a consent prompt ever being raised.</p>
      */
-    private static final class XdtoLookup
+    static final class XdtoLookup
     {
         /** Whether the owning package resolved inside the transaction at all. */
         final boolean packageResolved;
@@ -2060,10 +2066,36 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // The lookup materializes the package's lazy content, so it can fail exactly the way the
             // write can; mapping it through the SAME helper keeps the error contract identical to
             // the one this branch had when the lookup lived inside the write transaction.
-            return xdtoDeleteFailure(e);
+            return xdtoDeleteFailure(normFqn, e);
         }
+        return gateXdtoMemberDelete(normFqn, ref, found,
+            () -> writeXdtoMemberDelete(ctx, normFqn, ref, bmModel, pkgBmId, fqnGenerator, pkgExportFqn));
+    }
+
+    /**
+     * The XDTO branch's authorization step, the twin of {@link #gateFormMemberDelete}: turns what the
+     * pre-write lookup found into either an error or a consent prompt, and hands the branch's write to
+     * {@link #deleteWithConsent}.
+     *
+     * <p>Package-private and taking BOTH the lookup outcome and the write as parameters so a unit test
+     * can drive all three states without an EDT context. That matters more here than anywhere else in
+     * this tool: the ORDER (resolve, then ask) is what issue #331 asked for, and an order pinned only
+     * by bytecode offsets would stay green if the lookup's RESULT stopped being used - the prompt would
+     * come back for a target that is not there. The behavioural pin is
+     * {@code DeleteMetadataToolTest#testXdtoBranch...}; the offsets are pinned separately by
+     * {@code DeleteMetadataConsentSinglePointRatchetTest}.</p>
+     *
+     * @param normFqn the normalized FQN being deleted
+     * @param ref the parsed XDTO member ref
+     * @param found what the pre-write lookup found
+     * @param write this branch's mutation
+     * @return the mutation's result, the refusal error, or the miss the lookup found
+     */
+    String gateXdtoMemberDelete(String normFqn, XdtoWriter.MemberRef ref, XdtoLookup found, DeleteWrite write)
+    {
         // Both misses answer with the error the WRITE transaction would have produced for them, so
-        // moving the lookup in front of the gate changes when the caller is told, never what.
+        // moving the lookup in front of the gate changes when the caller is told, never what - and
+        // neither of them reaches the gate, so a typo never raises a destructive prompt.
         if (!found.packageResolved)
         {
             return xdtoPackageUnresolvedError();
@@ -2076,8 +2108,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             "This deletes '" + normFqn + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (ref.kind == XdtoWriter.Kind.OBJECT_TYPE ? " and all its own properties." : "."), //$NON-NLS-1$ //$NON-NLS-2$
             1, Collections.singletonList(normFqn));
-        return deleteWithConsent(preview,
-            () -> writeXdtoMemberDelete(ctx, normFqn, ref, bmModel, pkgBmId, fqnGenerator, pkgExportFqn));
+        return deleteWithConsent(preview, write);
     }
 
     /**
@@ -2109,7 +2140,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         catch (Exception e)
         {
-            return xdtoDeleteFailure(e);
+            return xdtoDeleteFailure(normFqn, e);
         }
 
         // DUAL force-export, mirroring create_metadata / modify_metadata exactly: the owning
@@ -2153,18 +2184,31 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * and the write, so a failure that used to surface from inside the write transaction still reaches
      * the caller in the same shape now that the lookup runs before it (issue #331).
      *
+     * <p>The generic branch names the TARGET and what to do next, because the platform message alone
+     * ("Resource ... could not be loaded") does not tell the caller which delete it belongs to nor how
+     * to proceed - CLAUDE.md rule #8. The message itself is kept: it is the only thing that
+     * distinguishes a corrupt {@code .xdto} from a stale BM id, the same text the write path has always
+     * returned, and the preview (no consent at all) reaches the identical failure - so withholding it
+     * here would buy no confidentiality and cost the caller its only diagnosis. The stack trace goes to
+     * the workspace error log only.</p>
+     *
+     * <p>Package-visible so a unit test can pin that shape.</p>
+     *
+     * @param fqn the normalized FQN the delete was addressed to
      * @param e the failure
      * @return the tool's JSON error
      */
-    private static String xdtoDeleteFailure(Exception e)
+    static String xdtoDeleteFailure(String fqn, Exception e)
     {
         String ready = XdtoWriteException.jsonOf(e);
         if (ready != null)
         {
             return ready;
         }
-        Activator.logError("Error deleting XDTO member", e); //$NON-NLS-1$
-        return ToolResult.error("Delete failed: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        Activator.logError("Error deleting XDTO member " + fqn, e); //$NON-NLS-1$
+        return ToolResult.error("Delete failed for '" + fqn + "': " + unwrapCauseMessage(e) //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Nothing was deleted. Re-read the owning XDTO package with get_metadata_details and " //$NON-NLS-1$
+            + "retry; if the package itself does not load, fix it on disk first.").toJson(); //$NON-NLS-1$
     }
 
     /** The write-transaction result for {@link #writeXdtoMemberDelete}: the removed kind + the content's own export FQN. */
