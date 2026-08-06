@@ -34,8 +34,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
+import org.eclipse.jgit.errors.ConfigInvalidException;
+import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
+import org.eclipse.jgit.storage.file.FileBasedConfig;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -1246,6 +1249,11 @@ public class GitTool implements IMcpTool
      * The subsection NAME is judged by the same predicate as those values
      * ({@link #storedTextFlaw}), because {@code remote -v} prints it too.
      * <p>
+     * The configuration is re-read from DISK first ({@link #reloadFromDisk}): the repository object
+     * is EGit's and outlives the call, and JGit refreshes its copy only when its snapshot notices a
+     * change - which an in-place edit of the same size and mtime does not produce, while the native
+     * git below re-reads the file anyway.
+     * <p>
      * What {@code repo.getConfig()} covers is the MERGED configuration, base chain included: this
      * repository's config over the user config over the system config - and the user config is
      * itself a chain of git's two files, {@code ~/.gitconfig} over {@code $XDG_CONFIG_HOME/git/config}
@@ -1293,6 +1301,7 @@ public class GitTool implements IMcpTool
         try
         {
             StoredConfig config = repo.getConfig();
+            reloadFromDisk(config);
             for (String remote : config.getSubsections(REMOTE_SECTION))
             {
                 StoredRemoteFlaw flaw = remoteEntryFlaw(config, remote);
@@ -1302,16 +1311,67 @@ public class GitTool implements IMcpTool
                 }
             }
         }
-        catch (RuntimeException e) // NOSONAR fail closed: an unreadable config cannot be shown to be safe
+        // NOSONAR fail closed: a configuration that cannot be read cannot be shown to be safe
+        catch (IOException | ConfigInvalidException | RuntimeException e)
         {
-            // JGit wraps an IOException / ConfigInvalidException from the reload in an unchecked
-            // exception. The THROWABLE is deliberately not handed on: its message can quote the
-            // configuration (see configReadFailureLog), and the EDT error log is permanent - writing
-            // it there would move the leak rather than close it.
+            // The re-read below throws these two CHECKED; a lazy reload inside JGit wraps the same
+            // pair in an unchecked exception. The THROWABLE is deliberately not handed on: its
+            // message can quote the configuration (see configReadFailureLog), and the EDT error log
+            // is permanent - writing it there would move the leak rather than close it.
             Activator.logError(configReadFailureLog(e), null);
             return CONFIG_UNREADABLE_REFUSAL;
         }
         return null;
+    }
+
+    /**
+     * Re-reads the configuration from DISK before anything is judged, rather than trusting the copy
+     * JGit is holding.
+     * <p>
+     * The {@link Repository} is not ours and outlives the call - EGit hands out a cached,
+     * reference-counted instance - and {@code getConfig()} refreshes only what JGit's
+     * {@code FileSnapshot} NOTICES: a changed size, file key, or mtime. An in-place edit that keeps
+     * all three is invisible to it, while the native {@code git} started below re-reads the file
+     * regardless. The check would then judge yesterday's clean remote and {@code remote -v} would
+     * print today's credential. Reading from disk here costs a few small file reads on the four
+     * remote-reaching subcommands and removes that heuristic from the answer altogether.
+     * <p>
+     * The whole base chain is walked, because a remote can be inherited (repository - user -
+     * system). THREE limits are real, and none of them is papered over:
+     * <ul>
+     * <li>{@code ~/.gitconfig} is held by JGit in a {@code UserConfigFile}, whose {@code load()}
+     * OVERRIDE re-reads only when {@code isOutdated()} says so - a forced reload of that one link is
+     * not reachable through the public API, so there it stays JGit's own detection. The
+     * repository's own {@code .git/config}, the XDG file behind {@code ~/.gitconfig} and the system
+     * file are plain {@code FileBasedConfig}s and are re-read unconditionally.</li>
+     * <li>An {@code [include]}d file is re-read only when the file that INCLUDES it changed:
+     * {@code load()} hashes the bytes it just read and skips the parse when the hash is what it
+     * parsed last time, and an include is followed from inside that parse. Editing only the
+     * included file therefore stays invisible here, exactly as it is to {@code isOutdated()}, which
+     * keeps no snapshot for it either.</li>
+     * <li>Nothing here closes the gap between this read and git's own: the configuration can be
+     * rewritten after the check and before the process starts. No check-then-run can close that, and
+     * the guide says so instead of implying otherwise.</li>
+     * </ul>
+     * That same hash check is why re-reading the SHARED user and system objects is safe to do on
+     * every call: when the bytes on disk are unchanged - the ordinary case - nothing is re-parsed
+     * and no in-memory state is replaced, so an unsaved change another part of the IDE is holding
+     * survives. When the bytes DID change, the state is replaced - but then JGit's own
+     * {@code isOutdated()} would have replaced it on the next read anyway.
+     *
+     * @param config the configuration to refresh, base chain included
+     * @throws IOException when a configuration file cannot be read
+     * @throws ConfigInvalidException when one cannot be parsed
+     */
+    private static void reloadFromDisk(Config config) throws IOException, ConfigInvalidException
+    {
+        for (Config link = config; link != null; link = link.getBaseConfig())
+        {
+            if (link instanceof FileBasedConfig)
+            {
+                ((FileBasedConfig)link).load();
+            }
+        }
     }
 
     /**

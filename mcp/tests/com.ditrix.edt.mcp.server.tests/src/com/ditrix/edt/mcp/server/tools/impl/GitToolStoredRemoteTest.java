@@ -799,6 +799,75 @@ public class GitToolStoredRemoteTest
             new Config(inherited).getSubsections(REMOTE_SECTION).contains("inherited-remote")); //$NON-NLS-1$
     }
 
+    // ==================== read from disk, not from JGit's cache ====================
+
+    @Test
+    public void testAConfigEditedBehindJGitsCacheIsStillJudged() throws Exception
+    {
+        // The Repository is not ours and outlives one call - EGit hands out a cached,
+        // reference-counted instance - and JGit refreshes its configuration only when its
+        // FileSnapshot NOTICES a change: size, file key, or mtime. An in-place edit that keeps all
+        // three is invisible to it, while the native git started afterwards re-reads the file
+        // regardless. Without a forced re-read the check approves yesterday's clean remote and
+        // 'remote -v' prints today's credential.
+        //
+        // The fixture reproduces exactly that: same byte count, same mtime, different content.
+        Repository repo = newRepository("git-stored-cache-bypass"); //$NON-NLS-1$
+        File configFile = new File(repo.getDirectory(), CONFIG_FILE);
+        String poisoned = poisonedUrl(SPACE);
+        // Padded to the poisoned value's length, so the FILE keeps its size across the edit.
+        String clean = "https://" + HOST + "/team/" //$NON-NLS-1$ //$NON-NLS-2$
+            + "c".repeat(poisoned.length() - ("https://" + HOST + "/team/.git").length()) //$NON-NLS-1$
+            + ".git"; //$NON-NLS-1$
+        assertEquals("fixture: the two URLs must be the same length, or the file size changes and " //$NON-NLS-1$
+            + "JGit notices the edit for a reason that has nothing to do with this case", //$NON-NLS-1$
+            poisoned.length(), clean.length());
+        String before = configText(clean);
+        String after = configText(poisoned);
+        assertEquals("fixture: and so must the two config FILES", before.length(), after.length()); //$NON-NLS-1$
+
+        // Written far enough in the past that the snapshot taken below cannot be "racily clean" -
+        // otherwise JGit re-reads out of caution and the case would prove nothing.
+        Files.write(configFile.toPath(), before.getBytes(StandardCharsets.UTF_8));
+        configFile.setLastModified(System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(1));
+        long mtime = configFile.lastModified();
+        assertTrue("fixture: the clean remote must be visible before the edit", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).contains(ORIGIN));
+
+        // The edit JGit cannot see: same length, and the mtime put back exactly as it was.
+        Files.write(configFile.toPath(), after.getBytes(StandardCharsets.UTF_8));
+        assertTrue("fixture: the mtime must be restorable, or the edit is visible for the wrong " //$NON-NLS-1$
+            + "reason", configFile.setLastModified(mtime)); //$NON-NLS-1$
+        assertEquals("fixture: the mtime really has to be back where it was", mtime, //$NON-NLS-1$
+            configFile.lastModified());
+        // Positive control, and the whole premise of the case: JGit is STILL serving the old value.
+        // Without this the test would pass on a JGit that noticed the edit by itself, proving
+        // nothing about the forced re-read.
+        assertEquals("fixture: JGit must NOT notice this edit on its own - if it does, this case " //$NON-NLS-1$
+            + "is not about a stale cache at all", clean, //$NON-NLS-1$
+            repo.getConfig().getString(REMOTE_SECTION, ORIGIN, URL_KEY));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("the check must read the configuration from DISK: what git will print is the " //$NON-NLS-1$
+            + "poisoned value, not the one JGit has cached", refusal); //$NON-NLS-1$
+        assertRefusalNamesTheRemoteAndTheFix(refusal, ORIGIN);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    /**
+     * A minimal config file text carrying one remote - written directly, because this case is about
+     * what JGit does NOT see, so the write may not go through JGit.
+     *
+     * @param url the value to store for {@code remote.origin.url}
+     * @return the file content
+     */
+    private static String configText(String url)
+    {
+        return "[core]\n\trepositoryformatversion = 0\n[remote \"" + ORIGIN + "\"]\n\turl = " //$NON-NLS-1$
+            + url + "\n"; //$NON-NLS-1$
+    }
+
     // ==================== fail closed ====================
 
     @Test
