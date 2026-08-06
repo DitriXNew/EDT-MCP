@@ -169,8 +169,11 @@ public final class GitRepositoryResolver
         }
         catch (RuntimeException e)
         {
-            Activator.logError("git-branch tools: RepositoryMapping lookup failed for project '" //$NON-NLS-1$
-                + project.getName() + "'", e); //$NON-NLS-1$
+            // Sanitized for the reason spelled out on discoverFromLocation: this lookup can open a
+            // repository too, and JGit's configuration parser quotes the offending line.
+            Activator.logError(GitFailureLog.typesOnly(
+                "git-branch tools: RepositoryMapping lookup failed for project '" //$NON-NLS-1$
+                    + project.getName() + "'", e), null); //$NON-NLS-1$
             return null;
         }
     }
@@ -186,14 +189,40 @@ public final class GitRepositoryResolver
         {
             return null;
         }
+        return discoverFromLocation(project.getLocation().toFile(), project.getName());
+    }
+
+    /**
+     * The discovery step WITH its failure handling, and without an {@link IProject}: opens the
+     * repository under {@code location}, or logs the failure - message withheld - and returns
+     * {@code null}.
+     * <p>
+     * Package-visible so the failure branch is testable at all. It is not cosmetic: opening a
+     * repository loads the repository, user and system configuration, so a configuration that is
+     * already malformed when the first call arrives fails HERE - before any check the caller runs on
+     * the opened repository. What it throws names the file at fault, and when that file is the USER
+     * config it still carries the offending line itself
+     * ({@code Invalid line in config file: include.notpath=https://user:...}) in its cause chain.
+     * Handing that throwable to {@link Activator#logError} would write a credential into the
+     * permanent EDT error log, so only the exception types are logged ({@link GitFailureLog}, whose
+     * javadoc says what that does and does not promise).
+     *
+     * @param location the project's filesystem location
+     * @param projectName the project's name, for the log line
+     * @return the discovered, caller-owned repository, or {@code null} when there is none - or when
+     *         it could not be opened
+     */
+    static Repository discoverFromLocation(File location, String projectName)
+    {
         try
         {
-            return discoverFromDirectory(project.getLocation().toFile());
+            return discoverFromDirectory(location);
         }
         catch (IOException | IllegalArgumentException e)
         {
-            Activator.logError("git-branch tools: git-dir discovery failed for project '" //$NON-NLS-1$
-                + project.getName() + "'", e); //$NON-NLS-1$
+            Activator.logError(GitFailureLog.typesOnly(
+                "git-branch tools: git-dir discovery failed for project '" //$NON-NLS-1$
+                    + projectName + "'", e), null); //$NON-NLS-1$
             return null;
         }
     }
@@ -208,7 +237,11 @@ public final class GitRepositoryResolver
      * @param dir the filesystem directory to search upward from
      * @return the discovered, caller-owned repository, or {@code null} when no {@code .git} directory is
      *         found anywhere up the tree
-     * @throws IOException propagated from {@link FileRepositoryBuilder#build()}
+     * @throws IOException propagated from {@link FileRepositoryBuilder#build()}, which loads the
+     *             repository, user and system configuration - a malformed one fails here, as an
+     *             {@link IOException} or an {@link IllegalArgumentException} depending on which file
+     *             it was, which is why {@link #discoverFromLocation} catches both and withholds the
+     *             message when it logs
      */
     static Repository discoverFromDirectory(File dir) throws IOException
     {

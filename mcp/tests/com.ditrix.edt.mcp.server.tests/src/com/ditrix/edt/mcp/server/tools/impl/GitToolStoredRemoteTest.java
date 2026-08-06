@@ -31,6 +31,9 @@ import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
+import org.eclipse.jgit.storage.file.FileBasedConfig;
+import org.eclipse.jgit.util.FS;
+import org.eclipse.jgit.util.SystemReader;
 import org.junit.After;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
@@ -82,6 +85,13 @@ public class GitToolStoredRemoteTest
 
     /** The fake host every fixture carries; a refusal must not name it either. */
     private static final String HOST = "example.com"; //$NON-NLS-1$
+
+    /**
+     * A second fake credential, planted in a remote's NAME rather than in its URL. Distinct from
+     * {@link #SECRET} on purpose: a leak from the name and a leak from the value must be
+     * distinguishable, or one assertion would cover for the other.
+     */
+    private static final String NAME_SECRET = "n4me-s3cr3t-token"; //$NON-NLS-1$
 
     private static final String REMOTE_SECTION = "remote"; //$NON-NLS-1$
 
@@ -487,6 +497,39 @@ public class GitToolStoredRemoteTest
     }
 
     @Test
+    public void testARemoteWhoseNameIsItselfACredentialUrlIsNotEchoed() throws Exception
+    {
+        // The name is untrusted configuration text in the same sense the URL is - and git accepts a
+        // URL as a subsection name: '[remote "https://user:s3cr3t@example.com"]' is enumerated by
+        // 'git remote' like any other. Quoting such a name back would hand the caller the very thing
+        // the refusal exists to withhold, in the one field the message still carries.
+        String hostile = "https://user:" + NAME_SECRET + "@" + HOST; //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control (a): the secret really IS in the name under test - an assertion that the
+        // refusal does not contain it would otherwise pass on a fixture that never carried it.
+        assertTrue("fixture: the name must carry the secret", hostile.contains(NAME_SECRET)); //$NON-NLS-1$
+        Repository repo = newRepository("git-stored-credential-name"); //$NON-NLS-1$
+        storeRemoteUrls(repo, hostile, URL_KEY, poisonedUrl(SPACE));
+        // Positive control (b): production reads the names from getSubsections, so JGit has to hand
+        // it this one VERBATIM - otherwise nothing here is under test.
+        assertTrue("fixture: JGit must return the credential-shaped name unchanged", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).contains(hostile));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("the remote's name has no bearing on WHETHER it is refused", refusal); //$NON-NLS-1$
+        assertFalse("the credential in the NAME must not be echoed back: " + refusal, //$NON-NLS-1$
+            refusal.contains(NAME_SECRET));
+        // ...and the same bar every other case is held to: nothing of the URL, the host included -
+        // which the name carried too.
+        assertRefusalLeaksNothing(refusal);
+        // ...and the message stays actionable: it still says what is wrong and how to repair it, and
+        // it says the name was withheld rather than printing something that reads like one.
+        assertRefusalStatesTheFix(refusal);
+        assertTrue("a withheld name must say so, or the placeholder reads as the real name: " //$NON-NLS-1$
+            + refusal, refusal.contains("withheld")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheSuggestedCommandsCarryNoConfigSuppliedName() throws Exception
     {
         // The name is untrusted configuration text and git accepts characters in it that a shell
@@ -514,6 +557,41 @@ public class GitToolStoredRemoteTest
         assertTrue("a command that needs the name must spell it '<name>': " + refusal, //$NON-NLS-1$
             refusal.contains("git remote remove <name>")); //$NON-NLS-1$
         assertRefusalStatesTheFix(refusal);
+    }
+
+    // ==================== how far the merged configuration reaches ====================
+
+    @Test
+    public void testTheUserConfigurationTheCheckReadsIsGitsTwoFilePair() throws Exception
+    {
+        // What the guide promises about the check's reach: it reads the MERGED configuration, and the
+        // USER half of that is git's two files - '~/.gitconfig' and '$XDG_CONFIG_HOME/git/config'
+        // (default '~/.config/git/config'). JGit pairs them in a UserConfigFile whose BASE is the XDG
+        // one; its own 'jgit/config' is a THIRD, JGit-only file, not a replacement for it. Read from
+        // the live SystemReader - the same object FileRepository asks for its user config - so the
+        // day that pairing goes away, this fails instead of the documentation quietly becoming false.
+        // It pins the DEPENDENCY, not this bundle's code: what the check does with the merged
+        // configuration is pinned by the cases above. (It reads the machine's own SystemReader, so a
+        // host with no user home at all would have no user configuration to pair.)
+        FileBasedConfig userConfig = SystemReader.getInstance().openUserConfig(null, FS.DETECTED);
+        assertEquals("fixture: the outer user config file JGit opens is '~/.gitconfig'", //$NON-NLS-1$
+            ".gitconfig", userConfig.getFile().getName()); //$NON-NLS-1$
+        Config base = userConfig.getBaseConfig();
+        assertTrue("the user configuration must be a CHAIN, or git's XDG file is not read at all", //$NON-NLS-1$
+            base instanceof FileBasedConfig);
+        File xdgFile = ((FileBasedConfig)base).getFile();
+        assertEquals("...and the file behind it is git's own, not JGit's 'jgit/config': " + xdgFile, //$NON-NLS-1$
+            "config", xdgFile.getName()); //$NON-NLS-1$
+        assertEquals("...under the 'git' directory: " + xdgFile, "git", //$NON-NLS-1$ //$NON-NLS-2$
+            xdgFile.getParentFile().getName());
+
+        // ...and a remote defined in a BASE configuration really is enumerated by the merged one -
+        // the walk storedRemoteRefusal relies on when it calls getSubsections.
+        Config inherited = new Config();
+        inherited.setString(REMOTE_SECTION, "inherited-remote", URL_KEY, //$NON-NLS-1$
+            "https://" + HOST + "/r.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a remote defined in a base configuration must be enumerated by the merged one", //$NON-NLS-1$
+            new Config(inherited).getSubsections(REMOTE_SECTION).contains("inherited-remote")); //$NON-NLS-1$
     }
 
     // ==================== fail closed ====================

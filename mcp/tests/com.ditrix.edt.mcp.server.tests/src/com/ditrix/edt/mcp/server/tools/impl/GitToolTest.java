@@ -490,6 +490,57 @@ public class GitToolTest
     }
 
     @Test
+    public void testARemoteNameThatCouldBeACredentialIsWithheld()
+    {
+        // git enumerates whatever stands in the subsection header, and a URL is a legal name there:
+        // '[remote "https://user:s3cr3t@example.com"]'. Echoing it would hand back the very thing the
+        // refusal exists to withhold - and redacting it instead would tie this message to the
+        // best-effort redactor, whose reach is exactly what storedRemoteRefusal refuses to depend on.
+        String credentialName = "https://user:s3cr3t-in-the-name@example.com"; //$NON-NLS-1$
+        String withheld = GitTool.safeRemoteName(credentialName);
+        assertFalse("the credential in the NAME must not be echoed: " + withheld, //$NON-NLS-1$
+            withheld.contains("s3cr3t-in-the-name")); //$NON-NLS-1$
+        assertFalse("nor the host it was stored for: " + withheld, //$NON-NLS-1$
+            withheld.contains("example.com")); //$NON-NLS-1$
+        // ...and it has to SAY it was withheld, or the reader takes the placeholder for the name.
+        assertTrue("a withheld name must say so: " + withheld, withheld.contains("withheld")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // All three carriers, not just the userinfo: a credential rides in a query or a fragment just
+        // as well, and the redaction's own scan stops at either one.
+        assertEquals("a query in the name is withheld the same way", withheld, //$NON-NLS-1$
+            GitTool.safeRemoteName("https://example.com/r.git?access_token=s3cr3t")); //$NON-NLS-1$
+        assertEquals("...and a fragment", withheld, //$NON-NLS-1$
+            GitTool.safeRemoteName("https://example.com/r.git#s3cr3t")); //$NON-NLS-1$
+        // ...and with no scheme at all, where the redactor would not even look: the '@' decides.
+        assertEquals("...and a scheme-less 'user:pass@host'", withheld, //$NON-NLS-1$
+            GitTool.safeRemoteName("user:s3cr3t@example.com")); //$NON-NLS-1$
+
+        // Withholding may not become the default answer: an everyday name carries none of the three.
+        assertEquals("origin", GitTool.safeRemoteName("origin")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a dot, a dash and an underscore are ordinary name characters", //$NON-NLS-1$
+            "my_remote-2.old", GitTool.safeRemoteName("my_remote-2.old")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The marker may sit PAST the part that would be printed, and that is the dangerous case, not
+        // a harmless one: in 'https://user:<secret>@host' the prefix IS the credential, so shortening
+        // such a name would print the secret and cut away only the '@' that gives it away. The whole
+        // name is therefore inspected, not just its printable head.
+        String secretBeforeAMarkerPastTheBound = "https://user:" + "s".repeat(500) + "@example.com"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String withheldTooBig = GitTool.safeRemoteName(secretBeforeAMarkerPastTheBound);
+        assertFalse("the head of a long credential name must not be echoed: " + withheldTooBig, //$NON-NLS-1$
+            withheldTooBig.contains("ssssssssssssssssssss")); //$NON-NLS-1$
+        assertEquals("a marker past the bound withholds the name like any other", withheld, //$NON-NLS-1$
+            withheldTooBig);
+
+        // ...while a long name with no marker anywhere is still SHORTENED, not withheld: dropping
+        // that would make every over-long name unactionable.
+        String shortened = GitTool.safeRemoteName("y".repeat(500)); //$NON-NLS-1$
+        assertFalse("a long name without a marker must not be withheld: " + shortened, //$NON-NLS-1$
+            shortened.contains("withheld")); //$NON-NLS-1$
+        assertTrue("...it is the ordinary shortening: " + shortened, shortened.endsWith("...")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("...bounded like any other, was " + shortened.length(), shortened.length() <= 80); //$NON-NLS-1$
+    }
+
+    @Test
     public void testSigningAndUrlGuardsDoNotOverReject()
     {
         // -S means GPG-sign only on a commit-producing subcommand; on log/diff it is the pickaxe

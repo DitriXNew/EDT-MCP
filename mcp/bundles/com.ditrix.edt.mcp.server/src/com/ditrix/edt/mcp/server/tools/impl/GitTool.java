@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.git.GitFailureLog;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
 /**
@@ -298,14 +299,18 @@ public class GitTool implements IMcpTool
      */
     private static final int MAX_REMOTE_NAME_CHARS = 80;
 
-    /** How many links of a cause chain {@link #configReadFailureLog} names; a chain can be cyclic. */
-    private static final int MAX_LOGGED_CAUSE_DEPTH = 5;
+    /**
+     * Stands in for a remote name that cannot be quoted safely - see {@link #safeRemoteName}. Written
+     * as prose rather than a {@code <name>}-style placeholder so it cannot be mistaken for something
+     * to type.
+     */
+    private static final String WITHHELD_REMOTE_NAME = "<name withheld: it may embed a credential>"; //$NON-NLS-1$
 
     /**
      * Refusal for a repository whose configuration cannot be read: the check FAILS CLOSED, because a
      * remote that cannot be inspected cannot be shown to be safe.
      * <p>
-     * The underlying exception's MESSAGE is withheld everywhere - from this text and from the EDT log
+     * The underlying exception's MESSAGE is withheld from this text and from what THIS code logs
      * alike - because JGit can quote the offending configuration in it, which is exactly where the
      * credential lives. Only the exception types are logged ({@link #configReadFailureLog}).
      */
@@ -315,10 +320,9 @@ public class GitTool implements IMcpTool
         + "refused instead of run blind. The file at fault is not necessarily this repository's own " //$NON-NLS-1$
         + "config: reading it loads the user and the system configuration as well, and a failure in " //$NON-NLS-1$
         + "any of the three - or of a file they '[include]' - arrives here the same way, so check " //$NON-NLS-1$
-        + "them in a terminal, repair the broken one and retry. Only the failure's exception type " //$NON-NLS-1$
-        + "reaches the EDT error log: the " //$NON-NLS-1$
-        + "message itself is withheld, here and there, because it can quote the offending " //$NON-NLS-1$
-        + "configuration, credentials included."; //$NON-NLS-1$
+        + "them in a terminal, repair the broken one and retry. This tool logs only the failure's " //$NON-NLS-1$
+        + "exception types: the message itself is withheld, here and in the log, because it can " //$NON-NLS-1$
+        + "quote the offending configuration, credentials included."; //$NON-NLS-1$
 
     /**
      * Subcommands that rewrite the WORKING TREE, after which the Eclipse workspace must be refreshed
@@ -1000,6 +1004,13 @@ public class GitTool implements IMcpTool
      * probe process is added - and both {@code remote.<name>.url} and {@code remote.<name>.pushurl}
      * are read as LISTS, because {@code url} is multi-valued and {@code remote -v} prints every value.
      * <p>
+     * What {@code repo.getConfig()} covers is the MERGED configuration, base chain included: this
+     * repository's config over the user config over the system config - and the user config is
+     * itself a chain of git's two files, {@code ~/.gitconfig} over {@code $XDG_CONFIG_HOME/git/config}
+     * (JGit's {@code SystemReader.openUserConfig} pairs them in a {@code UserConfigFile}; its own
+     * {@code jgit/config} is a THIRD, JGit-only file, not a replacement for the XDG one). A remote
+     * defined in any of them is enumerated here.
+     * <p>
      * Two limits are deliberate and stated in the tool guide: a {@code url.<base>.insteadOf} or
      * {@code .pushInsteadOf} rewrite rule is NOT inspected - both rewrite the effective URL (the
      * second one for push only), and that URL is git's to compute - and of git's two include forms
@@ -1064,35 +1075,19 @@ public class GitTool implements IMcpTool
      * The EDT-log line for the fail-closed path: what failed, and the exception TYPES behind it -
      * never their messages.
      * <p>
-     * A JGit configuration error can carry the configuration itself. A bad {@code [include]} entry is
-     * reported as {@code Invalid line in config file: <ConfigLine>}, and {@code ConfigLine.toString()}
-     * renders {@code section.subsection.name=value} - the VALUE included; a broken section header is
-     * reported as {@code Bad section entry: <name>}. This path is reached exactly when that file may
-     * hold a credential, so passing the throwable to a permanent log would move the leak from the
-     * response into the EDT error log instead of closing it.
-     * <p>
-     * A class name can carry nothing, so the cause chain is rendered by TYPE. Bounded, because a
-     * cause chain can be cyclic.
+     * This path is reached exactly when the configuration file may hold a credential, and a JGit
+     * configuration error can quote it, so passing the throwable to a permanent log would move the
+     * leak from the response into the EDT error log instead of closing it. The rendering - and the
+     * reason for it - lives in {@link GitFailureLog#typesOnly}, shared with the repository-opening
+     * failure in {@link GitRepositoryResolver}, which reaches JGit's parser the same way.
      *
      * @param failure the exception the configuration read threw (may be {@code null})
      * @return the message to log; it embeds no configuration content
      */
     static String configReadFailureLog(Throwable failure)
     {
-        StringBuilder types = new StringBuilder();
-        Throwable current = failure;
-        for (int depth = 0; current != null && depth < MAX_LOGGED_CAUSE_DEPTH; depth++)
-        {
-            if (depth > 0)
-            {
-                types.append(" <- "); //$NON-NLS-1$
-            }
-            types.append(current.getClass().getName());
-            current = current.getCause();
-        }
-        return "git: reading the repository config to check stored remotes failed (" + types //$NON-NLS-1$
-            + "). The exception message is withheld on purpose: it can quote the configuration, " //$NON-NLS-1$
-            + "credential values included."; //$NON-NLS-1$
+        return GitFailureLog.typesOnly(
+            "git: reading the repository config to check stored remotes failed", failure); //$NON-NLS-1$
     }
 
     /**
@@ -1127,7 +1122,8 @@ public class GitTool implements IMcpTool
      * The name is quoted ONCE, in the opening sentence, and no command carries it: where one needs
      * the name it is written as a literal {@code <name>} placeholder. A subsection name is untrusted
      * configuration text that git accepts shell metacharacters in, and these commands are meant to be
-     * pasted into a terminal.
+     * pasted into a terminal. That one quotation goes through {@link #safeRemoteName}, which withholds
+     * a name that could itself be a credential URL rather than echoing it.
      * <p>
      * It says WHERE the repair has to happen. The check keys on the SUBCOMMAND, so
      * {@code remote set-url} and {@code remote remove} - the two commands that could clear the entry
@@ -1169,15 +1165,34 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * A config subsection name safe to quote back in an error: control characters removed and the
-     * length bounded.
+     * A config subsection name safe to quote back in an error: C0/DEL removed, a name that could
+     * itself carry a credential withheld, and the length bounded.
      * <p>
      * Letters of ANY script survive - a Cyrillic remote name is legal, and reducing it to nothing
      * would make the message unactionable, so this is NOT one of the bundle's
      * {@code [^a-zA-Z0-9_-]} strippers.
+     * <p>
+     * A subsection name is untrusted configuration text, and git enumerates whatever stands there -
+     * {@code [remote "https://user:s3cr3t@example.com"]} included. A name carrying {@code @},
+     * {@code ?} or {@code #} is therefore withheld WHOLE ({@link #WITHHELD_REMOTE_NAME}) instead of
+     * being redacted: those are the three places where a URL MARKS a credential (userinfo, query,
+     * fragment), and {@link #redactCredentialUrls} is best-effort by design - it is exactly the
+     * reach this refusal exists to stop depending on ({@link #unmaskableCredentialUrl}). The
+     * everyday names - {@code origin}, {@code upstream}, a fork's - carry none of the three, so the
+     * message stays actionable where it matters. What this cannot catch is a secret that is not
+     * marked as one - a bearer token as a PATH segment, or as the whole name - and nothing could:
+     * such a name is indistinguishable from an ordinary one.
+     * <p>
+     * The WHOLE name is inspected for those three, not just the part that would be printed: with a
+     * long name the printed prefix is what a credential would sit in
+     * ({@code https://user:<80 characters of secret>@host} is cut before its {@code @}), so deciding
+     * on the prefix alone would hand back the secret and drop only the marker. The BUFFER stays
+     * bounded to what may be printed - one character past the bound is enough to know the name is
+     * longer - so an arbitrarily long name costs no allocation beyond that.
      *
      * @param name the raw subsection name (may be {@code null})
-     * @return the name with C0/DEL removed, bounded to {@value #MAX_REMOTE_NAME_CHARS} characters
+     * @return the name with C0/DEL removed, bounded to {@value #MAX_REMOTE_NAME_CHARS} characters,
+     *         or {@link #WITHHELD_REMOTE_NAME} when it could carry a credential
      */
     static String safeRemoteName(String name)
     {
@@ -1185,7 +1200,10 @@ public class GitTool implements IMcpTool
         {
             return ""; //$NON-NLS-1$
         }
-        StringBuilder safe = new StringBuilder(name.length());
+        // One character past the bound is all that is ever kept: it proves the name is longer than
+        // the message may print, which is the only thing the ellipsis branch needs to know.
+        int kept = MAX_REMOTE_NAME_CHARS + 1;
+        StringBuilder safe = new StringBuilder(Math.min(name.length(), kept));
         for (int i = 0; i < name.length(); i++)
         {
             char c = name.charAt(i);
@@ -1193,7 +1211,14 @@ public class GitTool implements IMcpTool
             {
                 continue;
             }
-            safe.append(c);
+            if (c == '@' || c == '?' || c == '#')
+            {
+                return WITHHELD_REMOTE_NAME;
+            }
+            if (safe.length() < kept)
+            {
+                safe.append(c);
+            }
         }
         if (safe.length() <= MAX_REMOTE_NAME_CHARS)
         {
