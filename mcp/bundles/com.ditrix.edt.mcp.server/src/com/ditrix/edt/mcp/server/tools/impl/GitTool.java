@@ -1003,6 +1003,8 @@ public class GitTool implements IMcpTool
      * The remotes are read from the {@link Repository} the call already holds - no {@code git config}
      * probe process is added - and both {@code remote.<name>.url} and {@code remote.<name>.pushurl}
      * are read as LISTS, because {@code url} is multi-valued and {@code remote -v} prints every value.
+     * The subsection NAME is judged by the same predicate as those values
+     * ({@link #carriesUnmaskableCredential}), because {@code remote -v} prints it too.
      * <p>
      * What {@code repo.getConfig()} covers is the MERGED configuration, base chain included: this
      * repository's config over the user config over the system config - and the user config is
@@ -1091,14 +1093,33 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Whether any URL stored for one remote carries a credential that cannot be masked.
+     * Whether one remote entry carries a credential that cannot be masked - in its NAME or in any URL
+     * stored for it.
+     * <p>
+     * The name is judged by the very same predicate as the values, because git PRINTS it: a
+     * subsection name is free configuration text, so {@code [remote "https://user:s3 cr@host"]} is a
+     * legal entry and {@code remote -v} puts that name in the output beside a perfectly clean
+     * {@code url} - where {@link #redactCredentialUrls} has exactly the blind spot it has on a value.
+     * Judging the values alone would build no refusal at all for such an entry.
+     * <p>
+     * An everyday name cannot reach that predicate: it needs a {@code ://} and an {@code @} inside
+     * the authority behind it, and {@code origin} - or a Cyrillic one - carries neither. A
+     * credential-shaped name the redaction DOES mask correctly is left alone too; this refusal exists
+     * for what cannot be masked, not for every {@code @}. Where the name IS judged differently from a
+     * value - every {@code ://} in it, not just the first - is spelled out on
+     * {@link #nameCarriesUnmaskableCredential}.
      *
      * @param config the repository configuration
      * @param remote the remote's subsection name
-     * @return {@code true} when one of its {@code url} / {@code pushurl} values is un-maskable
+     * @return {@code true} when the name, or one of its {@code url} / {@code pushurl} values, is
+     *         un-maskable
      */
     private static boolean carriesUnmaskableCredential(StoredConfig config, String remote)
     {
+        if (nameCarriesUnmaskableCredential(remote))
+        {
+            return true;
+        }
         for (String key : REMOTE_URL_KEYS)
         {
             for (String url : config.getStringList(REMOTE_SECTION, remote, key))
@@ -1107,6 +1128,51 @@ public class GitTool implements IMcpTool
                 {
                     return true;
                 }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a remote's NAME carries a credential that cannot be masked.
+     * <p>
+     * Judged per {@code scheme://}, not once for the whole string, and that is the one way it differs
+     * from a stored URL: a {@code url} value IS one URL - git reads the whole value as such - while a
+     * subsection name is free configuration text that may merely CONTAIN one, anywhere in it. A name
+     * reading {@code https://clean/r https://user:s3 cr@host} would otherwise pass on its harmless
+     * opening while {@code remote -v} printed the whole of it.
+     * <p>
+     * It walks the name the way {@link #redactCredentialUrls} walks the output, {@link #hasSchemeBefore}
+     * included, so it judges exactly what that scan will treat as a URL there. A {@code ://} with no
+     * scheme in front of it is a URL to neither: skipping it is what keeps a name like
+     * {@code label ://alice?team@corp} - which carries nothing the redaction could mis-mask - out of a
+     * refusal.
+     *
+     * @param remote the remote's subsection name (may be {@code null})
+     * @return {@code true} when some URL inside the name is un-maskable
+     */
+    private static boolean nameCarriesUnmaskableCredential(String remote)
+    {
+        if (remote == null)
+        {
+            return false;
+        }
+        for (int at = remote.indexOf(SCHEME_SEPARATOR); at >= 0;
+            at = remote.indexOf(SCHEME_SEPARATOR, at + SCHEME_SEPARATOR.length()))
+        {
+            if (!hasSchemeBefore(remote, at))
+            {
+                continue;
+            }
+            // Handed the separator itself, cut where the authority ends: unmaskableCredentialUrl
+            // starts at the FIRST separator it finds and ignores everything past that '/' anyway. The
+            // cut is what keeps this loop LINEAR on a name of unbounded length - a further scheme://
+            // can only sit behind a '/', the one in its own separator, so the slices cannot overlap.
+            int authorityEnd = remote.indexOf('/', at + SCHEME_SEPARATOR.length());
+            String url = authorityEnd < 0 ? remote.substring(at) : remote.substring(at, authorityEnd);
+            if (unmaskableCredentialUrl(url))
+            {
+                return true;
             }
         }
         return false;
@@ -1152,11 +1218,12 @@ public class GitTool implements IMcpTool
      */
     private static String unmaskableRemoteRefusal(String remote)
     {
-        return "The remote '" + safeRemoteName(remote) + "' has a stored URL whose credential " //$NON-NLS-1$ //$NON-NLS-2$
-            + "cannot be masked reliably in git's output, so the command is refused instead of run " //$NON-NLS-1$
-            + "- and the URL is not echoed here for the same reason. Repair it OUTSIDE this tool, " //$NON-NLS-1$
-            + "in a terminal: 'git remote remove <name>', then 'git remote add' with a URL that " //$NON-NLS-1$
-            + "embeds no credentials, and let a git credential helper or an ssh key supply the " //$NON-NLS-1$
+        return "The remote '" + safeRemoteName(remote) + "' is stored with a credential that " //$NON-NLS-1$ //$NON-NLS-2$
+            + "cannot be masked reliably in git's output - in one of its URLs, or in the remote's " //$NON-NLS-1$
+            + "own name - so the command is refused instead of run, and the offending value is not " //$NON-NLS-1$
+            + "echoed here for the same reason. Repair it OUTSIDE this tool, " //$NON-NLS-1$
+            + "in a terminal: 'git remote remove <name>', then 'git remote add' with a name and a " //$NON-NLS-1$
+            + "URL that embed no credentials, and let a git credential helper or an ssh key supply the " //$NON-NLS-1$
             + "secret. If the entry is inherited from your user or system git configuration, those " //$NON-NLS-1$
             + "answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
             + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
@@ -1182,6 +1249,10 @@ public class GitTool implements IMcpTool
      * message stays actionable where it matters. What this cannot catch is a secret that is not
      * marked as one - a bearer token as a PATH segment, or as the whole name - and nothing could:
      * such a name is indistinguishable from an ordinary one.
+     * <p>
+     * When it is the NAME that earned the refusal, this always withholds it: the predicate that fires
+     * on a name ({@link #unmaskableCredentialUrl}) needs an {@code @} inside the authority, so the
+     * name carries one.
      * <p>
      * The WHOLE name is inspected for those three, not just the part that would be printed: with a
      * long name the printed prefix is what a credential would sit in

@@ -332,6 +332,63 @@ public class GitToolStoredRemoteTest
     }
 
     @Test
+    public void testARemoteNameThatIsItselfAnUnmaskableCredentialUrlIsRefused() throws Exception
+    {
+        // Git takes a URL as a subsection name, and 'remote -v' prints that name beside the URL. So
+        // the name is a second place a credential can be stored - and this fixture puts it there
+        // ALONE: the url stored for it is clean, so if the name is not judged no refusal is built at
+        // all, the command runs, and the output redactor - whose scan ends at the whitespace before
+        // the '@' - hands the secret back. Judging the values only cannot reach this.
+        String hostileName = "https://user:" + NAME_SECRET + SPACE + "ok@" + HOST; //$NON-NLS-1$ //$NON-NLS-2$
+        String cleanUrl = "https://" + HOST + "/team/repo.git"; //$NON-NLS-1$ //$NON-NLS-2$
+        Repository repo = newRepository("git-stored-credential-name-only"); //$NON-NLS-1$
+        storeRemoteUrls(repo, hostileName, URL_KEY, cleanUrl);
+        // Positive control (a): production reads the names from getSubsections, so JGit has to hand
+        // it this one VERBATIM - otherwise nothing here is under test.
+        assertTrue("fixture: JGit must return the credential-shaped name unchanged", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).contains(hostileName));
+        // Positive control (b): the URL beside it really is clean, so the NAME is the only thing that
+        // can produce a refusal here.
+        assertFalse("fixture: the stored URL must be maskable, or the name is not what is judged", //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl(cleanUrl));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a NAME that is itself an un-maskable credential URL must be refused", refusal); //$NON-NLS-1$
+        assertFalse("...and the credential it carries must not be echoed back: " + refusal, //$NON-NLS-1$
+            refusal.contains(NAME_SECRET));
+        assertRefusalLeaksNothing(refusal);
+        assertRefusalStatesTheFix(refusal);
+        assertTrue("a withheld name must say so, or the placeholder reads as the real name: " //$NON-NLS-1$
+            + refusal, refusal.contains("withheld")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPoisonedUrlLaterInARemoteNameIsRefusedToo() throws Exception
+    {
+        // A subsection name is not a URL, it is free text that may CONTAIN several. Judge only the
+        // first 'scheme://' in it and this name passes on its harmless opening - while 'remote -v'
+        // prints the whole of it and the redaction, which walks the output one 'scheme://' at a
+        // time, hands the second one back through the whitespace it cannot scan past.
+        String hostileName = "https://clean." + HOST + "/r https://user:" + NAME_SECRET + SPACE //$NON-NLS-1$ //$NON-NLS-2$
+            + "ok@" + HOST; //$NON-NLS-1$
+        Repository repo = newRepository("git-stored-second-url-in-name"); //$NON-NLS-1$
+        storeRemoteUrls(repo, hostileName, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control: the name's OPENING really is harmless, so this case can only pass by
+        // judging past it - a check that stopped at the first URL would find nothing to refuse.
+        assertFalse("fixture: the name must start with a URL that is maskable", //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl(hostileName));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a poisoned URL later in the name must be refused as well", refusal); //$NON-NLS-1$
+        assertFalse("...and its credential must not be echoed back: " + refusal, //$NON-NLS-1$
+            refusal.contains(NAME_SECRET));
+        assertRefusalLeaksNothing(refusal);
+        assertRefusalStatesTheFix(refusal);
+    }
+
+    @Test
     public void testEverySubcommandThatCanReachARemoteIsChecked() throws Exception
     {
         Repository repo = newRepository("git-stored-subcommands"); //$NON-NLS-1$
@@ -393,6 +450,50 @@ public class GitToolStoredRemoteTest
         storeRemoteUrls(repo, ORIGIN, URL_KEY, "https://user:" + SECRET + "@" + HOST + "/r.git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assertNull("a credential the redaction CAN mask must not be refused", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAnOrdinaryRemoteNameIsNotRefused() throws Exception
+    {
+        // The other half of judging the NAME: it must not turn everyday names into an outage. None of
+        // these three reaches the predicate's authority for the same reason a real remote never does -
+        // an ordinary name is not a URL at all - and the third one IS a URL whose credential the
+        // redaction masks correctly, which is the boundary this refusal keeps: it fires on what
+        // cannot be masked, not on every '@'. Widen the name check to "contains an '@'", or to "is
+        // shaped like a URL", and this case turns red while every refusal case above stays green.
+        Repository repo = newRepository("git-stored-ordinary-names"); //$NON-NLS-1$
+        String cleanUrl = "https://" + HOST + "/team/repo.git"; //$NON-NLS-1$ //$NON-NLS-2$
+        String maskableName = "https://user:" + NAME_SECRET + "@" + HOST; //$NON-NLS-1$ //$NON-NLS-2$
+        storeRemoteUrls(repo, ORIGIN, URL_KEY, cleanUrl);
+        storeRemoteUrls(repo, CYRILLIC_REMOTE, URL_KEY, cleanUrl);
+        storeRemoteUrls(repo, maskableName, URL_KEY, cleanUrl);
+        // Positive control: all three names really are enumerated, or "nothing is refused" would be
+        // true because there was nothing to judge.
+        assertTrue("fixture: every name must be enumerated by getSubsections", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).containsAll(
+                List.of(ORIGIN, CYRILLIC_REMOTE, maskableName)));
+
+        assertNull("an ordinary remote name carries no credential the redaction would miss", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testASchemelessMarkerInARemoteNameIsNotRefused() throws Exception
+    {
+        // A '://' with no scheme in front of it is not a URL, and redactCredentialUrls skips exactly
+        // such a marker (hasSchemeBefore), so nothing behind it can be printed as a mis-masked
+        // credential. Judge it anyway and this name - which carries no credential at all - takes
+        // remote/push/fetch/pull down with it.
+        String oddName = "label ://alice?team@corp"; //$NON-NLS-1$
+        Repository repo = newRepository("git-stored-schemeless-marker"); //$NON-NLS-1$
+        storeRemoteUrls(repo, oddName, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control: the very same text WOULD be refused with a scheme in front of it, so this
+        // case turns on the scheme and not on the text being harmless in some other way.
+        assertTrue("fixture: with a scheme in front, this text must be un-maskable", //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl("https" + oddName.substring(oddName.indexOf("://")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("a '://' with no scheme in front of it is not a URL - it must not be refused", //$NON-NLS-1$
             GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
     }
 

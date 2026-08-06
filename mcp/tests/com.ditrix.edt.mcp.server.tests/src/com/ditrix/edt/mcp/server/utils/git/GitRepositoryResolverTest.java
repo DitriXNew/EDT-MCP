@@ -31,6 +31,7 @@ import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
+import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver.Discovery;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver.Resolution;
 
 /**
@@ -227,7 +228,7 @@ public class GitRepositoryResolverTest
             ILog log = Platform.getLog(bundle);
             List<IStatus> recorded = new ArrayList<>();
             ILogListener listener = (status, plugin) -> recorded.add(status);
-            Repository discovered;
+            Discovery discovered;
             log.addLogListener(listener);
             try
             {
@@ -238,8 +239,13 @@ public class GitRepositoryResolverTest
                 log.removeLogListener(listener);
             }
 
-            assertNull("a repository that cannot be opened resolves to nothing, it does not throw", //$NON-NLS-1$
-                discovered);
+            assertNull("a repository that cannot be opened hands back no repository, it does not throw", //$NON-NLS-1$
+                discovered.repository());
+            // ...and it says WHY it handed back none. Reported as "there is no repository here", the
+            // caller would be told to share a project that is already shared, and the broken
+            // configuration - the actual fault - would go unmentioned (see resolutionOf).
+            assertTrue("a .git directory that could not be OPENED is not 'no repository here'", //$NON-NLS-1$
+                discovered.configUnreadable());
             // Only OUR entry is judged: another thread may log during the window, and this case is
             // about what THIS branch hands over.
             List<IStatus> ours = new ArrayList<>();
@@ -269,6 +275,137 @@ public class GitRepositoryResolverTest
                 assertTrue("...and the exception type behind the failure: " + status.getMessage(), //$NON-NLS-1$
                     status.getMessage().contains("Exception")); //$NON-NLS-1$
             }
+        }
+        finally
+        {
+            deleteRecursively(repoRoot);
+        }
+    }
+
+    @Test
+    public void testALocationOutsideAnyGitTreeIsNotReportedAsAnUnreadableConfiguration() throws Exception
+    {
+        // The other side of the branch above: "there is no .git anywhere up the tree" must stay
+        // distinguishable from "there is one and it would not open". Collapse the two and the
+        // configuration-repair error would be handed to every non-git project on the machine.
+        File notARepo = Files.createTempDirectory("resolver-none-vs-unreadable").toFile(); //$NON-NLS-1$
+        try
+        {
+            // NOTE: same assumption as the discovery case above - no ancestor of the system temp
+            // directory is itself a git working tree.
+            Discovery discovery = GitRepositoryResolver.discoverFromLocation(notARepo, PROJECT_NAME);
+
+            assertNull("nothing to open means no repository", discovery.repository()); //$NON-NLS-1$
+            assertFalse("...and no configuration failure either", discovery.configUnreadable()); //$NON-NLS-1$
+        }
+        finally
+        {
+            deleteRecursively(notARepo);
+        }
+    }
+
+    @Test
+    public void testASuccessfulDiscoveryIsCarriedThroughTheOutcome() throws Exception
+    {
+        // The third outcome, and the one the other two cases cannot see: discoverFromLocation must
+        // hand the OPENED repository on. Return "nothing here" for every success instead and the
+        // malformed-config and non-git cases both stay green - they only ever assert a null
+        // repository - while every git tool lost its discovery fallback.
+        File repoRoot = Files.createTempDirectory("resolver-carried-through").toFile(); //$NON-NLS-1$
+        try
+        {
+            Git.init().setDirectory(repoRoot).call().close();
+
+            Discovery discovery = GitRepositoryResolver.discoverFromLocation(repoRoot, PROJECT_NAME);
+
+            // Every assertion sits INSIDE the close guard: a failing one must not also leak the
+            // handle, or the temp tree stays locked on Windows and the next case fails for a second,
+            // unrelated reason.
+            Repository discovered = discovery.repository();
+            try
+            {
+                assertNotNull("a repository that opens must be carried through", discovered); //$NON-NLS-1$
+                assertFalse("...and it is not a configuration failure", discovery.configUnreadable()); //$NON-NLS-1$
+                assertEquals(new File(repoRoot, ".git").getCanonicalFile(), //$NON-NLS-1$
+                    discovered.getDirectory().getCanonicalFile());
+            }
+            finally
+            {
+                if (discovered != null)
+                {
+                    discovered.close();
+                }
+            }
+        }
+        finally
+        {
+            deleteRecursively(repoRoot);
+        }
+    }
+
+    // ==================== resolutionOf: which error each outcome earns ====================
+
+    @Test
+    public void testAnUnreadableConfigurationEarnsItsOwnErrorNotTheNoRepositoryOne()
+    {
+        // What the caller is told decides where they look. Before this branch existed, a repository
+        // that failed to OPEN produced the same "No git repository found ... Share the project with
+        // Git" message as a project outside git entirely - sending the operator to share a project
+        // that is already shared, while the malformed configuration went unnamed.
+        Resolution resolution =
+            GitRepositoryResolver.resolutionOf(null, PROJECT_NAME, Discovery.unreadable());
+
+        assertFalse("an unreadable configuration is a failure", resolution.ok()); //$NON-NLS-1$
+        String error = resolution.errorJson();
+        assertTrue("the error must name the project: " + error, error.contains(PROJECT_NAME)); //$NON-NLS-1$
+        assertTrue("...and send the caller to the configuration: " + error, //$NON-NLS-1$
+            error.contains("configuration")); //$NON-NLS-1$
+        assertFalse("...and NOT claim the project has no repository: " + error, //$NON-NLS-1$
+            error.contains("No git repository found")); //$NON-NLS-1$
+        assertFalse("...nor send them to share it: " + error, error.contains("Share the project")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAProjectOutsideAnyGitTreeStillEarnsTheNoRepositoryError()
+    {
+        // Positive control for the case above: the "share it" message is still what a project outside
+        // git gets, so "the unreadable error is not that one" is a real distinction and not the
+        // by-product of a message nobody produces any more.
+        Resolution resolution =
+            GitRepositoryResolver.resolutionOf(null, PROJECT_NAME, Discovery.none());
+
+        assertFalse(resolution.ok());
+        String error = resolution.errorJson();
+        assertTrue("a project outside git must still be told so: " + error, //$NON-NLS-1$
+            error.contains("No git repository found")); //$NON-NLS-1$
+        assertTrue("...and told to share it: " + error, error.contains("Share the project")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testADiscoveredRepositoryResolvesAsOwned() throws Exception
+    {
+        // The third branch, and the one the other two must not swallow: a repository that opened is
+        // handed on, marked owned so closeIfOwned() closes it.
+        File repoRoot = Files.createTempDirectory("resolver-discovered-owned").toFile(); //$NON-NLS-1$
+        try
+        {
+            Repository repo = Git.init().setDirectory(repoRoot).call().getRepository();
+            Resolution resolution =
+                GitRepositoryResolver.resolutionOf(null, PROJECT_NAME, Discovery.of(repo));
+
+            // closeIfOwned() runs whatever the assertions do, so a failure here cannot also leave the
+            // handle open on the temp tree.
+            try
+            {
+                assertTrue("a discovered repository is not an error", resolution.ok()); //$NON-NLS-1$
+                assertEquals(repo, resolution.repository());
+            }
+            finally
+            {
+                resolution.closeIfOwned();
+            }
+            assertEquals("the discovery fallback OWNS what it opened - closeIfOwned must close it", //$NON-NLS-1$
+                0, useCount(repo));
         }
         finally
         {
