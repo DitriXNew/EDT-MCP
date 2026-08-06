@@ -9,7 +9,6 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -85,7 +84,8 @@ public class CleanProjectTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("projectName", "Name of the project to clean (optional, cleans all EDT projects if not specified)") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty(KEY_TIMEOUT, "How long to wait for the clean build itself, in seconds (default " //$NON-NLS-1$
+            .integerProperty(KEY_TIMEOUT, "How long to wait for the clean build itself, per project, " //$NON-NLS-1$
+                + "in seconds (default " //$NON-NLS-1$
                 + DEFAULT_CLEAN_TIMEOUT_SECONDS + ", clamped to " + MIN_CLEAN_TIMEOUT_SECONDS + ".." //$NON-NLS-1$ //$NON-NLS-2$
                 + MAX_CLEAN_TIMEOUT_SECONDS + "). On expiry the call fails with a timeout error instead of " //$NON-NLS-1$
                 + "waiting forever; the clean may still be running in EDT afterwards. Does not cover the " //$NON-NLS-1$
@@ -380,36 +380,47 @@ public class CleanProjectTool implements IMcpTool
      */
     static String runCleanPhase(List<ProjectCleanInfo> projectsToClean, long timeoutMs, ICleanAction action)
     {
-        // Written by the job thread before each project, read by this thread only after the
-        // deadline elapsed — names the project the clean was sitting on when time ran out.
-        AtomicReference<String> current = new AtomicReference<>(null);
-
-        BoundedJob.Result result = BoundedJob.run(NAME + ": clean build", timeoutMs, monitor -> { //$NON-NLS-1$
-            for (ProjectCleanInfo info : projectsToClean)
+        // The bound is PER PROJECT, not for the whole phase: 'clean all' over several healthy
+        // projects would otherwise be refused once their COMBINED time crossed the limit, with
+        // nothing actually wedged. A single wedged project still fails on its own deadline, and the
+        // error returns immediately - so the projects behind it are never started.
+        for (ProjectCleanInfo info : projectsToClean)
+        {
+            String error = cleanOneBounded(info, timeoutMs, action);
+            if (error != null)
             {
-                // The deadline may have passed while the previous project was cleaning. Stop here
-                // rather than starting another project's clean after the caller already gave up.
-                if (monitor.isCanceled())
-                {
-                    return;
-                }
-                current.set(info.name);
-                action.clean(info, monitor);
+                return error;
             }
-        });
+        }
+        return null;
+    }
+
+    /**
+     * Cleans one project under its own deadline and turns anything but a clean completion into the
+     * error JSON to return.
+     *
+     * @param info      the project to clean
+     * @param timeoutMs the bound for THIS project, in milliseconds
+     * @param action    the per-project clean action
+     * @return {@code null} when the project was cleaned, otherwise the error JSON
+     */
+    private static String cleanOneBounded(ProjectCleanInfo info, long timeoutMs, ICleanAction action)
+    {
+        BoundedJob.Result result = BoundedJob.run(NAME + ": clean build " + info.name, timeoutMs, //$NON-NLS-1$
+            monitor -> action.clean(info, monitor));
 
         switch (result.getOutcome())
         {
         case TIMED_OUT:
-            return timeoutError(current.get(), timeoutMs);
+            return timeoutError(info.name, timeoutMs);
         case INTERRUPTED:
             return ToolResult.error("Project clean was interrupted while waiting for the clean build" //$NON-NLS-1$
-                + onProject(current.get()) + ". The clean may still be running in EDT — check the " //$NON-NLS-1$
+                + onProject(info.name) + ". The clean may still be running in EDT — check the " //$NON-NLS-1$
                 + "project state with list_projects before retrying.").toJson(); //$NON-NLS-1$
         case NOT_RUN:
-            return ToolResult.error("The clean build was cancelled before it started, so nothing was " //$NON-NLS-1$
-                + "cleaned. Retry; if it keeps happening, EDT is shutting down or another operation " //$NON-NLS-1$
-                + "is cancelling background jobs.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("The clean build" + onProject(info.name) + " was cancelled before " //$NON-NLS-1$ //$NON-NLS-2$
+                + "it started, so nothing was cleaned. Retry; if it keeps happening, EDT is shutting " //$NON-NLS-1$
+                + "down or another operation is cancelling background jobs.").toJson(); //$NON-NLS-1$
         default:
             break;
         }

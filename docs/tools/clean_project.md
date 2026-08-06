@@ -6,7 +6,7 @@ Clean EDT project and trigger full revalidation. Direction: DISK -> MODEL - re-i
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | — | string | Name of the project to clean (optional, cleans all EDT projects if not specified) |
-| timeout | — | integer | How long to wait for the clean build itself, in seconds (default 120, clamped to 10..3600). On expiry the call fails with a timeout error instead of waiting forever; the clean may still be running in EDT afterwards. Does not cover the subsequent revalidation wait. |
+| timeout | — | integer | How long to wait for the clean build itself, per project, in seconds (default 120, clamped to 10..3600). On expiry the call fails with a timeout error instead of waiting forever; the clean may still be running in EDT afterwards. Does not cover the subsequent revalidation wait. |
 
 ## Guide
 Force EDT to fully rebuild and re-validate a project: refreshes its files from disk, drops every existing validation marker, re-imports the model, and BLOCKS until EDT has finished recomputing derived data. Use it to recover from a stuck or stale validation state.
@@ -23,7 +23,9 @@ Force EDT to fully rebuild and re-validate a project: refreshes its files from d
 - `timeout` - how long to wait for the clean build itself, in seconds (default 120, clamped to 10..3600). It bounds only the clean build, not the revalidation waits that follow. Raise it for a very large configuration; the default can also be changed in Preferences > MCP Server > Tools > `clean_project`.
 
 ## What you get
-JSON: `success`, `projectsCleaned` (count), `projects` (the names cleaned), and a human-readable `message`. The call returns only after three sequential waits **per project**: the clean build (`timeout`, default 120s), the project-context restart (up to 3 min) and the derived-data recomputation (up to 5 min). On a large configuration one call can therefore take several minutes, and cleaning ALL projects multiplies that - budget the client-side call timeout accordingly.
+JSON: `success`, `projectsCleaned` (count), `projects` (the names cleaned), and a human-readable `message`. The call returns only after three waits: the clean build (bounded by `timeout` **per project**, default 120s), the project-context restart and the derived-data recomputation (up to 5 min per project). On a large configuration one call can therefore take several minutes, and cleaning ALL projects multiplies that - budget the client-side call timeout accordingly.
+
+One subtlety about the restart wait: its 3-minute allowance is counted from the moment the lifecycle listener is registered, which happens **before** the clean build starts (that ordering is what keeps the restart event from being missed). A slow clean therefore eats into it, and on a clean-all so do the projects cleaned earlier. The allowance bounds the whole wait, not each phase separately.
 
 Two honest caveats about "settled":
 - If the clean build does not finish within `timeout`, the call fails with a timeout error instead of waiting indefinitely. Cancellation is requested, but EDT may still be working on it - poll `list_projects` until the project reports `ready` before relying on the model.

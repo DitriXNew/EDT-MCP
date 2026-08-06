@@ -33,6 +33,8 @@ public class LifecycleWaiterCleanupTest
     {
         final AtomicInteger added = new AtomicInteger();
         final AtomicInteger removed = new AtomicInteger();
+        /** When set, the NEXT removal attempt throws - the recoverable failure under test. */
+        boolean failNextRemoval;
 
         @Override
         public void addListener(IServiceContextLifecycleListener listener)
@@ -44,6 +46,11 @@ public class LifecycleWaiterCleanupTest
         public void removeListener(IServiceContextLifecycleListener listener)
         {
             removed.incrementAndGet();
+            if (failNextRemoval)
+            {
+                failNextRemoval = false;
+                throw new IllegalStateException("orchestrator refused the removal"); //$NON-NLS-1$
+            }
         }
 
         @Override
@@ -63,6 +70,31 @@ public class LifecycleWaiterCleanupTest
         {
             return true;
         }
+    }
+
+    /**
+     * A removal that THREW did not happen - the listener is still registered - so the guard must
+     * not retire the waiter. Otherwise the caller's fallback cleanup becomes a no-op and a live
+     * listener keeps receiving lifecycle events for the rest of the session.
+     */
+    @Test
+    public void testAFailedRemovalCanStillBeRetried()
+    {
+        CountingOrchestrator orchestrator = new CountingOrchestrator();
+        orchestrator.failNextRemoval = true;
+        ProjectRestartWaiter waiter = new ProjectRestartWaiter(orchestrator, "Demo"); //$NON-NLS-1$
+
+        waiter.cleanup();
+        assertEquals("the failing removal was attempted", 1, orchestrator.removed.get()); //$NON-NLS-1$
+
+        waiter.cleanup();
+        assertEquals("a removal that threw must leave the waiter retryable", //$NON-NLS-1$
+            2, orchestrator.removed.get());
+
+        // ...and once it succeeds, the guard closes again.
+        waiter.cleanup();
+        assertEquals("after a successful removal further cleanups are no-ops", //$NON-NLS-1$
+            2, orchestrator.removed.get());
     }
 
     @Test
