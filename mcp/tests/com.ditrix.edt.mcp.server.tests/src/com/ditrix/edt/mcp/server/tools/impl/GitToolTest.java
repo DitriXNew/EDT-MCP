@@ -573,9 +573,94 @@ public class GitToolTest
         // every remote whose text merely carries a second URL or an '@'.
         assertNull("a clean URL followed by a clean scp remote is not refused", //$NON-NLS-1$
             GitTool.storedTextFlaw(
-                "https://clean.example/r.git git@github.com:acme/repo.git")); //$NON-NLS-1$
-        assertNull("...and neither is a nested clean URL", //$NON-NLS-1$
+                "https://clean.example/r.git\u0020git@github.com:acme/repo.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredTextFlawJudgesANestedUrlByItsUserinfoAlone()
+    {
+        // A URL the redaction SKIPPED is not judged by the schemeless rule. That rule asks for a
+        // password marker because a bare '@' in plain text is a login ('git@github.com:...'); in a
+        // URL's authority a bare userinfo is how a token is carried, and at the top level the only
+        // reason such a URL is allowed is that the redaction masks it. Here it does not - the first
+        // URL's bound ran past this one - so the same text has to be refused.
+        String nestedToken = "https://clean/r/https://ghp_s3cr3t@example.com/x.git"; //$NON-NLS-1$
+        assertEquals("a bare token in a nested URL's userinfo is printed whole - refuse it", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, GitTool.storedTextFlaw(nestedToken));
+        // Positive control, and the whole reason the rule differs by position: the redaction really
+        // does hand this back untouched.
+        assertEquals("the redaction masks nothing here", nestedToken, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(nestedToken));
+        // ...and the same userinfo at the TOP level stays allowed, because there it IS masked. The
+        // two assertions together are what pin the rule to the redaction's reach rather than to the
+        // shape of the text.
+        String topLevel = "https://ghp_s3cr3t@example.com/x.git"; //$NON-NLS-1$
+        assertNull("the same token where the redaction reaches it is not refused", //$NON-NLS-1$
+            GitTool.storedTextFlaw(topLevel));
+        assertEquals("...precisely because this is what the caller would see", //$NON-NLS-1$
+            "https://***@example.com/x.git", GitTool.redactCredentialUrls(topLevel)); //$NON-NLS-1$
+
+        // A user name is no better than a token there - nothing tells them apart, and neither is
+        // masked. (This case read 'assertNull' until the nested URL was judged; it was wrong.)
+        assertEquals("a plain user name in a nested URL is not distinguishable from a token", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
             GitTool.storedTextFlaw("https://clean/r/https://user@host/x.git")); //$NON-NLS-1$
+
+        // The everyday shapes the new rule must NOT touch: a '://' with no scheme in front of it is
+        // not a URL, and a nested URL with no userinfo carries nothing to print.
+        assertNull("a nested URL without a userinfo is not refused", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://clean/r/https://host/x.git")); //$NON-NLS-1$
+        assertNull("a scheme-less '://' marker is still not a URL", //$NON-NLS-1$
+            GitTool.storedTextFlaw("label ://alice?team@corp")); //$NON-NLS-1$
+        assertNull("git's own scp-like remote is still a login", //$NON-NLS-1$
+            GitTool.storedTextFlaw("git@github.com:acme/repo.git")); //$NON-NLS-1$
+        assertNull("...and a local path with an '@' in a segment still passes", //$NON-NLS-1$
+            GitTool.storedTextFlaw("/srv/git:mirrors/my@project")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredTextFlawSeesANestedUrlThatStartsOnTheRegionBoundary()
+    {
+        // The region handed to the plain-text rules begins where the URL before it ends its
+        // authority - at the first '/'. When the next thing in the text is itself a URL, that slash
+        // is the FIRST slash of its '://', so the separator straddles the boundary and a scan
+        // starting at the boundary steps right over it.
+        String straddling = "https://https://ghp_s3cr3t@host/x.git"; //$NON-NLS-1$
+        assertEquals("a nested URL whose separator straddles the region boundary must be seen", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, GitTool.storedTextFlaw(straddling));
+        // Positive control: the redaction hands this back untouched, which is why it must be refused.
+        assertEquals("the redaction masks nothing here", straddling, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(straddling));
+        // ...and looking two characters back may not start refusing the OUTER URL, whose credential
+        // the redaction masks perfectly well.
+        assertNull("the URL the region belongs to is still judged by the redaction's reach", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://user:s3cr3t@example.com/r.git")); //$NON-NLS-1$
+        assertNull("...and an empty authority is not a userinfo either", //$NON-NLS-1$
+            GitTool.storedTextFlaw("file:///C:/Program\u0020Files/repo")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANestedSshLoginIsNotACredential()
+    {
+        // The same doctrine the INPUT guard rules by: for ssh, a userinfo with no password marker is
+        // the login git documents - it is the alternative this tool's guide recommends. Refusing it
+        // for standing inside another URL's path would judge one spelling by two rules.
+        assertNull("a nested ssh LOGIN is not a credential", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://mirror.example/proxy/ssh://git@github.com/acme/r.git")); //$NON-NLS-1$
+        assertNull("...git+ssh and ssh+git spell the same thing", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://mirror.example/p/git+ssh://git@github.com/a/r.git")); //$NON-NLS-1$
+        // ...but a PASSWORD there is a credential, and http(s) userinfo is one whatever it looks
+        // like - that is where a token rides. Both are what the exemption must not swallow.
+        assertEquals("a password in a nested ssh URL is still a credential", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://mirror.example/p/ssh://git:s3cr3t@github.com/a/r.git")); //$NON-NLS-1$
+        assertEquals("...and so is a bare token in a nested https URL", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://mirror.example/p/https://ghp_s3cr3t@github.com/a/r.git")); //$NON-NLS-1$
+        // ...and an unknown scheme gets no exemption: only ssh documents a bare user name.
+        assertEquals("an exotic scheme is not exempt", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://mirror.example/p/ftp://user@host/a/r.git")); //$NON-NLS-1$
     }
 
     @Test

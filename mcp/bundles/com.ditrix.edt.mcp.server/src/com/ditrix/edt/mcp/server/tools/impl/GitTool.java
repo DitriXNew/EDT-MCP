@@ -288,6 +288,35 @@ public class GitTool implements IMcpTool
     /** The git config section that holds the remotes ({@code [remote "<name>"]}). */
     private static final String REMOTE_SECTION = "remote"; //$NON-NLS-1$
 
+    /** The config section declaring repository-format extensions ({@code [extensions]}). */
+    private static final String EXTENSIONS_SECTION = "extensions"; //$NON-NLS-1$
+
+    /** The extension that makes git read a per-worktree configuration file as well. */
+    private static final String WORKTREE_CONFIG_KEY = "worktreeConfig"; //$NON-NLS-1$
+
+    /** That file, relative to the git directory - what {@code --git-path config.worktree} resolves to. */
+    private static final String WORKTREE_CONFIG_FILE = "config.worktree"; //$NON-NLS-1$
+
+    /** The repository's own configuration file, beside it. */
+    private static final String REPOSITORY_CONFIG_FILE = "config"; //$NON-NLS-1$
+
+    /** {@code core.repositoryformatversion} - extensions are honoured from version 1 on. */
+    private static final String CORE_SECTION = "core"; //$NON-NLS-1$
+
+    /** The key naming that version. */
+    private static final String FORMAT_VERSION_KEY = "repositoryformatversion"; //$NON-NLS-1$
+
+    /**
+     * The schemes for which a userinfo without a password marker is a LOGIN, not a credential -
+     * git's documented SSH remote spelling. One list, asked by {@link #isPlainSshUser} on the input
+     * side and by {@link #isPlainSshLogin} on the stored side.
+     */
+    private static final Set<String> SSH_SCHEMES =
+        Set.of("ssh", "git+ssh", "ssh+git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /** Length of the longest {@link #SSH_SCHEMES} entry, so a scheme run can be rejected uncopied. */
+    private static final int LONGEST_SSH_SCHEME_CHARS = 7;
+
     /**
      * The {@code remote.<name>.*} keys that carry a URL git prints or connects to. Both are read as
      * a LIST: {@code url} is multi-valued ({@code remote set-url --add}) and {@code remote -v} prints
@@ -1089,8 +1118,7 @@ public class GitTool implements IMcpTool
      * <ul>
      * <li>a URL's AUTHORITY - {@link #unmaskableAuthority}, the reach the redaction's own userinfo
      * scan has;</li>
-     * <li>plain text - {@link #schemelessCredential}, where nothing is masked at all, so an
-     * {@code @} marked as carrying a password is enough.</li>
+     * <li>plain text - {@link #unmaskedRegionCarriesCredential}, where nothing is masked at all.</li>
      * </ul>
      * The ONLY thing skipped is what the redaction really does cover: a URL's query or fragment,
      * which it masks whole ({@code ...r.git?***}). Everything else - the URL's PATH, and whatever
@@ -1116,9 +1144,9 @@ public class GitTool implements IMcpTool
             int marker = nextUrlMarker(text, cursor);
             if (marker < 0)
             {
-                return schemelessCredential(text, plainFrom, text.length());
+                return unmaskedRegionCarriesCredential(text, plainFrom, text.length());
             }
-            if (schemelessCredential(text, plainFrom, marker))
+            if (unmaskedRegionCarriesCredential(text, plainFrom, marker))
             {
                 return true;
             }
@@ -1149,7 +1177,8 @@ public class GitTool implements IMcpTool
             {
                 // The redaction copies the delimiter itself and replaces what follows it.
                 int maskedFrom = query + 1;
-                if (authorityEnd < maskedFrom && schemelessCredential(text, authorityEnd, maskedFrom))
+                if (authorityEnd < maskedFrom
+                    && unmaskedRegionCarriesCredential(text, authorityEnd, maskedFrom))
                 {
                     return true;
                 }
@@ -1178,6 +1207,123 @@ public class GitTool implements IMcpTool
             }
         }
         return -1;
+    }
+
+    /**
+     * Whether {@code text[from, to)} - a run the redaction leaves untouched - carries a credential.
+     * <p>
+     * Two shapes count, and they are judged by DIFFERENT rules because they mark a credential
+     * differently:
+     * <ul>
+     * <li>a {@code scheme://} URL sitting inside this run ({@link #urlUserinfoHere}): the redaction
+     * skipped it - its per-URL bound had already run past it - so ANY {@code @} in that URL's
+     * authority reaches the caller verbatim. That is the same rule
+     * {@link #unmaskableAuthority} applies at the top level minus the "can the redaction reach it"
+     * question, which here is already answered NO. Requiring a password marker here would judge the
+     * very same text more leniently than the top level does, purely because of where it sits:
+     * {@code https://clean/r/https://<token>@host/x.git} is printed whole, and a bare token is
+     * exactly what a URL userinfo carries;</li>
+     * <li>everything else - scp-like or plain text ({@link #schemelessCredential}), where a
+     * {@code :} is what tells a login from a secret.</li>
+     * </ul>
+     *
+     * @param text the text being walked
+     * @param from the first index of the run
+     * @param to the index the run stops before
+     * @return {@code true} when the run carries a credential nothing would mask
+     */
+    private static boolean unmaskedRegionCarriesCredential(String text, int from, int to)
+    {
+        return urlUserinfoHere(text, from, to) || schemelessCredential(text, from, to);
+    }
+
+    /**
+     * Whether some {@code scheme://} URL inside {@code text[from, to)} carries a userinfo.
+     * <p>
+     * Only reached for a region the redaction does not scan, so there is nothing to weigh: an
+     * {@code @} before the authority ends is a credential that will be printed as it stands. The
+     * authority ends where a URL's authority always ends - at {@code /}, {@code ?}, {@code #},
+     * whitespace or the end of the run - and a {@code ://} with no scheme in front of it is not a
+     * URL to the redaction, so it is not one here either.
+     *
+     * @param text the text being walked
+     * @param from the first index of the run
+     * @param to the index the run stops before
+     * @return {@code true} when such a URL carries a userinfo
+     */
+    private static boolean urlUserinfoHere(String text, int from, int to)
+    {
+        // Two characters BACK, because a region can begin inside a separator: the URL before it
+        // ends its authority at the first '/', and that slash can be the first one of a nested
+        // '://'. Starting at 'from' would step over the marker in
+        // 'https://https://<token>@host/x.git' and see nothing. Nothing earlier can be re-judged
+        // this way - a region begins at least one character past its own URL's separator.
+        int search = Math.max(0, from - (SCHEME_SEPARATOR.length() - 1));
+        for (int marker = text.indexOf(SCHEME_SEPARATOR, search); marker >= 0 && marker < to;
+            marker = text.indexOf(SCHEME_SEPARATOR, marker + SCHEME_SEPARATOR.length()))
+        {
+            if (!hasSchemeBefore(text, marker))
+            {
+                continue;
+            }
+            int userinfoStart = marker + SCHEME_SEPARATOR.length();
+            int lastAt = -1;
+            for (int i = userinfoStart; i < to; i++)
+            {
+                char c = text.charAt(i);
+                if (c == '@')
+                {
+                    // The LAST one before the authority ends: git takes an email-style user name,
+                    // so the real separator of 'user@corp.com:secret@host' is the second '@'.
+                    lastAt = i;
+                }
+                else if (c == '/' || c == '?' || c == '#' || isAsciiWhitespace(c))
+                {
+                    break;
+                }
+            }
+            if (lastAt >= 0 && !isPlainSshLogin(text, marker, userinfoStart, lastAt))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the userinfo of the URL at {@code separator} is git's documented SSH LOGIN rather
+     * than a credential - the same question {@link #isPlainSshUser} answers for a whole token, asked
+     * by index for a URL sitting inside other text.
+     * <p>
+     * It has to be asked here too, or the tool would judge one spelling by two rules: the input
+     * guard accepts {@code ssh://git@host/repo.git} - it is the alternative the guide recommends -
+     * while a refusal on every nested {@code @} would reject that very URL for standing in another
+     * one's path. For http(s) any userinfo stays a credential, because that is where a token rides.
+     *
+     * @param text the text being walked
+     * @param separator the index of this URL's {@value #SCHEME_SEPARATOR}
+     * @param userinfoStart the first index after it
+     * @param at the index of the {@code @} that closes the userinfo
+     * @return {@code true} when this is a plain ssh user name
+     */
+    private static boolean isPlainSshLogin(String text, int separator, int userinfoStart, int at)
+    {
+        if (at <= userinfoStart || carriesPasswordMarker(text, userinfoStart, at))
+        {
+            return false;
+        }
+        int schemeStart = separator;
+        while (schemeStart > 0 && isSchemeChar(text.charAt(schemeStart - 1)))
+        {
+            schemeStart--;
+        }
+        // Bounded before any copy: a scheme longer than the longest ssh spelling cannot be one, and
+        // the run in front of a separator is untrusted text of any length.
+        if (separator - schemeStart > LONGEST_SSH_SCHEME_CHARS)
+        {
+            return false;
+        }
+        return SSH_SCHEMES.contains(text.substring(schemeStart, separator).toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -1302,9 +1448,10 @@ public class GitTool implements IMcpTool
         {
             StoredConfig config = repo.getConfig();
             reloadFromDisk(config);
-            for (String remote : config.getSubsections(REMOTE_SECTION))
+            Config effective = withWorktreeConfig(repo, config);
+            for (String remote : effective.getSubsections(REMOTE_SECTION))
             {
-                StoredRemoteFlaw flaw = remoteEntryFlaw(config, remote);
+                StoredRemoteFlaw flaw = remoteEntryFlaw(effective, remote);
                 if (flaw != null)
                 {
                     return unprintableRemoteRefusal(remote, flaw);
@@ -1375,6 +1522,66 @@ public class GitTool implements IMcpTool
     }
 
     /**
+     * Adds the PER-WORKTREE configuration on top when the repository has it switched on, because
+     * JGit does not - and a remote can live there and nowhere else.
+     * <p>
+     * With {@code extensions.worktreeConfig = true} git reads {@code <git dir>/config.worktree}
+     * after {@code config} ({@code git rev-parse --git-path config.worktree} resolves it, and for a
+     * linked worktree that git dir is the {@code .git/worktrees/<name>} directory JGit already
+     * hands back). JGit 6.8 knows nothing about the file: neither {@code config.worktree} nor
+     * {@code worktreeConfig} occurs anywhere in its jar, and a live repository carrying the
+     * extension opens fine while {@code getConfig().getSubsections("remote")} lists only what
+     * {@code .git/config} declares. So {@code remote -v} would print a remote this check never saw.
+     * <p>
+     * Layered as a BASE-chained {@link FileBasedConfig}, which is how git reads it too: a remote
+     * declared only there is enumerated, and one declared in both takes the worktree value. Built
+     * fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new object has no
+     * cached content to go stale.
+     * <p>
+     * The switch is read from the REPOSITORY's own file, never from the merged chain. It is a
+     * repository-FORMAT setting: git honours {@code extensions.*} out of {@code .git/config} and
+     * only from format version 1 on, so an {@code extensions.worktreeConfig = true} left in a
+     * user's {@code ~/.gitconfig} turns nothing on for git - and must turn nothing on here either,
+     * or a stale {@code config.worktree} git ignores would take a repository off the air.
+     * <p>
+     * LINKED worktrees are outside this - and outside the whole check - for a reason that is not
+     * ours: JGit 6.8 gives such a repository no repository-level configuration at all. Its
+     * {@code getDirectory()} is the {@code .git/worktrees/<name>} directory, which is the right
+     * place to look for {@code config.worktree} (that is what {@code --git-path} resolves to there),
+     * but the {@code config} JGit reads beside it does not exist, and the common one is never read:
+     * on a linked worktree {@code getConfig()} reports no format version and no remotes whatsoever.
+     * So nothing is judged there, and nothing here can change that.
+     *
+     * @param repo the repository the command would run in
+     * @param config the merged configuration already read for it
+     * @return the configuration to judge - {@code config} itself when the extension is off
+     * @throws IOException when a configuration file cannot be read
+     * @throws ConfigInvalidException when one cannot be parsed
+     */
+    private static Config withWorktreeConfig(Repository repo, Config config)
+        throws IOException, ConfigInvalidException
+    {
+        File gitDir = repo.getDirectory();
+        if (gitDir == null)
+        {
+            return config;
+        }
+        FileBasedConfig repositoryOnly =
+            new FileBasedConfig(null, new File(gitDir, REPOSITORY_CONFIG_FILE), repo.getFS());
+        repositoryOnly.load();
+        if (repositoryOnly.getInt(CORE_SECTION, FORMAT_VERSION_KEY, 0) < 1
+            || !repositoryOnly.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false))
+        {
+            return config;
+        }
+        FileBasedConfig worktree =
+            new FileBasedConfig(config, new File(gitDir, WORKTREE_CONFIG_FILE), repo.getFS());
+        // A missing file is not an error here: load() clears and the layer simply adds nothing.
+        worktree.load();
+        return worktree;
+    }
+
+    /**
      * The EDT-log line for the fail-closed path: what failed, and the exception TYPES behind it -
      * never their messages.
      * <p>
@@ -1416,7 +1623,7 @@ public class GitTool implements IMcpTool
      * @param remote the remote's subsection name
      * @return the flaw, or {@code null} when the entry may be printed
      */
-    private static StoredRemoteFlaw remoteEntryFlaw(StoredConfig config, String remote)
+    private static StoredRemoteFlaw remoteEntryFlaw(Config config, String remote)
     {
         StoredRemoteFlaw flaw = storedTextFlaw(remote);
         if (flaw == StoredRemoteFlaw.UNMASKABLE_CREDENTIAL)
@@ -1613,8 +1820,7 @@ public class GitTool implements IMcpTool
         {
             return false;
         }
-        String scheme = value.substring(0, marker).toLowerCase(Locale.ROOT);
-        if (!"ssh".equals(scheme) && !"git+ssh".equals(scheme) && !"ssh+git".equals(scheme)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!SSH_SCHEMES.contains(value.substring(0, marker).toLowerCase(Locale.ROOT)))
         {
             return false;
         }

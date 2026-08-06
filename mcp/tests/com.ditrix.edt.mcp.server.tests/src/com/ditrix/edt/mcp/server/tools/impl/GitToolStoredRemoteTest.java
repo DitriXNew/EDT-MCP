@@ -868,6 +868,89 @@ public class GitToolStoredRemoteTest
             + url + "\n"; //$NON-NLS-1$
     }
 
+    @Test
+    public void testARemoteLivingOnlyInTheWorktreeConfigIsJudged() throws Exception
+    {
+        // With 'extensions.worktreeConfig = true' git reads <git dir>/config.worktree after
+        // config, and a remote can live there and nowhere else. JGit 6.8 does not know the file at
+        // all - neither 'config.worktree' nor 'worktreeConfig' occurs in its jar - so
+        // repo.getConfig() lists only what .git/config declares, while 'git remote -v' prints both.
+        Repository repo = newRepository("git-stored-worktree-config"); //$NON-NLS-1$
+        File gitDir = repo.getDirectory();
+        Files.write(new File(gitDir, CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 1\n[extensions]\n\tworktreeConfig = true\n" //$NON-NLS-1$
+                + "[remote \"" + ORIGIN + "\"]\n\turl = https://" + HOST + "/team/clean.git\n") //$NON-NLS-1$ //$NON-NLS-2$
+                    .getBytes(StandardCharsets.UTF_8));
+        String poisonedRemote = "worktree-remote"; //$NON-NLS-1$
+        Files.write(new File(gitDir, "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"" + poisonedRemote + "\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        // Positive control (a): the extension really is on, so this is the shape git reads that way.
+        assertTrue("fixture: extensions.worktreeConfig must be set", //$NON-NLS-1$
+            repo.getConfig().getBoolean("extensions", "worktreeConfig", false)); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control (b), and the premise of the whole case: JGit is BLIND to that file. If it
+        // ever learns to read it, this assertion fails and the case stops claiming something false.
+        assertFalse("fixture: JGit must not see the worktree remote by itself - if it does, this " //$NON-NLS-1$
+            + "case is not about the gap it was written for", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).contains(poisonedRemote));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a remote that lives only in config.worktree is printed by git and must be " //$NON-NLS-1$
+            + "judged like any other", refusal); //$NON-NLS-1$
+        assertRefusalNamesTheRemoteAndTheFix(refusal, poisonedRemote);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testTheWorktreeConfigNeedsRepositoryFormatVersionOne() throws Exception
+    {
+        // 'extensions.*' is a repository-FORMAT setting, and git honours it only from format
+        // version 1 on. At version 0 it ignores the extension and never reads config.worktree, so a
+        // check that read the file anyway would take a repository git is perfectly happy with off
+        // the air. (The same rule is why the switch is read from .git/config itself and not from
+        // the merged chain - one left behind in a user's ~/.gitconfig turns nothing on for git.
+        // That half is argued from git's semantics; only the version half is reproducible here,
+        // because putting a switch into the USER configuration would mean writing to the machine's
+        // own ~/.gitconfig.)
+        Repository repo = newRepository("git-stored-worktree-version"); //$NON-NLS-1$
+        File gitDir = repo.getDirectory();
+        Files.write(new File(gitDir, CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 0\n[extensions]\n\tworktreeConfig = true\n" //$NON-NLS-1$
+                + "[remote \"" + ORIGIN + "\"]\n\turl = https://" + HOST + "/team/clean.git\n") //$NON-NLS-1$ //$NON-NLS-2$
+                    .getBytes(StandardCharsets.UTF_8));
+        Files.write(new File(gitDir, "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"ignored\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+        // Positive control: the switch really IS declared - so the only thing keeping the file
+        // unread is the format version, which is exactly what this case is about.
+        assertTrue("fixture: extensions.worktreeConfig must be declared", //$NON-NLS-1$
+            repo.getConfig().getBoolean("extensions", "worktreeConfig", false)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("format version 0 means git ignores the extension - and so must this check", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testTheWorktreeConfigIsNotReadWhenTheExtensionIsOff() throws Exception
+    {
+        // The other half: without the extension git ignores the file, so reading it would refuse a
+        // repository git is perfectly happy with. A leftover config.worktree is exactly what an
+        // abandoned experiment leaves behind.
+        Repository repo = newRepository("git-stored-worktree-config-off"); //$NON-NLS-1$
+        File gitDir = repo.getDirectory();
+        storeRemoteUrls(repo, ORIGIN, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$
+        Files.write(new File(gitDir, "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"ignored\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+        assertFalse("fixture: the extension must be OFF for this half", //$NON-NLS-1$
+            repo.getConfig().getBoolean("extensions", "worktreeConfig", false)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("git does not read config.worktree without the extension, so neither may this " //$NON-NLS-1$
+            + "check", GitTool.storedRemoteRefusal(repo, List.of(PUSH))); //$NON-NLS-1$
+    }
+
     // ==================== fail closed ====================
 
     @Test
