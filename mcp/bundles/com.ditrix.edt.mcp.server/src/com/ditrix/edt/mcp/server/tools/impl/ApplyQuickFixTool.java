@@ -338,6 +338,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             {
                 return noFixAvailableError(chosen);
             }
+            sortVariantsDeterministically(variants);
 
             int chosenIdx = chooseIndex(variants.size(), variant);
             if (chosenIdx < 0)
@@ -577,6 +578,31 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             return ""; //$NON-NLS-1$
         }
         return line >= 1 ? " at " + modulePath + ":" + line : " at " + modulePath; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * Sorts {@code variants} into a DETERMINISTIC order by their displayed {@link #describe}
+     * text, in place.
+     * <p>
+     * {@code getApplicableFixVariants()} returns a {@code Collection} with no ordering
+     * guarantee (the same class of hazard as {@code IMarkerManager.markers()} - see
+     * {@link MarkerMatch#DETERMINISTIC_ORDER}) - and each call to {@code applyFix} prepares a
+     * FRESH {@link FixProcessHandle}, so a {@code variant=N} selector chosen from ONE call's
+     * {@link #multipleVariantsError} listing must still resolve to the SAME variant on a
+     * follow-up call, even though the underlying Collection could enumerate the same variant
+     * set in a different order each time. Sorting by the exact text
+     * {@code multipleVariantsError} shows the caller pins the listing to content, not
+     * incidental Collection iteration order.
+     * <p>
+     * Package-visible (not {@code private}) so this pure ordering decision is unit-testable
+     * without a live {@link IFixManager} session.
+     *
+     * @param variants the candidate fix variants for one marker; sorted in place, never
+     *            {@code null} or empty when called from {@link #applyFix}
+     */
+    static void sortVariantsDeterministically(List<FixVariantDescriptor> variants)
+    {
+        variants.sort(Comparator.comparing(ApplyQuickFixTool::describe));
     }
 
     /** A fix variant's human description, falling back to its details / a placeholder. */

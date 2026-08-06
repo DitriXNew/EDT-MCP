@@ -22,6 +22,7 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool.MarkerMatch;
 import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool.SelectorArgument;
+import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
 
 /**
  * Lightweight contract tests for {@link ApplyQuickFixTool}: tool metadata and JSON schema,
@@ -308,5 +309,43 @@ public class ApplyQuickFixToolTest
         assertEquals("Catalog.Beta", order1.get(1).objectPresentation); //$NON-NLS-1$
         assertEquals("both encounter orders must sort identically", //$NON-NLS-1$
             order1.get(0).objectPresentation, order2.get(0).objectPresentation);
+    }
+
+    // ---- sortVariantsDeterministically: variant=N stability across getApplicableFixVariants() ----
+    // encounter order (the class of hazard the DETERMINISTIC_ORDER tests above cover for markers) --
+
+    @Test
+    public void testSortVariantsDeterministicallyIsStableAcrossEncounterOrder()
+    {
+        FixVariantDescriptor alpha = new FixVariantDescriptor("Alpha fix", null); //$NON-NLS-1$
+        FixVariantDescriptor beta = new FixVariantDescriptor("Beta fix", null); //$NON-NLS-1$
+
+        // Two opposite encounter orders, standing in for getApplicableFixVariants() enumerating
+        // the SAME two variants differently on separate calls (it makes no ordering promise).
+        List<FixVariantDescriptor> order1 = new ArrayList<>(List.of(beta, alpha));
+        List<FixVariantDescriptor> order2 = new ArrayList<>(List.of(alpha, beta));
+        ApplyQuickFixTool.sortVariantsDeterministically(order1);
+        ApplyQuickFixTool.sortVariantsDeterministically(order2);
+
+        assertEquals("both encounter orders must sort identically, so variant=1 always means " //$NON-NLS-1$
+            + "the same fix", order1.get(0), order2.get(0)); //$NON-NLS-1$
+        assertEquals("sorted by displayed description: 'Alpha fix' precedes 'Beta fix'", //$NON-NLS-1$
+            alpha, order1.get(0));
+        assertEquals(beta, order1.get(1));
+    }
+
+    @Test
+    public void testSortVariantsDeterministicallyFallsBackToDetailsThenPlaceholder()
+    {
+        FixVariantDescriptor withDetailsOnly = new FixVariantDescriptor("", "Zeta details"); //$NON-NLS-1$ //$NON-NLS-2$
+        FixVariantDescriptor unnamed = new FixVariantDescriptor(null, null);
+
+        // "(unnamed fix)" < "Zeta details" lexically, so the unnamed placeholder sorts first -
+        // this only needs to be DETERMINISTIC, not any particular order, but pins the behaviour.
+        List<FixVariantDescriptor> variants = new ArrayList<>(List.of(withDetailsOnly, unnamed));
+        ApplyQuickFixTool.sortVariantsDeterministically(variants);
+
+        assertEquals(unnamed, variants.get(0));
+        assertEquals(withDetailsOnly, variants.get(1));
     }
 }
