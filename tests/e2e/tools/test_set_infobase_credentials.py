@@ -13,11 +13,21 @@ other tools, not here. The tool selects an EXISTING infobase user (does not crea
 users); an empty password is valid (demo bases). Target by launchConfigurationName
 (preferred) or projectName + applicationId.
 
+TWO CONSUMERS (#359)
+--------------------
+A launch has two processes that authenticate, and they read the user from different
+places: the designer AGENT from EDT's per-infobase access settings (written by every
+call), and the launched 1C CLIENT from the launch configuration's own attributes
+(written ONLY when the target was given as launchConfigurationName). A projectName +
+applicationId call therefore returns success:true with clientConfigured:false, and the
+launched client keeps popping the platform's login dialog — which is exactly how #359
+was reported: the call said success, run_yaxunit_tests then blocked on a password.
+
 RESPONSE SHAPE
 --------------
 JSON tool (getResponseType() == JSON); payload in r.structured:
-  stored: {"success": true, "project", "applicationId", "applicationName",
-           "user", "access", "passwordSet", "message"}
+  stored: {"success": true, "clientConfigured", "project", "applicationId",
+           "applicationName", "user", "access", "passwordSet", "message"}
   error:  {"success": false, "error": "..."}
 
 CI STRATEGY
@@ -177,6 +187,13 @@ def test_live_standalone_server_application_id_roundtrip():
         assert sc.get("applicationId") == app_id, "applicationId must be echoed: %r" % sc
         assert sc.get("user") == "Admin", "stored user must be echoed: %r" % sc
         assert sc.get("access") == "INFOBASE", "default access must be echoed: %r" % sc
+        # #359: an applicationId target names no launch configuration, so the launched CLIENT is
+        # NOT configured -- and the answer has to say so instead of letting success:true read as
+        # "a launch will now work".
+        assert sc.get("clientConfigured") is False, \
+            "an applicationId target must report clientConfigured=false: %r" % sc
+        assert "NOT covered" in (sc.get("message") or ""), \
+            "the message must warn that the launched client is not configured: %r" % sc
     finally:
         _ensure_standalone_absent()
 

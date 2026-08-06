@@ -9,12 +9,15 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
 
@@ -75,6 +78,29 @@ public final class LaunchConfigUtils
 
     /** Remote attach: URL of the HTTP debug server (e.g. "http://localhost:1550"). */
     public static final String ATTR_DEBUG_SERVER_URL = "com._1c.g5.v8.dt.debug.core.ATTR_DEBUG_SERVER_URL"; //$NON-NLS-1$
+
+    /**
+     * Launch attribute: the infobase user the CLIENT connects as ("Пользователь информационной
+     * базы" in the launch dialog). The client is a separate process from the designer agent and
+     * takes its credentials from here, NOT from the infobase access settings.
+     */
+    public static final String ATTR_LAUNCH_USER_NAME =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_USER_NAME"; //$NON-NLS-1$
+
+    /** Launch attribute: the password that goes with {@link #ATTR_LAUNCH_USER_NAME}. */
+    public static final String ATTR_LAUNCH_USER_PASSWORD =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_USER_PASSWORD"; //$NON-NLS-1$
+
+    /**
+     * Launch attribute: "Использовать настройки доступа к информационной базе" - the first radio
+     * of the launch dialog's client-user section. Mutually exclusive with an explicit user.
+     */
+    public static final String ATTR_LAUNCH_USER_USE_INFOBASE_ACCESS =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_USER_USE_INFOBASE_ACCESS"; //$NON-NLS-1$
+
+    /** Launch attribute: "Использовать аутентификацию ОС" - the second radio of that section. */
+    public static final String ATTR_LAUNCH_OS_INFOBASE_ACCESS =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_OS_INFOBASE_ACCESS"; //$NON-NLS-1$
 
     /** Synthetic applicationId prefix for Attach launches that don't carry ATTR_APPLICATION_ID. */
     public static final String ATTACH_APP_ID_PREFIX = "attach:"; //$NON-NLS-1$
@@ -548,6 +574,85 @@ public final class LaunchConfigUtils
             }
         }
         return null;
+    }
+
+    /**
+     * The client-user attributes a launch configuration must carry for the CLIENT process to
+     * authenticate without the platform's "Доступ к информационной базе" prompt.
+     *
+     * <p>Kept separate from the write below so the mapping - which radio of the launch dialog's
+     * client-user section ends up selected - is pinnable without a live launch configuration. The
+     * three radios are mutually exclusive, so choosing one means clearing the others: an explicit
+     * user must switch OFF "use the infobase access settings", or the client keeps reading the
+     * settings that only the designer agent consumes (issue #359).
+     *
+     * @param user     the infobase user the client connects as (may be {@code null}/empty for OS auth)
+     * @param password the user's password (may be {@code null}; an empty password is legitimate)
+     * @param osAuth   {@code true} to select OS authentication instead of an explicit user
+     * @return the attribute name/value pairs to write, never {@code null}
+     */
+    public static Map<String, Object> clientCredentialAttributes(String user, String password, boolean osAuth)
+    {
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        // Whichever mode is chosen, it is NOT "take them from the infobase access settings":
+        // those are read by the designer agent, not by the launched client.
+        attributes.put(ATTR_LAUNCH_USER_USE_INFOBASE_ACCESS, Boolean.FALSE);
+        attributes.put(ATTR_LAUNCH_OS_INFOBASE_ACCESS, Boolean.valueOf(osAuth));
+        if (osAuth)
+        {
+            // OS authentication carries no user/password - leave nothing stale behind.
+            attributes.put(ATTR_LAUNCH_USER_NAME, ""); //$NON-NLS-1$
+            attributes.put(ATTR_LAUNCH_USER_PASSWORD, ""); //$NON-NLS-1$
+        }
+        else
+        {
+            attributes.put(ATTR_LAUNCH_USER_NAME, user == null ? "" : user); //$NON-NLS-1$
+            attributes.put(ATTR_LAUNCH_USER_PASSWORD, password == null ? "" : password); //$NON-NLS-1$
+        }
+        return attributes;
+    }
+
+    /**
+     * Writes {@link #clientCredentialAttributes} onto a launch configuration, so the launched
+     * CLIENT authenticates by itself.
+     *
+     * @param config   the runtime-client launch configuration to update
+     * @param user     the infobase user (may be {@code null}/empty for OS auth)
+     * @param password the password (may be {@code null}; empty is legitimate)
+     * @param osAuth   {@code true} for OS authentication
+     * @return {@code null} on success, otherwise a human-readable reason the write failed
+     */
+    public static String applyClientCredentials(ILaunchConfiguration config, String user, String password,
+        boolean osAuth)
+    {
+        if (config == null)
+        {
+            return "launch configuration is not available"; //$NON-NLS-1$
+        }
+        try
+        {
+            ILaunchConfigurationWorkingCopy copy = config.getWorkingCopy();
+            for (Map.Entry<String, Object> attribute : clientCredentialAttributes(user, password, osAuth).entrySet())
+            {
+                Object value = attribute.getValue();
+                if (value instanceof Boolean)
+                {
+                    copy.setAttribute(attribute.getKey(), ((Boolean)value).booleanValue());
+                }
+                else
+                {
+                    copy.setAttribute(attribute.getKey(), (String)value);
+                }
+            }
+            copy.doSave();
+            return null;
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Could not store client credentials on the launch configuration", e); //$NON-NLS-1$
+            // The message is the platform's own and names no credential - it is safe to report.
+            return e.getMessage();
+        }
     }
 
 }

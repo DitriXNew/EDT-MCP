@@ -55,6 +55,23 @@ public class InfobaseAccessSupportTest
     }
 
     @Test
+    public void testIsOsAccessAgreesWithParseAccess()
+    {
+        // isOsAccess (issue #359) answers the same question for the launch configuration's
+        // client-user section that parseAccess answers for the infobase access settings. Two
+        // independent spellings of "is this OS auth" would eventually disagree, and the launch
+        // dialog would end up on a different radio than the stored settings - so it delegates,
+        // and this pins that the two never diverge.
+        for (String access : new String[] { null, "", "INFOBASE", "infobase", "OS", "os", "Os", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "whatever" }) //$NON-NLS-1$
+        {
+            assertEquals("isOsAccess must agree with parseAccess for '" + access + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                InfobaseAccess.OS == InfobaseAccessSupport.parseAccess(access),
+                InfobaseAccessSupport.isOsAccess(access));
+        }
+    }
+
+    @Test
     public void testAccessErrorAcceptsNullEmptyAndEnumValues()
     {
         assertNull(InfobaseAccessSupport.accessError(null));

@@ -49,6 +49,15 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * create users. Demo bases typically have a user with an empty password, so an
  * empty {@code password} is valid.
  *
+ * <p><strong>Two consumers, two stores (issue #359).</strong> The infobase access
+ * settings above are read by the designer AGENT. The 1C CLIENT a launch starts is a
+ * different process and reads its user from the launch configuration's own attributes,
+ * so a target given as {@code launchConfigurationName} configures BOTH — see
+ * {@link #configureClient}. A target given as {@code projectName} + {@code applicationId}
+ * names no launch configuration, so only the agent is configured and the success message
+ * says so: otherwise a caller reads {@code success:true} and is surprised by the
+ * platform's login dialog on the next {@code run_yaxunit_tests} / {@code debug_launch}.
+ *
  * <p><strong>Unattended-safety:</strong> the model work (resolve application -&gt;
  * {@link InfobaseAccessSupport#storeCredentials(IApplication, String, String, InfobaseAccess)}
  * -&gt; {@code IInfobaseAccessManager.updateSettings} -&gt; read-back display name) runs in a
@@ -74,6 +83,19 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     private static final String KEY_ACCESS = "access"; //$NON-NLS-1$
     /** Output key: whether a non-empty password was stored (the password itself is never returned). */
     private static final String KEY_PASSWORD_SET = "passwordSet"; //$NON-NLS-1$
+    /** Output key: whether the launched CLIENT was configured too (issue #359). */
+    private static final String KEY_CLIENT_CONFIGURED = "clientConfigured"; //$NON-NLS-1$
+
+    /**
+     * Stand-in "client write failed" reason for the persist-first record taken BEFORE the client
+     * half runs. It only ever reaches the caller when the call ends between the agent commit and
+     * the moment the client's outcome is recorded (the bounded Job's deadline), so the agent
+     * credentials really are stored. Cancellation is cooperative, so the launch-configuration save
+     * may in fact have completed by then — this deliberately UNDER-claims: reporting a client that
+     * turns out to be configured is harmless, the reverse is the bug issue #359 is about.
+     */
+    private static final String CLIENT_WRITE_UNFINISHED =
+        "the call ended before the launch configuration's outcome was known"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -90,7 +112,9 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             + "registered infobase (issue #275). Selects an EXISTING infobase user (does not " //$NON-NLS-1$
             + "create users); an empty password is valid (demo bases). Target by " //$NON-NLS-1$
             + "launchConfigurationName (preferred) or projectName + applicationId (from " //$NON-NLS-1$
-            + "get_applications). " //$NON-NLS-1$
+            + "get_applications). With launchConfigurationName the launched 1C CLIENT is " //$NON-NLS-1$
+            + "configured too so it stops asking for a password (issue #359); with projectName + " //$NON-NLS-1$
+            + "applicationId only the agent is - check clientConfigured in the result. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
 
@@ -99,9 +123,12 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact runtime-client config name from list_configurations (preferred target).") //$NON-NLS-1$
+                "Exact runtime-client config name from list_configurations (preferred target: the " //$NON-NLS-1$
+                + "only shape that also configures the launched 1C client).") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT_NAME,
-                "EDT project name; required if launchConfigurationName is omitted.") //$NON-NLS-1$
+                "EDT project name; required if launchConfigurationName is omitted. Configures the " //$NON-NLS-1$
+                + "designer agent only - this call does not touch any launch configuration's own " //$NON-NLS-1$
+                + "client-user settings.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID from get_applications; required if launchConfigurationName is omitted.") //$NON-NLS-1$
             .stringProperty(KEY_USER,
@@ -127,6 +154,11 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .stringProperty(KEY_USER, "Stored infobase user name.") //$NON-NLS-1$
             .stringProperty(KEY_ACCESS, "Stored access kind (INFOBASE or OS).") //$NON-NLS-1$
             .booleanProperty(KEY_PASSWORD_SET, "True when a non-empty password was stored.") //$NON-NLS-1$
+            .booleanProperty(KEY_CLIENT_CONFIGURED,
+                "True when THIS call also wrote the launched client's own authentication onto a " //$NON-NLS-1$
+                + "launch configuration - only possible when the target was given as " //$NON-NLS-1$
+                + "launchConfigurationName. False means this call did not configure the client " //$NON-NLS-1$
+                + "(no configuration named, or the write failed); see message.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
@@ -156,6 +188,9 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
 
         boolean hasName = configName != null && !configName.isEmpty();
+        // Stays null for a projectName + applicationId target: there is then no launch
+        // configuration in play, which is an ANSWER configureClient returns — not a skipped step.
+        ILaunchConfiguration clientConfig = null;
         if (hasName)
         {
             // Resolve the project + applicationId from the launch configuration when a name was given.
@@ -166,6 +201,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             }
             projectName = resolved.projectName();
             applicationId = resolved.applicationId();
+            clientConfig = resolved.config();
         }
         else
         {
@@ -182,7 +218,51 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return store(projectName, applicationId, user, password, access);
+        return store(projectName, applicationId, user, password, access,
+            hasName ? configName : null, clientConfig);
+    }
+
+    /**
+     * Configures the launched CLIENT — when there is a launch configuration to configure.
+     *
+     * <p>The credentials {@link #store} writes below are the <em>infobase access settings</em>, and
+     * those are read by the designer AGENT. The client 1C launches is a different process and takes
+     * its user from the launch configuration's own attributes, so writing only the former leaves the
+     * client popping the platform's "Infobase access" dialog at every launch — a call that reported
+     * {@code success:true} while the very next {@code run_yaxunit_tests} still blocked on a login
+     * prompt (issue #359).
+     *
+     * <p>Called on BOTH target shapes, on purpose. "No launch configuration was named" is a value
+     * this method returns, not a call site that quietly does not exist, so the one place that
+     * decides whether the client is configured is testable for both answers.
+     *
+     * <p>It runs only AFTER the agent's credentials have committed. There is no transaction across
+     * EDT's secure storage and a launch configuration, so one of the two writes is always second —
+     * but this way the second one's failure is REPORTED ({@code clientConfigured:false} plus the
+     * reason), whereas the reverse order would leave a launch configuration silently rewritten by a
+     * call that answered {@code success:false}.
+     *
+     * @param configName the launch configuration named as the target, or {@code null}/empty when the
+     *     target was given as projectName + applicationId
+     * @param config the resolved launch configuration to write to; only read when {@code configName}
+     *     is non-empty
+     * @param user the infobase user the client connects as (may be {@code null}/empty for OS auth)
+     * @param password the user's password (may be {@code null}; an empty password is legitimate)
+     * @param osAuth {@code true} to select OS authentication instead of an explicit user
+     * @return {@code null} when nothing failed — including the case where no launch configuration
+     *     was named and nothing was written; otherwise the reason the write failed
+     */
+    static String configureClient(String configName, ILaunchConfiguration config, String user,
+            String password, boolean osAuth)
+    {
+        if (configName == null || configName.isEmpty())
+        {
+            // projectName + applicationId target: no launch configuration exists to write to. The
+            // client stays unconfigured, and buildSuccess() says so out loud rather than letting the
+            // caller read "credentials stored" as "a launch will now work".
+            return null;
+        }
+        return LaunchConfigUtils.applyClientCredentials(config, user, password, osAuth);
     }
 
     /**
@@ -239,7 +319,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             return TargetResolution.error(ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
                 + "' has no project or applicationId attribute — cannot derive the target.").toJson()); //$NON-NLS-1$
         }
-        return TargetResolution.resolved(cfgProject, cfgAppId);
+        return TargetResolution.resolved(cfgProject, cfgAppId, cfg);
     }
 
     /**
@@ -251,22 +331,31 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         private final String projectName;
         private final String applicationId;
         private final String error;
+        /** The resolved configuration itself - the CLIENT's credentials are written onto it. */
+        private final ILaunchConfiguration config;
 
-        private TargetResolution(String projectName, String applicationId, String error)
+        private TargetResolution(String projectName, String applicationId, String error,
+            ILaunchConfiguration config)
         {
             this.projectName = projectName;
             this.applicationId = applicationId;
             this.error = error;
+            this.config = config;
         }
 
-        static TargetResolution resolved(String projectName, String applicationId)
+        static TargetResolution resolved(String projectName, String applicationId, ILaunchConfiguration config)
         {
-            return new TargetResolution(projectName, applicationId, null);
+            return new TargetResolution(projectName, applicationId, null, config);
+        }
+
+        ILaunchConfiguration config()
+        {
+            return config;
         }
 
         static TargetResolution error(String error)
         {
-            return new TargetResolution(null, null, error);
+            return new TargetResolution(null, null, error, null);
         }
 
         String projectName()
@@ -286,7 +375,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     }
 
     private String store(String projectName, String applicationId, String user, String password,
-            String access)
+            String access, String clientConfigName, ILaunchConfiguration clientConfig)
     {
         // Prelude on the calling thread: resolving the IApplicationManager is a cheap service lookup.
         ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -301,6 +390,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         final String finalUser = user;
         final String finalPassword = password;
         final String finalAccess = access;
+        final String finalClientConfigName = clientConfigName;
+        final ILaunchConfiguration finalClientConfig = clientConfig;
 
         // The model work (getApplication -> storeCredentials -> getName) runs in a bounded background
         // Job. Resolving an application can provoke EDT's background application-update-state recompute,
@@ -343,11 +434,20 @@ public class SetInfobaseCredentialsTool implements IMcpTool
 
                 // Persist-first: the credentials have committed (updateSettings returned null). Record the
                 // success NOW, keyed on the applicationId as the display name, so a later read-back or a
-                // timeout cannot lose the persisted success.
+                // timeout cannot lose the persisted success. The client half has not been attempted yet,
+                // so this provisional record says so rather than claiming a configured client.
                 boolean passwordSet = finalPassword != null && !finalPassword.isEmpty();
                 String storedUser = finalUser == null ? "" : finalUser; //$NON-NLS-1$
                 jobResult.set(buildSuccess(finalProjectName, finalApplicationId, finalApplicationId,
-                    storedUser, passwordSet, accessKind));
+                    storedUser, passwordSet, accessKind, finalClientConfigName, CLIENT_WRITE_UNFINISHED));
+
+                // The agent half has committed, so now — and only now — the CLIENT half. Writing it
+                // after the commit means a failure of the agent half leaves the launch configuration
+                // untouched instead of silently rewritten by a call that answered success:false.
+                String clientError = configureClient(finalClientConfigName, finalClientConfig, finalUser,
+                    finalPassword, InfobaseAccessSupport.isOsAccess(finalAccess));
+                jobResult.set(buildSuccess(finalProjectName, finalApplicationId, finalApplicationId,
+                    storedUser, passwordSet, accessKind, finalClientConfigName, clientError));
 
                 // Best-effort enrich: replace the applicationId-named success with the real display name.
                 try
@@ -356,7 +456,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                     if (name != null && !name.isEmpty())
                     {
                         jobResult.set(buildSuccess(finalProjectName, finalApplicationId, name, storedUser,
-                            passwordSet, accessKind));
+                            passwordSet, accessKind, finalClientConfigName, clientError));
                     }
                 }
                 catch (Exception e) // NOSONAR cosmetic read-back — keep the applicationId-named success
@@ -374,15 +474,57 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     }
 
     /**
-     * Builds the SUCCESS tool-result JSON. The same field set (success + project + applicationId +
-     * applicationName + user + access + passwordSet + message) is emitted whether the display name is
-     * the applicationId (persist-first) or the real read-back name, so the output shape is identical
-     * across branches.
+     * The sentence that tells the caller whether the launched CLIENT is covered as well.
+     *
+     * <p>The two consumers are different processes: the designer agent reads the infobase access
+     * settings, the client reads its own launch-configuration attributes. Saying only "credentials
+     * stored" made a caller believe a launch would now work when it still popped the platform's
+     * login dialog (issue #359), so the answer names exactly what was configured.
+     *
+     * <p>It reports what THIS call did, not what a launch will do. A launch configuration nobody
+     * touched here may already carry a user somebody set by hand, and one this call did write can
+     * still fail at connect on a user that does not exist or a wrong password — so the wording says
+     * "not configured by this call", never "will fail".
+     *
+     * @param clientConfigName the launch configuration that was updated, or {@code null} when the
+     *     target was given as projectName + applicationId and no configuration was touched
+     * @param clientError the reason the launch configuration could not be updated, or {@code null}
+     * @return the sentence to append to the success message
      */
-    private static String buildSuccess(String projectName, String applicationId, String displayName,
-            String storedUser, boolean passwordSet, InfobaseAccess accessKind)
+    static String clientNote(String clientConfigName, String clientError)
+    {
+        if (clientConfigName == null)
+        {
+            return "The launched CLIENT reads its user from a launch configuration instead, which is " //$NON-NLS-1$
+                + "NOT covered here: call this tool with launchConfigurationName to configure that " //$NON-NLS-1$
+                + "too, or the client will keep asking for a password at launch unless its " //$NON-NLS-1$
+                + "'Client application user' section was already filled in by hand."; //$NON-NLS-1$
+        }
+        if (clientError != null)
+        {
+            return "The launch configuration '" + clientConfigName + "' could NOT be updated (" //$NON-NLS-1$ //$NON-NLS-2$
+                + clientError + "), so its client user is whatever it was before - set it in the " //$NON-NLS-1$
+                + "'Client application user' section by hand if the client still asks for a " //$NON-NLS-1$
+                + "password."; //$NON-NLS-1$
+        }
+        // Deliberately says nothing about a "user": with access=OS the section carries none.
+        return "The launch configuration '" + clientConfigName + "' was updated as well, so the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "launched client authenticates from its own settings instead of asking - as long as " //$NON-NLS-1$
+            + "what was stored is valid for this infobase."; //$NON-NLS-1$
+    }
+
+    /**
+     * Builds the SUCCESS tool-result JSON. The same field set (success + clientConfigured + project
+     * + applicationId + applicationName + user + access + passwordSet + message) is emitted whether
+     * the display name is the applicationId (persist-first) or the real read-back name, so the
+     * output shape is identical across branches.
+     */
+    static String buildSuccess(String projectName, String applicationId, String displayName,
+            String storedUser, boolean passwordSet, InfobaseAccess accessKind, String clientConfigName,
+            String clientError)
     {
         return ToolResult.success()
+            .put(KEY_CLIENT_CONFIGURED, clientConfigName != null && clientError == null)
             .put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId)
             .put(KEY_APPLICATION_NAME, displayName)
@@ -391,8 +533,9 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .put(KEY_PASSWORD_SET, passwordSet)
             .put(McpKeys.MESSAGE, "Stored infobase access credentials for application '" //$NON-NLS-1$
                 + displayName + "' (user '" + storedUser + "', access " //$NON-NLS-1$ //$NON-NLS-2$
-                + accessKind.getName() + "). update_database / debug_launch will now authenticate " //$NON-NLS-1$
-                + "with these credentials.") //$NON-NLS-1$
+                + accessKind.getName() + "). The update agent used by update_database / " //$NON-NLS-1$
+                + "debug_launch will now authenticate with them. " //$NON-NLS-1$
+                + clientNote(clientConfigName, clientError))
             .toJson();
     }
 
