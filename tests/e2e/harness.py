@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 import time
 import urllib.request
@@ -77,6 +78,21 @@ MODEL_SETTLE_TIMEOUT = int(os.environ.get(
     "E2E_MODEL_SETTLE_TIMEOUT",
     str(max(int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180")), 300))))
 
+# reset_model's POST-CONDITION probe: an object the committed fixture always has and no
+# test may leave renamed or deleted (a rename test that targets it must be reverted by the
+# same reset). Resolving it is the only direct evidence that clean_project's re-import
+# actually landed — 'clean_project ok' + 'project ready' can both hold while the model
+# still carries the previous test's write (see reset_model). Override with
+# E2E_BASELINE_PROBE_FQN if the fixture's canonical object is ever renamed.
+BASELINE_PROBE_FQN = os.environ.get("E2E_BASELINE_PROBE_FQN", "Catalog.Catalog")
+
+# How many full revert + clean_project cycles reset_model may spend getting the model back
+# to the baseline before it gives up and stops the run. >1 because the lost race it recovers
+# from (an async disk export landing after the revert) is one-shot: the second cycle reverts
+# what that export wrote and re-imports it. Not a timeout knob — each cycle re-does the work,
+# it does not merely wait longer. Override with E2E_MODEL_RESET_ATTEMPTS.
+MODEL_RESET_ATTEMPTS = int(os.environ.get("E2E_MODEL_RESET_ATTEMPTS", "3"))
+
 # Transient "Project is building ... Please wait and retry" refusal: when a call arrives
 # while EDT is still recomputing derived data (heaviest right after a big write-metadata
 # test, and slow to drain on an under-powered CI runner), the server REFUSES it UPFRONT
@@ -104,6 +120,33 @@ _SESSION_ID = None
 # ──────────────────────────────────────────────────────────────────────────────
 class E2EAssertion(Exception):
     """Raised when an e2e assertion fails (a normal test failure)."""
+
+
+class E2ECallTimeout(Exception):
+    """One MCP call exceeded MCP_CALL_TIMEOUT.
+
+    NOT the same as a failed call: the request was never answered, so the server may still be
+    RUNNING it - a write tool keeps mutating the model after we walk away. Measured on CI: a
+    rename_metadata_object the client abandoned at 300s completed server-side at 301s
+    ("Completed tools/call: rename_metadata_object in 301090ms, outcome=ok" followed by
+    "Client connection lost: Broken pipe") and left the object renamed, so the next test failed
+    on a fixture nobody had touched. Nothing here can cancel that call, so the run must STOP
+    rather than read - or try to reset - a model somebody else is still writing.
+    """
+
+
+class E2EModelResetFailed(Exception):
+    """clean_project could not be gotten to succeed within its retry budget - raised by both
+    reset_model() (per-test model cleanup) and final_cleanup() (start/end-of-run sync), and by
+    either one's FINAL settle wait reporting the project still not ready afterward.
+
+    Either way the in-memory model may still carry an unsynchronised change (the just-finished
+    test's write, or whatever a stale session/manual edit left behind), and the next reader - the
+    next test, or a caller trusting a "clean" run - would inherit it. Silently continuing is what
+    used to turn one real failure into two (or report a run green over a model that was never
+    actually back in sync), so this is raised rather than swallowed, and callers must not treat
+    it as best-effort.
+    """
 
 
 class E2ESkip(Exception):
@@ -193,6 +236,15 @@ def _parse_response(text):
     return json.loads(t)  # last resort: raise with detail
 
 
+# Set once a call times out. After that the server is still busy with work nobody can cancel,
+# so EVERY later call is refused HERE rather than at each call site: a test-level `finally` that
+# tears down its fixture (delete_project, delete_metadata, remove_breakpoint) would otherwise race
+# the request we walked away from. The run is over at that point; the latch just makes it true
+# everywhere instead of only where someone remembered to check.
+_TIMED_OUT = False
+_ABORT_REASON = "an earlier call timed out and may still be running"
+
+
 def _post(method, params):
     global _REQUEST_ID, _SESSION_ID
     _REQUEST_ID += 1
@@ -206,6 +258,10 @@ def _post(method, params):
     }
     if _SESSION_ID:
         headers["Mcp-Session-Id"] = _SESSION_ID
+    if _TIMED_OUT:
+        raise E2ECallTimeout(
+            "refusing to send %s: %s, so the run is over. (The latch, not a new timeout - see "
+            "_TIMED_OUT.)" % (method, _ABORT_REASON))
     req = urllib.request.Request(MCP_URL, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=CALL_TIMEOUT) as resp:
@@ -214,8 +270,50 @@ def _post(method, params):
                 _SESSION_ID = sid
             text = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        text = e.read().decode("utf-8", "replace")
+        try:
+            text = e.read().decode("utf-8", "replace")
+        except (TimeoutError, socket.timeout) as body_timeout:
+            # Headers arrived, the body did not - still a call we cannot account for.
+            _arm_timeout_latch()
+            raise E2ECallTimeout(_call_timeout_message(body_timeout))
+    except urllib.error.URLError as e:
+        # A socket read timeout arrives either bare or wrapped in URLError, depending on the
+        # Python build; only the timeout becomes E2ECallTimeout - a refused connection is a
+        # different failure and must keep its own traceback.
+        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            _arm_timeout_latch()
+            raise E2ECallTimeout(_call_timeout_message(e))
+        raise
+    except (TimeoutError, socket.timeout) as e:
+        _arm_timeout_latch()
+        raise E2ECallTimeout(_call_timeout_message(e))
     return _parse_response(text)
+
+
+def _arm_timeout_latch():
+    """Remember that a call was abandoned - see _TIMED_OUT."""
+    abort_further_calls("an earlier call timed out and may still be running")
+
+
+def abort_further_calls(reason):
+    """Refuse every SUBSEQUENT MCP call, whatever is still holding the wire.
+
+    Armed by a call timeout and by the orchestrator when it abandons a timed-out worker. Both
+    mean the same thing: something we cannot cancel is still working, and every later request -
+    a test's own teardown, a reset_model still in flight on the abandoned thread - would race it.
+    Refusing at the ONE place they all pass through beats hoping each caller checks a flag.
+    """
+    global _TIMED_OUT, _ABORT_REASON
+    _TIMED_OUT = True
+    _ABORT_REASON = reason
+
+
+def _call_timeout_message(cause):
+    return ("no response in %gs (MCP_CALL_TIMEOUT). The server may still be RUNNING this call, "
+            "so the model is not safe to read or even to reset - the run stops here. Check the "
+            "EDT log for the matching 'Completed tools/call: ... in Nms' line to see whether it "
+            "finished late (raise MCP_CALL_TIMEOUT) or never finished (a real hang). %s"
+            % (CALL_TIMEOUT, cause))
 
 
 def _is_transient_building(result):
@@ -334,6 +432,11 @@ def wait_for_project_ready(timeout=None):
             text = (call("list_projects", {}).text or "").lower()
             if text and "building" not in text and "not_available" not in text:
                 return True
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
         except Exception:
             pass
         now = time.time()
@@ -415,6 +518,32 @@ def read_disk(relpath):
         return f.read()
 
 
+def _baseline_is_back():
+    """Did the model actually return to the committed baseline? (reset post-condition)
+
+    'clean_project returned ok' and 'the project reports ready' are both SIGNALS, not
+    proof: they say EDT finished the work it knew about, not that the model now matches
+    the committed fixture. Only reading the model says that. So probe the one object every
+    baseline is guaranteed to have and no test is allowed to leave renamed or deleted —
+    if BASELINE_PROBE_FQN resolves, the re-import landed.
+
+    Best-effort by construction: any failure to read it counts as 'not back' and the caller
+    retries the whole revert+clean cycle. A call TIMEOUT still propagates (see call()).
+    """
+    try:
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [BASELINE_PROBE_FQN]})
+    except E2ECallTimeout:
+        raise
+    except Exception:
+        return False
+    # Require POSITIVE evidence: a non-error result whose body actually says something and
+    # does not report the object missing. An empty body must not read as "baseline is back" —
+    # that is an unexplained response, and treating it as proof is how a stale model slips
+    # through into the next test.
+    text = (r.text or "").strip()
+    return (not r.is_error) and bool(text) and "not found" not in text.lower()
+
+
 def reset_model():
     """Re-sync EDT's in-memory BM model to the on-disk baseline after a write-metadata test.
 
@@ -433,18 +562,64 @@ def reset_model():
     timeout. So: wait for the project to SETTLE first (out-waiting that recompute) so the
     clean is accepted, THEN clean_project (which itself blocks on its own derived-data
     rebuild). Retry if a late-starting recompute re-flags BUILDING between the wait and the
-    call — a successful clean_project is the guarantee the model was actually reset.
+    call.
+
+    A successful clean_project is NOT that guarantee on its own, which is the second race
+    this function has to close. The orchestrator reverts the fixture on disk BEFORE the
+    test's model cleanup, but a metadata write's disk export is ASYNC: EDT can flush the
+    MUTATED state back out DURING the settle wait, i.e. AFTER that revert — and then
+    clean_project faithfully re-imports the mutated disk and still reports ok. Observed on
+    EDT 2026.2 (a renamed Catalog survived a green clean_project and the next test failed
+    on the baseline FQN). Hence, per attempt: settle FIRST so any lagging export has landed,
+    re-revert the disk, THEN clean, and finally VERIFY the baseline is actually back
+    (_baseline_is_back) instead of assuming it. Verification — not a longer timeout — is
+    what makes this correct: the failure is a lost write-back race, not slowness.
     """
-    for _ in range(3):
-        wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
-        try:
-            if not call("clean_project", {"projectName": PROJECT}).is_error:
-                break
-        except Exception:
-            pass
-    # Final settle: clean_project's revalidation re-triggers derived data; make sure the
-    # next test starts on a fully-indexed model regardless of which branch above we took.
-    wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+    for _ in range(MODEL_RESET_ATTEMPTS):
+        cleaned = False
+        for _ in range(3):
+            # Settle BEFORE the revert: out-wait the recompute (so the clean is accepted) and
+            # give any lagging disk export time to land, so the revert below is the last write.
+            wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+            # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
+            # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
+            reset_fixture()
+            try:
+                if not call("clean_project", {"projectName": PROJECT}).is_error:
+                    cleaned = True
+                    break
+            except E2ECallTimeout:
+                # The one failure a best-effort catch must NOT swallow: the server is still running
+                # that call, so retrying - or reporting success - hides it from the runner, the only
+                # place that can stop the run before the next test reads a model it is still writing.
+                raise
+            except Exception:
+                pass
+        if not cleaned:
+            # Three refusals in a row: the model still carries the finished test's write, and the next
+            # test would read it. That is the cascade this reset exists to prevent, so stop the run
+            # instead of continuing on a model we know is stale.
+            raise E2EModelResetFailed(
+                "clean_project did not succeed in 3 attempts, so the in-memory model still carries "
+                "the last test's write. Continuing would hand it to the next test.")
+        # Final settle: clean_project's revalidation re-triggers derived data; make sure the
+        # next test starts on a fully-indexed model regardless of which branch above we took.
+        # A negative result here is the same hazard as the exhausted-retries branch above (the
+        # model is not guaranteed to be back in sync) and must not be swallowed either.
+        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+            raise E2EModelResetFailed(
+                "clean_project succeeded, but the final settle did not report the project ready "
+                "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
+        if _baseline_is_back():
+            return
+    # Every attempt reported success and the model STILL does not match the baseline. Continuing
+    # would hand the previous test's mutation to the next one (exactly the cascade this reset
+    # exists to prevent), and the next failure would be reported against an innocent test.
+    raise E2EModelResetFailed(
+        "the model still does not resolve the baseline object %s after %d revert+clean_project "
+        "cycles, even though every clean_project reported ok and the project reported ready. The "
+        "in-memory model does not match the committed fixture; the next test would read the last "
+        "test's write." % (BASELINE_PROBE_FQN, MODEL_RESET_ATTEMPTS))
 
 
 def all_fixtures_status():
@@ -463,22 +638,47 @@ def final_cleanup():
     """Leave the working tree verifiably clean ('no diff' == the session passed and left
     nothing behind).
 
-    Reverts BOTH fixtures on disk, then clean_projects BOTH. The clean_project is the part
-    that defeats the autosave resurrection: it tears down EDT's in-memory model and
-    re-imports it from the now-clean disk (synchronously — the call blocks on the project
-    restart + derived-data rebuild), so a STALE model (e.g. a manual edit made in the EDT
-    editor, or a metadata write whose model change was not flushed) no longer has a pending
-    change to AUTOSAVE back and re-dirty the tree (the Compute/Goods whack-a-mole). The
-    final reset_all_fixtures() only mops up any file clean_project itself re-touched (e.g. a
-    CRLF/marker touch). Best-effort on the MCP calls (a wedged EDT must not make teardown
-    raise). Run at startup AND at the end."""
+    Reverts BOTH fixtures on disk, then clean_projects BOTH, with the SAME retry-until-synced
+    contract as reset_model() (wait for the project to settle, THEN clean_project, retried up
+    to 3 times each): call() only raises on a TIMEOUT, so a clean_project that came back with
+    isError (e.g. the derived-data pipeline outlived BUILDING_RETRY_TIMEOUT and the server
+    refused it) used to be swallowed by a bare `except Exception: pass`, silently declaring an
+    unsynchronised model clean. The clean_project is the part that defeats the autosave
+    resurrection: it tears down EDT's in-memory model and re-imports it from the now-clean disk
+    (synchronously — the call blocks on the project restart + derived-data rebuild), so a STALE
+    model (e.g. a manual edit made in the EDT editor, or a metadata write whose model change was
+    not flushed) no longer has a pending change to AUTOSAVE back and re-dirty the tree (the
+    Compute/Goods whack-a-mole). If a project still refuses after the retry budget - or the
+    final settle never reports every project ready - that must be EXPLICIT: raises
+    E2EModelResetFailed rather than let a run be reported green over a model nobody actually
+    verified is back in sync. The final reset_all_fixtures() only mops up any file clean_project
+    itself re-touched (e.g. a CRLF/marker touch). Run at startup AND at the end."""
     reset_all_fixtures()
     for proj in (PROJECT, TESTS_PROJECT):
-        try:
-            call("clean_project", {"projectName": proj})
-        except Exception:
-            pass
-    wait_for_project_ready()
+        cleaned = False
+        for _ in range(3):
+            wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
+            try:
+                if not call("clean_project", {"projectName": proj}).is_error:
+                    cleaned = True
+                    break
+            except E2ECallTimeout:
+                # The one failure a best-effort catch must NOT swallow: the server is still running
+                # that call, so retrying - or reporting success - hides it from the runner, the only
+                # place that can stop the run before the next test reads a model it is still writing.
+                raise
+            except Exception:
+                pass
+        if not cleaned:
+            raise E2EModelResetFailed(
+                "clean_project did not succeed in 3 attempts for project %r, so its in-memory "
+                "model may still carry an unsynchronised change - reporting this run clean would "
+                "be a lie." % proj)
+    if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+        raise E2EModelResetFailed(
+            "clean_project succeeded for every project, but the final settle did not report "
+            "every project ready within %ds, so the model is not guaranteed to be back in "
+            "sync." % MODEL_SETTLE_TIMEOUT)
     reset_all_fixtures()
 
 
@@ -665,6 +865,31 @@ def poll_disk_path_gone(rel_path, timeout=10, ctx=""):
     _fail("expected %s to be deleted from disk [%s]" % (rel_path, ctx))
 
 
+def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
+    """Poll until ONE named fixture file contains substr. rel_path is relative to the project dir,
+    e.g. 'src/XDTOPackages/P/Package.xdto'.
+
+    Use this instead of poll_diff_contains whenever the assertion that follows reads ONE SPECIFIC
+    file: poll_diff_contains is satisfied by the substring appearing in ANY changed file, so when a
+    write touches several files (an object plus the ones it cascades into) it can release while the
+    file about to be read is still being exported - a race that only shows up on a fast machine.
+    A missing file just keeps polling: the export may not have created it yet."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                last = f.read()
+            if substr in last:
+                return
+        except FileNotFoundError:
+            last = "(file does not exist yet)"
+        time.sleep(0.5)
+    _fail("expected %s to contain %r [%s]; it holds:\n%s"
+          % (rel_path, substr, ctx, last[:700]))
+
+
 def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
     """Poll until a fixture file no longer contains substr (e.g. a removed collection
     reference). A missing file also satisfies 'lacks'. Polls because the on-disk edit
@@ -746,9 +971,15 @@ def any_launch_running(config_name=None):
 def terminate_all_live_launches():
     """Teardown helper: kill EVERY live EDT launch (all=true,confirm=true). Idempotent
     and safe when nothing is running (returns the benign not_found sentinel). Best
-    effort — never raises, so it can run in a finally block."""
+    effort in a finally block: it swallows every failure EXCEPT a call timeout, which means
+    the server is still busy and must not be hidden."""
     try:
         call("terminate_launch", {"all": True, "confirm": True})
+    except E2ECallTimeout:
+        # The one failure a best-effort catch must NOT swallow: the server is still running
+        # that call, so retrying - or reporting success - hides it from the runner, the only
+        # place that can stop the run before the next test reads a model it is still writing.
+        raise
     except Exception:
         pass
 
@@ -762,6 +993,11 @@ def wait_until_no_running_launch(config_name=None, timeout=60):
         try:
             if not any_launch_running(config_name):
                 return True
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
         except Exception:
             pass
         time.sleep(2)

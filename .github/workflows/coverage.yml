@@ -15,7 +15,7 @@ name: Coverage
 
 on:
   workflow_run:
-    workflows: ["E2E 2026.1"]
+    workflows: ["E2E 2026.2"]
     types: [completed]
 
 permissions:
@@ -96,7 +96,7 @@ jobs:
         run: |
           set -uxo pipefail
           UNIT=mcp/tests/com.ditrix.edt.mcp.server.tests/target/jacoco.exec
-          curl -fSL "https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/0.8.13/org.jacoco.cli-0.8.13-nodeps.jar" \
+          curl -fSL "https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/0.8.15/org.jacoco.cli-0.8.15-nodeps.jar" \
             -o "$RUNNER_TEMP/jacococli.jar"
           EXECS=$(ls coverage-execs/*.exec 2>/dev/null || true)
           if [ -n "$EXECS" ]; then

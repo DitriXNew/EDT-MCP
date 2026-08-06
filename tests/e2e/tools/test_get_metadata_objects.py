@@ -31,6 +31,7 @@ Fixture inventory used (TestConfiguration, English Names):
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains, assert_no_diff, e2e_test, PROJECT,
+    wait_for_project_ready,
 )
 
 
@@ -55,6 +56,35 @@ def test_lists_catalog_and_does_not_mutate():
     assert_not_contains(r.text, "| Origin |",
                         "a base configuration listing must not gain the extension Origin column")
     assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_metadata_objects", kind="write-metadata")
+def test_lists_xdto_packages_the_xdto_tools_need_the_fqn_of():
+    # An XDTO package had no listing route at all, so the advice the XDTO tools give
+    # ("check the name with get_metadata_objects") could not be followed (issue #321).
+    # The fixture ships none, so one is seeded here.
+    pkg = "GMOXdtoPkg"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "XDTOPackage." + pkg}),
+              "seed an XDTO package to list")
+    wait_for_project_ready()
+
+    r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "xdtoPackages"})
+    assert_ok(r, "get_metadata_objects xdtoPackages")
+    assert_contains(r.text, pkg, "the xdtoPackages filter must list the seeded package")
+    assert_contains(r.text, "XDTOPackage", "the row must carry the XDTOPackage type token")
+    assert_not_contains(r.text, "Catalog |",
+                        "the xdtoPackages filter must not leak other categories")
+
+    # The type NAME resolves to the same category - that is the token an agent sends.
+    r = call("get_metadata_objects", {"projectName": PROJECT, "metadataType": "XDTOPackage"})
+    assert_ok(r, "the type-name token must resolve to the same category")
+    assert_contains(r.text, pkg, "the type-name token must list the seeded package")
+
+    # And the default 'all' listing must include it too, so a caller who does not know
+    # the category still sees the package.
+    r = call("get_metadata_objects", {"projectName": PROJECT})
+    assert_ok(r, "the 'all' listing")
+    assert_contains(r.text, pkg, "the 'all' listing must include XDTO packages")
 
 
 @e2e_test(tool="get_metadata_objects", kind="read")

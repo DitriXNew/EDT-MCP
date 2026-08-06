@@ -8,7 +8,7 @@ validate_xdto_package is a THIN wrapper over get_project_errors: it resolves + t
 the `fqn` (must be an existing XDTOPackage top object), then delegates to
 GetProjectErrorsTool.getProjectErrors(projectName, null, null, [pkgFqn], limit, false,
 exactScope=true) -- ALL severities, EXACT per-package scope, using the resolved package's
-canonical FQN -- and prepends a one-line pass/fail verdict to the returned Markdown.
+canonical FQN -- and prepends a one-line verdict (valid / problems found / undecided) to the returned Markdown.
 
 Happy paths:
   - a freshly created, empty XDTO package validates clean ("is valid" verdict).

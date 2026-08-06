@@ -56,6 +56,7 @@ import re
 import time
 
 from harness import (
+    E2ECallTimeout,
     call,
     assert_ok,
     assert_no_substantive_diff,
@@ -93,6 +94,10 @@ def _quiet_infobase():
     'closing' phase". Terminating only our own config keeps the blast radius minimal."""
     try:
         call("terminate_launch", {"launchConfigurationName": LIVE_LAUNCH_CONFIG})
+    except E2ECallTimeout:
+        # A timeout here means the server is STILL running that call; swallowing it would let the
+        # run continue against state it is changing. The orchestrator aborts on it.
+        raise
     except Exception:
         pass
     wait_until_no_running_launch(config_name=LIVE_LAUNCH_CONFIG, timeout=60)
@@ -402,6 +407,8 @@ def test_live_debug_breakpoint_suspend_inspect_resume():
         if bp_id:
             try:
                 call("remove_breakpoint", {"breakpointId": bp_id})
+            except E2ECallTimeout:
+                raise  # see _quiet_infobase: a timed-out call is never best-effort
             except Exception:
                 pass
         _quiet_infobase()
@@ -538,6 +545,8 @@ def test_live_profiling_start_results_stop_roundtrip():
         if bp_id:
             try:
                 call("remove_breakpoint", {"breakpointId": bp_id})
+            except E2ECallTimeout:
+                raise  # see _quiet_infobase: a timed-out call is never best-effort
             except Exception:
                 pass
         _quiet_infobase()

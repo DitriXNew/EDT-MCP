@@ -32,7 +32,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * missing {@code projectName}/{@code fqn} (required-argument guard) and an unknown project
  * (value-naming "Project not found" via
  * {@code ProjectContext}). The FQN-resolves-but-is-not-an-XDTOPackage path and the
- * happy-path pass/fail verdict need a live configuration and are covered by the E2E suite.
+ * happy-path verdict (valid / problems found / undecided) needs a live configuration and is
+ * covered by the E2E suite.
  */
 public class ValidateXdtoPackageToolTest
 {
@@ -169,8 +170,14 @@ public class ValidateXdtoPackageToolTest
         String guide = new ValidateXdtoPackageTool().getGuide();
         assertNotNull(guide);
         assertFalse("guide must be non-empty", guide.isEmpty()); //$NON-NLS-1$
-        assertTrue("guide should explain the pass/fail verdict shape", //$NON-NLS-1$
+        assertTrue("guide must document the valid verdict", //$NON-NLS-1$
             guide.contains("is valid")); //$NON-NLS-1$
+        assertTrue("guide must document the problems verdict", //$NON-NLS-1$
+            guide.contains("problems found")); //$NON-NLS-1$
+        // The third outcome is the one a client branching on two states gets wrong.
+        assertTrue("guide must document the UNDECIDED verdict", //$NON-NLS-1$
+            guide.contains("could not be checked")); //$NON-NLS-1$
+        assertTrue("guide must say what to do about it", guide.contains("revalidate_objects")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== Argument validation (returns before any UI / BM access) ====================

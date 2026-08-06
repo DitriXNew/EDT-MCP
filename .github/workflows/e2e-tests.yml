@@ -1,7 +1,7 @@
 name: E2E Tests (reusable)
 
 # REUSABLE workflow (on: workflow_call) — invoked by the thin caller workflow
-# e2e-2026.1.yml (parameterized by EDT version so it stays ready for a future matrix),
+# e2e-2026.2.yml (parameterized by EDT version so it stays ready for a future matrix),
 # which gives the gate its OWN status badge. Black-box e2e gate on a STOCK
 # GitHub-hosted runner (ubuntu-latest):
 # no docker image, no self-hosted runner. The `build` job builds the plugin; the `e2e`
@@ -18,7 +18,17 @@ name: E2E Tests (reusable)
 #
 # The EDT version comes from the caller via inputs.edt. The extra IUs the install
 # pulls (platform-support 8.5.1, profiling.feature, bsl.extension) are verified
-# present in the 2026.1 p2.
+# present in the 2026.2 p2.
+#
+# EDT VERSION ⇄ ECLIPSE BASE ⇄ JDK are ONE tuple — an EDT release pins the other two. 2026.2
+# is Eclipse 4.38 on Java 25 (its bundles declare Bundle-RequiredExecutionEnvironment
+# JavaSE-25 and ship bytecode major 69); EDT 2026.1 was Eclipse 4.30 on Java 17. The
+# defaults below are the newest supported EDT's tuple, so a caller pinning an OLDER EDT
+# must pass its matching java / eclipse-archive / eclipse-p2 too.
+#
+# Note the `build` job deliberately stays on JDK 17: the plugin is COMPILED against the
+# 2026.1 target platform (the OLDEST supported EDT) so one artifact resolves on both
+# 2026.1 and 2026.2. Only the job that RUNS EDT needs the newer JDK.
 
 on:
   workflow_call:
@@ -26,6 +36,26 @@ on:
       edt:
         description: "EDT version (public p2 ruby/<version>/)"
         required: true
+        type: string
+      java:
+        description: "JDK the EDT under test requires at RUNTIME (EDT 2026.2 ⇒ 25)"
+        required: false
+        default: "25"
+        type: string
+      eclipse-archive:
+        description: "Eclipse Platform archive the EDT under test is built on"
+        required: false
+        default: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.38-202512010920/eclipse-platform-4.38-linux-gtk-x86_64.tar.gz"
+        type: string
+      eclipse-p2:
+        description: "Eclipse release p2 (for the platform closure) matching that base"
+        required: false
+        default: "https://download.eclipse.org/releases/2025-12/"
+        type: string
+      orbit-simrel-p2:
+        description: "Eclipse Orbit aggregation p2 (Batik / SVG) matching that base"
+        required: false
+        default: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.38.0/"
         type: string
 
 jobs:
@@ -92,10 +122,13 @@ jobs:
     # composite's inputs; the EDT version comes from the caller (inputs.edt).
     env:
       EDT_P2: "https://edt.1c.ru/downloads/releases/ruby/${{ inputs.edt }}/"
-      ECLIPSE_ARCHIVE: "https://archive.eclipse.org/eclipse/downloads/drops4/R-4.30-202312010110/eclipse-platform-4.30-linux-gtk-x86_64.tar.gz"
-      ECLIPSE_P2: "https://download.eclipse.org/releases/2023-12/"
+      ECLIPSE_ARCHIVE: ${{ inputs.eclipse-archive }}
+      ECLIPSE_P2: ${{ inputs.eclipse-p2 }}
       ORBIT_P2: "https://download.eclipse.org/tools/orbit/downloads/drops/R20211213173813/repository/"
-      ORBIT_SIMREL_P2: "https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.37.0/"
+      ORBIT_SIMREL_P2: ${{ inputs.orbit-simrel-p2 }}
+      # EDT's own launcher requires this exact JDK (p2 requiredJavaVersion); a lower one
+      # leaves every JavaSE-25 bundle unresolved and EDT never boots.
+      EDT_JAVA: ${{ inputs.java }}
       # TestConfiguration is compatibilityMode 8.5.1 → EDT needs the 8.5.1 platform-support
       # FEATURE to initialize the project (no 1cv8 binary needed for indexing).
       PLATFORM_SUPPORT_IU: "com._1c.g5.v8.dt.platform.support_v8.5.1.feature.feature.group"
@@ -116,11 +149,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up JDK 17
+      - name: Set up the JDK EDT ${{ inputs.edt }} runs on
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: ${{ inputs.java }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -139,7 +172,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          V=0.8.13
+          # 0.8.15+ is required to instrument the Java 25 class files EDT 2026.2 runs on.
+          V=0.8.15
           BASE=https://repo1.maven.org/maven2/org/jacoco
           curl -fSL "$BASE/org.jacoco.agent/$V/org.jacoco.agent-$V-runtime.jar" -o "$RUNNER_TEMP/jacocoagent.jar"
           curl -fSL "$BASE/org.jacoco.cli/$V/org.jacoco.cli-$V-nodeps.jar" -o "$RUNNER_TEMP/jacococli.jar"
@@ -180,9 +214,11 @@ jobs:
           # aborts this step under `set -e` (a red gate that forces a conscious re-pin).
           EDT_BUILD="$(bash "$GITHUB_WORKSPACE/.github/scripts/edt-pin.sh" "${{ inputs.edt }}" "$EDT_P2")"
           # Key on the IMMUTABLE base inputs (NOT the plugin, which is overlaid fresh) + the
-          # served EDT build qualifier.
-          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s' \
-                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" \
+          # served EDT build qualifier. EVERY repository fed to the director below must be in
+          # here: they are caller-settable inputs now, and a repo that changes without changing
+          # the key would restore a base assembled from the OLD one and skip the reinstall.
+          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+                "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" "$ORBIT_SIMREL_P2" \
                 "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" "$BSL_EXTENSION_IU" \
                 "$EDT_BUILD" \
                 | sha256sum | cut -c1-16)
@@ -302,16 +338,17 @@ jobs:
           export EDT_MCP_DESTRUCTIVE_CONSENT=allow
           export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests"
           echo "[edt] importing: $EDT_MCP_IMPORT_PROJECTS"
-          # EDT runs Apache Ignite (BM store) which on JDK 17 needs java.nio/sun.nio.ch opened
-          # and the module system relaxed — exactly the flags EDT's own 1cedt.ini ships. A
-          # command-line -vmargs REPLACES the eclipse.ini block, so repeat the osgi flags too.
+          # EDT runs Apache Ignite (BM store) which needs java.nio/sun.nio.ch opened and the
+          # module system relaxed — exactly the flags EDT's own 1cedt.ini ships (the set is
+          # unchanged in 2026.2; only requiredJavaVersion moved 17 → 25). A command-line
+          # -vmargs REPLACES the eclipse.ini block, so repeat the osgi flags too.
           xvfb-run -a -s "-screen 0 1920x1080x24" \
             "$ECLIPSE/eclipse" -data "$WS" -clean -nosplash -consoleLog \
             --launcher.suppressErrors \
             -vmargs \
             "-javaagent:$JACOCO_AGENT=output=tcpserver,address=127.0.0.1,port=6300,includes=com.ditrix.edt.mcp.*" \
             -Xmx4g \
-            -Dosgi.requiredJavaVersion=17 \
+            "-Dosgi.requiredJavaVersion=$EDT_JAVA" \
             -Dorg.osgi.framework.bundle.parent=ext \
             -Dosgi.module.lock.timeout=240 \
             -Dlog4j.formatMsgNoLookups=true \
@@ -344,12 +381,21 @@ jobs:
           # cached, the workspace index is not), so give readiness a generous ceiling
           # before run_all aborts with a single clear error.
           E2E_PROJECT_READY_TIMEOUT: "1200"
-          # Per-CALL socket timeout. A cascading rename_metadata_object (Catalog: updates
-          # refs across BSL/forms/metadata + re-export + revalidate) can exceed the 180s
-          # default on a cold 2-core cloud runner — the call then times out and wedges the
-          # model for the next test. Give heavy mutating calls headroom (still < the 600s
-          # per-test timeout in run_all).
-          MCP_CALL_TIMEOUT: "300"
+          # Per-CALL socket timeout. A cascading rename_metadata_object can enter EDT's
+          # refactoring while the derived-data pipeline still has work; the refactoring then
+          # waits for that pipeline from inside its own BM batch session and takes ~301s
+          # (measured: "Completed tools/call: rename_metadata_object in 301090ms, outcome=ok"
+          # right after "Client connection lost: Broken pipe"). The tool now drains the
+          # pipeline first, so that path should not be reached — but 300 sat EXACTLY on the
+          # boundary, which is why every collision cost a run. Keep the budget clear of it,
+          # and below the per-test timeout below.
+          MCP_CALL_TIMEOUT: "600"
+          # Bound what reset_model may spend BEFORE and AFTER its clean_project. Left to default
+          # it inherits E2E_PROJECT_READY_TIMEOUT (1200 above, sized for the COLD first index),
+          # and reset_model can spend it twice per test - which alone exceeds the per-test cap and
+          # turns a legitimately slow cleanup into a reported hang. A post-write settle is not a
+          # cold index; 600 is generous for it.
+          E2E_MODEL_SETTLE_TIMEOUT: "600"
           # Unbuffer stdout: otherwise Python block-buffers in CI (stdout is a pipe), so
           # the readiness-wait countdown only appears when the process exits — which looks
           # like a hang during the (long) index wait. -u/PYTHONUNBUFFERED stream it live.

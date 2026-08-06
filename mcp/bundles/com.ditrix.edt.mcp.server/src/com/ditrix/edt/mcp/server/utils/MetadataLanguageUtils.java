@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -87,10 +91,16 @@ public final class MetadataLanguageUtils
      * localized property), or fails with the shared actionable message.
      * <ul>
      * <li>{@code value} absent/empty &rarr; {@code null} (nothing to localize, no error);</li>
-     * <li>otherwise the {@link #resolveLanguageCode} result when determinable;</li>
-     * <li>otherwise throws {@link IllegalArgumentException} whose message is ready for
-     * {@code ToolResult.error} (the caller wraps it).</li>
+     * <li>an EXPLICIT code the configuration DECLARES &rarr; that language's own spelling (a
+     * differently-cased request is canonicalized rather than stored as a second, never-displayed
+     * key);</li>
+     * <li>an EXPLICIT code the configuration does NOT declare &rarr; throws (issue #298) - unless the
+     * configuration declares no code at all, which leaves nothing to validate against;</li>
+     * <li>no explicit code &rarr; the {@link #resolveLanguageCode} fallback, which comes from the
+     * configuration itself and is therefore declared by construction;</li>
+     * <li>no code determinable at all &rarr; throws.</li>
      * </ul>
+     * Every thrown message is ready for {@code ToolResult.error} (the caller wraps it).
      * Extracted because the identical resolve-or-error block existed at four call sites
      * (create_metadata synonym x2, the create form-member title, modify_metadata's
      * localized-string branch) and their error texts had started to drift.
@@ -105,9 +115,72 @@ public final class MetadataLanguageUtils
     public static String resolveSynonymLanguage(Configuration config, String value,
         String explicitLanguage, String subject)
     {
+        return resolveSynonymLanguage(config, value, explicitLanguage, subject, (Collection<String>)null);
+    }
+
+    /**
+     * The {@link #resolveSynonymLanguage(Configuration, String, String, String)} variant that
+     * validates against the codes the configuration will declare AFTER the current call.
+     * <p>
+     * One {@code modify_metadata} batch can set a {@code Language} object's {@code languageCode} AND
+     * a localized value in the same breath. Validating against the model alone would reject the
+     * second half of an edit whose first half declares the code; validating against the UNION of old
+     * and new would do the opposite and accept a code the batch REMOVES (renaming a language's code
+     * from {@code en} to {@code fr} leaves no {@code en} behind). So the caller computes the
+     * post-batch set and passes it here, and it REPLACES the model-derived one.
+     * <p>
+     * This cannot let a value slip in under a code that never materializes: the whole batch is
+     * prepared before anything is written, so a rejected {@code languageCode} fails the call before
+     * the locale it would have declared can be used.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param value the localized value being set (may be {@code null}/empty)
+     * @param explicitLanguage an explicitly requested language code, or {@code null}/empty
+     * @param subject what is being localized, for the error message
+     * @param declaredOverride the codes declared AFTER this call, or {@code null}/empty to use the
+     *            configuration's current ones
+     * @return the resolved language code, or {@code null} when {@code value} is absent
+     * @throws IllegalArgumentException when the code is undeclared or cannot be determined
+     */
+    public static String resolveSynonymLanguage(Configuration config, String value,
+        String explicitLanguage, String subject, Collection<String> declaredOverride)
+    {
         if (value == null || value.isEmpty())
         {
             return null;
+        }
+        // An UNDECLARED code must be refused, not stored: the platform has no fallback between
+        // locale codes, so a value written under a code the configuration does not declare is simply
+        // never displayed - the label comes out blank and the mistake is invisible until a human
+        // opens the form. Only an EXPLICIT code can be wrong; the fallbacks below resolve to a
+        // declared language by construction. Issue #298.
+        if (explicitLanguage != null && !explicitLanguage.isEmpty())
+        {
+            List<String> declared = declaredOrOverride(config, declaredOverride);
+            if (declared.isEmpty())
+            {
+                // An EMPTY declaration set does not make an arbitrary code declared - it makes
+                // EVERY code undeclared. Storing the value anyway is precisely the invisible write
+                // this guard exists to stop: nothing would ever display it. Say what is wrong and
+                // what to do about it instead.
+                throw new IllegalArgumentException("This configuration declares no language codes, " //$NON-NLS-1$
+                    + "so '" + explicitLanguage + "' for " + subject + " cannot be stored where " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "anything would display it. Add a Language object with a 'languageCode' " //$NON-NLS-1$
+                    + "first (create_metadata 'Language.<Name>' + modify_metadata 'languageCode'), " //$NON-NLS-1$
+                    + "then write the localized value."); //$NON-NLS-1$
+            }
+            {
+                String canonical = canonicalOf(declared, explicitLanguage);
+                if (canonical == null)
+                {
+                    throw new IllegalArgumentException("Unknown language '" + explicitLanguage //$NON-NLS-1$
+                        + "' for " + subject + ". This configuration declares: " //$NON-NLS-1$ //$NON-NLS-2$
+                        + String.join(", ", declared) //$NON-NLS-1$
+                        + ". A value stored under an undeclared code is never displayed. Use one of " //$NON-NLS-1$
+                        + "the declared codes, or omit 'language' to use the default one."); //$NON-NLS-1$
+                }
+                return canonical;
+            }
         }
         String code = resolveLanguageCode(config, explicitLanguage);
         if (code == null)
@@ -115,7 +188,259 @@ public final class MetadataLanguageUtils
             throw new IllegalArgumentException("Cannot determine a language code for " + subject //$NON-NLS-1$
                 + " in this configuration. Specify a 'language' code (e.g. 'en' or 'ru')."); //$NON-NLS-1$
         }
+        // The fallback above comes from the MODEL, so it describes the configuration as it was
+        // BEFORE this call. When the same call changes the language codes, that answer is stale in
+        // two different ways, and only one of them is visible by looking for the old code:
+        //   - a RENAME deletes it, and the value would land under a code that no longer exists;
+        //   - giving the default language its FIRST code leaves the old fallback (borrowed from
+        //     whichever language did have one) perfectly valid - and wrong, because the write
+        //     belongs to the language the caller just made valid.
+        // Both are answered the same way: the defaultLanguage reference still points at the SAME
+        // Language object, so the fallback is THAT object's post-edit code, which the caller
+        // computes and passes as the FIRST override entry. Prefer it whenever it exists, rather
+        // than only when the old code vanished. Only when the caller cannot name it is the call
+        // refused - and only if the old code is gone too.
+        if (declaredOverride != null && !declaredOverride.isEmpty())
+        {
+            List<String> after = declaredOrOverride(config, declaredOverride);
+            String postEditDefault = after.isEmpty() ? null : after.get(0);
+            if (postEditDefault != null && !postEditDefault.isEmpty())
+            {
+                return postEditDefault;
+            }
+            if (!after.contains(code))
+            {
+                throw new IllegalArgumentException("This call changes the language codes, so the "  //$NON-NLS-1$
+                    + "default code ('" + code + "') for " + subject + " no longer exists after it. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "Name the 'language' explicitly."); //$NON-NLS-1$
+            }
+        }
         return code;
+    }
+
+    /**
+     * The language CODES the configuration declares, in declaration order, without blanks or
+     * duplicates.
+     * <p>
+     * An EMPTY result means "this configuration declares no language code", which callers must treat
+     * as <em>cannot validate</em> - never as "no code is allowed". A configuration being created, or
+     * one whose languages have not resolved yet, legitimately lands here.
+     *
+     * @param config the configuration (may be {@code null})
+     * @return the declared codes, never {@code null}
+     */
+    public static List<String> declaredLanguageCodes(Configuration config)
+    {
+        List<String> codes = new ArrayList<>();
+        collectDeclared(config, codes);
+        return codes;
+    }
+
+    /**
+     * {@code declaredOverride} when it has content, else the configuration's current codes. An empty
+     * or {@code null} override means "the caller has nothing better to say".
+     *
+     * @param config the configuration (may be {@code null})
+     * @param declaredOverride the codes declared after the current call (may be {@code null}/empty)
+     * @return the codes to validate against, never {@code null}
+     */
+    public static List<String> declaredOrOverride(Configuration config,
+        Collection<String> declaredOverride)
+    {
+        if (declaredOverride != null && !declaredOverride.isEmpty())
+        {
+            List<String> codes = new ArrayList<>();
+            for (String code : declaredOverride)
+            {
+                if (code != null && !code.isEmpty() && !codes.contains(code))
+                {
+                    codes.add(code);
+                }
+            }
+            if (!codes.isEmpty())
+            {
+                return codes;
+            }
+        }
+        return declaredLanguageCodes(config);
+    }
+
+    private static void collectDeclared(Configuration config, List<String> codes)
+    {
+        if (config == null)
+        {
+            return;
+        }
+        for (Language lang : config.getLanguages())
+        {
+            if (lang == null)
+            {
+                continue;
+            }
+            String code = lang.getLanguageCode();
+            if (code != null && !code.isEmpty() && !codes.contains(code))
+            {
+                codes.add(code);
+            }
+        }
+    }
+
+    /**
+     * The DECLARED spelling of a language code, or {@code null} when the configuration does not
+     * declare it.
+     * <p>
+     * An exact match wins; otherwise the comparison is case-insensitive and the DECLARED spelling is
+     * returned, so {@code "EN_ca"} is stored under the configuration's own {@code "en_CA"} key
+     * instead of creating a second, never-displayed entry.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param code the requested code (may be {@code null}/empty)
+     * @return the declared spelling, or {@code null} when the code is not declared
+     */
+    public static String canonicalLanguageCode(Configuration config, String code)
+    {
+        return canonicalOf(declaredLanguageCodes(config), code);
+    }
+
+    /** The declared spelling of {@code code} within {@code declared}, or {@code null}. */
+    private static String canonicalOf(List<String> declared, String code)
+    {
+        if (code == null || code.isEmpty())
+        {
+            return null;
+        }
+        if (declared.contains(code))
+        {
+            return code;
+        }
+        for (String declaredCode : declared)
+        {
+            if (declaredCode.equalsIgnoreCase(code))
+            {
+                return declaredCode;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The declared language codes that a localized property does NOT yet have a value for - what the
+     * caller still owes a translation for. Issue #298.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param present the codes that DO have a value (may be {@code null}/empty)
+     * @return the missing codes in declaration order, never {@code null}
+     */
+    public static List<String> localesMissing(Configuration config, Collection<String> present)
+    {
+        List<String> missing = new ArrayList<>();
+        for (String inUse : localesInUse(config))
+        {
+            if (present == null || !present.contains(inUse))
+            {
+                missing.add(inUse);
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * The declared language codes the configuration ACTUALLY USES - the ones its OWN synonym is
+     * filled in for.
+     * <p>
+     * A language can be declared and yet not be in play: a multilingual configuration worked on in a
+     * single-language dev branch declares them all, but only one carries any text. Treating every
+     * declared code as owed a translation would nag about languages nobody is translating into,
+     * which is why {@link #localesMissing} asks THIS question rather than counting declarations.
+     * <p>
+     * A configuration whose own synonym is empty for EVERY language uses none of them, and the
+     * answer is the empty list. Calling them all in use instead would suppress the confirmation a
+     * write into such a language is owed, and demand translations into every declared code on top.
+     *
+     * @param config the configuration (may be {@code null})
+     * @return the codes in use, in declaration order, never {@code null}
+     */
+    public static List<String> localesInUse(Configuration config)
+    {
+        return localesInUse(config, declaredLanguageCodes(config));
+    }
+
+    /**
+     * The same question asked about a GIVEN set of declared codes rather than the model's own.
+     * <p>
+     * A batch that declares a new language code in the very call that writes a value under it has a
+     * declaration set the model does not carry yet. Reading the languages from the model would then
+     * answer for the before-state while the caller reports on the after-state, and a code this call
+     * declares could never be "in use" - reported as a language nobody translates into, on the one
+     * write that just started translating into it.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param declared the codes that count as declared for this call (may be {@code null})
+     * @return the subset the configuration's own synonym is filled in for, or all of them when it is
+     *         filled in for none; never {@code null}
+     */
+    public static List<String> localesInUse(Configuration config, List<String> declared)
+    {
+        if (declared == null)
+        {
+            return List.of();
+        }
+        if (config == null || declared.isEmpty())
+        {
+            return declared;
+        }
+        Map<String, String> synonym = config.getSynonym() == null ? Map.of() : config.getSynonym().map();
+        List<String> inUse = new ArrayList<>();
+        for (Map.Entry<String, String> entry : synonym.entrySet())
+        {
+            String value = entry.getValue();
+            if (value != null && !value.isEmpty() && declared.contains(entry.getKey()))
+            {
+                inUse.add(entry.getKey());
+            }
+        }
+        // A configuration whose own synonym is empty everywhere has NO language in use - the answer
+        // is the empty list, not "all of them". Calling them all in use would suppress the very
+        // question the caller is owed ("this configuration is not named in that language - do you
+        // really want to translate into it?") and would demand translations into every declared
+        // language on top of it.
+        return orderedAsDeclared(declared, inUse);
+    }
+
+    /** {@code inUse} in DECLARATION order - the order every list this class returns is read in. */
+    private static List<String> orderedAsDeclared(List<String> declared, List<String> inUse)
+    {
+        List<String> ordered = new ArrayList<>(inUse.size());
+        for (String code : declared)
+        {
+            if (inUse.contains(code))
+            {
+                ordered.add(code);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * Whether a value is being written under a declared code the configuration itself does not use -
+     * its own synonym has no text for that language.
+     * <p>
+     * Not an error: the language IS declared, so the value will display. It is a prompt to CHECK,
+     * because it may equally mean the caller is translating into a language this build does not
+     * really support yet. The caller surfaces it so an agent asks the user instead of quietly
+     * populating a language nobody asked for.
+     *
+     * @param config the configuration (may be {@code null})
+     * @param code the code being written (may be {@code null})
+     * @return {@code true} when the code is declared but unused by the configuration's own synonym
+     */
+    public static boolean isDeclaredButUnused(Configuration config, String code)
+    {
+        if (config == null || code == null || code.isEmpty())
+        {
+            return false;
+        }
+        return declaredLanguageCodes(config).contains(code) && !localesInUse(config).contains(code);
     }
 
     /**

@@ -125,6 +125,20 @@ public final class MdNameNormalizer
         }
 
         /**
+         * A fresh EMPTY report carrying the SAME normalization setting. For a validation pass that is
+         * run twice - once to decide before a destructive prompt, once for real inside the write
+         * transaction - so the second pass reports each normalized field once instead of twice. The
+         * setting is copied rather than assumed: a pass validating a value the write would normalize
+         * differently would be validating something else than what gets written.
+         *
+         * @return an empty report with this report's {@code normalizeYo} setting
+         */
+        public Report emptyCopy()
+        {
+            return new Report(enabled);
+        }
+
+        /**
          * Normalizes {@code value} when this report is enabled and the value
          * actually contains a "yo"; records {@code fieldName} when a replacement
          * happened.

@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Constant;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
@@ -77,19 +78,21 @@ public class GetMetadataObjectsTool implements IMcpTool
     private static final String TYPE_EVENT_SUBSCRIPTIONS = "eventsubscriptions"; //$NON-NLS-1$
     private static final String TYPE_SCHEDULED_JOBS = "scheduledjobs"; //$NON-NLS-1$
 
+    private static final String TYPE_XDTO_PACKAGES = "xdtopackages"; //$NON-NLS-1$
+
     /**
      * The category tokens this tool actually collects (lowercase). Used both as the
      * legacy vocabulary of {@code metadataType} and as the target of the type-name-token
      * normalization in {@link #normalizeMetadataType(String)}: {@code MetadataTypeUtils}
-     * recognizes far more type names (e.g. Role, Subsystem, XDTOPackage) than this tool
-     * has collectors for, so a resolved type name is only accepted when its category is
-     * a member of this set.
+     * recognizes far more type names (e.g. Role, Subsystem) than this tool has collectors
+     * for, so a resolved type name is only accepted when its category is a member of this
+     * set.
      */
     private static final Set<String> SUPPORTED_CATEGORIES = new HashSet<>(Arrays.asList(
         TYPE_DOCUMENTS, TYPE_CATALOGS, TYPE_INFORMATION_REGISTERS, TYPE_ACCUMULATION_REGISTERS,
         TYPE_COMMON_MODULES, TYPE_ENUMS, TYPE_CONSTANTS, TYPE_REPORTS, TYPE_DATA_PROCESSORS,
         TYPE_EXCHANGE_PLANS, TYPE_BUSINESS_PROCESSES, TYPE_TASKS, TYPE_COMMON_ATTRIBUTES,
-        TYPE_EVENT_SUBSCRIPTIONS, TYPE_SCHEDULED_JOBS));
+        TYPE_EVENT_SUBSCRIPTIONS, TYPE_SCHEDULED_JOBS, TYPE_XDTO_PACKAGES));
 
     private static final String LIMIT = "limit"; //$NON-NLS-1$
 
@@ -119,7 +122,8 @@ public class GetMetadataObjectsTool implements IMcpTool
                 "Type filter (case-insensitive), default 'all'. Accepts EITHER a category token - all, " + //$NON-NLS-1$
                 "documents, catalogs, informationRegisters, accumulationRegisters, commonModules, enums, " + //$NON-NLS-1$
                 "constants, reports, dataProcessors, exchangePlans, businessProcesses, tasks, " + //$NON-NLS-1$
-                "commonAttributes, eventSubscriptions, scheduledJobs - OR a single standard metadata " + //$NON-NLS-1$
+                "commonAttributes, eventSubscriptions, scheduledJobs, xdtoPackages - OR a single " + //$NON-NLS-1$
+                "standard metadata " + //$NON-NLS-1$
                 "type name (the FQN token, English or its Russian equivalent, e.g. 'ScheduledJob', " + //$NON-NLS-1$
                 "'Document'). Single value only - not an array. An unrecognized value returns an error " + //$NON-NLS-1$
                 "listing the supported options.") //$NON-NLS-1$
@@ -231,7 +235,8 @@ public class GetMetadataObjectsTool implements IMcpTool
                    "Supported categories (case-insensitive): all, documents, catalogs, informationRegisters, " + //$NON-NLS-1$
                    "accumulationRegisters, commonModules, enums, constants, reports, dataProcessors, " + //$NON-NLS-1$
                    "exchangePlans, businessProcesses, tasks, commonAttributes, eventSubscriptions, " + //$NON-NLS-1$
-                   "scheduledJobs. Also accepts a standard metadata type name (the FQN token, English " + //$NON-NLS-1$
+                   "scheduledJobs, xdtoPackages. Also accepts a standard metadata type name (the FQN " + //$NON-NLS-1$
+                   "token, English " + //$NON-NLS-1$
                    "or Russian, singular or plural, e.g. 'ScheduledJob', 'Document') for one of these " + //$NON-NLS-1$
                    "categories.").toJson(); //$NON-NLS-1$
         }
@@ -257,6 +262,7 @@ public class GetMetadataObjectsTool implements IMcpTool
                 collectCommonAttributes(config, objects, nameFilter);
                 collectEventSubscriptions(config, objects, nameFilter);
                 collectScheduledJobs(config, objects, nameFilter);
+                collectXdtoPackages(config, objects, nameFilter);
                 break;
             case TYPE_DOCUMENTS:
                 collectDocuments(config, objects, nameFilter);
@@ -303,6 +309,9 @@ public class GetMetadataObjectsTool implements IMcpTool
             case TYPE_SCHEDULED_JOBS:
                 collectScheduledJobs(config, objects, nameFilter);
                 break;
+            case TYPE_XDTO_PACKAGES:
+                collectXdtoPackages(config, objects, nameFilter);
+                break;
             default:
                 // Unreachable: normalizeMetadataType only ever returns TYPE_ALL or a
                 // member of SUPPORTED_CATEGORIES, both fully covered above. Kept as a
@@ -336,7 +345,7 @@ public class GetMetadataObjectsTool implements IMcpTool
      *       mapped to its category token via {@link MetadataTypeUtils.MetadataTypeInfo#getConfigReferenceName()}
      *       IF that category is one this tool actually collects
      *       ({@link #SUPPORTED_CATEGORIES}) - a type MetadataTypeUtils recognizes but
-     *       this tool has no collector for (e.g. Role, Subsystem, XDTOPackage) falls
+     *       this tool has no collector for (e.g. Role, Subsystem) falls
      *       through to "not recognized" here, same as an unknown value.</li>
      * </ol>
      * This reuses the shared bilingual resolver (do NOT hand-roll type resolution,
@@ -657,6 +666,26 @@ public class GetMetadataObjectsTool implements IMcpTool
         }
     }
     
+    /**
+     * XDTO packages. They carry no modules, and their MEMBERS (ObjectType / Property) are addressed
+     * through the package FQN - which is exactly what a caller needs before create_metadata /
+     * modify_metadata / validate_xdto_package on 'XDTOPackage.&lt;Name&gt;...', and had no listing
+     * route at all before.
+     */
+    private void collectXdtoPackages(Configuration config, List<MetadataInfo> objects, String filter)
+    {
+        for (XDTOPackage pkg : config.getXDTOPackages())
+        {
+            if (matchesFilter(pkg.getName(), filter))
+            {
+                MetadataInfo info = createMetadataInfo(pkg, "XDTOPackage"); //$NON-NLS-1$
+                info.hasObjectModule = false;
+                info.hasManagerModule = false;
+                objects.add(info);
+            }
+        }
+    }
+
     private void collectEventSubscriptions(Configuration config, List<MetadataInfo> objects, String filter)
     {
         for (EventSubscription sub : config.getEventSubscriptions())

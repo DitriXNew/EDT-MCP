@@ -34,6 +34,7 @@ Fixture inventory (TestConfiguration, English Names):
 import xml.etree.ElementTree as ET
 
 from harness import (
+    E2ECallTimeout,
     call,
     assert_ok,
     assert_error,
@@ -45,6 +46,7 @@ from harness import (
     assert_tree_unchanged,
     diff,
     poll_diff_contains,
+    poll_disk_contains,
     read_disk,
     reset_all_fixtures,
     tree_snapshot,
@@ -54,6 +56,10 @@ from harness import (
     TESTS_PROJECT,
     _fail,
 )
+
+
+# The fixture form the kind-resolution probes write to (issue #343).
+_KIND_PROBE_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
 
 
 def _objects_text(metadata_type):
@@ -486,7 +492,9 @@ def test_create_form_object_default_seeds_no_attributes():
     assert_ok(r, "create form object without generateContent")
     assert r.structured.get("generateContent") is False, \
         "the default create must echo generateContent=false: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the empty form must land on disk")
+    # Wait on the .form FILE: the form name lands in the owner .mdo first, so waiting on the diff
+    # can release before the content form is exported and the read below hits a missing file.
+    poll_disk_contains(form_rel, "<autoCommandBar>", ctx="the empty form must land on disk")
     form_xml = read_disk(form_rel)
     assert "<attributes>" not in form_xml, \
         "an unseeded object form must carry no <attributes> block: %s" % form_xml
@@ -568,14 +576,25 @@ def test_create_form_object_generate_content_extension_owned_owner_gets_value_ty
         assert_contains(d.text, "DataProcessorObject.%s" % obj,
                         "the main Object attribute must carry the DataProcessorObject value type even "
                         "though the owner was created in an extension (issue #262)")
-    finally:
-        # Revert the EXTENSION fixture on disk, then re-sync ITS in-memory model from the clean disk -
-        # the same two-step final_cleanup() uses for both fixtures, scoped here to just the extension
-        # (the orchestrator's kind="write-metadata" post-test hook already handles the BASE fixture).
-        reset_all_fixtures()
-        call("clean_project", {"projectName": TESTS_PROJECT})
-        wait_for_project_ready()
-        reset_all_fixtures()
+    except E2ECallTimeout:
+        # NO cleanup here: the timed-out call may still be writing these very files, and a git
+        # reset would race it. The orchestrator aborts the run on this.
+        raise
+    except BaseException:
+        _restore_extension_fixture()
+        raise
+    else:
+        _restore_extension_fixture()
+
+
+def _restore_extension_fixture():
+    """Revert the EXTENSION fixture on disk, then re-sync ITS in-memory model from the clean disk -
+    the same two-step final_cleanup() uses for both fixtures, scoped here to just the extension
+    (the orchestrator's kind="write-metadata" post-test hook already handles the BASE fixture)."""
+    reset_all_fixtures()
+    call("clean_project", {"projectName": TESTS_PROJECT})
+    wait_for_project_ready()
+    reset_all_fixtures()
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -625,7 +644,10 @@ def test_create_form_object_explicit_object_fields_seeds_only_listed():
     assert_ok(r, "create document form with an explicit single objectFields list")
     assert r.structured.get("generateContent") is True, \
         "the create must echo generateContent=true: %r" % (r.structured,)
-    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    # Wait on the .form FILE (see above): the name reaches the owner .mdo before the content is
+    # exported, and the assertions below read the content form itself.
+    poll_disk_contains(form_rel, "<name>Object</name>",
+                       ctx="the seeded document form must land on disk")
     form_xml = read_disk(form_rel)
     # The main Object attribute is still seeded, and the one listed field binds to Object.Number.
     assert "<name>Object</name>" in form_xml, \
@@ -677,7 +699,10 @@ def test_create_form_object_empty_object_fields_seeds_only_main_attribute():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": fqn, "generateContent": True, "objectFields": []})
     assert_ok(r, "create document form with an empty objectFields list")
-    poll_diff_contains(form, ctx="the seeded document form must land on disk")
+    # Wait on the .form FILE (see above): the name reaches the owner .mdo before the content is
+    # exported, and the assertions below read the content form itself.
+    poll_disk_contains(form_rel, "<name>Object</name>",
+                       ctx="the seeded document form must land on disk")
     form_xml = read_disk(form_rel)
     assert "<name>Object</name>" in form_xml, \
         "the main Object attribute must still be seeded: %s" % form_xml
@@ -971,6 +996,90 @@ def test_create_form_object_invalid_name_is_error():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# A STANDALONE form (CommonForm) owns a content form of its own — issue #297.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _read_disk_or_fail(rel_path, what):
+    """read_disk, but a MISSING file fails as a plain assertion instead of raising
+    FileNotFoundError — here the missing file IS the regression under test (issue #297), so it
+    must be reported as such and not as a harness crash."""
+    try:
+        return read_disk(rel_path)
+    except FileNotFoundError:
+        _fail("%s was never written: %s is missing on disk" % (what, rel_path))
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_common_form_writes_the_descriptor_and_the_content_form():
+    """Issue #297: creating a CommonForm wrote ONLY the descriptor <Name>.mdo. Its content form
+    (the file Form.form — what the editor renders and what every form element attaches to) was
+    never created, so the form opened empty and the first element create failed with "bmGetFqn may
+    be called on attached BM objects only".
+
+    Covers the whole round trip: create the form, add an element to it (a Decoration — a label),
+    then assert BOTH files exist on disk AND carry the expected content.
+    """
+    form, label = "Z_McpCommonForm", "Z_McpCommonFormLabel"
+    mdo_rel = "src/CommonForms/%s/%s.mdo" % (form, form)
+    content_rel = "src/CommonForms/%s/Form.form" % form
+
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "CommonForm." + form})
+    assert_ok(r, "create a standalone CommonForm")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert r.structured.get("name") == form, "name must be the form name: %r" % (r.structured,)
+    poll_diff_contains(form, ctx="the new common form must register in the configuration on disk")
+    # Then poll a marker that ONLY the content file carries: the name lands in Configuration.mdo
+    # first, so polling on it alone races the .form export and the reads below could hit a file
+    # that is not there yet (same reason as the object-form tests above).
+    poll_diff_contains("<autoCommandBar>",
+                       ctx="the new common form's content .form must land on disk")
+
+    # 1) The DESCRIPTOR — src/CommonForms/<Name>/<Name>.mdo.
+    mdo_xml = _read_disk_or_fail(mdo_rel, "the CommonForm descriptor")
+    assert "mdclass:CommonForm" in mdo_xml, \
+        "the descriptor must be a CommonForm: %s" % mdo_xml
+    assert "<name>%s</name>" % form in mdo_xml, \
+        "the descriptor must carry the form name: %s" % mdo_xml
+
+    # 2) The CONTENT form — src/CommonForms/<Name>/Form.form. THIS is the file issue #297 was
+    # missing entirely. It must be a real form root carrying the render-critical predefined
+    # command bar with its -1 id sentinel (issue #189) — the same shape an owned form gets.
+    content_xml = _read_disk_or_fail(content_rel, "the CommonForm content form")
+    assert "form:Form" in content_xml, \
+        "the content must be a form root: %s" % content_xml
+    assert "<autoCommandBar>" in content_xml, \
+        "the content form must carry the predefined command bar: %s" % content_xml
+    assert "<id>-1</id>" in content_xml, \
+        "the predefined command bar must keep its -1 id sentinel: %s" % content_xml
+    # The rest of the designer form root the issue lists. Read BEFORE any item is added, so these
+    # can only come from the root itself.
+    for marker in ("<autoTitle>true</autoTitle>", "<autoFillCheck>true</autoFillCheck>",
+                   "<enabled>true</enabled>", "<commandInterface>"):
+        assert marker in content_xml, \
+            "the content form must carry the designer form default %s: %s" % (marker, content_xml)
+
+    # 3) An ELEMENT added afterwards must attach to that content form and serialize into it. Before
+    # the fix this call failed outright — the content form was never a BM top object.
+    wait_for_project_ready()
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "CommonForm.%s.Decoration.%s" % (form, label)})
+    assert_ok(r2, "add a label (Decoration) to the new common form")
+    poll_diff_contains(label, ctx="the label must land in the common form's Form.form on disk")
+    content_xml = _read_disk_or_fail(content_rel, "the CommonForm content form after the label")
+    assert 'xsi:type="form:Decoration"' in content_xml, \
+        "the label must serialize as a form Decoration: %s" % content_xml
+    assert "<name>%s</name>" % label in content_xml, \
+        "the label must serialize under its own name: %s" % content_xml
+
+    # 4) MODEL read-back over the wire: the form renders its structure (which only resolves when
+    # the content was attached under its canonical FQN) and that structure names the label.
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["CommonForm." + form]})
+    assert_ok(d, "render the new common form's structure")
+    assert_contains(d.text, "Form Structure", "the common form must render a structure")
+    assert_contains(d.text, label, "the rendered structure must name the added label")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Happy — FORM content members (the cross-model hop into the editable .form)
 # Fixture: Catalog.Catalog has a managed form "ItemForm".
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1026,8 +1135,253 @@ def test_create_form_unknown_kind_is_error():
     r = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Nonsense.X"})
     e = assert_error(r, "unknown form element kind")
-    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command"],
+    assert_error_quality(e, names=["Nonsense"], suggests=["Attribute", "Command", "Column"],
                          ctx="an unknown form kind must list the supported form kinds")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Columns of a collection-typed form attribute (issue #295)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _seed_collection_attribute(attr):
+    """Create a form attribute and make it a ValueTable - the shape that owns columns."""
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed collection attribute " + attr)
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "type " + attr + " as a ValueTable")
+    wait_for_project_ready()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column():
+    attr, col = "E2EColOwner", "E2ECol"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(r, "create a column on a collection form attribute")
+    assert r.structured.get("kind") == "FormAttributeColumn", \
+        "the created element must be a FormAttributeColumn: %r" % (r.structured,)
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
+                       ctx="the new column must land in the form's .form on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_column_russian_token():
+    attr, col = "E2EColOwnerRu", "E2EColRu"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Реквизит." + attr + ".Колонка." + col})
+    assert_ok(r, "create a column via the Russian Колонка token")
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form", "<name>" + col + "</name>",
+                       ctx="the Russian-token column must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_cannot_walk_past_a_memberless_column():
+    # A column typed UUID / ValueStorage holds one opaque value, so no tail can resolve against it and
+    # EDT does not flag the binding. The terminality check knew only the four primitives while the
+    # type builder had grown these two, so 'Rows.Id.Part' was accepted merely because the 'Id' column
+    # existed and the tool reported success for a dead binding (issue #295 review). Asserted LIVE
+    # because a real form's types are platform PROXIES, not the in-memory Types a unit test builds.
+    attr = "E2EOpaqueOwner"
+    _seed_collection_attribute(attr)
+    base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    for col, kind in (("OpaqueId", "UUID"), ("OpaqueBlob", "ValueStorage")):
+        c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
+        assert_ok(c, "seed column " + col)
+        wait_for_project_ready()
+        t = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": base + ".Column." + col,
+            "properties": [{"name": "type", "value": {"types": [{"kind": kind}]}}]})
+        assert_ok(t, "type the column as " + kind)
+        wait_for_project_ready()
+
+        r = call("create_metadata", {
+            "projectName": PROJECT,
+            "fqn": "Catalog.Catalog.Form.ItemForm.Field.Deep" + col,
+            "properties": [{"name": "dataPath", "value": "%s.%s.Part" % (attr, col)}]})
+        e = assert_error(r, "a path past a %s column must be refused" % kind)
+        assert_error_quality(e, names=[col], suggests=["dataPath"],
+                             ctx="the refusal must name the column and how to bind to it instead")
+
+    # ...and the column ITSELF still binds - the guard is about continuing past it, not about the type.
+    ok = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.OpaqueCell",
+        "properties": [{"name": "dataPath", "value": attr + ".OpaqueId"}]})
+    assert_ok(ok, "a field bound to the opaque column itself must still be created")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_cannot_walk_past_a_collection_column():
+    # A COLLECTION column is not terminal, so a two-valued "terminal refuses / else passes" rule let
+    # 'Rows.Nested.Price' through as soon as the column existed. But the members such a value implies
+    # are COLUMNS, and the form metamodel puts `columns` on FormAttribute only - a column owns none -
+    # so 'Price' can never be declared under 'Nested' (issue #295 review). Asserted live, because the
+    # verdict is read off the real metamodel, not the synthetic one a unit test builds.
+    attr, col = "E2ENestedOwner", "Nested"
+    _seed_collection_attribute(attr)
+    base = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    c = call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Column." + col})
+    assert_ok(c, "seed the column")
+    wait_for_project_ready()
+    t = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": base + ".Column." + col,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}]})
+    assert_ok(t, "type the column as a ValueTable")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DeepOnNested",
+        "properties": [{"name": "dataPath", "value": "%s.%s.Price" % (attr, col)}]})
+    e = assert_error(r, "a path past a collection column must be refused")
+    assert_error_quality(e, names=[col], suggests=["dataPath", "ATTRIBUTE"],
+                         ctx="the refusal must name the column, say only an attribute owns columns, "
+                             "and give the two ways out")
+
+    # The OTHER side: the collection column as the FINAL segment stays addressable.
+    ok = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.NestedCell",
+        "properties": [{"name": "dataPath", "value": "%s.%s" % (attr, col)}]})
+    assert_ok(ok, "a field bound to the collection column ITSELF must still be created")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_column_on_non_collection_attribute_is_error():
+    # Only a ValueTable / ValueTree attribute owns columns. EDT would not flag a column hung off a
+    # String attribute, so the tool has to - and it must say how to fix it (issue #295).
+    attr = "E2EPlainAttr"
+    cr = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(cr, "seed a plain form attribute")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.Nope"})
+    e = assert_error(r, "a column on a non-collection attribute is refused")
+    assert_error_quality(e, names=[attr], suggests=["ValueTable", "modify_metadata"],
+                         ctx="the refusal must name the attribute and say how to make it a collection")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_inapplicable_properties_are_refused_on_a_column():
+    # A column takes only `title`. Every other property was parsed, stored and then never applied by
+    # createColumn - the call reported success for a discarded request (issue #295 review).
+    attr = "E2EColPropsOwner"
+    _seed_collection_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column.WithProps"
+    for prop, value in (("parent", "SomeGroup"), ("dataPath", "Price"),
+                        ("attribute", "Price"), ("command", "Post"), ("type", "InputField")):
+        r = call("create_metadata", {
+            "projectName": PROJECT, "fqn": fqn,
+            "properties": [{"name": prop, "value": value}]})
+        e = assert_error(r, "'%s' on a column must be refused, not silently dropped" % prop)
+        assert_error_quality(e, names=[prop], suggests=["title", "modify_metadata"],
+                             ctx="the refusal must name the property and what a column does accept")
+
+    # None of the refused calls may have created anything.
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "WithProps",
+                        "a refused create must not have written the column")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_column_handler_fqn_does_not_bind_to_a_same_named_item():
+    # '...Form.F.Column.X.Handler.Event' parses as an ITEM-LEVEL handler, so the bare-Column guard
+    # alone let it through and the handler container was looked up among the form's ITEMS by name -
+    # binding the handler to a visual item that merely shares the name (issue #295 review).
+    attr, fld = "E2EColHandlerAttr", "E2EColHandlerField"
+    a = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(a, "seed the form attribute")
+    wait_for_project_ready()
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(f, "seed a FIELD with the name the bad address will use")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Column." + fld + ".Handler.OnChange",
+        "properties": [{"name": "procedure", "value": "Hijacked"}]})
+    e = assert_error(r, "a handler addressed on a Column must be refused")
+    assert_contains(e, "no event handlers", "the refusal must say a column carries no events")
+
+    # The same-named FIELD must not have gained a handler.
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_not_contains(d.text or "", "Hijacked",
+                        "the same-named visual item must NOT have been bound")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_collection_attribute_can_be_shown_on_the_form():
+    # The point of the whole feature: a ValueTable attribute the user can SEE. The data column was
+    # creatable, but nothing could display it - a Table over the attribute auto-generated a bogus
+    # `<Attr>.LineNumber` column (a collection has no such field) and an explicit field with
+    # dataPath 'Rows.Price' was refused, because a dotted path was accepted only for a dynamic list
+    # or the main object attribute (issue #295 review).
+    attr, col, tbl = "E2EShownRows", "E2EShownPrice", "E2EShownTable"
+    _seed_collection_attribute(attr)
+    c = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr + ".Column." + col})
+    assert_ok(c, "create the data column")
+    wait_for_project_ready()
+
+    t = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Table." + tbl,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(t, "create a table bound to the collection attribute")
+    form_file = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    # The table's auto-columns come from the ATTRIBUTE's columns, addressed <Attr>.<Column> (a dotted
+    # path serializes as ONE dot-joined <segments> element).
+    poll_disk_contains(form_file, "<segments>%s.%s</segments>" % (attr, col),
+                       ctx="the table column must be bound to the attribute's own column")
+    form_xml = read_disk(form_file)
+    assert "<name>%sLineNumber</name>" % tbl not in form_xml, \
+        "an in-memory collection has no LineNumber field, so the table must not generate that " \
+        "column: %s" % form_xml
+
+    # ...and an EXPLICIT field bound to the same column is accepted too.
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.E2EShownField",
+        "properties": [{"name": "dataPath", "value": attr + "." + col},
+                       {"name": "parent", "value": tbl}]})
+    assert_ok(f, "an explicit field may bind to a collection attribute's column")
+    poll_disk_contains(form_file, "E2EShownField",
+                       ctx="the explicit column field must land on disk")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_field_on_an_unknown_collection_column_is_error():
+    # Widening the dotted path must not accept ANY tail: an unknown column is named, with the
+    # address that would create it.
+    attr = "E2EGhostRows"
+    _seed_collection_attribute(attr)
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.E2EGhostField",
+        "properties": [{"name": "dataPath", "value": attr + ".NoSuchColumn"}]})
+    e = assert_error(r, "a field bound to a nonexistent column is refused")
+    assert_error_quality(e, names=["NoSuchColumn", attr], suggests=["create_metadata", "Column"],
+                         ctx="the refusal must name the missing column and how to create it")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_column_on_missing_attribute_is_error():
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.NoSuchAttr_zzz.Column.C"})
+    e = assert_error(r, "a column on a missing attribute is refused")
+    assert_error_quality(e, names=["NoSuchAttr_zzz"], suggests=["Create it first"],
+                         ctx="the refusal must name the missing owner attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -1407,6 +1761,48 @@ def test_create_form_command_action_missing_command_is_error():
                          ctx="an Action handler on a missing command is a clean error")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_handler_on_an_owner_of_a_foreign_kind_is_refused():
+    # Issue #343: the OWNER's kind segment of an item-level handler address is part of the
+    # resolution. Before the fix the owner was looked up by NAME alone, so a handler addressed at
+    # 'Button.<a field>' was bound to the FIELD that merely bears the name.
+    attr, fld = "CkAttr", "CreateKindFld"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "seed the probe attribute")
+    wait_for_project_ready()
+    poll_disk_contains(_KIND_PROBE_FORM, attr, timeout=60,
+                       ctx="the seeded attribute must be visible before the field binds to it")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + fld,
+        "properties": [{"name": "dataPath", "value": attr}]})
+    assert_ok(r, "seed the probe field")
+    wait_for_project_ready()
+    poll_disk_contains(_KIND_PROBE_FORM, fld, timeout=60,
+                       ctx="the seeded probe field must be on disk first")
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Button.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": "CreateKindWrong_zz"}]})
+    e = assert_error(r, "bind a handler through an owner of a foreign kind")
+    assert_error_quality(e, names=[fld], suggests=["Field"],
+                         ctx="a foreign owner kind must name the kind the owner really has")
+    assert_contains(e, "(kind 'Button')", "the refusal must name the kind that found nothing")
+    assert_not_contains(read_disk(_KIND_PROBE_FORM),
+                        "CreateKindWrong_zz",
+                        "the refused handler create must not have bound anything")
+
+    # The owner's OWN kind still binds it.
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Field.%s.Handler.OnChange" % fld,
+        "properties": [{"name": "procedure", "value": "CreateKindRight_zz"}]})
+    assert_ok(r, "bind the handler through the owner's own kind")
+    poll_disk_contains(_KIND_PROBE_FORM, "CreateKindRight_zz", timeout=60,
+                       ctx="the correctly-addressed handler must land on disk")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ё->е normalization — the Name leaf + synonym are normalized at the parse step
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1424,7 +1820,9 @@ def test_create_normalizes_yo_in_name_and_synonym_by_default():
     r = call("create_metadata", {
         "projectName": PROJECT,
         "fqn": "Catalog." + name_yo,
-        "properties": [{"name": "synonym", "value": syn_yo, "language": "ru"}],
+        # The fixture declares only 'en'; a 'ru' here would now be REJECTED as an undeclared
+        # locale (issue #298). The ё-normalization under test is about the VALUE, not the locale.
+        "properties": [{"name": "synonym", "value": syn_yo, "language": "en"}],
     })
     assert_ok(r, "create a Catalog whose Name + synonym carry ё (default normalizeYo)")
     assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
@@ -1564,9 +1962,9 @@ def test_create_xdto_package_with_target_namespace():
     assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
     assert r.structured.get("targetNamespace") == ns, \
         "the create must echo the written XDTO namespace: %r" % (r.structured,)
-    # Model read-back via get_metadata_details: get_metadata_objects has no 'xDTOPackages'
-    # type filter (its supported-type list is the common-object subset), so read the created
-    # package back by its FQN instead — same model-visibility proof, supported channel.
+    # Model read-back via get_metadata_details, by FQN: a targeted read of THIS package is the
+    # sharper proof of model visibility than finding its row among every package the
+    # get_metadata_objects 'xdtoPackages' filter lists (that filter is covered by its own test).
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["XDTOPackage." + name]})
     assert_ok(d, "get_metadata_details read-back (XDTOPackage.%s)" % name)
     assert_contains(d.text, name, "the new XDTO package must appear in the model read-back")
@@ -1650,3 +2048,171 @@ def test_unsupported_property_is_error():
     e = assert_error(r, "unsupported property name")
     assert_error_quality(e, names=["indexing"], suggests=["synonym, comment", "modify_metadata"])
     assert_no_diff("a rejected create must not change the project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Localized strings must name a DECLARED locale — issue #298.
+# Fixture ground truth: TestConfiguration declares exactly ONE language, code 'en'.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_rejects_a_synonym_in_an_undeclared_locale():
+    """Issue #298: a synonym written under a locale the configuration does not declare was accepted
+    silently. The platform has no fallback between locale codes, so that value is NEVER displayed —
+    the label comes out blank and the mistake is invisible until a human opens the form."""
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Z298Undeclared",
+        "properties": [{"name": "synonym", "value": "Marchandises", "language": "fr_CA"}],
+    })
+    e = assert_error(r, "a synonym in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the error must name the bad code AND list what the configuration declares")
+    assert_no_diff("a rejected localized write must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_stores_a_declared_locale_under_its_declared_spelling():
+    # A differently-cased request names a DECLARED locale, so it is accepted — but stored under the
+    # configuration's own spelling, or it would be a second, never-displayed key (issue #298).
+    name = "Z298Case"
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog." + name,
+        "properties": [{"name": "synonym", "value": "Goods", "language": "EN"}],
+    })
+    assert_ok(r, "a declared locale in a different case must be accepted")
+    assert r.structured.get("language") == "en", \
+        "the result must echo the DECLARED spelling, not the requested one: %r" % (r.structured,)
+    poll_diff_contains("<key>en</key>", ctx="the synonym must be keyed by the declared code")
+    mdo = read_disk("src/Catalogs/%s/%s.mdo" % (name, name))
+    assert "<key>EN</key>" not in mdo, \
+        "the requested casing must NOT create a second synonym key: %s" % mdo
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_reports_the_locales_still_missing_a_translation():
+    # Issue #298 part 2: after a localized write the result lists the locales that still have NO
+    # value, so a caller building a multilingual configuration knows what it still owes - but only
+    # for the languages the configuration ITSELF uses. The fixture is named in 'en' only, so the
+    # second language added here is declared and NOT in use: there is nothing to nag about, and a
+    # write under it is FLAGGED so the agent can ask whether translating into it is really wanted.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnCreate"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnCreate",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Z298Missing",
+        "properties": [{"name": "synonym", "value": "Goods", "language": "en"}],
+    })
+    assert_ok(r, "create with a synonym in one of the two declared locales")
+    assert r.structured.get("language") == "en", \
+        "the result must echo the locale used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [], \
+        "a language the configuration is not translated into is not owed one: %r" % (r.structured,)
+    assert "localeUnusedInConfiguration" not in r.structured, \
+        "a write in the language the configuration DOES use must not be questioned: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Z298Unused",
+        "properties": [{"name": "synonym", "value": "Marchandises", "language": "fr"}],
+    })
+    assert_ok(r, "a synonym in a declared but unused language is legal")
+    assert r.structured.get("localeUnusedInConfiguration") is True, \
+        "writing into a language the configuration does not use must be flagged: %r" % (r.structured,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_member_rejects_a_title_in_an_undeclared_locale():
+    # The same guard on the OTHER localized create path (a form element's title).
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Decoration.Z298Deco",
+        "properties": [{"name": "title", "value": "Étiquette", "language": "fr_CA"}],
+    })
+    e = assert_error(r, "a form-element title in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the form-title path must give the same actionable error")
+    assert_no_diff("a rejected form-member create must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_object_reports_the_locales_still_missing_a_translation():
+    # The form-OBJECT create builds its own payload, so it needs its own proof that the localized
+    # report is there too (issue #298).
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnFormObject"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnFormObject",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.Z298LocForm",
+        "properties": [{"name": "synonym", "value": "Item form", "language": "en"}],
+    })
+    assert_ok(r, "create a form object with a synonym")
+    assert r.structured.get("language") == "en",         "the form-object create must echo the locale used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [],         "the form-object create must carry the report - empty, the second language is unused: %r" % (r.structured,)
+    assert "localeUnusedInConfiguration" not in r.structured,         "the language the configuration uses must not be questioned: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.Z298LocFormFr",
+        "properties": [{"name": "synonym", "value": "Formulaire", "language": "fr"}],
+    })
+    assert_ok(r, "create a form object with a synonym in the unused language")
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "the form-object create must flag a write into an unused language: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.Z298LocFormFr.Decoration.Z298DecoFr",
+        "properties": [{"name": "title", "value": "Étiquette", "language": "fr"}],
+    })
+    assert_ok(r, "create a form element with a title in the unused language")
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "the form-MEMBER create must flag it too - that path builds its own payload: %r" % (r.structured,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_table_without_a_title_still_reports_the_generated_titles_locale():
+    # A Table with no explicit title still GETS one (its own name, the way the designer builds it),
+    # so a localized value IS written - and it must land under a DECLARED locale, not one guessed
+    # from the script variant, and be reported like any other localized write (issue #298).
+    ts, table = "Z298TableTS", "Z298Table"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnTable"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298FrOnTable",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.TabularSection." + ts}),
+        "seed the tabular section the table binds to")
+    wait_for_project_ready()
+
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Table." + table,
+        "properties": [{"name": "dataPath", "value": "Object.%s" % ts}],
+    })
+    assert_ok(r, "create a table without an explicit title")
+    assert r.structured.get("language") == "en",         "the generated title's locale must be reported: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [],         "a generated title must carry the report too - empty, the second language is unused: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # And it must really be stored under the declared code - the pre-fix code wrote the script-variant
+    # guess, which in an en_CA-only configuration would be an invisible 'en' key.
+    form_xml = read_disk("src/Catalogs/Catalog/Forms/ItemForm/Form.form")
+    assert "<key>en</key>" in form_xml,         "the generated title must be keyed by a declared language code: %s" % form_xml[:400]

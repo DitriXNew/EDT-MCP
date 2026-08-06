@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MCP Server for EDT
  * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
  * Licensed under AGPL-3.0-or-later
@@ -254,6 +254,22 @@ public final class MetadataNodeResolver
         {
             return new CreateTarget(owner, topObject, feature, elementType, childName);
         }
+    }
+
+    /**
+     * The child-kind grammar itself: an unmodifiable {@code lowercase token -> EMF feature name}
+     * view of THE map {@link #featureNameForKind} answers from.
+     *
+     * <p>Exposed so a regression check can walk the SOURCE of the first-step grammar rather than a
+     * catalogue that mirrors it. A pin taken from a mirror is vacuous: a token added here alone is
+     * live in address resolution while the mirror - and therefore the check - knows nothing about
+     * it.</p>
+     *
+     * @return the token to feature map, unmodifiable
+     */
+    public static Map<String, String> childFeatureByToken()
+    {
+        return CHILD_FEATURE_BY_TOKEN;
     }
 
     /**

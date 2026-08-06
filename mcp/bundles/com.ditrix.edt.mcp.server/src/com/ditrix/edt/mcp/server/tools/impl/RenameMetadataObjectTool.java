@@ -34,6 +34,16 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
  */
 public class RenameMetadataObjectTool implements IMcpTool
 {
+    /**
+     * How long the pre-flight waits for the derived-data pipeline to drain before refusing.
+     * <p>
+     * Sized against what the alternative costs: entering the cascade with the pipeline still busy
+     * makes EDT wait for it from INSIDE its own batch session, which took 301 SECONDS on CI. Waiting
+     * here is the same wall-clock in the worst case, but it is OUR wait - bounded, logged, and
+     * ending in an actionable error instead of a silent block on the wire.
+     */
+    private static final long SETTLE_TIMEOUT_MS = 60_000L;
+
     public static final String NAME = "rename_metadata_object"; //$NON-NLS-1$
 
     /** Input param: FQN of the metadata object to rename. */
@@ -149,7 +159,15 @@ public class RenameMetadataObjectTool implements IMcpTool
         // object, miss some references, and still report success — leaving dangling old
         // references (silent partial corruption). Refuse only for that transient BUILDING
         // state; a missing/closed project falls through to the value-naming error below.
-        String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+        // Drain the derived-data pipeline before the cascade rather than merely asking whether it
+        // is quiet. NB this narrows the window, it does not close it: EDT builds the refactoring
+        // INSIDE the syncExec below (saving dirty editors and running an incremental build as it
+        // goes), so fresh work can still be queued between here and perform(). Closing it properly
+        // needs an EDT-supported "quiesce then open the batch session" step; doing it ourselves -
+        // by draining between construction and perform - would mean releasing the UI thread in the
+        // middle of a rename, which drops the serialisation that keeps a concurrent write from
+        // making the built cascade stale. See issue #320.
+        String building = ProjectStateChecker.settleBeforeCascadeOrError(projectName, SETTLE_TIMEOUT_MS);
         if (building != null)
         {
             return ToolResult.error(building).toJson();

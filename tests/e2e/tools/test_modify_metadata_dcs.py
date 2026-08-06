@@ -46,6 +46,8 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_not_contains,
+    diff,
     poll_diff_contains,
     read_disk,
     wait_for_project_ready,
@@ -243,3 +245,132 @@ def test_dcs_payload_on_non_report_fqn_is_error():
     assert_error_quality(e, names=[NON_REPORT_FQN], suggests=["dcs", "Report"],
                          ctx="a dcs payload on a non-Report object names the FQN + a Report hint")
     assert_no_diff("a rejected non-Report dcs write must change nothing on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_in_an_undeclared_locale_is_rejected():
+    # Issue #298: a dcs payload writes localized titles straight into the DCS model, bypassing the
+    # property pipeline where the undeclared-locale guard lives - so this route still accepted a
+    # code nothing declares and produced the invisible value the guard exists to prevent.
+    report = "Z298DcsLocale"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"fr_CA": "Periode"}}]},
+    })
+    e = assert_error(r, "a dcs title in an undeclared locale must be refused")
+    assert_error_quality(e, names=["fr_CA"], suggests=["en"],
+                         ctx="the error must name the bad code and list what the configuration declares")
+    # NOT assert_no_diff: seeding the report above is a legitimate change. What must be true is that
+    # the REJECTED write left nothing behind - neither the locale nor the title it carried.
+    assert_not_contains(diff(), "fr_CA", "a rejected dcs write must not reach the disk")
+    assert_not_contains(diff(), "Periode", "a rejected dcs write must not reach the disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_locale_is_stored_under_the_declared_spelling():
+    # The DCS writer stores the payload key verbatim, so a declared code given in another case has to
+    # be rewritten to the configuration's own spelling - otherwise accepting it (the match is
+    # case-insensitive) would create a second, never-displayed key. The property pipeline already
+    # canonicalizes; the two paths must not disagree (issue #298 review).
+    report = "Z298DcsCase"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"EN": "Period"}}]},
+    })
+    assert_ok(r, "a declared locale in another case must be accepted")
+    wait_for_project_ready()
+    # The DCS template folder is chosen by the tool, so use the suite's locator rather than a guess.
+    dcs_rel = _find_report_dcs(report)
+    assert dcs_rel, "the dcs write must have created the report's .dcs content resource"
+    dcs = read_disk(dcs_rel)
+    assert ">en<" in dcs,         "the title must be stored under the DECLARED spelling 'en': %s" % dcs[:700]
+    assert ">EN<" not in dcs,         "the requested casing must not create a second, never-displayed key: %s" % dcs[:700]
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_in_a_language_the_configuration_does_not_use_is_flagged():
+    # A dcs title is a localized write that bypasses the property pipeline, so it needs its own
+    # proof that the "the configuration is not translated into this language - ask the user" prompt
+    # reaches the caller. The fixture is named in 'en' only, so the second language declared here is
+    # declared and unused: the write is legal and the answer carries the question (issue #298).
+    report = "Z298DcsUnused"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Language.Z298DcsFr"}),
+              "add a second language to the configuration")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {"projectName": PROJECT, "fqn": "Language.Z298DcsFr",
+                                       "properties": [{"name": "languageCode", "value": "fr"}]}),
+              "give the second language its code")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"fr": "P\u00e9riode"}}]},
+    })
+    assert_ok(r, "a title in a declared but unused language is legal")
+    assert r.structured.get("localeUnusedInConfiguration") is True,         "the dcs path must flag a title written into an unused language: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"en": "Period"}}]},
+    })
+    assert_ok(r, "a title in the language the configuration uses")
+    assert "localeUnusedInConfiguration" not in r.structured,         "the language the configuration DOES use must not be questioned: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # A 'title' on a member the writer does not read (a data SOURCE has none) reaches no model
+    # object. Neither the question nor the undeclared-code rejection may fire on it: both would
+    # report a value that was never going to be stored.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"dataSources": [{"name": "DataSource1", "type": "Local",
+                                 "title": {"fr": "Ignor\u00e9"}}],
+                "parameters": [{"name": "Period", "title": {"en": "Period"}}]},
+    })
+    assert_ok(r, "an inert title must not be judged")
+    assert "localeUnusedInConfiguration" not in r.structured,         "a title the writer never reads must not raise the question: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    # Same rule one level deeper: the guard follows the writer's OWN shape, so a member merely NAMED
+    # like a writer container ('parameters' nested in a data source) is inert too - it must neither
+    # raise the question nor reject an undeclared code the writer would have ignored.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"dataSources": [{"name": "DataSource1", "type": "Local",
+                                 "parameters": [{"title": {"fr_CA": "Ignor\u00e9"}}]}],
+                "parameters": [{"name": "Period", "title": {"en": "Period"}}]},
+    })
+    assert_ok(r, "an inert title nested in a look-alike member must not be judged")
+    assert "localeUnusedInConfiguration" not in r.structured,         "a nested inert title must not raise the question either: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_dcs_title_naming_one_locale_twice_is_rejected():
+    # {"en": ..., "EN": ...} both canonicalize to the declared 'en'. Rewriting them would silently
+    # drop one translation, and WHICH one survived would depend on map order - so the call is
+    # refused instead: only the caller knows which text was meant (issue #298 review).
+    report = "Z298DcsDup"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Report." + report}),
+              "seed the report the dcs payload targets")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Report." + report,
+        "dcs": {"parameters": [{"name": "Period", "title": {"en": "Period", "EN": "Other"}}]},
+    })
+    e = assert_error(r, "one locale named twice must be refused")
+    assert_error_quality(e, names=["en"], suggests=["once"],
+                         ctx="the error must name the duplicated locale and say to give it once")
+    assert_not_contains(diff(), "Other", "a rejected dcs write must not reach the disk")
+

@@ -131,6 +131,12 @@ public final class ToolParameterSettings // NOSONAR intentional singleton (Eclip
                     + "reporting timeout (or escalating to force-kill when force=true)", //$NON-NLS-1$
                 10, 1, 120)));
 
+        map.put("clean_project", Collections.singletonList( //$NON-NLS-1$
+            new ParameterDef("timeout", "Clean build timeout (sec)", //$NON-NLS-1$ //$NON-NLS-2$
+                "How long to wait for the clean build itself before failing with a timeout " //$NON-NLS-1$
+                    + "instead of holding the call open. Raise it for very large configurations", //$NON-NLS-1$
+                120, 10, 3600)));
+
         TOOL_PARAMETERS = Collections.unmodifiableMap(map);
     }
 

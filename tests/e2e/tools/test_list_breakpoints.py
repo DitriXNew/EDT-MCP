@@ -50,6 +50,7 @@ Fixture inventory used (TestConfiguration, English Names):
 """
 
 from harness import (
+    E2ECallTimeout,
     call,
     assert_ok,
     assert_no_diff,
@@ -90,6 +91,10 @@ def _remove_probe(breakpoint_id):
     manager, so we remove explicitly."""
     try:
         call("remove_breakpoint", {"breakpointId": breakpoint_id})
+    except E2ECallTimeout:
+        # A timeout here means the server is STILL running that call; swallowing it would let the
+        # run continue against state it is changing. The orchestrator aborts on it.
+        raise
     except Exception:
         pass
 
