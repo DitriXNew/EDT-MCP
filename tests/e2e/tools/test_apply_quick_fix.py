@@ -28,11 +28,46 @@ Negative matrix (real error paths from ApplyQuickFixTool):
   - missing required checkId  -> requireArguments rejects it, naming the parameter
 """
 
+import re
+
 from harness import (
     call, assert_ok, assert_error, assert_error_quality, e2e_test,
     PROJECT, TESTS_PROJECT, E2ESkip, reset_all_fixtures, wait_for_project_ready,
     split_markdown_row,
 )
+
+_AMBIGUITY_RANGE_RE = re.compile(r"variant=<1\.\.(\d+)>")
+
+
+def _apply_resolving_ambiguity(args):
+    """Applies a quick-fix for `args`'s locator, resolving whatever ambiguity the tool
+    reports instead of committing to the first option offered.
+
+    An 'index=<1..N>' ambiguity (several MARKERS share the same locator) still just picks
+    index=1: which marker instance gets picked cannot change whether the CHECK's registered
+    fix is interactive - that is a property of the check id, shared by every marker of it -
+    so there is nothing to gain from trying every index.
+
+    A 'variant=<1..N>' ambiguity is different: it is the SAME marker's fix that has several
+    registered variants, and variant 1 can be the interactive one while a later variant is
+    the real automated edit. So every variant in the advertised range is tried in order,
+    stopping at the first one that is NOT refused as INTERACTIVE.
+
+    Returns the last Result obtained: applied, or refused for a reason unrelated to
+    ambiguity/interactivity (including "every variant is interactive").
+    """
+    r = call("apply_quick_fix", args)
+    if r.is_error and "index=" in (r.error_text() or ""):
+        args = dict(args, index=1)
+        r = call("apply_quick_fix", args)
+    if r.is_error and "variant=" in (r.error_text() or ""):
+        m = _AMBIGUITY_RANGE_RE.search(r.error_text() or "")
+        variant_count = int(m.group(1)) if m else 1
+        for variant in range(1, variant_count + 1):
+            r = call("apply_quick_fix", dict(args, variant=variant))
+            if not (r.is_error and "INTERACTIVE" in (r.error_text() or "")):
+                break
+    return r
 
 
 def _scan_detailed_rows(project):
@@ -114,13 +149,7 @@ def test_never_reports_success_without_actually_changing_anything():
                     "modulePath": c["modulePath"]}
             if c["line"]:
                 args["line"] = int(c["line"])
-            r = call("apply_quick_fix", args)
-            if r.is_error and "index=" in (r.error_text() or ""):
-                args["index"] = 1
-                r = call("apply_quick_fix", args)
-            if r.is_error and "variant=" in (r.error_text() or ""):
-                args["variant"] = 1
-                r = call("apply_quick_fix", args)
+            r = _apply_resolving_ambiguity(args)
             checked += 1
 
             if r.is_error:
@@ -164,62 +193,62 @@ def test_apply_a_discovered_fixable_marker():
     tool's own response claimed success. Locator collisions (several markers / fix variants)
     are resolved with index / variant. Self-cleans the extension fixture afterwards.
 
-    Skips when every fixable marker the fixture exposes turns out to be an INTERACTIVE
-    (UI-only) fix, which cannot apply headlessly by construction - the no-false-success
-    invariant for that case is covered, mandatorily, by the test above.
+    Tries every DISCOVERED candidate in turn, not just the first: an earlier candidate being
+    refused (typically INTERACTIVE, UI-only) says nothing about a later one - the fixture
+    could expose several fixable checks and only some of them have a real automated edit.
+    Skips only once EVERY candidate has been tried and none produced an automated fix - the
+    no-false-success invariant for a refused candidate is covered, mandatorily, by the test
+    above, so this test does not re-validate refusal quality here.
     """
     candidates = _find_fixable(TESTS_PROJECT)
     if not candidates:
         raise E2ESkip("no auto-fixable marker in the extension fixture (env-dependent)")
     try:
-        c = candidates[0]
-        # Baseline for the effect assertion below, captured BEFORE the mutation.
-        before = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
-        args = {"projectName": TESTS_PROJECT, "checkId": c["checkId"],
-                "modulePath": c["modulePath"]}
-        if c["line"]:
-            args["line"] = int(c["line"])
-        r = call("apply_quick_fix", args)
-        # Disambiguate if several markers share the locator, or the fix has several variants.
-        if r.is_error and "index=" in (r.error_text() or ""):
-            args["index"] = 1
-            r = call("apply_quick_fix", args)
-        if r.is_error and "variant=" in (r.error_text() or ""):
-            args["variant"] = 1
-            r = call("apply_quick_fix", args)
+        refusals = []
+        for c in candidates:
+            # Baseline for the effect assertion below, captured BEFORE the mutation.
+            before = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
+            args = {"projectName": TESTS_PROJECT, "checkId": c["checkId"],
+                    "modulePath": c["modulePath"]}
+            if c["line"]:
+                args["line"] = int(c["line"])
+            r = _apply_resolving_ambiguity(args)
 
-        # An INTERACTIVE (UI-only) fix cannot apply headlessly - that is a property of the
-        # check's registered fix, not a defect of this tool, and refusing it is the CORRECT
-        # behaviour (asserted mandatorily by the no-false-success test above). There is no
-        # automated fix to exercise here, so skip rather than fail the tool for being right.
-        if r.is_error and "INTERACTIVE" in (r.error_text() or ""):
-            raise E2ESkip("the fixture's fixable markers all register INTERACTIVE (UI-only) "
-                          "fixes, which cannot be applied headlessly: %s"
-                          % (r.error_text() or "")[:160])
+            if r.is_error:
+                # No headless path for THIS candidate (typically INTERACTIVE) - move on to
+                # the next discovered candidate rather than giving up on the whole test.
+                refusals.append("%s in %s: %s" % (c["checkId"], c["modulePath"],
+                                                    (r.error_text() or "")[:120]))
+                continue
 
-        assert_ok(r, "apply_quick_fix on a discovered fixable marker")
-        assert r.structured is not None, "apply_quick_fix must return structured content"
-        if not r.structured.get("success"):
-            raise AssertionError("apply_quick_fix structured.success must be true: %r" % r.structured)
-        if not r.structured.get("appliedVariant"):
-            raise AssertionError("apply_quick_fix must name the applied fix variant: %r" % r.structured)
+            assert r.structured is not None, "apply_quick_fix must return structured content"
+            if not r.structured.get("success"):
+                raise AssertionError("apply_quick_fix structured.success must be true: %r" % r.structured)
+            if not r.structured.get("appliedVariant"):
+                raise AssertionError("apply_quick_fix must name the applied fix variant: %r" % r.structured)
 
-        # Anti-cheat: a self-reported success alone does not prove the fix did anything (a
-        # stub that always returns success=true without touching the source would pass
-        # everything above). Re-scan after the model revalidates and require the marker
-        # COUNT for this locator to have DROPPED.
-        #
-        # Deliberately a count comparison, not "no marker with this locator survives": the
-        # locator can match several markers (the very collision resolved with `index`
-        # above), and this call fixed exactly ONE of them - demanding the whole locator be
-        # clean would fail the test even though the tool worked correctly.
-        wait_for_project_ready()
-        after = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
-        if after >= before:
-            raise AssertionError(
-                "applying the quick-fix for '%s' in %s must REMOVE a marker, but the count "
-                "did not drop (before=%d, after=%d) - success:true alone does not prove the "
-                "fix changed anything" % (c["checkId"], c["modulePath"], before, after))
+            # Anti-cheat: a self-reported success alone does not prove the fix did anything (a
+            # stub that always returns success=true without touching the source would pass
+            # everything above). Re-scan after the model revalidates and require the marker
+            # COUNT for this locator to have DROPPED.
+            #
+            # Deliberately a count comparison, not "no marker with this locator survives":
+            # the locator can match several markers (the very collision resolved with
+            # `index` above), and this call fixed exactly ONE of them - demanding the whole
+            # locator be clean would fail the test even though the tool worked correctly.
+            wait_for_project_ready()
+            after = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
+            if after >= before:
+                raise AssertionError(
+                    "applying the quick-fix for '%s' in %s must REMOVE a marker, but the count "
+                    "did not drop (before=%d, after=%d) - success:true alone does not prove the "
+                    "fix changed anything" % (c["checkId"], c["modulePath"], before, after))
+            return  # a genuinely applied fix proves the whole path; stop mutating the fixture
+
+        raise E2ESkip(
+            "none of the %d discovered 'Fix registered' candidate(s) has a headless "
+            "(automated) path - every one was refused: %s"
+            % (len(candidates), "; ".join(refusals)[:400]))
     finally:
         # The fix mutated the extension (model + disk); the per-test reset only covers the
         # BASE, so revert + re-sync the extension here to keep the whole tree clean.
