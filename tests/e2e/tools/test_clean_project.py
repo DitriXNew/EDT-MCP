@@ -204,11 +204,18 @@ def test_explicit_timeout_is_accepted_and_keeps_the_success_envelope():
 
     The bound exists so a wedged CLEAN_BUILD fails honestly instead of holding the MCP
     request open forever (#349). A generous value cannot expire on the fixture (a clean
-    here takes seconds), so the observable contract is unchanged: the same success
+    here takes 3-5s), so the observable contract is unchanged: the same success
     envelope, the fixture among the cleaned projects, the tree untouched. A server that
     rejected the new parameter as unknown, or that let it leak into the response, fails
-    here."""
-    r = call("clean_project", {"projectName": PROJECT, "timeout": 600})
+    here.
+
+    The value stays well BELOW the harness call budget (CALL_TIMEOUT, 180s by default and
+    600s on CI) on purpose. Passing a bound at or above that budget would mean that if this
+    very call hit the CLEAN_BUILD wedge #349 exists to contain, the HTTP client would give
+    up BEFORE the server-side fuse could answer - E2ECallTimeout, the remaining suite
+    aborted, EDT still working. The test proving the fuse must not be the one that defeats
+    it."""
+    r = call("clean_project", {"projectName": PROJECT, "timeout": 60})
     assert_ok(r, "clean_project with an explicit timeout")
 
     projects, cleaned = _success_envelope(r, "explicit timeout")
