@@ -223,6 +223,110 @@ public class GitToolStoredRemoteTest
     }
 
     @Test
+    public void testASchemelessStoredCredentialIsRefused() throws Exception
+    {
+        // git's scp-like remote form. There is no 'scheme://' anywhere in it, so redactCredentialUrls
+        // does not even look at the value - it masks a userinfo only inside a URL it recognises - and
+        // 'git remote -v' prints the whole thing verbatim. Judging only what LOOKS like a URL leaves
+        // this one out; asking instead what the redaction is ABLE to mask puts it in.
+        for (String url : List.of("user:" + SECRET + SPACE + "ok@" + HOST + ":team/repo.git", //$NON-NLS-1$ //$NON-NLS-2$
+            "user:" + SECRET + "@" + HOST + ":team/repo.git")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Repository repo = newRepository("git-stored-schemeless"); //$NON-NLS-1$
+            storeRemoteUrls(repo, ORIGIN, URL_KEY, url);
+            // Positive control: the redaction really does hand this value back untouched, which is
+            // the whole reason it has to be refused rather than masked.
+            assertEquals("fixture: a value with no scheme is not redactable at all", url, //$NON-NLS-1$
+                GitTool.redactCredentialUrls(url));
+
+            String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+            assertNotNull("a schemeless 'user:password@host:path' cannot be masked, so the command " //$NON-NLS-1$
+                + "must be refused", refusal); //$NON-NLS-1$
+            assertRefusalNamesTheRemoteAndTheFix(refusal, ORIGIN);
+            assertRefusalLeaksNothing(refusal);
+        }
+    }
+
+    @Test
+    public void testASchemelessCredentialInARemoteNameIsRefused() throws Exception
+    {
+        // The same shape in the one other field 'remote -v' prints. The url stored beside it is
+        // clean, so if the name is not judged by the very same predicate no refusal is built at all.
+        String hostileName = "user:" + NAME_SECRET + SPACE + "ok@" + HOST; //$NON-NLS-1$ //$NON-NLS-2$
+        Repository repo = newRepository("git-stored-schemeless-name"); //$NON-NLS-1$
+        storeRemoteUrls(repo, hostileName, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("fixture: JGit must return the credential-shaped name unchanged", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).contains(hostileName));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a NAME carrying a schemeless credential must be refused too", refusal); //$NON-NLS-1$
+        assertFalse("...and the credential it carries must not be echoed back: " + refusal, //$NON-NLS-1$
+            refusal.contains(NAME_SECRET));
+        assertRefusalLeaksNothing(refusal);
+        assertRefusalStatesTheFix(refusal);
+    }
+
+    @Test
+    public void testAnScpRemoteWithoutACredentialIsNotRefused() throws Exception
+    {
+        // The half that decides whether the rule above is usable. 'git@github.com:owner/repo.git' is
+        // git's DOCUMENTED ssh spelling - the very alternative this tool's guide recommends - and a
+        // local path may carry an '@' in a directory name. Widen the schemeless rule to "contains an
+        // '@'" and every one of these remotes is refused forever.
+        Repository repo = newRepository("git-stored-scp-clean"); //$NON-NLS-1$
+        storeRemoteUrls(repo, ORIGIN, URL_KEY, "git@github.com:acme/repo.git"); //$NON-NLS-1$
+        storeRemoteUrls(repo, "upstream", URL_KEY, "alice@" + HOST + ":team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        storeRemoteUrls(repo, "local", URL_KEY, "C:\\repos\\my@project"); //$NON-NLS-1$ //$NON-NLS-2$
+        storeRemoteUrls(repo, "mirror", URL_KEY, "/srv/git:mirrors/my@project"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("git's own ssh remote form is a LOGIN, not a credential to mask", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAControlCharacterWithNoCredentialIsRefusedAndSaysSo() throws Exception
+    {
+        // The second thing the redaction cannot do: it masks credentials, it never REMOVES a byte.
+        // Neither fixture carries a credential at all, so the credential rule alone would let both
+        // through and the raw byte would ride into the response, the EDT log and the request history.
+        String controlUrl = "https://exa\u001bmple.com/r.git"; //$NON-NLS-1$
+        Repository byUrl = newRepository("git-stored-control-only-url"); //$NON-NLS-1$
+        storeRemoteUrls(byUrl, ORIGIN, URL_KEY, controlUrl);
+        // Positive control: the redaction leaves the byte exactly where it is - masking it is not
+        // something it does, which is why this has to be a refusal.
+        assertEquals("fixture: the redaction does not remove a control byte", controlUrl, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(controlUrl));
+
+        String urlRefusal = GitTool.storedRemoteRefusal(byUrl, List.of(PUSH));
+
+        assertNotNull("a raw control byte in a stored URL must be refused on its own", urlRefusal); //$NON-NLS-1$
+        assertRefusalNamesTheRemoteAndTheFix(urlRefusal, ORIGIN);
+        assertRefusalLeaksNothing(urlRefusal);
+        // ...and it says WHICH of the two flaws fired, or the operator greps the config for a
+        // credential that is not there.
+        assertTrue("the refusal must name the control character: " + urlRefusal, //$NON-NLS-1$
+            urlRefusal.toLowerCase(Locale.ROOT).contains("control character")); //$NON-NLS-1$
+
+        String hostileName = "ori\u001bgin"; //$NON-NLS-1$
+        Repository byName = newRepository("git-stored-control-only-name"); //$NON-NLS-1$
+        storeRemoteUrls(byName, hostileName, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("fixture: JGit must return the control-bearing name unchanged", //$NON-NLS-1$
+            byName.getConfig().getSubsections(REMOTE_SECTION).contains(hostileName));
+
+        String nameRefusal = GitTool.storedRemoteRefusal(byName, List.of(PUSH));
+
+        assertNotNull("...and so must one in the NAME - 'remote -v' prints that too", nameRefusal); //$NON-NLS-1$
+        assertRefusalLeaksNothing(nameRefusal);
+        assertRefusalStatesTheFix(nameRefusal);
+        // The name marks no credential, so it is SHORTENED of its control byte rather than withheld:
+        // withholding it would cost the operator the one field that says which entry to repair.
+        assertTrue("a name that marks no credential must still be named: " + nameRefusal, //$NON-NLS-1$
+            nameRefusal.contains("origin")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAQuestionMarkOrHashInsideTheUserinfoDoesNotHideTheCredential() throws Exception
     {
         // An RFC-shaped authority scan stops at the '?' or the '#', finds no '@' at all and would

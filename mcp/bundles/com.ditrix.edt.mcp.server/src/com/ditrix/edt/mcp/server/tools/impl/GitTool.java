@@ -525,12 +525,14 @@ public class GitTool implements IMcpTool
      * specific error, and it is about the command the caller just sent rather than about the
      * repository's stored state.
      * <p>
-     * The stored-remote check is the one that cannot be replaced by masking: a credential hidden
-     * behind ASCII whitespace - or behind a {@code ?} / {@code #} - in the authority is INVISIBLE to
-     * {@link #redactCredentialUrls} (its userinfo scan stops at all three; {@link #urlLimit} does
-     * not, but it only bounds where one URL ends), so {@code remote -v} / {@code push} would print
-     * such a stored remote verbatim; a control character in the authority is refused alongside them
-     * because it can never be legitimate there. The remotes are read from the {@link Repository} this
+     * The stored-remote check is the one that cannot be replaced by masking, and it asks exactly
+     * that: what {@link #redactCredentialUrls} would be ABLE to do to the value once git printed it.
+     * A credential behind ASCII whitespace, behind a {@code ?} / {@code #}, or outside any
+     * {@code scheme://} URL at all is invisible to that redaction (its userinfo scan stops at the
+     * first three and never looks at the fourth; {@link #urlLimit} does not stop, but it only bounds
+     * where one URL ends), so {@code remote -v} / {@code push} would print such a stored remote
+     * verbatim; a raw control character is refused alongside them because the redaction masks
+     * credentials and never removes a byte. The remotes are read from the {@link Repository} this
      * call already holds - no extra git process is started for it.
      * <p>
      * {@link #requireConsentFor} deliberately stays OUT of this seam: it may block on a human, which
@@ -809,7 +811,7 @@ public class GitTool implements IMcpTool
      * <p>
      * This is the RFC-shaped reading, used by the INPUT guard - where a URL carrying a {@code ?} or a
      * {@code #} is refused by the query/fragment rule anyway. The stored-remote refusal needs git's
-     * wider reading instead: see {@link #gitAuthorityOf}.
+     * wider reading instead: see {@link #unmaskableCredentialUrl}.
      *
      * @param url the candidate URL (may be {@code null})
      * @return the authority, or {@code null} when the string carries no {@code ://}
@@ -873,13 +875,26 @@ public class GitTool implements IMcpTool
      */
     private static boolean hasWhitespaceOrControl(String segment)
     {
-        if (segment == null)
+        return segment != null && hasWhitespaceOrControl(segment, 0, segment.length());
+    }
+
+    /**
+     * Whether {@code text[from, to)} carries ASCII whitespace or a C0/DEL control character.
+     * <p>
+     * Judged by index rather than on a substring: the stored-remote walk runs on configuration text
+     * of unbounded length, and copying a slice out of it before deciding would let a hostile name
+     * charge the check for its whole size.
+     *
+     * @param text the text to inspect
+     * @param from the first index to look at
+     * @param to the index to stop before
+     * @return {@code true} when one of those characters is present
+     */
+    private static boolean hasWhitespaceOrControl(String text, int from, int to)
+    {
+        for (int i = from; i < to; i++)
         {
-            return false;
-        }
-        for (int i = 0; i < segment.length(); i++)
-        {
-            char c = segment.charAt(i);
+            char c = text.charAt(i);
             if (isAsciiWhitespace(c) || c < 0x20 || c == 0x7F)
             {
                 return true;
@@ -889,43 +904,47 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * The authority as GIT delimits it: everything from just after the first {@code ://} up to the
-     * first {@code /}, or to the end of the string.
+     * Whether a URL carries a credential this tool cannot be trusted to mask - the single-URL
+     * spelling of {@link #unmaskableAuthority}, which is where the rule itself lives.
      * <p>
-     * Wider than {@link #authorityOf} on purpose, and used only to judge a STORED URL. RFC 3986 ends
-     * an authority at {@code ?} and {@code #} as well; this scan runs on to the first {@code /}. NOT
-     * because git would read such a URL as a credential - it does not: git ends the host portion at
-     * the first of {@code /}, {@code ?} and {@code #} too, so for
+     * The authority is taken as GIT delimits it: everything from just after the first {@code ://} up
+     * to the first {@code /}, or to the end of the string. Wider than {@link #authorityOf} on
+     * purpose. RFC 3986 ends an authority at {@code ?} and {@code #} as well; this scan runs on to
+     * the first {@code /}. NOT because git would read such a URL as a credential - it does not: git
+     * ends the host portion at the first of {@code /}, {@code ?} and {@code #} too, so for
      * {@code https://user:s3cr3t?x@example.com/r.git} it sends no credential at all and takes
      * {@code user:s3cr3t} for the HOST. The reason is the REDACTION: its userinfo scan
      * ({@link #userinfoEnd}) bails at that same {@code ?} and so finds no {@code @} at all, leaving
      * {@link #redactCredentialUrls} to mask what it takes for a query and emit
      * {@code https://user:s3cr3t?***} - the whole secret verbatim. Judging a stored URL by the RFC
      * shape would not even SEE the {@code @} of that one, and would let it past the refusal.
+     * <p>
+     * Production judges stored text through {@link #carriesUnmaskableCredential}, which walks it by
+     * index and never copies a slice; this named form states the rule for one URL and is what the
+     * tests use as a positive control.
      *
      * @param url the candidate URL (may be {@code null})
-     * @return the authority as git delimits it, or {@code null} when the string carries no
-     *         {@code ://}
+     * @return {@code true} when the URL carries a credential this tool cannot mask
      */
-    private static String gitAuthorityOf(String url)
+    static boolean unmaskableCredentialUrl(String url)
     {
         if (url == null)
         {
-            return null;
+            return false;
         }
         int marker = url.indexOf(SCHEME_SEPARATOR);
         if (marker < 0)
         {
-            return null;
+            return false;
         }
         int start = marker + SCHEME_SEPARATOR.length();
-        int end = url.indexOf('/', start);
-        return end < 0 ? url.substring(start) : url.substring(start, end);
+        int slash = url.indexOf('/', start);
+        return unmaskableAuthority(url, start, slash < 0 ? url.length() : slash);
     }
 
     /**
-     * Whether a URL carries a credential this tool cannot be trusted to mask: the authority GIT reads
-     * ({@link #gitAuthorityOf}) holds a userinfo ({@code @}) and one of two independent blockers.
+     * Whether the authority in {@code text[start, to)} holds a userinfo ({@code @}) the redaction
+     * cannot be trusted to mask - one of two independent blockers.
      * <p>
      * The FIRST is ASCII whitespace, judged blind to where it sits, because it ends every scan
      * {@link #redactCredentialUrls} makes: {@code https://user@ho st:s3cr3t@example.com/r.git} is
@@ -946,25 +965,33 @@ public class GitTool implements IMcpTool
      * remote this tool created can land here.
      * <p>
      * A control character that is not whitespace is NOT part of this predicate's reasoning: it ends
-     * none of those scans and such a URL is masked correctly. It is caught by
-     * {@link #hasWhitespaceOrControl} for the reason stated on
-     * {@link #authorityHasWhitespaceOrControl} - it can never be legitimate in an authority and must
-     * not travel verbatim into the response.
+     * none of those scans and such a URL is masked correctly. It is refused one level up, by
+     * {@link #storedTextFlaw}, for the reason stated on {@link #authorityHasWhitespaceOrControl}.
      * <p>
      * The {@code @} is still required: an authority with whitespace but no userinfo carries no
      * secret to protect, and refusing it would be an outage for no gain.
      *
-     * @param url the candidate URL (may be {@code null})
-     * @return {@code true} when the URL carries a credential this tool cannot mask
+     * @param text the text the authority sits in
+     * @param start the first index of the authority
+     * @param end the index the authority stops before
+     * @return {@code true} when the authority carries a credential this tool cannot mask
      */
-    static boolean unmaskableCredentialUrl(String url)
+    private static boolean unmaskableAuthority(String text, int start, int end)
     {
-        String authority = gitAuthorityOf(url);
-        if (authority == null || authority.indexOf('@') < 0)
+        boolean userinfo = false;
+        for (int i = start; i < end; i++)
+        {
+            if (text.charAt(i) == '@')
+            {
+                userinfo = true;
+                break;
+            }
+        }
+        if (!userinfo)
         {
             return false;
         }
-        return hasWhitespaceOrControl(authority) || !redactionFindsUserinfo(authority);
+        return hasWhitespaceOrControl(text, start, end) || !redactionFindsUserinfo(text, start, end);
     }
 
     /**
@@ -972,17 +999,19 @@ public class GitTool implements IMcpTool
      * <p>
      * Mirrors {@link #userinfoEnd}'s stop set: that walk takes the LAST {@code @} it passes and gives
      * up at the first {@code /}, {@code ?}, {@code #} or whitespace, so an {@code @} behind one of
-     * those is invisible to it. The {@code /} is absent here because {@link #gitAuthorityOf} has
-     * already cut there.
+     * those is invisible to it. The {@code /} is absent here because the authority has already been
+     * cut there.
      *
-     * @param authority the authority as {@link #gitAuthorityOf} delimits it
+     * @param text the text the authority sits in
+     * @param start the first index of the authority
+     * @param end the index the authority stops before
      * @return {@code true} when an {@code @} is reachable before the walk would stop
      */
-    private static boolean redactionFindsUserinfo(String authority)
+    private static boolean redactionFindsUserinfo(String text, int start, int end)
     {
-        for (int i = 0; i < authority.length(); i++)
+        for (int i = start; i < end; i++)
         {
-            char c = authority.charAt(i);
+            char c = text.charAt(i);
             if (c == '@')
             {
                 return true;
@@ -996,7 +1025,218 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Refuses a command that would print or use a STORED remote whose credential cannot be masked.
+     * Why a stored remote may not be printed. Both reasons are derived from the same question - what
+     * {@link #redactCredentialUrls} is able to do to the text before it reaches the caller - and they
+     * are kept apart only so the refusal can say which one fired.
+     */
+    enum StoredRemoteFlaw
+    {
+        /** A credential the redaction would not mask (see {@link GitTool#unmaskableAuthority}). */
+        UNMASKABLE_CREDENTIAL,
+
+        /** A C0/DEL byte: the redaction masks credentials, it never removes a control character. */
+        CONTROL_CHARACTER
+    }
+
+    /**
+     * What, if anything, makes a piece of STORED configuration text unsafe to let git print - the one
+     * predicate behind the stored-remote refusal, applied alike to a remote's name and to every URL
+     * value stored for it, because {@code remote -v} puts them in the same output stream.
+     * <p>
+     * Derived from the output redaction's CAPABILITIES rather than from a list of URL shapes, which
+     * is what keeps it from having to grow a case per spelling:
+     * <ul>
+     * <li>{@link #redactCredentialUrls} masks a userinfo only inside a {@code scheme://} URL whose
+     * authority its own scan can walk, so a credential ANYWHERE else - or behind whitespace, or
+     * behind a {@code ?} / {@code #} - is one it cannot mask, and is refused;</li>
+     * <li>it never removes a control character, so a C0/DEL byte would reach the response verbatim
+     * whatever else happens to the text - refused too, and for that different reason.</li>
+     * </ul>
+     * The credential half wins when both are present: it is the more specific diagnosis, and every
+     * ASCII whitespace character except the plain space is itself a C0 byte, so testing controls
+     * first would relabel the whitespace-split credentials this check was written for.
+     *
+     * @param text the stored text (may be {@code null})
+     * @return the flaw, or {@code null} when the text may be printed
+     */
+    static StoredRemoteFlaw storedTextFlaw(String text)
+    {
+        if (text == null)
+        {
+            return null;
+        }
+        if (carriesUnmaskableCredential(text))
+        {
+            return StoredRemoteFlaw.UNMASKABLE_CREDENTIAL;
+        }
+        if (hasControlCharacter(text))
+        {
+            return StoredRemoteFlaw.CONTROL_CHARACTER;
+        }
+        return null;
+    }
+
+    /**
+     * Walks stored text the way {@link #redactCredentialUrls} walks git's output, and asks of each
+     * region whether a credential there could be masked.
+     * <p>
+     * The redaction recognises a URL only at a {@code ://} with a scheme in front of it
+     * ({@link #hasSchemeBefore}); everything else is plain text it never touches. So the walk splits
+     * the text the same way and judges the two kinds differently:
+     * <ul>
+     * <li>a URL's AUTHORITY - {@link #unmaskableAuthority}, the reach the redaction's own userinfo
+     * scan has;</li>
+     * <li>plain text - {@link #schemelessCredential}, where nothing is masked at all, so an
+     * {@code @} marked as carrying a password is enough.</li>
+     * </ul>
+     * The ONLY thing skipped is what the redaction really does cover: a URL's query or fragment,
+     * which it masks whole ({@code ...r.git?***}). Everything else - the URL's PATH, and whatever
+     * follows the URL before the next one - goes back to the plain-text rule, because the redaction
+     * does nothing there either. Skipping to a URL's {@link #urlLimit} instead would blind the walk
+     * to a credential parked behind it: that bound deliberately runs past whitespace, so
+     * {@code https://clean/r.git user:s3cr3t@host:path} would be swallowed whole by the first URL.
+     * <p>
+     * Judged by index throughout, never on a substring: the name of a subsection is untrusted text of
+     * unbounded length, and copying its tail before deciding would let it charge the check for its
+     * whole size. The walk is linear - the spans it judges are disjoint and the cursor only moves
+     * forward, by at least one URL per turn.
+     *
+     * @param text the stored text
+     * @return {@code true} when some credential in it would reach the caller unmasked
+     */
+    private static boolean carriesUnmaskableCredential(String text)
+    {
+        int plainFrom = 0;
+        int cursor = 0;
+        while (true)
+        {
+            int marker = nextUrlMarker(text, cursor);
+            if (marker < 0)
+            {
+                return schemelessCredential(text, plainFrom, text.length());
+            }
+            if (schemelessCredential(text, plainFrom, marker))
+            {
+                return true;
+            }
+            int authorityStart = marker + SCHEME_SEPARATOR.length();
+            // The same bound the redaction computes once per URL, and for the same reason: without
+            // it a scan would run on into the NEXT URL.
+            int limit = urlLimit(text, authorityStart);
+            int slash = text.indexOf('/', authorityStart);
+            int authorityEnd = slash < 0 || slash > limit ? limit : slash;
+            if (unmaskableAuthority(text, authorityStart, authorityEnd))
+            {
+                return true;
+            }
+            // Where the redaction looks for the query, computed the way IT computes it: from just
+            // past a userinfo it managed to mask, else from the start of the authority. Starting
+            // anywhere else - at the end of the authority, say - would find a '?' the redaction's
+            // own scan never reaches, because that scan stops at the first whitespace: in
+            // 'https://host name/r.git?user:pass@evil' it gives up at the space and masks NOTHING,
+            // while a scan begun at the path would take the tail for a masked query and skip it.
+            int userinfo = userinfoEnd(text, authorityStart, limit);
+            int scanFrom = userinfo < 0 ? authorityStart : userinfo + 1;
+            int query = earliest(queryStart(text, scanFrom, limit), fragmentStart(text, scanFrom, limit));
+            if (query < 0)
+            {
+                plainFrom = authorityEnd;
+            }
+            else
+            {
+                // The redaction copies the delimiter itself and replaces what follows it.
+                int maskedFrom = query + 1;
+                if (authorityEnd < maskedFrom && schemelessCredential(text, authorityEnd, maskedFrom))
+                {
+                    return true;
+                }
+                // Masked whole by the redaction, so nothing in it can reach the caller unmasked.
+                plainFrom = Math.max(authorityEnd, queryEnd(text, maskedFrom, limit));
+            }
+            cursor = limit;
+        }
+    }
+
+    /**
+     * The next {@code ://} the redaction would treat as a URL - one with a scheme in front of it.
+     *
+     * @param text the text being walked
+     * @param from the index to start looking at
+     * @return the index of the separator, or {@code -1} when no URL follows
+     */
+    private static int nextUrlMarker(String text, int from)
+    {
+        for (int marker = text.indexOf(SCHEME_SEPARATOR, from); marker >= 0;
+            marker = text.indexOf(SCHEME_SEPARATOR, marker + SCHEME_SEPARATOR.length()))
+        {
+            if (hasSchemeBefore(text, marker))
+            {
+                return marker;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Whether {@code text[from, to)} - a run the redaction treats as plain text, not as a URL -
+     * carries a credential. There it masks NOTHING, so the only question left is whether something
+     * in it IS one.
+     * <p>
+     * The marker is the same one {@link #isPlainSshUser} already rules by on the input side: a
+     * {@code :} (percent-encoded or not) between the {@code @} and the path separator in front of it.
+     * That is what tells git's documented scp-like remote {@code git@github.com:owner/repo.git} - a
+     * login, not a secret, and one the tool's own guide recommends - from
+     * {@code user:s3 cr@example.com:path}, which git accepts just as readily and {@code remote -v}
+     * prints verbatim because there is no {@code scheme://} for the redaction to find.
+     * <p>
+     * Whitespace deliberately does NOT end the candidate, where {@code /} and {@code \} do. A path
+     * separator cannot occur inside a userinfo, so it really does start a new one - that is what
+     * keeps a local remote such as {@code C:\repos\my@project} out of the refusal - while whitespace
+     * INSIDE the candidate is the very thing that hides the rest of it from every scan the redaction
+     * makes. Ending the run there would read {@code user:s3 cr@host} as the harmless {@code cr@host}.
+     * <p>
+     * A {@code :} with no {@code @} behind it is not judged at all: an scp-like remote and a Windows
+     * path are both full of them, and it is the {@code @} that turns what precedes it into a
+     * userinfo. What this cannot catch is the same thing nothing can - a secret that is not marked as
+     * one, a bare token standing in for a login.
+     * <p>
+     * That last limit is also why the marker is not worth hardening against evasion. This asks what
+     * a stored value IS, for the operator who parked a credential in it by accident; whoever can
+     * WRITE the configuration can store the same secret unmarked ({@code ghp_token@host}), which no
+     * predicate can tell from a login - so a spelling that dodges the {@code :} buys nothing the
+     * unmarked one does not already give.
+     *
+     * @param text the text being walked
+     * @param from the first index of the run
+     * @param to the index the run stops before
+     * @return {@code true} when the run carries a credential nothing would mask
+     */
+    private static boolean schemelessCredential(String text, int from, int to)
+    {
+        boolean password = false;
+        for (int i = from; i < to; i++)
+        {
+            char c = text.charAt(i);
+            if (c == '/' || c == '\\')
+            {
+                password = false;
+            }
+            else if (c == '@' && password)
+            {
+                return true;
+            }
+            else if (isPasswordMarkerAt(text, i, to))
+            {
+                password = true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Refuses a command that would print or use a STORED remote this tool could not hand back safely
+     * - one carrying a credential the output redaction cannot mask, or a raw control character it
+     * would never remove ({@link #storedTextFlaw}).
      * <p>
      * Only the subcommands that can reach or print a remote are checked ({@link #REMOTE_SUBCOMMANDS});
      * everything else runs untouched, so a poisoned remote never blocks {@code log} or {@code status}.
@@ -1004,7 +1244,7 @@ public class GitTool implements IMcpTool
      * probe process is added - and both {@code remote.<name>.url} and {@code remote.<name>.pushurl}
      * are read as LISTS, because {@code url} is multi-valued and {@code remote -v} prints every value.
      * The subsection NAME is judged by the same predicate as those values
-     * ({@link #carriesUnmaskableCredential}), because {@code remote -v} prints it too.
+     * ({@link #storedTextFlaw}), because {@code remote -v} prints it too.
      * <p>
      * What {@code repo.getConfig()} covers is the MERGED configuration, base chain included: this
      * repository's config over the user config over the system config - and the user config is
@@ -1055,9 +1295,10 @@ public class GitTool implements IMcpTool
             StoredConfig config = repo.getConfig();
             for (String remote : config.getSubsections(REMOTE_SECTION))
             {
-                if (carriesUnmaskableCredential(config, remote))
+                StoredRemoteFlaw flaw = remoteEntryFlaw(config, remote);
+                if (flaw != null)
                 {
-                    return unmaskableRemoteRefusal(remote);
+                    return unprintableRemoteRefusal(remote, flaw);
                 }
             }
         }
@@ -1093,93 +1334,60 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Whether one remote entry carries a credential that cannot be masked - in its NAME or in any URL
-     * stored for it.
+     * What makes one remote entry unsafe to print - judged over its NAME and over every URL stored
+     * for it, by the one predicate {@link #storedTextFlaw}.
      * <p>
-     * The name is judged by the very same predicate as the values, because git PRINTS it: a
-     * subsection name is free configuration text, so {@code [remote "https://user:s3 cr@host"]} is a
-     * legal entry and {@code remote -v} puts that name in the output beside a perfectly clean
-     * {@code url} - where {@link #redactCredentialUrls} has exactly the blind spot it has on a value.
-     * Judging the values alone would build no refusal at all for such an entry.
+     * The name is judged like the values because git PRINTS it: a subsection name is free
+     * configuration text, so {@code [remote "user:s3 cr@example.com"]} is a legal entry and
+     * {@code remote -v} puts that name in the output beside a perfectly clean {@code url} - where
+     * {@link #redactCredentialUrls} has exactly the blind spot it has on a value. Judging the values
+     * alone would build no refusal at all for such an entry. The one difference is a consequence of
+     * that predicate rather than a rule of its own: a {@code url} value is a single URL, a name is
+     * free text that may merely CONTAIN one anywhere in it, and the walk covers both.
      * <p>
-     * An everyday name cannot reach that predicate: it needs a {@code ://} and an {@code @} inside
-     * the authority behind it, and {@code origin} - or a Cyrillic one - carries neither. A
-     * credential-shaped name the redaction DOES mask correctly is left alone too; this refusal exists
-     * for what cannot be masked, not for every {@code @}. Where the name IS judged differently from a
-     * value - every {@code ://} in it, not just the first - is spelled out on
-     * {@link #nameCarriesUnmaskableCredential}.
+     * An everyday name reaches neither half: {@code origin} - or a Cyrillic one - has no {@code @}
+     * at all, and a credential-shaped name the redaction DOES mask correctly is left alone too. This
+     * refusal exists for what cannot be masked, not for every {@code @}.
+     * <p>
+     * The CREDENTIAL flaw outranks a control character found elsewhere in the same entry, so the
+     * message names the more specific of the two; see {@link #storedTextFlaw}.
      *
      * @param config the repository configuration
      * @param remote the remote's subsection name
-     * @return {@code true} when the name, or one of its {@code url} / {@code pushurl} values, is
-     *         un-maskable
+     * @return the flaw, or {@code null} when the entry may be printed
      */
-    private static boolean carriesUnmaskableCredential(StoredConfig config, String remote)
+    private static StoredRemoteFlaw remoteEntryFlaw(StoredConfig config, String remote)
     {
-        if (nameCarriesUnmaskableCredential(remote))
+        StoredRemoteFlaw flaw = storedTextFlaw(remote);
+        if (flaw == StoredRemoteFlaw.UNMASKABLE_CREDENTIAL)
         {
-            return true;
+            return flaw;
         }
         for (String key : REMOTE_URL_KEYS)
         {
             for (String url : config.getStringList(REMOTE_SECTION, remote, key))
             {
-                if (unmaskableCredentialUrl(url))
+                StoredRemoteFlaw urlFlaw = storedTextFlaw(url);
+                if (urlFlaw == StoredRemoteFlaw.UNMASKABLE_CREDENTIAL)
                 {
-                    return true;
+                    return urlFlaw;
+                }
+                if (flaw == null)
+                {
+                    flaw = urlFlaw;
                 }
             }
         }
-        return false;
+        return flaw;
     }
 
     /**
-     * Whether a remote's NAME carries a credential that cannot be masked.
+     * The refusal text for a remote this tool may not let git print.
      * <p>
-     * Judged per {@code scheme://}, not once for the whole string, and that is the one way it differs
-     * from a stored URL: a {@code url} value IS one URL - git reads the whole value as such - while a
-     * subsection name is free configuration text that may merely CONTAIN one, anywhere in it. A name
-     * reading {@code https://clean/r https://user:s3 cr@host} would otherwise pass on its harmless
-     * opening while {@code remote -v} printed the whole of it.
-     * <p>
-     * It walks the name the way {@link #redactCredentialUrls} walks the output, {@link #hasSchemeBefore}
-     * included, so it judges exactly what that scan will treat as a URL there. A {@code ://} with no
-     * scheme in front of it is a URL to neither: skipping it is what keeps a name like
-     * {@code label ://alice?team@corp} - which carries nothing the redaction could mis-mask - out of a
-     * refusal.
-     *
-     * @param remote the remote's subsection name (may be {@code null})
-     * @return {@code true} when some URL inside the name is un-maskable
-     */
-    private static boolean nameCarriesUnmaskableCredential(String remote)
-    {
-        if (remote == null)
-        {
-            return false;
-        }
-        for (int at = remote.indexOf(SCHEME_SEPARATOR); at >= 0;
-            at = remote.indexOf(SCHEME_SEPARATOR, at + SCHEME_SEPARATOR.length()))
-        {
-            if (!hasSchemeBefore(remote, at))
-            {
-                continue;
-            }
-            // Handed the separator itself, cut where the authority ends: unmaskableCredentialUrl
-            // starts at the FIRST separator it finds and ignores everything past that '/' anyway. The
-            // cut is what keeps this loop LINEAR on a name of unbounded length - a further scheme://
-            // can only sit behind a '/', the one in its own separator, so the slices cannot overlap.
-            int authorityEnd = remote.indexOf('/', at + SCHEME_SEPARATOR.length());
-            String url = authorityEnd < 0 ? remote.substring(at) : remote.substring(at, authorityEnd);
-            if (unmaskableCredentialUrl(url))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * The refusal text for a remote whose stored credential cannot be masked.
+     * The opening clause names WHICH of the two flaws fired ({@link StoredRemoteFlaw}) and the rest
+     * of the message is shared: the repair is the same either way - the entry has to go - and an
+     * unattended caller needs to know what to look for in a file whose content this message
+     * deliberately never echoes.
      * <p>
      * Names the remote and the fix, and NOTHING else: no URL, no host, no configuration value. The
      * message travels back to the client, into the model's context and into the request history, so
@@ -1199,7 +1407,7 @@ public class GitTool implements IMcpTool
      * remote-reaching subcommands stay refused until the entry is gone.
      * <p>
      * It names remove-and-re-add rather than {@code set-url}, because that pair is the one repair
-     * that fits every shape {@link #carriesUnmaskableCredential} fires on. A plain
+     * that fits every shape {@link #remoteEntryFlaw} fires on. A plain
      * {@code git remote set-url <name> <url>} writes {@code url} only, so it would leave a poisoned
      * {@code pushurl} ({@link #REMOTE_URL_KEYS}) exactly where it is; and against a MULTI-valued
      * {@code url} ({@code remote set-url --add}, which is why that key is read as a list) it refuses
@@ -1214,12 +1422,13 @@ public class GitTool implements IMcpTool
      * "No such remote" and exit non-zero, which would leave the caller with no way out at all.
      *
      * @param remote the remote's subsection name (untrusted text)
+     * @param flaw what makes the entry unprintable
      * @return the actionable, leak-free message
      */
-    private static String unmaskableRemoteRefusal(String remote)
+    private static String unprintableRemoteRefusal(String remote, StoredRemoteFlaw flaw)
     {
-        return "The remote '" + safeRemoteName(remote) + "' is stored with a credential that " //$NON-NLS-1$ //$NON-NLS-2$
-            + "cannot be masked reliably in git's output - in one of its URLs, or in the remote's " //$NON-NLS-1$
+        return "The remote '" + safeRemoteName(remote) + "' is stored with " + flawClause(flaw) //$NON-NLS-1$ //$NON-NLS-2$
+            + " - in one of its URLs, or in the remote's " //$NON-NLS-1$
             + "own name - so the command is refused instead of run, and the offending value is not " //$NON-NLS-1$
             + "echoed here for the same reason. Repair it OUTSIDE this tool, " //$NON-NLS-1$
             + "in a terminal: 'git remote remove <name>', then 'git remote add' with a name and a " //$NON-NLS-1$
@@ -1229,6 +1438,24 @@ public class GitTool implements IMcpTool
             + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
             + "--system). Retrying through this tool cannot work: while the entry is stored, every " //$NON-NLS-1$
             + "remote, push, fetch and pull command here gets this same refusal."; //$NON-NLS-1$
+    }
+
+    /**
+     * The opening clause that names the flaw: what to look for in the configuration, said without
+     * quoting any of it.
+     *
+     * @param flaw what makes the entry unprintable
+     * @return the clause the refusal opens with
+     */
+    private static String flawClause(StoredRemoteFlaw flaw)
+    {
+        if (flaw == StoredRemoteFlaw.CONTROL_CHARACTER)
+        {
+            return "a control character that cannot be masked out of git's output - only " //$NON-NLS-1$
+                + "credentials are masked there, never a raw byte - and that must not be copied " //$NON-NLS-1$
+                + "verbatim into this tool's response"; //$NON-NLS-1$
+        }
+        return "a credential that cannot be masked reliably in git's output"; //$NON-NLS-1$
     }
 
     /**
@@ -1250,9 +1477,11 @@ public class GitTool implements IMcpTool
      * marked as one - a bearer token as a PATH segment, or as the whole name - and nothing could:
      * such a name is indistinguishable from an ordinary one.
      * <p>
-     * When it is the NAME that earned the refusal, this always withholds it: the predicate that fires
-     * on a name ({@link #unmaskableCredentialUrl}) needs an {@code @} inside the authority, so the
-     * name carries one.
+     * When it is a CREDENTIAL in the name that earned the refusal, this always withholds it: that
+     * half of {@link #storedTextFlaw} needs an {@code @}, so the name carries one. The other half -
+     * a control character - is stripped instead and the rest of the name still quoted: a name that
+     * carries no {@code @}, {@code ?} or {@code #} marks no credential, and withholding it would cost
+     * the operator the one field that says which entry to repair.
      * <p>
      * The WHOLE name is inspected for those three, not just the part that would be printed: with a
      * long name the printed prefix is what a credential would sit in
@@ -1345,11 +1574,59 @@ public class GitTool implements IMcpTool
         {
             return false;
         }
-        String userinfo = value.substring(authorityStart, at);
         // A ':' anywhere in the userinfo is a password - a credential wherever it rides. Percent
         // encoding counts: git decodes '%3A' back to ':', so the encoded spelling is refused too.
-        return !userinfo.isEmpty() && userinfo.indexOf(':') < 0
-            && !userinfo.toLowerCase(Locale.ROOT).contains("%3a"); //$NON-NLS-1$
+        // The same marker rules the stored side (schemelessCredential), and deliberately so: one
+        // doctrine about what tells a login from a secret, not two that could drift apart.
+        return at > authorityStart && !carriesPasswordMarker(value, authorityStart, at);
+    }
+
+    /**
+     * Whether {@code text[from, to)} - a candidate userinfo - is marked as carrying a PASSWORD.
+     * <p>
+     * The mark is a {@code :}, encoded or not. It is what separates git's documented
+     * {@code ssh://user@host} and {@code git@github.com:owner/repo.git} - a login this tool's own
+     * guide recommends - from {@code user:secret@host}. A secret that is not marked as one (a bare
+     * token standing in for the login) cannot be told from an ordinary name by anything.
+     *
+     * @param text the text the candidate sits in
+     * @param from the first index of the candidate
+     * @param to the index the candidate stops before
+     * @return {@code true} when a password marker is present
+     */
+    private static boolean carriesPasswordMarker(String text, int from, int to)
+    {
+        for (int i = from; i < to; i++)
+        {
+            if (isPasswordMarkerAt(text, i, to))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a password marker - a {@code :}, or its percent-encoded spelling - starts at
+     * {@code at}. The one place the marker is spelled out; both sides of the tool ask here.
+     * <p>
+     * {@code %3A} counts for two different reasons on the two sides, and only the first is about
+     * git's own parsing: in a {@code scheme://} URL git DECODES it back into a {@code :}, so
+     * {@code ssh://user%3Apass@host} really does carry a password ({@link #isPlainSshUser}). In the
+     * schemeless scp-like form it decodes nothing - the whole {@code user%3Apass@host} goes to ssh
+     * as written - and the marker is kept there for what it says about the VALUE: a {@code :} that
+     * someone escaped is still a {@code :} somebody wrote, and the text is printed either way.
+     *
+     * @param text the text being scanned
+     * @param at the index to test
+     * @param to the index the scan stops before
+     * @return {@code true} when a marker starts here
+     */
+    private static boolean isPasswordMarkerAt(String text, int at, int to)
+    {
+        char c = text.charAt(at);
+        return c == ':' || (c == '%' && at + 2 < to && text.charAt(at + 1) == '3'
+            && (text.charAt(at + 2) == 'a' || text.charAt(at + 2) == 'A'));
     }
 
     /**

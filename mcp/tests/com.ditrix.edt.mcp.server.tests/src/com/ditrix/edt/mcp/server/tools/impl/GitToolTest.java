@@ -464,6 +464,265 @@ public class GitToolTest
     }
 
     @Test
+    public void testStoredTextFlawRefusesACredentialWithNoSchemeToRedactAt()
+    {
+        // The predicate asks what redactCredentialUrls would be ABLE to do to the value, not what
+        // the value looks like - and outside a 'scheme://' URL the answer is NOTHING: the redaction
+        // never even looks there. So a credential parked in git's scp-like form reaches the caller
+        // whole, whitespace or no whitespace, and is refused.
+        assertEquals("a scp-like 'user:password@host:path' is masked by nothing at all", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("user:s3cr3t@example.com:team/repo.git")); //$NON-NLS-1$
+        assertEquals("...and the whitespace-split spelling just the same", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("user:s3cr3t\u0020ok@example.com:team/repo.git")); //$NON-NLS-1$
+        // The percent-encoded colon counts too, and NOT because git decodes it: in this schemeless
+        // form it decodes nothing and hands 'user%3As3cr3t@example.com' to ssh as written. It counts
+        // because of what the VALUE says - an escaped ':' is still a ':' somebody wrote - and
+        // because 'remote -v' prints it either way. (In a 'scheme://' URL git really does decode it,
+        // which is why the input guard has refused that spelling all along; see isPlainSshUser.)
+        assertEquals("...and the percent-encoded colon", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("user%3As3cr3t@example.com:r.git")); //$NON-NLS-1$
+        // A '://' with no scheme in front of it is not a URL to the redaction either, so what
+        // follows it is plain text and judged as such.
+        assertEquals("...and a marker the redaction skips leaves plain text behind it", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("://user:s3cr3t\u0020ok@example.com")); //$NON-NLS-1$
+
+        // The other half, and the one that decides whether this is usable at all. 'git@github.com:'
+        // is git's DOCUMENTED ssh spelling - the very alternative this tool's guide recommends - and
+        // a ':' in a path or a Windows drive is an everyday character. What separates them is the
+        // password MARKER between the '@' and the path separator in front of it, the same marker
+        // isPlainSshUser rules by on the input side.
+        assertNull("git's documented scp-like ssh remote is a LOGIN, not a credential", //$NON-NLS-1$
+            GitTool.storedTextFlaw("git@github.com:acme/repo.git")); //$NON-NLS-1$
+        assertNull("...an explicit user with a port-less host too", //$NON-NLS-1$
+            GitTool.storedTextFlaw("alice@example.com:team/repo.git")); //$NON-NLS-1$
+        assertNull("a Windows path whose last segment carries an '@'", //$NON-NLS-1$
+            GitTool.storedTextFlaw("C:\\repos\\my@project")); //$NON-NLS-1$
+        assertNull("...and a POSIX one, colon in an earlier segment included", //$NON-NLS-1$
+            GitTool.storedTextFlaw("/srv/git:mirrors/my@project")); //$NON-NLS-1$
+        assertNull("an ordinary remote name", GitTool.storedTextFlaw("origin")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("...in any script", //$NON-NLS-1$
+            GitTool.storedTextFlaw("\u0438\u0441\u0442\u043e\u043a\u0438")); //$NON-NLS-1$
+        assertNull("an ordinary https remote", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/team/repo.git")); //$NON-NLS-1$
+        assertNull("...and one whose credential the redaction masks correctly", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://user:s3cr3t@example.com/r.git")); //$NON-NLS-1$
+        assertNull("a relative local remote", GitTool.storedTextFlaw("../sibling.git")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStoredTextFlawLeavesWhatTheRedactionMasksAlone()
+    {
+        // The boundary this PR declares and does not move: a credential in the QUERY of a URL. The
+        // redaction masks the whole query ('...r.git?***'), so refusing there would take remotes it
+        // handles correctly off the air - and it would silently answer a question that is still open
+        // with the author. The walk therefore skips exactly the span the redaction covers, and
+        // only that one.
+        //
+        // Each case carries its COUPLING: not just "the predicate says null", but that the
+        // redaction really does mask the secret. Without it the pin could stay green while the two
+        // drifted apart and this check went on trusting a masking that no longer happens.
+        String query = "https://example.com/r.git?tok:en@x"; //$NON-NLS-1$
+        assertNull("a ':'-marked '@' inside a query is masked, so it is not refused", //$NON-NLS-1$
+            GitTool.storedTextFlaw(query));
+        assertEquals("...and this is the masking it is trusting", //$NON-NLS-1$
+            "https://example.com/r.git?***", GitTool.redactCredentialUrls(query)); //$NON-NLS-1$
+        String fragment = "https://example.com/r.git#tok:en@x"; //$NON-NLS-1$
+        assertNull("...and so is a fragment", GitTool.storedTextFlaw(fragment)); //$NON-NLS-1$
+        assertEquals("...masked the same way", "https://example.com/r.git#***", //$NON-NLS-1$ //$NON-NLS-2$
+            GitTool.redactCredentialUrls(fragment));
+        // The known hole in the query, stated rather than discovered: whitespace stops the query
+        // scan too. It is the declared boundary of this change, not something this predicate closes.
+        assertNull("a whitespace-split query secret stays out of scope by decision", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/r.git?access_token=sec\u0020ret")); //$NON-NLS-1$
+        // ...and a path segment that merely carries an '@' is a path, not a userinfo: the '/' in
+        // front of it ends the candidate.
+        assertNull("an '@' in a path segment is not a credential marker", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/team/foo@bar.git")); //$NON-NLS-1$
+        assertNull("...and neither is one in an Azure DevOps path with a space in it", //$NON-NLS-1$
+            GitTool.storedTextFlaw(
+                "https://user:s3cr3t@dev.azure.example/org/My\u0020Project/_git/repo")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredTextFlawJudgesWhatFollowsARecognisedUrl()
+    {
+        // A URL does not swallow the rest of the text. urlLimit - the bound the redaction
+        // computes per URL - deliberately runs PAST whitespace, so a walk that jumped straight to
+        // it would hand back a whole credential standing behind one; and it does not treat a '/'
+        // as a separator either, so a second 'scheme://' reached through one would never be
+        // judged at all. Both were live holes, and neither is visible from the authority alone.
+        String afterAUrl = "https://clean.example/r.git user:s3cr3t@host:path"; //$NON-NLS-1$
+        assertEquals("a credential standing after a clean URL must be refused", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, GitTool.storedTextFlaw(afterAUrl));
+        // Positive control: the redaction really does hand this back verbatim - its userinfo scan
+        // ended at the first URL's '/' and its query scan at the space.
+        assertEquals("the redaction masks nothing here, which is why it must be refused", //$NON-NLS-1$
+            afterAUrl, GitTool.redactCredentialUrls(afterAUrl));
+
+        String nestedUrl = "https://clean/r/https://user:pass word@host"; //$NON-NLS-1$
+        assertEquals("a second URL reached through a '/' must be judged too", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, GitTool.storedTextFlaw(nestedUrl));
+        assertEquals("...and the redaction leaves it verbatim as well", nestedUrl, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(nestedUrl));
+
+        // ...while the same shapes WITHOUT a credential stay accepted, or this rule would refuse
+        // every remote whose text merely carries a second URL or an '@'.
+        assertNull("a clean URL followed by a clean scp remote is not refused", //$NON-NLS-1$
+            GitTool.storedTextFlaw(
+                "https://clean.example/r.git git@github.com:acme/repo.git")); //$NON-NLS-1$
+        assertNull("...and neither is a nested clean URL", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://clean/r/https://user@host/x.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredTextFlawFindsTheQueryWhereTheRedactionDoes()
+    {
+        // The redaction looks for a URL's query from the START of the authority, and that scan stops
+        // at the first ASCII whitespace - so in the URL below it never reaches the '?' at all and
+        // masks NOTHING. A check that looked for the query from the end of the PATH instead would
+        // find that '?', take the tail for a masked query, skip it, and hand the credential back.
+        String pastWhitespace = "https://host\u0020name/r.git?user:s3cr3t@evil"; //$NON-NLS-1$
+        assertEquals("a query the redaction never reaches must not be treated as masked", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, GitTool.storedTextFlaw(pastWhitespace));
+        // Positive control: this is what the redaction really does with it - nothing at all.
+        assertEquals("the redaction masks nothing here", pastWhitespace, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(pastWhitespace));
+        assertEquals("...and the same with a fragment", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://host\u0020name/r.git#user:s3cr3t@evil")); //$NON-NLS-1$
+
+        // ...while a query the redaction DOES reach is still trusted to it, delimiter and all. The
+        // two cases differ only in that whitespace, which is the whole point.
+        String reached = "https://host/r.git?user:s3cr3t@evil"; //$NON-NLS-1$
+        assertNull("a query the redaction reaches is masked, so it is not refused", //$NON-NLS-1$
+            GitTool.storedTextFlaw(reached));
+        assertEquals("...and this is that masking", "https://host/r.git?***", //$NON-NLS-1$ //$NON-NLS-2$
+            GitTool.redactCredentialUrls(reached));
+        // A query that opens before the path does, too: there the redaction masks from the '?' on.
+        String noPath = "https://host?a=b/c@d"; //$NON-NLS-1$
+        assertNull("a URL with no path at all is judged the same way", //$NON-NLS-1$
+            GitTool.storedTextFlaw(noPath));
+        assertEquals("...and its query is masked whole", "https://host?***", //$NON-NLS-1$ //$NON-NLS-2$
+            GitTool.redactCredentialUrls(noPath));
+        // ...but whitespace INSIDE that query ends the masking, and what follows is verbatim again -
+        // so the accepted over-reach on a delimiter-before-the-'@' authority still fires there.
+        assertEquals("a query the redaction abandons mid-way is refused", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://host?a\u0020b@c")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredTextFlawRefusesARawControlCharacterOnItsOwn()
+    {
+        // The second thing the redaction cannot do: it masks credentials, it never REMOVES a byte.
+        // So a C0/DEL character reaches the caller verbatim whatever else is in the text - here with
+        // no credential anywhere, which is why the credential rule alone would let it through.
+        assertEquals("a control byte in a URL is copied into the response verbatim", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.CONTROL_CHARACTER,
+            GitTool.storedTextFlaw("https://exa\u001bmple.com/r.git")); //$NON-NLS-1$
+        assertEquals("...and one in a remote NAME just as much - 'remote -v' prints that too", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.CONTROL_CHARACTER,
+            GitTool.storedTextFlaw("ori\u001bgin")); //$NON-NLS-1$
+        assertEquals("...DEL included", GitTool.StoredRemoteFlaw.CONTROL_CHARACTER, //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/r\u007f.git")); //$NON-NLS-1$
+
+        // The CREDENTIAL diagnosis outranks it when both are present, and it has to: every ASCII
+        // whitespace character but the plain space is itself a C0 byte, so a control-first order
+        // would relabel the whitespace-split credentials this check was written for.
+        assertEquals("a tab-split credential is a CREDENTIAL, not a stray control byte", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://user:s3cr3t\tok@example.com/r.git")); //$NON-NLS-1$
+
+        // And it stays off everything legitimate: a Unicode space is not a control character, and
+        // neither is anything in an ordinary remote.
+        assertNull("U+2003 is no control character - such a credential is still REDACTED", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://secret\u2003name@example.com/r.git")); //$NON-NLS-1$
+        assertNull("an ordinary remote carries none", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/team/my\u0020repo.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredTextFlawJudgesAHugeNameWithoutCopyingIt()
+    {
+        // A subsection name is untrusted text of unbounded length, and it is judged BEFORE
+        // safeRemoteName's bounded buffer ever runs. A slice taken to decide - 'the tail after
+        // scheme://', which has no '/' to stop at here - would let such a name charge the check for
+        // its whole size on every remote-reaching command.
+        String huge = "https://" + "a".repeat(4_000_000); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Positive control: the meter has to be able to SEE a copy of this string, or "the check
+        // allocates little" would be true of a measurement that sees nothing at all.
+        long copying = allocatedBy(() -> huge.substring("https://".length())); //$NON-NLS-1$
+        assertTrue("the allocation meter must see a copy of the name (" + copying + " bytes)", //$NON-NLS-1$ //$NON-NLS-2$
+            copying >= huge.length());
+
+        long judging = allocatedBy(() -> GitTool.storedTextFlaw(huge));
+
+        assertTrue("judging the name must not copy it: " + judging + " bytes against " + copying //$NON-NLS-1$ //$NON-NLS-2$
+            + " for one copy", judging < copying / 8); //$NON-NLS-1$
+        // ...and it still answers correctly on it: an authority of 4 million letters carries no '@'.
+        assertNull("a huge but harmless name must not be refused", GitTool.storedTextFlaw(huge)); //$NON-NLS-1$
+    }
+
+    /** Where a measured result is parked, so the JIT cannot drop the work as dead code. */
+    private static volatile Object allocationSink;
+
+    /**
+     * Bytes allocated by the calling thread while {@code work} runs.
+     * <p>
+     * Read from the thread MX bean rather than from the heap, so a garbage collection in the middle
+     * cannot hide the allocation. Reached by REFLECTION through the platform class loader:
+     * {@code com.sun.management} is not a {@code java.*} package, so a direct reference would need
+     * this test fragment to import it from OSGi - and the measurement is a test concern, not a
+     * reason to widen the bundle's wiring.
+     * <p>
+     * Nothing here is assumed away. When the bean cannot meter allocation it answers {@code -1} and
+     * the caller's positive control - which demands that a real copy be SEEN - fails loudly, rather
+     * than a skipped case reporting success for a measurement that never happened.
+     *
+     * @param work the work to measure; its result is parked so it cannot be optimised away
+     * @return the bytes allocated by this thread during it, or a value that fails the positive
+     *         control when this JVM cannot meter it
+     */
+    private static long allocatedBy(java.util.function.Supplier<Object> work)
+    {
+        // Warm up: the first call through a path allocates its own bookkeeping, which would
+        // otherwise be counted against the work under test.
+        allocationSink = work.get();
+        long before = threadAllocatedBytes();
+        allocationSink = work.get();
+        return threadAllocatedBytes() - before;
+    }
+
+    /**
+     * @return the running thread's allocation counter, or {@code 0} when this JVM does not keep one
+     */
+    private static long threadAllocatedBytes()
+    {
+        try
+        {
+            Class<?> hotspotBean = Class.forName("com.sun.management.ThreadMXBean", false, //$NON-NLS-1$
+                ClassLoader.getPlatformClassLoader());
+            Object bean = java.lang.management.ManagementFactory.getThreadMXBean();
+            if (!hotspotBean.isInstance(bean))
+            {
+                return 0;
+            }
+            Object bytes = hotspotBean.getMethod("getThreadAllocatedBytes", long.class) //$NON-NLS-1$
+                .invoke(bean, Thread.currentThread().getId());
+            return Math.max(0, ((Long)bytes).longValue());
+        }
+        catch (ReflectiveOperationException | ClassCastException e)
+        {
+            return 0;
+        }
+    }
+
+    @Test
     public void testSafeRemoteNameKeepsTheRefusalActionable()
     {
         assertEquals("origin", GitTool.safeRemoteName("origin")); //$NON-NLS-1$ //$NON-NLS-2$
