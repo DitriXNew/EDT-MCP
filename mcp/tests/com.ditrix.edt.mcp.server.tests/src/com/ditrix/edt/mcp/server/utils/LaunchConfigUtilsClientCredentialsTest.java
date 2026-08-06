@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -16,16 +17,26 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 /**
  * Tests for the client-credential half of {@link LaunchConfigUtils} (issue #359): the attribute
@@ -50,6 +61,23 @@ public class LaunchConfigUtilsClientCredentialsTest
     private static final String PASSWORD = "s3cret";
 
     private static final String CONFIG_NAME = "TestConfiguration - thin client";
+
+    /**
+     * The password the EDT-log cases carry. Deliberately unlike anything else in the run: the log is
+     * shared with every other test, so the marker has to be unmistakably ours.
+     */
+    private static final String LOG_PROBE_PASSWORD = "s3cret-edt-log-probe-pw";
+
+    /**
+     * Marker standing for PLATFORM-PRODUCED text in the failure the log cases drive. It is not a
+     * secret itself: it makes "no platform message travels to the log" testable, which the password
+     * check alone cannot do - a scrubbed platform message would pass that one and still be the text
+     * this fix withholds.
+     */
+    private static final String LOG_PROBE_PLATFORM_TEXT = "platform-text-edt-log-probe";
+
+    /** Anchor that picks OUR entries out of a log every test in the run writes to. */
+    private static final String LOG_ANCHOR = "client credentials";
 
     // ==================== The pure attribute mapping ====================
 
@@ -370,6 +398,139 @@ public class LaunchConfigUtilsClientCredentialsTest
         assertEquals("boom", LaunchConfigUtils.withoutSecret("boom", ""));
         assertEquals("boom", LaunchConfigUtils.withoutSecret("boom", null));
         assertNull(LaunchConfigUtils.withoutSecret(null, "s3cret"));
+    }
+
+    // ==================== The EDT log: the other copy of the same failure ====================
+
+    /**
+     * Whether {@code secret} appears anywhere in a status tree — its own message or that of any
+     * child. Eclipse writes a multi-status's children as nested log entries, so checking only the
+     * top message would call a leak clean.
+     *
+     * @param status the status to inspect
+     * @param secret the value that must not be there
+     * @return {@code true} as soon as the secret is found
+     */
+    private static boolean containsDeep(IStatus status, String secret)
+    {
+        if (status.getMessage() != null && status.getMessage().contains(secret))
+        {
+            return true;
+        }
+        for (IStatus child : status.getChildren())
+        {
+            if (containsDeep(child, secret))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Test
+    public void theEdtLogLineNamesTheExceptionTypesAndNoPlatformText()
+    {
+        // What the log line RENDERS. The failing save is the save of the attribute that HOLDS the
+        // password, so the platform's own text is exactly where that value can surface - only the
+        // exception types travel, and a class name can carry no attribute value.
+        CoreException thrown = new CoreException(new Status(IStatus.ERROR, "test",
+            "attribute value '" + LOG_PROBE_PASSWORD + "' was rejected",
+            new IllegalStateException("the writer saw '" + LOG_PROBE_PASSWORD + "'")));
+
+        String line = LaunchConfigUtils.saveFailureLog(thrown);
+
+        assertFalse("no platform-produced text may reach the log line: " + line,
+            line.contains(LOG_PROBE_PASSWORD));
+        assertTrue("the line must still say what failed: " + line, line.contains(LOG_ANCHOR));
+        assertTrue("the exception type is what keeps the line usable: " + line,
+            line.contains(CoreException.class.getName()));
+        assertTrue("the cause's type must be named too - a CoreException's cause is its status's "
+            + "own exception, and that is usually the real failure: " + line,
+            line.contains(IllegalStateException.class.getName()));
+    }
+
+    @Test
+    public void aFailedSaveAttachesNoThrowableToTheEdtLog() throws CoreException
+    {
+        // The case above pins what saveFailureLog RENDERS; this one pins what the failure branch
+        // actually HANDS to the log. They are different claims: 'logError(sanitized, e)' would keep
+        // every assertion above green while Eclipse wrote the exception's message, its whole cause
+        // chain and - for a CoreException - the statuses behind it into a permanent workspace file.
+        // So the plug-in's own log is listened to while the production path runs, and the recorded
+        // Status is read back.
+        IStatus child = new Status(IStatus.ERROR, "test",
+            "attribute value '" + LOG_PROBE_PASSWORD + "' was rejected");
+        MultiStatus status = new MultiStatus("test", 0, new IStatus[] { child },
+            "could not save /P/x.launch (" + LOG_PROBE_PLATFORM_TEXT + ")",
+            new IllegalStateException("the writer saw '" + LOG_PROBE_PASSWORD + "'"));
+        CoreException thrown = new CoreException(status);
+
+        // Positive controls: the fixture is only a fixture if the password really is where Eclipse
+        // renders it. The password is kept OUT of the top message and put in the cause and the child
+        // status instead - scrubbing e.getMessage(), which is all the ANSWER needs, leaves both of
+        // those routes wide open, so a case whose secret sat in the top message would prove less.
+        assertFalse("the password must sit in the routes the answer's scrubbing cannot reach",
+            thrown.getMessage().contains(LOG_PROBE_PASSWORD));
+        // ...and the top message carries its own marker, so "no platform text at all" is testable:
+        // without it, appending a scrubbed e.getMessage() to the log line would keep this green.
+        assertTrue("positive control: the top message must carry its own marker",
+            thrown.getMessage().contains(LOG_PROBE_PLATFORM_TEXT));
+        StringWriter rendered = new StringWriter();
+        thrown.printStackTrace(new PrintWriter(rendered));
+        assertTrue("positive control: the cause chain must really carry the password",
+            rendered.toString().contains(LOG_PROBE_PASSWORD));
+        assertTrue("positive control: the child status must really carry the password",
+            containsDeep(status, LOG_PROBE_PASSWORD));
+
+        ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
+        ILaunchConfiguration config = localConfig(copy);
+        doThrow(thrown).when(copy).doSave();
+
+        Bundle bundle = FrameworkUtil.getBundle(LaunchConfigUtils.class);
+        assertNotNull("this case can only observe the log from inside OSGi; without the bundle it "
+            + "would 'pass' by seeing nothing at all", bundle);
+        ILog log = Platform.getLog(bundle);
+        List<IStatus> recorded = new ArrayList<>();
+        ILogListener listener = (logged, plugin) -> recorded.add(logged);
+        String error;
+        log.addLogListener(listener);
+        try
+        {
+            error = LaunchConfigUtils.applyClientCredentials(config, USER, LOG_PROBE_PASSWORD, false);
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+
+        assertNotNull("a failed save must still be reported to the caller", error);
+        List<IStatus> ours = new ArrayList<>();
+        for (IStatus entry : recorded)
+        {
+            // The log is shared with the rest of the run, so only this failure's entries are judged.
+            if (entry.getMessage() != null && entry.getMessage().contains(LOG_ANCHOR))
+            {
+                ours.add(entry);
+            }
+        }
+        // Positive control: a listener that recorded nothing would make this case pass without ever
+        // having looked at a log entry.
+        assertFalse("the failure branch must really log, or nothing here was observed", ours.isEmpty());
+        for (IStatus entry : ours)
+        {
+            assertNull("no throwable may be attached - Eclipse writes its message, its cause chain "
+                + "and the statuses behind a CoreException, and the value that failed to save here "
+                + "is the password: " + entry.getMessage(), entry.getException());
+            assertFalse("nor may the password reach the logged status itself: " + entry.getMessage(),
+                containsDeep(entry, LOG_PROBE_PASSWORD));
+            // No platform-produced text at all, not just no password: masking is literal, and the
+            // platform can quote a value escaped or re-encoded. This is what catches a log line
+            // built as saveFailureLog(e) + e.getMessage(), which the password check alone would not.
+            assertFalse("no platform-produced text may travel to the log: " + entry.getMessage(),
+                containsDeep(entry, LOG_PROBE_PLATFORM_TEXT));
+            assertTrue("the entry must still name what failed: " + entry.getMessage(),
+                entry.getMessage().contains(CoreException.class.getName()));
+        }
     }
 
     @Test

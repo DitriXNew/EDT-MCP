@@ -49,6 +49,9 @@ public final class LaunchConfigUtils
      */
     public static final int LAUNCH_POLL_INTERVAL_MS = 100;
 
+    /** How many links of a cause chain {@link #saveFailureLog} names; a chain can be cyclic. */
+    private static final int MAX_LOGGED_CAUSE_DEPTH = 5;
+
     /** 1C:EDT Runtime Client launch configuration type id. */
     public static final String LAUNCH_CONFIG_TYPE_ID = "com._1c.g5.v8.dt.launching.core.RuntimeClient"; //$NON-NLS-1$
 
@@ -680,6 +683,45 @@ public final class LaunchConfigUtils
     }
 
     /**
+     * The EDT-log line for a failed credential write: what failed, and the exception TYPES behind
+     * it — never any message the platform produced.
+     *
+     * <p>The failing call is a save of the launch attribute that HOLDS the infobase password, so
+     * the platform's own text is exactly where that value can surface, and it does so by three
+     * separate routes once the throwable is attached to a {@link org.eclipse.core.runtime.Status}:
+     * Eclipse renders the throwable's stack trace (its {@code toString()}, i.e. the message, and
+     * every {@code Caused by:} link), and for a {@link CoreException} it additionally writes the
+     * statuses behind it — the exception's own {@link org.eclipse.core.runtime.IStatus} and that
+     * status's children — as nested log entries. Masking cannot be relied on there: the workspace
+     * log is a permanent file read by whoever opens the workspace, while the response the caller
+     * gets is a one-off answer to the very agent that supplied the password, so the two are
+     * scrubbed to different depths on purpose. Withholding the text closes all three routes at
+     * once, and a class name can carry no attribute value.
+     *
+     * <p>The chain is walked by type and BOUNDED, because a cause chain can be cyclic.
+     *
+     * @param failure the exception the save threw (may be {@code null})
+     * @return the message to log; it embeds no platform-produced text
+     */
+    static String saveFailureLog(Throwable failure)
+    {
+        StringBuilder types = new StringBuilder();
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_LOGGED_CAUSE_DEPTH; depth++)
+        {
+            if (depth > 0)
+            {
+                types.append(" <- "); //$NON-NLS-1$
+            }
+            types.append(current.getClass().getName());
+            current = current.getCause();
+        }
+        return "Could not store client credentials on the launch configuration (" + types //$NON-NLS-1$
+            + "); the failure's message is withheld because it can quote the attribute value that " //$NON-NLS-1$
+            + "failed to save, which on this path is the infobase password"; //$NON-NLS-1$
+    }
+
+    /**
      * Writes {@link #clientCredentialAttributes} onto a launch configuration, so the launched
      * CLIENT authenticates by itself.
      *
@@ -725,7 +767,11 @@ public final class LaunchConfigUtils
         }
         catch (CoreException e)
         {
-            Activator.logError("Could not store client credentials on the launch configuration", e); //$NON-NLS-1$
+            // Only the exception TYPES reach the EDT log (see saveFailureLog): the throwable itself
+            // is NOT attached, because Eclipse would write its message, its cause chain and the
+            // statuses behind a CoreException into a permanent workspace file - and the value that
+            // failed to save here is the infobase password.
+            Activator.logError(saveFailureLog(e), null);
             // The message is the platform's own and normally names the resource, not the value that
             // failed to save - but "normally" is not a guarantee, and this string goes back out to
             // the caller in a tool whose contract is that the password is never returned.
