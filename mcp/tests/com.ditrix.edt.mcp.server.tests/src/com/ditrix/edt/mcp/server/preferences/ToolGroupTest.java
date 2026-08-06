@@ -120,6 +120,9 @@ public class ToolGroupTest
     {
         assertEquals(ToolGroup.CORE, ToolGroup.getGroupForTool("get_edt_version"));
         assertEquals(ToolGroup.PROBLEMS, ToolGroup.getGroupForTool("get_project_errors"));
+        assertEquals("code_review is an external-process tool the Tools tab / Disable All must be able "
+            + "to manage, so it must be reachable through ToolGroup like every other registered tool",
+            ToolGroup.PROBLEMS, ToolGroup.getGroupForTool("code_review"));
         assertEquals(ToolGroup.APPLICATIONS, ToolGroup.getGroupForTool("list_configurations"));
         assertEquals(ToolGroup.DEBUG, ToolGroup.getGroupForTool("set_breakpoint"));
         assertEquals(ToolGroup.BSL_CODE, ToolGroup.getGroupForTool("read_module_source"));

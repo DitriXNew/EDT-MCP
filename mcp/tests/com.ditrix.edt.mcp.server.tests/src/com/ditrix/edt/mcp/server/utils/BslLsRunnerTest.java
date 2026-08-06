@@ -291,13 +291,51 @@ public class BslLsRunnerTest
     }
 
     @Test
+    public void testCompareVersionsStableReleaseOutranksPreReleaseOfSameCoreVersion()
+    {
+        // The exact bug reported against the first fix: "0-rc1" fell into the string fallback
+        // and compared GREATER than "0" (longer string, same prefix), so autodetect picked the
+        // RC over the stable release of the identical version - backwards SemVer precedence.
+        assertTrue("1.10.0 must outrank 1.10.0-rc1 (a stable release beats any pre-release)",
+            BslLsRunner.compareVersions("1.10.0", "1.10.0-rc1") > 0);
+        assertTrue("1.10.0-rc1 must be older than 1.10.0",
+            BslLsRunner.compareVersions("1.10.0-rc1", "1.10.0") < 0);
+    }
+
+    @Test
+    public void testCompareVersionsPreReleaseIdentifiersComparedInOrder()
+    {
+        assertTrue("rc1 must be older than rc2 (same core version, later pre-release identifier)",
+            BslLsRunner.compareVersions("1.10.0-rc1", "1.10.0-rc2") < 0);
+        assertTrue("rc2 must be newer than rc1",
+            BslLsRunner.compareVersions("1.10.0-rc2", "1.10.0-rc1") > 0);
+    }
+
+    @Test
+    public void testCompareVersionsNumericPreReleaseIdentifiersComparedNumericallyNotLexically()
+    {
+        // A dot-separated NUMERIC pre-release identifier must compare numerically ("9" < "10"),
+        // not lexically (where "...rc.10" would wrongly sort before "...rc.9").
+        assertTrue("1.10.0-rc.9 must be older than 1.10.0-rc.10",
+            BslLsRunner.compareVersions("1.10.0-rc.9", "1.10.0-rc.10") < 0);
+    }
+
+    @Test
+    public void testCompareVersionsLongerPreReleaseIdentifierListOutranksSharedPrefix()
+    {
+        // SemVer 11.4.4: when every shared leading identifier is equal, the longer list wins.
+        assertTrue("1.10.0-rc.1.1 must be newer than 1.10.0-rc.1",
+            BslLsRunner.compareVersions("1.10.0-rc.1.1", "1.10.0-rc.1") > 0);
+    }
+
+    @Test
     public void testCompareVersionsPreReleaseSuffixDoesNotThrow()
     {
-        // Full SemVer pre-release precedence is not implemented (see the method's javadoc) - this
-        // only needs to stay deterministic and not throw on a non-numeric trailing component.
-        int result = BslLsRunner.compareVersions("1.10.0-rc1", "1.10.0");
+        // Defensive: even a pre-release suffix that is not a plain identifier list must stay
+        // deterministic rather than throw.
+        int result = BslLsRunner.compareVersions("1.10.0-!!weird??", "1.10.0-###other");
         assertEquals("the same comparison must be stable across repeated calls",
-            result, BslLsRunner.compareVersions("1.10.0-rc1", "1.10.0"));
+            result, BslLsRunner.compareVersions("1.10.0-!!weird??", "1.10.0-###other"));
     }
 
     @Test
@@ -353,6 +391,23 @@ public class BslLsRunnerTest
         assertNull(BslLsRunner.scanForExecJar(dir));
     }
 
+    @Test
+    public void testScanForExecJarPrefersStableReleaseOverPreReleaseOfTheSameVersion() throws IOException
+    {
+        // The integration case DitriX's re-check asked for: a stable release and an RC of the
+        // SAME core version sitting side by side must resolve to the STABLE one, not the RC.
+        File dir = newFolder("stable-and-rc-engine");
+        assertTrue(new File(dir, "bsl-language-server-1.10.0-rc1-exec.jar").createNewFile());
+        assertTrue(new File(dir, "bsl-language-server-1.10.0-exec.jar").createNewFile());
+        assertTrue(new File(dir, "bsl-language-server-1.9.0-exec.jar").createNewFile());
+
+        File best = BslLsRunner.scanForExecJar(dir);
+
+        assertNotNull(best);
+        assertEquals("the stable 1.10.0 release must win over both the 1.10.0-rc1 pre-release "
+            + "and the older 1.9.0 stable release", "bsl-language-server-1.10.0-exec.jar", best.getName());
+    }
+
     // ==================== Managed fixture process: real subprocess plumbing without the real engine ====================
 
     @Test
@@ -369,6 +424,36 @@ public class BslLsRunnerTest
 
         assertTrue("fixture run must succeed: " + (result.ok() ? "" : result.errorMessage()), result.ok()); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull(result.report());
+    }
+
+    @Test
+    public void testExecuteSubprocessCwdIsWorkspaceDirNotTheNarrowedSrcDir() throws Exception
+    {
+        // Regression for a real bug found via live e2e (not any review comment): the actual BSL
+        // Language Server derives each finding's reported "path" from the PROCESS CWD, not from
+        // --srcDir. A single-module review narrows request.srcDir to that module's own containing
+        // folder; if the subprocess CWD were set to srcDir directly (as it once was), the engine's
+        // path construction doubles the module's folder segment into a non-existent path that
+        // CodeReviewTool's exact-match scoping can never find - silently emptying EVERY
+        // module-scoped review. The fixture reports its own System.getProperty("user.dir") as a
+        // finding path, so this pins the actual subprocess CWD without depending on the real
+        // engine's undocumented, version-specific path-construction behaviour.
+        File fixtureJar = buildFixtureJar();
+        Assume.assumeTrue("no system Java compiler available to build the fixture jar - skip", //$NON-NLS-1$
+            fixtureJar != null);
+        File workspaceRoot = newFolder("fixture-workspace-root"); //$NON-NLS-1$
+        File srcDir = new File(workspaceRoot, "CommonModules/Calc"); //$NON-NLS-1$
+        assertTrue(srcDir.mkdirs());
+        Files.write(srcDir.toPath().resolve("FIXTURE_BEHAVIOR.txt"), "report-cwd".getBytes()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        BslLsRunner.Request request = new BslLsRunner.Request(srcDir).workspaceDir(workspaceRoot)
+            .jarOverride(fixtureJar).javaOverride(currentJavaExecutable());
+        BslLsRunner.Result result = BslLsRunner.run(request);
+
+        assertTrue("fixture run must succeed: " + (result.ok() ? "" : result.errorMessage()), result.ok()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the subprocess CWD must be the workspace root, not the narrowed srcDir",
+            workspaceRoot.getCanonicalFile(),
+            new File(result.report().findings().get(0).path()).getCanonicalFile());
     }
 
     @Test
@@ -390,6 +475,30 @@ public class BslLsRunnerTest
 
         assertTrue("a huge-stdout child must still complete and parse: " //$NON-NLS-1$
             + (result.ok() ? "" : result.errorMessage()), result.ok()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFixtureRunWithNonZeroExitIsRejectedEvenWithAValidReportPresent() throws Exception
+    {
+        // The exact bug reported against the engine wrapper: a process that exits non-zero can
+        // still have left a well-formed bsl-json.json behind (verified empirically against the
+        // real engine that a CLEAN run - even one that reports diagnostics - always exits 0, so a
+        // non-zero exit is genuinely an operational failure, not "found problems"). run() must
+        // refuse to trust that report rather than parse and report success.
+        File fixtureJar = buildFixtureJar();
+        Assume.assumeTrue("no system Java compiler available to build the fixture jar - skip", //$NON-NLS-1$
+            fixtureJar != null);
+        File srcDir = newFolder("fixture-src-nonzero-exit"); //$NON-NLS-1$
+        Files.write(srcDir.toPath().resolve("FIXTURE_BEHAVIOR.txt"), "nonzero-exit".getBytes()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        BslLsRunner.Request request = new BslLsRunner.Request(srcDir)
+            .jarOverride(fixtureJar).javaOverride(currentJavaExecutable()).timeoutSeconds(60);
+        BslLsRunner.Result result = BslLsRunner.run(request);
+
+        assertFalse("a non-zero exit must be rejected even though a report file was written", result.ok()); //$NON-NLS-1$
+        assertNotNull(result.errorMessage());
+        assertTrue("the error must name the actual exit status: " + result.errorMessage(), //$NON-NLS-1$
+            result.errorMessage().contains("status 7")); //$NON-NLS-1$
     }
 
     @Test
@@ -427,8 +536,12 @@ public class BslLsRunnerTest
      * [--configuration <c>]}, exactly {@link BslLsRunner#buildCommand}'s shape): it locates
      * {@code --srcDir}/{@code --outputDir} among its own args, reads an optional
      * {@code FIXTURE_BEHAVIOR.txt} sentinel file from {@code --srcDir} (defaulting to
-     * {@code "normal"} when absent) and either writes a small valid {@code bsl-json.json},
-     * floods stdout, or writes an oversized report, before exiting 0. Compiled in-process via
+     * {@code "normal"} when absent) and either writes a small valid {@code bsl-json.json} then
+     * exits 0, floods stdout then exits 0, writes an oversized report then exits 0, writes a
+     * valid report then exits 7 ({@code "nonzero-exit"} - simulates an operational failure that
+     * still leaves a report file behind), or reports its own {@code user.dir} system property as
+     * a finding's path ({@code "report-cwd"} - pins the actual subprocess working directory).
+     * Compiled in-process via
      * {@link ToolProvider#getSystemJavaCompiler()} (needs a JDK, not a bare JRE, running the test) so
      * no extra Maven module/dependency is needed just for this fixture.
      *
@@ -468,6 +581,12 @@ public class BslLsRunnerTest
             + "      for (int i = 0; i < 60; i++) out.write(chunk);\n" //$NON-NLS-1$
             + "      out.write(\"\\\"}]}\".getBytes());\n" //$NON-NLS-1$
             + "      out.close();\n" //$NON-NLS-1$
+            + "    } else if (\"nonzero-exit\".equals(behavior)) {\n" //$NON-NLS-1$
+            + "      java.nio.file.Files.write(report.toPath(), \"{\\\"fileinfos\\\":[]}\".getBytes());\n" //$NON-NLS-1$
+            + "      System.exit(7);\n" //$NON-NLS-1$
+            + "    } else if (\"report-cwd\".equals(behavior)) {\n" //$NON-NLS-1$
+            + "      String cwdUri = new java.io.File(System.getProperty(\"user.dir\")).toURI().toString();\n" //$NON-NLS-1$
+            + "      java.nio.file.Files.write(report.toPath(), (\"{\\\"fileinfos\\\":[{\\\"path\\\":\\\"\" + cwdUri + \"\\\",\\\"diagnostics\\\":[{}]}]}\").getBytes());\n" //$NON-NLS-1$
             + "    } else {\n" //$NON-NLS-1$
             + "      java.nio.file.Files.write(report.toPath(), \"{\\\"fileinfos\\\":[]}\".getBytes());\n" //$NON-NLS-1$
             + "    }\n" //$NON-NLS-1$

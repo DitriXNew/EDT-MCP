@@ -1,6 +1,6 @@
 # code_review
 
-Review BSL code quality with the BSL Language Server engine: reports code-metric defects (magic number, cyclomatic/cognitive complexity, method/line length, nesting, …) that EDT's own checks do not cover. Each finding is a defect to FIX: it carries the rule, severity, Module path and Line, ready for read_module_source / write_module_source — fix each, then re-run code_review to verify. Scope the whole project or one module; filter by severity or rule. Needs the engine jar (see the guide). Full parameters and examples: call get_tool_guide('code_review').
+Review BSL code quality with the BSL Language Server engine: its FULL diagnostic catalog (magic number, cyclomatic/cognitive complexity, method/line length, nesting, naming, unused code, …) — this overlaps with EDT's own v8-code-style checks (get_project_errors), it is not a strict delta over them; use excludeRule to drop rule ids you already get elsewhere. Each finding is a defect to FIX: it carries the rule, severity, Module path and Line, ready for read_module_source / write_module_source — fix each, then re-run code_review to verify. Scope the whole project or one module; filter by severity, rule or excludeRule. Needs the engine jar (see the guide). Full parameters and examples: call get_tool_guide('code_review').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -9,15 +9,16 @@ Review BSL code quality with the BSL Language Server engine: reports code-metric
 | modulePath | — | string | Optional: narrow the review to a single module, path from src/ (e.g. 'CommonModules/Calc/Module.bsl'). Omit to review the whole configuration. |
 | severity | — | string (one of: error, warning, information, hint) | Optional: minimum severity to report (error > warning > information > hint). Omit to report all. |
 | rule | — | string | Optional: report only diagnostics whose rule id contains this substring (e.g. 'Magic', 'Complexity'). |
+| excludeRule | — | string | Optional: drop diagnostics whose rule id contains this substring — e.g. to exclude rules you already get from get_project_errors and avoid double-reporting the same issue. |
 | limit | — | integer | Max findings; default 100, max 1000 (optional). |
 
 ## Guide
 Review BSL code quality by running the external BSL Language Server engine over a project (or a single module) and reporting its diagnostics as an actionable table. Every finding is a concrete defect located by `Module path` + `Line` — the same coordinates `read_module_source` and `write_module_source` use — so the intended workflow is **review → fix → re-run to verify**.
 
 ## When to use
-- To surface code-metric defects EDT's own checks do not raise: magic numbers/dates, cyclomatic & cognitive complexity, method/line length, parameter counts, nesting, deprecated calls, service tags, and more.
+- To run the BSL Language Server's FULL diagnostic catalog over your code: magic numbers/dates, cyclomatic & cognitive complexity, method/line length, parameter counts, nesting, deprecated calls, unused code, naming, service tags, and well over a hundred more rules.
 - As the first step of an automated clean-up loop: run `code_review`, fix each finding in place with `write_module_source`, then run `code_review` again (optionally scoped to the one module) to confirm the finding is gone.
-- Prefer `get_project_errors` when you want EDT's configuration-development standards (`v8-code-style`) — that half is already covered there. `code_review` is the BSL Language Server metric layer on top.
+- **This is NOT a strict delta over `get_project_errors`.** Both `code_review` and EDT's own `v8-code-style` (surfaced by `get_project_errors`) are BSL static analyzers with a PARTIALLY SHARED rule set, so some findings here will duplicate ones you already saw there. Use `get_project_errors` for EDT's native check surface, `code_review` for the (larger, partially different) BSL Language Server rule set, or run both to cross-check. Pass `excludeRule` to drop rule ids you already get elsewhere so they stop double-reporting.
 
 ## How the findings should be handled
 The rows are defects to FIX, not just a report:
@@ -30,7 +31,8 @@ The rows are defects to FIX, not just a report:
 - `modulePath` — narrow the review to a single module, given as a path from `src/` (e.g. `CommonModules/Calc/Module.bsl`). Omit to review the whole configuration. This is the same path form the `Module path` column returns, so you can feed a row straight back in.
 - `severity` — minimum severity to report: `error` > `warning` > `information` > `hint`. Omit to report every severity. (These are the engine's LSP severities, independent of EDT's BLOCKER/MAJOR/… taxonomy.)
 - `rule` — report only diagnostics whose rule id contains this substring, case-insensitive (e.g. `Magic`, `Complexity`, `Unused`). Handy for a focused pass or a targeted re-verify.
-- `limit` — maximum number of rows to render; default 100, capped at 1000. The summary counts above the table always reflect the full report, not the capped table.
+- `excludeRule` — drop diagnostics whose rule id contains this substring, case-insensitive — e.g. to exclude rules you already get from `get_project_errors` and avoid reviewing the same issue twice.
+- `limit` — maximum number of rows to render; default 100, capped at 1000. The summary counts above the table reflect the requested SCOPE (the whole project, or just the target module when `modulePath` narrows it) — `severity`/`rule`/`excludeRule` narrow only which rows are DISPLAYED in the table below, not the summary counts.
 
 ## Output
 - Markdown. A heading with the scope, a one-line summary of counts per severity, a short instruction to fix-and-re-verify, then a table with columns: `Severity`, `Rule`, `Module path`, `Line`, `Message`, `Docs` (the rule's documentation URL).
@@ -52,12 +54,15 @@ The rows are defects to FIX, not just a report:
 - One module, fast re-verify after a fix: `{projectName: "MyProject", modulePath: "CommonModules/Calc/Module.bsl"}`.
 - Only the important ones: `{projectName: "MyProject", severity: "warning"}`.
 - Only magic numbers: `{projectName: "MyProject", rule: "Magic"}`.
+- Skip a rule already covered elsewhere: `{projectName: "MyProject", excludeRule: "SemicolonPresence"}`.
 
 ## Notes & gotchas
 - Line numbers are 1-based (converted from the engine's 0-based LSP output), matching `read_module_source`/`set_breakpoint`.
 - `Module path` is relativized to `src/`; a finding outside `src/` (rare) shows its absolute path instead.
 - The engine analyzes files on disk. If you just edited a module through the model, ensure it is exported to disk (the write tools do this) before reviewing, or the review may read a stale file.
 - A large configuration can take a while to analyze; scope with `modulePath` for quick iterative checks.
+- The engine's report is capped at 50 MB; a report larger than that (a pathological run, or a misconfigured/corrupt engine process) is rejected with an actionable error instead of being read into memory — narrow the scope with `modulePath` and re-run.
+- A `modulePath` must resolve INSIDE the requested project's own `src/` — an absolute path or one using `..` to point elsewhere is rejected.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

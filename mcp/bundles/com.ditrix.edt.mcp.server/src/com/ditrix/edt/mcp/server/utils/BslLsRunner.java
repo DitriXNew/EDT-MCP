@@ -320,9 +320,21 @@ public final class BslLsRunner
         // Working directory MUST share a filesystem root with the analyzed sources: the engine
         // relativizes each source file against the process CWD (getFileInfoFromFile), which throws
         // "'other' has different root" when CWD and the sources are on different drives (e.g. a temp
-        // dir on C: vs a project on D:, common on Windows). The scope dir is always under the project,
-        // so use it as CWD; the outputDir stays an absolute path and may live on any drive.
-        pb.directory(request.srcDir);
+        // dir on C: vs a project on D:, common on Windows). resolveWorkspaceDir(request) is always
+        // an ANCESTOR of (or equal to) request.srcDir, so it shares the same root and satisfies that
+        // constraint just as well as srcDir itself would.
+        // <p>
+        // It must NOT be request.srcDir directly, though - verified against the real engine: each
+        // finding's reported "path" is built from the process CWD joined with a metadata-relative
+        // fragment (e.g. "CommonModules/Calc/Module.bsl", derived from the module's mdoRef), NOT
+        // from --srcDir. For a single-module review request.srcDir narrows to that module's OWN
+        // containing folder (".../src/CommonModules/Calc") - using it as CWD makes the engine
+        // report a DOUBLED, non-existent path (".../src/CommonModules/Calc/CommonModules/Calc/
+        // Module.bsl"), which then can never match CodeReviewTool's targetAbsPath and silently
+        // empties every module-scoped review. Using the STABLE workspace root as CWD instead (the
+        // same one --workspaceDir already pins, see buildCommand) keeps the reported path correct
+        // regardless of how narrow --srcDir is for a given run.
+        pb.directory(resolveWorkspaceDir(request));
         pb.redirectErrorStream(true);
 
         Process process;
@@ -361,10 +373,21 @@ public final class BslLsRunner
         join(drain);
 
         int exit = process.exitValue();
+        // Checked BEFORE trusting any report the process may have left behind: a clean analyze run
+        // exits 0 REGARDLESS of how many diagnostics it found (verified against the real engine -
+        // findings alone never produce a non-zero exit), so a non-zero exit means an operational
+        // failure (a crash, a bad CLI arg, an unreadable --configuration) - a stray or partially
+        // written bsl-json.json from such a run must not be parsed and reported as success.
+        if (exit != 0)
+        {
+            return Result.error("BSL Language Server exited with status " + exit + " (a clean analyze run " //$NON-NLS-1$ //$NON-NLS-2$
+                + "exits 0 even when it reports diagnostics, so this is an operational failure, not " //$NON-NLS-1$
+                + "findings). Engine output: " + tail(captured.toString())); //$NON-NLS-1$
+        }
         Path reportPath = outputDir.resolve(REPORT_FILE);
         if (!Files.isRegularFile(reportPath))
         {
-            return Result.error("BSL Language Server produced no JSON report (exit " + exit + "). " //$NON-NLS-1$ //$NON-NLS-2$
+            return Result.error("BSL Language Server produced no JSON report despite exiting 0. " //$NON-NLS-1$
                 + "Engine output: " + tail(captured.toString())); //$NON-NLS-1$
         }
 
@@ -497,17 +520,65 @@ public final class BslLsRunner
     }
 
     /**
-     * Compares two dotted version strings (e.g. {@code "0.28.0"}, {@code "1.10.0"}) NUMERICALLY,
-     * component by component - NOT lexicographically, where {@code "1.9.0"} would wrongly sort
-     * after {@code "1.10.0"}. A version with fewer components is padded with {@code 0} for the
-     * comparison (so {@code "1.9"} == {@code "1.9.0"}). A non-numeric component (e.g. a pre-release
-     * suffix glued onto the last segment, like {@code "0-rc1"}) falls back to a plain string
-     * comparison for just THAT component - full SemVer pre-release precedence is not implemented,
-     * this only needs to stay deterministic and not throw on the rare pre-release jar name.
+     * Compares two dotted version strings (e.g. {@code "0.28.0"}, {@code "1.10.0"},
+     * {@code "1.10.0-rc1"}) by SemVer PRECEDENCE, not lexicographically (where {@code "1.9.0"}
+     * would wrongly sort after {@code "1.10.0"}) and not by treating a pre-release suffix as
+     * just another string tail (where {@code "1.10.0-rc1"} would wrongly sort AFTER
+     * {@code "1.10.0"} - a stable release must always outrank a pre-release of the same core
+     * version).
+     * <p>
+     * The core {@code MAJOR.MINOR.PATCH} is compared numerically, component by component; a
+     * version with fewer components is padded with {@code 0} (so {@code "1.9"} == {@code "1.9.0"}).
+     * When the core versions are equal: a release with NO pre-release suffix outranks one that
+     * has any suffix; two pre-release suffixes are compared per the SemVer identifier rules -
+     * split on {@code '.'}, each identifier pair compared numerically when BOTH are all-digits,
+     * lexically otherwise (a numeric identifier always has LOWER precedence than a non-numeric
+     * one at the same position), and a longer identifier list outranks a shorter one whose
+     * leading identifiers all matched. A component that still cannot be parsed (an unexpected
+     * jar-name shape) falls back to a plain string comparison for just that component, so this
+     * stays deterministic and never throws.
      *
      * @return negative/zero/positive as {@code a} is older/equal/newer than {@code b}
      */
     static int compareVersions(String a, String b)
+    {
+        int coreCmp = compareCoreVersions(coreVersion(a), coreVersion(b));
+        if (coreCmp != 0)
+        {
+            return coreCmp;
+        }
+        String preA = preReleaseSuffix(a);
+        String preB = preReleaseSuffix(b);
+        if (preA == null && preB == null)
+        {
+            return 0;
+        }
+        if (preA == null)
+        {
+            return 1; // a has no pre-release suffix, b does - a outranks b
+        }
+        if (preB == null)
+        {
+            return -1;
+        }
+        return comparePreRelease(preA, preB);
+    }
+
+    /** @return the part of {@code version} before its first {@code '-'} (or the whole string) */
+    private static String coreVersion(String version)
+    {
+        int dash = version.indexOf('-');
+        return dash < 0 ? version : version.substring(0, dash);
+    }
+
+    /** @return the part of {@code version} after its first {@code '-'}, or {@code null} when there is none */
+    private static String preReleaseSuffix(String version)
+    {
+        int dash = version.indexOf('-');
+        return dash < 0 ? null : version.substring(dash + 1);
+    }
+
+    private static int compareCoreVersions(String a, String b)
     {
         String[] pa = a.split("\\."); //$NON-NLS-1$
         String[] pb = b.split("\\."); //$NON-NLS-1$
@@ -535,6 +606,69 @@ public final class BslLsRunner
         {
             return sa.compareTo(sb);
         }
+    }
+
+    /**
+     * Compares two SemVer pre-release strings (the part after the version's first {@code '-'},
+     * e.g. {@code "rc1"} or {@code "rc.2"}) per the SemVer precedence rules for dot-separated
+     * identifiers.
+     */
+    private static int comparePreRelease(String preA, String preB)
+    {
+        String[] idsA = preA.split("\\."); //$NON-NLS-1$
+        String[] idsB = preB.split("\\."); //$NON-NLS-1$
+        int n = Math.min(idsA.length, idsB.length);
+        for (int i = 0; i < n; i++)
+        {
+            int cmp = comparePreReleaseIdentifier(idsA[i], idsB[i]);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+        }
+        // All shared identifiers matched: the longer list has higher precedence (SemVer 11.4.4).
+        return Integer.compare(idsA.length, idsB.length);
+    }
+
+    private static int comparePreReleaseIdentifier(String idA, String idB)
+    {
+        boolean numA = isNumericIdentifier(idA);
+        boolean numB = isNumericIdentifier(idB);
+        if (numA && numB)
+        {
+            try
+            {
+                return Long.compare(Long.parseLong(idA), Long.parseLong(idB));
+            }
+            catch (NumberFormatException e)
+            {
+                // Pathologically long digit string - fall through to a plain string comparison
+                // rather than throw; still deterministic.
+            }
+        }
+        else if (numA != numB)
+        {
+            // SemVer 11.4.3: a numeric identifier always has LOWER precedence than a non-numeric
+            // one compared at the same position.
+            return numA ? -1 : 1;
+        }
+        return idA.compareTo(idB);
+    }
+
+    private static boolean isNumericIdentifier(String s)
+    {
+        if (s.isEmpty())
+        {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++)
+        {
+            if (!Character.isDigit(s.charAt(i)))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

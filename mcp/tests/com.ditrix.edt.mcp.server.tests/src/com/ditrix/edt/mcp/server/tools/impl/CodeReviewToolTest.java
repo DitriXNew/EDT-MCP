@@ -34,7 +34,14 @@ import com.ditrix.edt.mcp.server.utils.BslLsReport;
  */
 public class CodeReviewToolTest
 {
-    /** Two findings (MagicNumber = Information, UnusedLocalVariable = Warning) + one clean file. */
+    /**
+     * Two findings together, DELIBERATELY of different overlap classes: {@code MagicNumber}
+     * (Information) has no EDT v8-code-style equivalent - a genuinely additional finding -
+     * while {@code UnusedLocalVariable} (Warning) overlaps EDT's own unused-code checks
+     * (get_project_errors). Exercised together so the rule/excludeRule filters below are
+     * proven against a MIXED set, not just a single-rule report - the mechanism a caller
+     * uses to drop the overlapping rule while keeping the additional one.
+     */
     private static final String SAMPLE = "{"
         + "\"fileinfos\":["
         + "  {\"path\":\"file:///C:/proj/src/CommonModules/Calc/Module.bsl\",\"mdoRef\":\"CommonModule.Calc\","

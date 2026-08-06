@@ -26,8 +26,8 @@ public enum ToolGroup
         "delete_project", "create_project"), //$NON-NLS-1$ //$NON-NLS-2$
 
     PROBLEMS("problems", "Errors & Problems", //$NON-NLS-1$ //$NON-NLS-2$
-        "Error reporting and workspace markers (bookmarks, tasks)", //$NON-NLS-1$
-        "get_problem_summary", "get_project_errors", "get_markers"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "Error reporting, workspace markers (bookmarks, tasks), and code-metric review", //$NON-NLS-1$
+        "get_problem_summary", "get_project_errors", "get_markers", "code_review"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     CODE_INTELLIGENCE("codeIntelligence", "Code Intelligence", //$NON-NLS-1$ //$NON-NLS-2$
         "Content assist, documentation, metadata browsing, and references", //$NON-NLS-1$
