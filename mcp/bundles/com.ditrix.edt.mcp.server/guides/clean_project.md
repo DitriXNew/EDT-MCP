@@ -9,9 +9,16 @@ Force EDT to fully rebuild and re-validate a project: refreshes its files from d
 
 ## Parameter details
 - `projectName` - the project to clean. **Omit to clean every EDT project** in the workspace.
+- `timeout` - how long to wait for the clean build itself, in seconds (default 120, clamped to 10..3600). It bounds only the clean build, not the revalidation waits that follow. Raise it for a very large configuration; the default can also be changed in Preferences > MCP Server > Tools > `clean_project`.
 
 ## What you get
-JSON: `success`, `projectsCleaned` (count), `projects` (the names cleaned), and a human-readable `message`. The call returns only AFTER the rebuild + re-validation finish (it waits up to ~3 min per project), so the project is fully settled when it returns.
+JSON: `success`, `projectsCleaned` (count), `projects` (the names cleaned), and a human-readable `message`. The call returns only after three waits: the clean build (bounded by `timeout` **per project**, default 120s), the project-context restart and the derived-data recomputation (up to 5 min per project). On a large configuration one call can therefore take several minutes, and cleaning ALL projects multiplies that - budget the client-side call timeout accordingly.
+
+One subtlety about the restart wait: its 3-minute allowance is counted from the moment the lifecycle listener is registered, which happens **before** the clean build starts (that ordering is what keeps the restart event from being missed). A slow clean therefore eats into it, and on a clean-all so do the projects cleaned earlier. The allowance bounds the whole wait, not each phase separately.
+
+Two honest caveats about "settled":
+- If the clean build does not finish within `timeout`, the call fails with a timeout error instead of waiting indefinitely. Cancellation is requested, but EDT may still be working on it - poll `list_projects` until the project reports `ready` before relying on the model.
+- If the restart or derived-data wait runs out, that is only logged: the call still reports success. So a `success` means "the clean was driven to completion", not "EDT has certainly finished recomputing". When it matters, confirm with `list_projects`.
 
 ## Notes & gotchas
 - This is a rebuild, not a destructive action - but it **discards UNSAVED in-memory model edits** (they are recomputed from disk). Save pending changes first.

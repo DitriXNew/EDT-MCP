@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.UnaryOperator;
 
 import org.junit.Test;
 
@@ -598,6 +599,81 @@ public class ResyncToDiskToolTest
         {
             deleteRecursively(projectRoot);
         }
+    }
+
+    /**
+     * The optional post-export revalidation delegates to {@code clean_project}, which REPORTS
+     * most failures instead of throwing — a missed clean-build deadline among them (#349).
+     * Discarding that envelope would let resync_to_disk claim success while EDT is still
+     * mid-rebuild, so the failure must come back as the declared {@code revalidateWarning}.
+     */
+    @Test
+    public void testReportedRevalidationFailureBecomesAWarningInsteadOfBeingDiscarded()
+    {
+        String timeout = ResyncToDiskTool.revalidateWarningFrom(
+            "{\"success\":false,\"error\":\"Clean build did not finish within 120 seconds\"}"); //$NON-NLS-1$
+        assertNotNull("a reported clean failure must not be swallowed", timeout); //$NON-NLS-1$
+        assertTrue("the warning must carry the reason: " + timeout, //$NON-NLS-1$
+            timeout.contains("Clean build did not finish within 120 seconds")); //$NON-NLS-1$
+    }
+
+    /**
+     * The wiring, not just the helper: the revalidation step must FEED the delegate's envelope
+     * through the reporting rule. A call site that discarded the returned JSON would pass every
+     * helper test above and fail this one.
+     */
+    @Test
+    public void testRevalidationStepReportsWhatTheDelegateReturned()
+    {
+        String warning = ResyncToDiskTool.runOptionalRevalidation("Demo", true, true, //$NON-NLS-1$
+            project -> "{\"success\":false,\"error\":\"Clean build did not finish within 120 seconds\"}"); //$NON-NLS-1$
+
+        assertNotNull("a reported clean failure must reach the caller", warning); //$NON-NLS-1$
+        assertTrue("the reason must survive: " + warning, //$NON-NLS-1$
+            warning.contains("Clean build did not finish within 120 seconds")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRevalidationStepIsSkippedWhenNotRequestedOrExportFailed()
+    {
+        AtomicBoolean called = new AtomicBoolean(false);
+        UnaryOperator<String> spy = project -> {
+            called.set(true);
+            return "{\"success\":false,\"error\":\"must not run\"}"; //$NON-NLS-1$
+        };
+
+        assertNull(ResyncToDiskTool.runOptionalRevalidation("Demo", false, true, spy)); //$NON-NLS-1$
+        assertNull(ResyncToDiskTool.runOptionalRevalidation("Demo", true, false, spy)); //$NON-NLS-1$
+        assertFalse("a failed or unrequested export must not trigger a clean build", called.get()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSuccessfulRevalidationProducesNoWarning()
+    {
+        assertNull("a successful clean must not raise a warning", //$NON-NLS-1$
+            ResyncToDiskTool.revalidateWarningFrom(
+                "{\"success\":true,\"projectsCleaned\":1,\"projects\":[\"Demo\"]}")); //$NON-NLS-1$
+    }
+
+    /**
+     * The error rule is an explicit {@code success == false}, the same one the protocol layer
+     * uses. A successful payload that merely carries a field named "error" is NOT a failure —
+     * otherwise every future field name would be coupled to error detection.
+     */
+    @Test
+    public void testSuccessCarryingAnErrorFieldIsNotTreatedAsFailure()
+    {
+        assertNull("only success==false marks an error envelope", //$NON-NLS-1$
+            ResyncToDiskTool.revalidateWarningFrom(
+                "{\"success\":true,\"error\":\"a diagnostics field, not a failure\"}")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnreadableRevalidationEnvelopeDoesNotInventAWarning()
+    {
+        assertNull(ResyncToDiskTool.revalidateWarningFrom(null));
+        assertNull(ResyncToDiskTool.revalidateWarningFrom("")); //$NON-NLS-1$
+        assertNull(ResyncToDiskTool.revalidateWarningFrom("not json at all")); //$NON-NLS-1$
     }
 
     /** Recursively deletes a temp directory tree (best-effort test cleanup). */
