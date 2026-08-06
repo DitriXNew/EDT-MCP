@@ -9,12 +9,16 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchManager;
 
@@ -44,6 +48,9 @@ public final class LaunchConfigUtils
      * that need to spin-wait on Eclipse debug API state.
      */
     public static final int LAUNCH_POLL_INTERVAL_MS = 100;
+
+    /** How many links of a cause chain {@link #saveFailureLog} names; a chain can be cyclic. */
+    private static final int MAX_LOGGED_CAUSE_DEPTH = 5;
 
     /** 1C:EDT Runtime Client launch configuration type id. */
     public static final String LAUNCH_CONFIG_TYPE_ID = "com._1c.g5.v8.dt.launching.core.RuntimeClient"; //$NON-NLS-1$
@@ -75,6 +82,29 @@ public final class LaunchConfigUtils
 
     /** Remote attach: URL of the HTTP debug server (e.g. "http://localhost:1550"). */
     public static final String ATTR_DEBUG_SERVER_URL = "com._1c.g5.v8.dt.debug.core.ATTR_DEBUG_SERVER_URL"; //$NON-NLS-1$
+
+    /**
+     * Launch attribute: the infobase user the CLIENT connects as ("Пользователь информационной
+     * базы" in the launch dialog). The client is a separate process from the designer agent and
+     * takes its credentials from here, NOT from the infobase access settings.
+     */
+    public static final String ATTR_LAUNCH_USER_NAME =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_USER_NAME"; //$NON-NLS-1$
+
+    /** Launch attribute: the password that goes with {@link #ATTR_LAUNCH_USER_NAME}. */
+    public static final String ATTR_LAUNCH_USER_PASSWORD =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_USER_PASSWORD"; //$NON-NLS-1$
+
+    /**
+     * Launch attribute: "Использовать настройки доступа к информационной базе" - the first radio
+     * of the launch dialog's client-user section. Mutually exclusive with an explicit user.
+     */
+    public static final String ATTR_LAUNCH_USER_USE_INFOBASE_ACCESS =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_USER_USE_INFOBASE_ACCESS"; //$NON-NLS-1$
+
+    /** Launch attribute: "Использовать аутентификацию ОС" - the second radio of that section. */
+    public static final String ATTR_LAUNCH_OS_INFOBASE_ACCESS =
+        "com._1c.g5.v8.dt.launching.core.ATTR_LAUNCH_OS_INFOBASE_ACCESS"; //$NON-NLS-1$
 
     /** Synthetic applicationId prefix for Attach launches that don't carry ATTR_APPLICATION_ID. */
     public static final String ATTACH_APP_ID_PREFIX = "attach:"; //$NON-NLS-1$
@@ -548,6 +578,205 @@ public final class LaunchConfigUtils
             }
         }
         return null;
+    }
+
+    /**
+     * The client-user attributes a launch configuration must carry for the CLIENT process to
+     * authenticate without the platform's "Доступ к информационной базе" prompt.
+     *
+     * <p>Kept separate from the write below so the mapping - which radio of the launch dialog's
+     * client-user section ends up selected - is pinnable without a live launch configuration. The
+     * three radios are mutually exclusive, so choosing one means clearing the others: an explicit
+     * user must switch OFF "use the infobase access settings", or the client keeps reading the
+     * settings that only the designer agent consumes (issue #359).
+     *
+     * @param user     the infobase user the client connects as (may be {@code null}/empty for OS auth)
+     * @param password the user's password (may be {@code null}; an empty password is legitimate)
+     * @param osAuth   {@code true} to select OS authentication instead of an explicit user
+     * @return the attribute name/value pairs to write, never {@code null}
+     */
+    public static Map<String, Object> clientCredentialAttributes(String user, String password, boolean osAuth)
+    {
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        // Whichever mode is chosen, it is NOT "take them from the infobase access settings":
+        // those are read by the designer agent, not by the launched client.
+        attributes.put(ATTR_LAUNCH_USER_USE_INFOBASE_ACCESS, Boolean.FALSE);
+        attributes.put(ATTR_LAUNCH_OS_INFOBASE_ACCESS, Boolean.valueOf(osAuth));
+        if (osAuth)
+        {
+            // OS authentication carries no user/password - leave nothing stale behind.
+            attributes.put(ATTR_LAUNCH_USER_NAME, ""); //$NON-NLS-1$
+            attributes.put(ATTR_LAUNCH_USER_PASSWORD, ""); //$NON-NLS-1$
+        }
+        else
+        {
+            attributes.put(ATTR_LAUNCH_USER_NAME, user == null ? "" : user); //$NON-NLS-1$
+            attributes.put(ATTR_LAUNCH_USER_PASSWORD, password == null ? "" : password); //$NON-NLS-1$
+        }
+        return attributes;
+    }
+
+    /**
+     * Refuses to put a SECRET into a launch configuration that is SHARED.
+     *
+     * <p>A launch configuration is either <em>local</em> — kept in the workspace metadata
+     * ({@code .metadata/.plugins/org.eclipse.debug.core/.launches/*.launch}) — or <em>shared</em>, in
+     * which case its {@code .launch} file is an ordinary resource inside a project and is therefore
+     * normally committed to version control. The platform reads
+     * {@link #ATTR_LAUNCH_USER_PASSWORD} back as a plain launch attribute
+     * ({@code ILaunchConfiguration.getAttribute(String, String)}), so it is serialised into that file
+     * in the clear: writing it onto a shared configuration would publish the infobase password to
+     * everyone who clones the repository.
+     *
+     * <p>The refusal is scoped to the case where something secret would actually be written. OS
+     * authentication stores no password at all, and an empty password (the demo-base case) is not a
+     * secret — those keep working on a shared configuration, so the guard costs no legitimate use.
+     * The user name is not treated as a secret: it is what a human puts in the very same section of
+     * the launch dialog when sharing a configuration on purpose.
+     *
+     * @param config   the launch configuration about to be written; never {@code null}
+     * @param password the password that would be written (may be {@code null})
+     * @param osAuth   {@code true} when OS authentication was requested, so no password is written
+     * @return the reason to refuse the write, or {@code null} when nothing secret would leave the
+     *     workspace metadata
+     */
+    static String sharedSecretRefusal(ILaunchConfiguration config, String password, boolean osAuth)
+    {
+        if (osAuth || password == null || password.isEmpty())
+        {
+            // Nothing secret is written, so there is nothing to leak into a committed file.
+            return null;
+        }
+        if (config.isLocal())
+        {
+            // Workspace metadata: still cleartext, but private to this workspace - the guide says so.
+            return null;
+        }
+        IFile file = config.getFile();
+        String where = file == null ? "" : " stored as '" + file.getFullPath() + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "it is a SHARED launch configuration" + where + ", and the password would be written " //$NON-NLS-1$ //$NON-NLS-2$
+            + "into that file in the clear - shared configurations live inside the project and are " //$NON-NLS-1$
+            + "normally committed to version control (filling that section in by hand in the launch " //$NON-NLS-1$
+            + "dialog writes the same password to the same file). Make the configuration local " //$NON-NLS-1$
+            + "(launch dialog -> Common -> Local file), or use access='OS', or pass an empty " //$NON-NLS-1$
+            + "password and let the client ask"; //$NON-NLS-1$
+    }
+
+    /**
+     * Removes a secret from a platform message before it becomes part of a tool answer.
+     *
+     * <p>The messages reported below are the platform's own and normally name a resource, not an
+     * attribute value — but nothing in the API guarantees that, and the tool's contract is that the
+     * password is never returned. Cheap insurance on the one string that travels back to the caller.
+     *
+     * @param message the platform's message (may be {@code null})
+     * @param secret  the value that must not appear in it ({@code null}/empty means nothing to hide)
+     * @return the message with every occurrence of the secret masked
+     */
+    static String withoutSecret(String message, String secret)
+    {
+        if (message == null || secret == null || secret.isEmpty())
+        {
+            return message;
+        }
+        return message.replace(secret, "***"); //$NON-NLS-1$
+    }
+
+    /**
+     * The EDT-log line for a failed credential write: what failed, and the exception TYPES behind
+     * it — never any message the platform produced.
+     *
+     * <p>The failing call is a save of the launch attribute that HOLDS the infobase password, so
+     * the platform's own text is exactly where that value can surface, and it does so by three
+     * separate routes once the throwable is attached to a {@link org.eclipse.core.runtime.Status}:
+     * Eclipse renders the throwable's stack trace (its {@code toString()}, i.e. the message, and
+     * every {@code Caused by:} link), and for a {@link CoreException} it additionally writes the
+     * statuses behind it — the exception's own {@link org.eclipse.core.runtime.IStatus} and that
+     * status's children — as nested log entries. Masking cannot be relied on there: the workspace
+     * log is a permanent file read by whoever opens the workspace, while the response the caller
+     * gets is a one-off answer to the very agent that supplied the password, so the two are
+     * scrubbed to different depths on purpose. Withholding the text closes all three routes at
+     * once, and a class name can carry no attribute value.
+     *
+     * <p>The chain is walked by type and BOUNDED, because a cause chain can be cyclic.
+     *
+     * @param failure the exception the save threw (may be {@code null})
+     * @return the message to log; it embeds no platform-produced text
+     */
+    static String saveFailureLog(Throwable failure)
+    {
+        StringBuilder types = new StringBuilder();
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_LOGGED_CAUSE_DEPTH; depth++)
+        {
+            if (depth > 0)
+            {
+                types.append(" <- "); //$NON-NLS-1$
+            }
+            types.append(current.getClass().getName());
+            current = current.getCause();
+        }
+        return "Could not store client credentials on the launch configuration (" + types //$NON-NLS-1$
+            + "); the failure's message is withheld because it can quote the attribute value that " //$NON-NLS-1$
+            + "failed to save, which on this path is the infobase password"; //$NON-NLS-1$
+    }
+
+    /**
+     * Writes {@link #clientCredentialAttributes} onto a launch configuration, so the launched
+     * CLIENT authenticates by itself.
+     *
+     * <p>Refuses the write entirely when it would put a password into a SHARED configuration — see
+     * {@link #sharedSecretRefusal}. All or nothing: a half-written client-user section (mode
+     * switched, credentials missing) leaves the launch dialog in a state nobody asked for.
+     *
+     * @param config   the runtime-client launch configuration to update
+     * @param user     the infobase user (may be {@code null}/empty for OS auth)
+     * @param password the password (may be {@code null}; empty is legitimate)
+     * @param osAuth   {@code true} for OS authentication
+     * @return {@code null} on success, otherwise a human-readable reason the write failed
+     */
+    public static String applyClientCredentials(ILaunchConfiguration config, String user, String password,
+        boolean osAuth)
+    {
+        if (config == null)
+        {
+            return "launch configuration is not available"; //$NON-NLS-1$
+        }
+        String sharedRefusal = sharedSecretRefusal(config, password, osAuth);
+        if (sharedRefusal != null)
+        {
+            return sharedRefusal;
+        }
+        try
+        {
+            ILaunchConfigurationWorkingCopy copy = config.getWorkingCopy();
+            for (Map.Entry<String, Object> attribute : clientCredentialAttributes(user, password, osAuth).entrySet())
+            {
+                Object value = attribute.getValue();
+                if (value instanceof Boolean)
+                {
+                    copy.setAttribute(attribute.getKey(), ((Boolean)value).booleanValue());
+                }
+                else
+                {
+                    copy.setAttribute(attribute.getKey(), (String)value);
+                }
+            }
+            copy.doSave();
+            return null;
+        }
+        catch (CoreException e)
+        {
+            // Only the exception TYPES reach the EDT log (see saveFailureLog): the throwable itself
+            // is NOT attached, because Eclipse would write its message, its cause chain and the
+            // statuses behind a CoreException into a permanent workspace file - and the value that
+            // failed to save here is the infobase password.
+            Activator.logError(saveFailureLog(e), null);
+            // The message is the platform's own and normally names the resource, not the value that
+            // failed to save - but "normally" is not a guarantee, and this string goes back out to
+            // the caller in a tool whose contract is that the password is never returned.
+            return withoutSecret(e.getMessage(), password);
+        }
     }
 
 }
