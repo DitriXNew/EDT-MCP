@@ -877,12 +877,12 @@ public class DeleteMetadataToolTest
     /**
      * A recording write: it must run ONLY when consent was granted, and exactly once.
      */
-    private static final class RecordingWrite implements java.util.function.Supplier<String>
+    private static final class RecordingWrite implements DeleteMetadataTool.DeleteWrite
     {
         int calls;
 
         @Override
-        public String get()
+        public String perform()
         {
             calls++;
             return "{\"written\":true}"; //$NON-NLS-1$
@@ -967,8 +967,10 @@ public class DeleteMetadataToolTest
         // What this does NOT prove, stated plainly because the comment here used to claim it did: it
         // calls gateFormMemberDelete directly, so re-routing deleteFormMember() straight to
         // performFormDelete() would leave this test green. Driving the real dispatch needs a resolved
-        // project + BM services, which a headless unit test has none of; the production call site is
-        // one line (see deleteFormMember) and is what a reviewer must read.
+        // project + BM services, which a headless unit test has none of. That WIRING is no longer
+        // left to a reviewer's eye either: DeleteMetadataConsentSinglePointRatchetTest reads the
+        // compiled class and fails when any branch can reach a write without passing through
+        // deleteWithConsent (issue #331).
         for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
             DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
         {
@@ -992,7 +994,8 @@ public class DeleteMetadataToolTest
     @Test
     public void testFormObjectBranchRunsItsWriteOnlyWhenConsentIsGranted()
     {
-        // Same scope as its twin above: the authorization STEP, not the branch's wiring to it.
+        // Same scope as its twin above: the authorization STEP; the branch's wiring to it is pinned by
+        // DeleteMetadataConsentSinglePointRatchetTest, which reads the compiled class.
         for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
             DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
         {

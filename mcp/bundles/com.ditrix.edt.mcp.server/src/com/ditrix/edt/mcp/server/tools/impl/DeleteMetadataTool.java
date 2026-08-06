@@ -116,31 +116,50 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The authorization point of the FORM delete branches: asks, and invokes {@code write} ONLY on
-     * ALLOW, so "did we ask before mutating?" is one question for both of them instead of one per
-     * call site.
+     * The mutation one delete branch performs once the gate has answered ALLOW. A dedicated type
+     * rather than a bare {@code Supplier<String>} because it is load-bearing for the enforcement:
+     * it is the ONE thing {@link #deleteWithConsent} invokes, and {@code
+     * DeleteMetadataConsentSinglePointRatchetTest} reads the compiled class to prove that no other
+     * method of this tool invokes it - which turns "nothing is written without ALLOW" into something
+     * checkable instead of something a reviewer has to re-read every time a branch is added.
+     */
+    @FunctionalInterface
+    interface DeleteWrite
+    {
+        /**
+         * Performs the branch's mutation.
+         *
+         * @return the branch's JSON result
+         */
+        String perform();
+    }
+
+    /**
+     * The tool's SINGLE authorization point: EVERY branch that can mutate - the generic mdclass
+     * object / member, an owned form object, a form member, a predefined item and an XDTO package
+     * member - asks here, and its write runs ONLY on ALLOW. "Did we ask before mutating?" is one
+     * question for the whole tool instead of one per branch, which is what issue #331 asked for after
+     * two branches were found writing with no gate at all; the branches that had their own
+     * {@link DestructiveConsentGate#getInstance()} call were routed through here for the same reason
+     * - a per-branch copy is a per-branch chance to forget.
      *
-     * <p>It is NOT the tool's only gate, and this javadoc used to claim it was: the mdclass
-     * top-object / member deletes and the XDTO delete still call
-     * {@link DestructiveConsentGate#getInstance()} directly (see the {@code requireConsent} call
-     * sites below). Those paths are older than the form branches and are not routed through here
-     * yet; at least the XDTO one asks BEFORE it looks its target up, so a typo raises a destructive
-     * prompt and only then answers "not found" - the ordering defect this branch fixed for the form
-     * paths. Recorded rather than quietly widened: rerouting them is a change to code this branch
-     * does not otherwise touch.</p>
+     * <p>Every branch resolves and validates its target BEFORE calling this, so a typo answers "not
+     * found" without ever raising a destructive prompt, and the prompt names what is really removed.
+     * The gate is the LAST check before the write and runs outside any transaction, because it may
+     * block on a UI dialog.</p>
      *
      * @param preview what the user is being asked to authorize
      * @param write the mutation, invoked only when consent is granted
      * @return the mutation's result, or the refusal error
      */
-    String deleteWithConsent(ConsentPreview preview, java.util.function.Supplier<String> write)
+    String deleteWithConsent(ConsentPreview preview, DeleteWrite write)
     {
         DestructiveConsentGate.ConsentDecision decision = consentRequester.request(NAME, preview);
         if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
         {
             return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
         }
-        return write.get();
+        return write.perform();
     }
 
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
@@ -433,13 +452,26 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview preview = new ConsentPreview(
             "Delete metadata node", //$NON-NLS-1$
             subtitle, 1, Collections.singletonList(fqn));
-        DestructiveConsentGate.ConsentDecision consentDecision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
-        {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
-        }
+        return deleteWithConsent(preview, () -> performDeleteRefactoring(fqn, refactoring, force, blocking));
+    }
 
+    /**
+     * Runs the delete refactoring and builds the result. Split out of {@link #performDelete} so the
+     * WHOLE mutation is the callback {@link #deleteWithConsent} invokes: this branch used to consult
+     * the gate itself and then fall through to the work below it, which left "nothing is written
+     * without ALLOW" true only by the order of statements (issue #331).
+     *
+     * <p>Call only after consent was granted.</p>
+     *
+     * @param fqn the normalized FQN being deleted
+     * @param refactoring the prepared delete refactoring
+     * @param force whether blocking references were overridden
+     * @param blocking the blocking references the caller already collected
+     * @return the tool's JSON result
+     */
+    private static String performDeleteRefactoring(String fqn, IRefactoring refactoring, boolean force,
+        List<Map<String, Object>> blocking)
+    {
         try
         {
             refactoring.perform();
@@ -750,8 +782,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /**
      * The FORM-MEMBER branch's authorization step: builds the prompt from what the preview actually
      * found and hands the branch's write to {@link #deleteWithConsent}. Package-private and taking the
-     * write as a parameter so a unit test can drive THIS branch's dispatch without an EDT context -
-     * proving the branch is wired to the gate, not merely that the gate works (issue #331 review).
+     * write as a parameter so a unit test can drive THIS branch's prompt and refusal without an EDT
+     * context; that the branch REACHES this step - and that no branch reaches a write without it - is
+     * pinned separately by {@code DeleteMetadataConsentSinglePointRatchetTest} (issue #331).
      *
      * @param normFqn the normalized FQN being deleted
      * @param ref the parsed form-member ref
@@ -761,7 +794,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @return the mutation's result, or the refusal error
      */
     String gateFormMemberDelete(String normFqn, FormElementWriter.FormMemberRef ref, boolean handler,
-        FormDeletePreview data, java.util.function.Supplier<String> write)
+        FormDeletePreview data, DeleteWrite write)
     {
         // The breakdown is DERIVED from what the walk actually found, not a fixed phrase naming the
         // kinds the walk used to follow: the prompt named "nested items, attribute columns" while an
@@ -789,8 +822,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param write this branch's mutation
      * @return the mutation's result, or the refusal error
      */
-    String gateFormObjectDelete(String normFqn, FormContentSummary content,
-        java.util.function.Supplier<String> write)
+    String gateFormObjectDelete(String normFqn, FormContentSummary content, DeleteWrite write)
     {
         return deleteWithConsent(new ConsentPreview("Delete form", //$NON-NLS-1$
             "Removes the form and its content" //$NON-NLS-1$
@@ -1237,12 +1269,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return putBlockingReferences(blocked, refScan.refs).toJson();
         }
 
-        // Destructive-operation consent gate: the LAST check before the mutation, mirroring the
-        // generic-node path above. delete_metadata is a gated tool, and a FOLDER delete cascades its
-        // whole content tree - so an interactive session that requires confirmation must get the
-        // dialog here too. On ALLOW the behaviour is unchanged; headless / env-bypass never block.
-        // Reached only when the reference check completed with nothing blocking, OR force=true bypasses
-        // either an incomplete check or a non-empty blocking set.
+        // Destructive-operation consent gate, through the tool's single authorization point: the LAST
+        // check before the mutation, mirroring every other branch. delete_metadata is a gated tool, and
+        // a FOLDER delete cascades its whole content tree - so an interactive session that requires
+        // confirmation must get the dialog here too. On ALLOW the behaviour is unchanged; headless /
+        // env-bypass never block. Reached only when the reference check completed with nothing
+        // blocking, OR force=true bypasses either an incomplete check or a non-empty blocking set.
         int cascadeTotal = 1 + preview.descendantCount;
         // Cascade wording follows the real containment-descendant count, not isFolder: a
         // ChartOfAccounts parent account (isFolder=false) still cascades its childItems, so the
@@ -1266,14 +1298,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview consentPreview = new ConsentPreview(
             "Delete predefined item", //$NON-NLS-1$
             consentSubtitle.toString(), cascadeTotal, Collections.singletonList(normFqn));
-        DestructiveConsentGate.ConsentDecision consentDecision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview);
-        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
-        {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
-        }
-
-        return performPredefinedItemDelete(ctx.project, owner, normFqn, ref, refScan, force);
+        return deleteWithConsent(consentPreview,
+            () -> performPredefinedItemDelete(ctx.project, owner, normFqn, ref, refScan, force));
     }
 
     /**
@@ -1924,16 +1950,61 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             : buildXdtoMemberDeletePreview(normFqn, ref, bmModel, pkgBmId);
     }
 
+    /**
+     * What a pre-write lookup of an XDTO member found. Two OUTCOMES, not one, because the two callers
+     * owe the caller different errors: the confirm path must be able to report the package-level
+     * failure with the SAME message the write transaction would have produced, instead of collapsing
+     * it into "member not found" (issue #331 review).
+     */
+    private static final class XdtoLookup
+    {
+        /** Whether the owning package resolved inside the transaction at all. */
+        final boolean packageResolved;
+
+        /** {eClassName} of the member, or {@code null} when it is not there. */
+        final String[] member;
+
+        XdtoLookup(boolean packageResolved, String[] member)
+        {
+            this.packageResolved = packageResolved;
+            this.member = member;
+        }
+    }
+
+    /**
+     * Locates the target member inside a rolled-back (read-with-materialize) transaction - the
+     * package's content is a lazy {@code @ExternalProperty}, so even a pure read has to materialize it.
+     * Shared by the preview and the confirm path so both ask the model the same question, and so the
+     * confirm path can answer "not found" BEFORE the consent gate (issue #331). It is a separate
+     * transaction from the write, so it is a pre-check and not a guarantee: the write re-locates the
+     * member and reports its own error if it went in between.
+     *
+     * @param bmModel the project's BM model
+     * @param pkgBmId the owning XDTO package's BM id
+     * @param ref the parsed member ref
+     * @return what the lookup found; never {@code null}
+     */
+    private static XdtoLookup locateXdtoMemberInModel(IBmModel bmModel, long pkgBmId,
+        XdtoWriter.MemberRef ref)
+    {
+        return BmTransactions.executeAndRollback(bmModel, "DeleteXdtoMemberLookup", (tx, pm) -> //$NON-NLS-1$
+        {
+            Object inTx = tx.getObjectById(pkgBmId);
+            if (!(inTx instanceof XDTOPackage))
+            {
+                return new XdtoLookup(false, null);
+            }
+            return new XdtoLookup(true, locateXdtoMember(((XDTOPackage)inTx).getPackage(), ref));
+        });
+    }
+
     /** Preview inside a rolled-back (read-with-materialize) transaction: locates the target, no mutation. */
     private String buildXdtoMemberDeletePreview(String normFqn, XdtoWriter.MemberRef ref, IBmModel bmModel,
         long pkgBmId)
     {
-        String[] found = BmTransactions.executeAndRollback(bmModel, "DeleteXdtoMemberPreview", (tx, pm) -> //$NON-NLS-1$
-        {
-            Object inTx = tx.getObjectById(pkgBmId);
-            Package content = inTx instanceof XDTOPackage ? ((XDTOPackage)inTx).getPackage() : null;
-            return locateXdtoMember(content, ref);
-        });
+        // The preview reports both misses as "not found" exactly as it did before the lookup gained a
+        // second outcome: a preview cannot mutate, so the package-level distinction buys it nothing.
+        String[] found = locateXdtoMemberInModel(bmModel, pkgBmId, ref).member;
         if (found == null)
         {
             return xdtoMemberNotFoundError(ref);
@@ -1959,22 +2030,77 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    /** Delete behind the destructive-consent gate, then a write transaction; force-exports the package. */
+    /**
+     * Resolves the target, then asks the gate, then writes: the ORDER is the fix, not an accident of
+     * layout. This branch used to ask FIRST and look the member up only inside the write transaction,
+     * so a typo in the member name raised a destructive prompt at a human and answered "not found"
+     * only after it had been dealt with - the ordering defect the form branches had already fixed
+     * (issue #331). The lookup is the SAME rolled-back read the preview runs.
+     *
+     * @param ctx the resolved project/configuration
+     * @param normFqn the normalized FQN being deleted
+     * @param ref the parsed XDTO member ref
+     * @param bmModel the project's BM model
+     * @param pkgBmId the owning package's BM id
+     * @param fqnGenerator generator for the content's own export FQN
+     * @param pkgExportFqn the resolved package's canonical export FQN
+     * @return the tool's JSON result
+     */
     private String performXdtoMemberDelete(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
         IBmModel bmModel, long pkgBmId, ITopObjectFqnGenerator fqnGenerator,
         String pkgExportFqn)
     {
+        XdtoLookup found;
+        try
+        {
+            found = locateXdtoMemberInModel(bmModel, pkgBmId, ref);
+        }
+        catch (Exception e)
+        {
+            // The lookup materializes the package's lazy content, so it can fail exactly the way the
+            // write can; mapping it through the SAME helper keeps the error contract identical to
+            // the one this branch had when the lookup lived inside the write transaction.
+            return xdtoDeleteFailure(e);
+        }
+        // Both misses answer with the error the WRITE transaction would have produced for them, so
+        // moving the lookup in front of the gate changes when the caller is told, never what.
+        if (!found.packageResolved)
+        {
+            return xdtoPackageUnresolvedError();
+        }
+        if (found.member == null)
+        {
+            return xdtoMemberNotFoundError(ref);
+        }
         ConsentPreview preview = new ConsentPreview("Delete metadata node", //$NON-NLS-1$
             "This deletes '" + normFqn + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (ref.kind == XdtoWriter.Kind.OBJECT_TYPE ? " and all its own properties." : "."), //$NON-NLS-1$ //$NON-NLS-2$
             1, Collections.singletonList(normFqn));
-        DestructiveConsentGate.ConsentDecision consentDecision =
-            DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
-        {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
-        }
+        return deleteWithConsent(preview,
+            () -> writeXdtoMemberDelete(ctx, normFqn, ref, bmModel, pkgBmId, fqnGenerator, pkgExportFqn));
+    }
 
+    /**
+     * The XDTO member delete itself: the write transaction and the dual force-export. Split out of
+     * {@link #performXdtoMemberDelete} so the WHOLE mutation is the callback
+     * {@link #deleteWithConsent} invokes. The member is re-located inside the transaction (it may have
+     * gone while the prompt was open), so the pre-gate lookup above never becomes the only check.
+     *
+     * <p>Call only after consent was granted.</p>
+     *
+     * @param ctx the resolved project/configuration
+     * @param normFqn the normalized FQN being deleted
+     * @param ref the parsed XDTO member ref
+     * @param bmModel the project's BM model
+     * @param pkgBmId the owning package's BM id
+     * @param fqnGenerator generator for the content's own export FQN
+     * @param pkgExportFqn the resolved package's canonical export FQN
+     * @return the tool's JSON result
+     */
+    private String writeXdtoMemberDelete(ProjectContext ctx, String normFqn, XdtoWriter.MemberRef ref,
+        IBmModel bmModel, long pkgBmId, ITopObjectFqnGenerator fqnGenerator,
+        String pkgExportFqn)
+    {
         XdtoDeleteResult result;
         try
         {
@@ -1983,13 +2109,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         catch (Exception e)
         {
-            String ready = XdtoWriteException.jsonOf(e);
-            if (ready != null)
-            {
-                return ready;
-            }
-            Activator.logError("Error deleting XDTO member", e); //$NON-NLS-1$
-            return ToolResult.error("Delete failed: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+            return xdtoDeleteFailure(e);
         }
 
         // DUAL force-export, mirroring create_metadata / modify_metadata exactly: the owning
@@ -2015,7 +2135,39 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    /** The write-transaction result for {@link #performXdtoMemberDelete}: the removed kind + the content's own export FQN. */
+    /**
+     * The "package is not there" error of the XDTO delete, in ONE place: the pre-gate lookup and the
+     * write transaction both hit this condition and must report it identically, so that moving the
+     * lookup in front of the gate (issue #331) changed when the caller hears it, not what.
+     *
+     * @return the tool's JSON error
+     */
+    private static String xdtoPackageUnresolvedError()
+    {
+        return ToolResult.error("The XDTO package could not be resolved inside the transaction.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Maps an EXCEPTION from the XDTO member delete to the tool's JSON error: a ready one carried by an
+     * {@link XdtoWriteException}, otherwise a logged generic. One helper for both the pre-gate lookup
+     * and the write, so a failure that used to surface from inside the write transaction still reaches
+     * the caller in the same shape now that the lookup runs before it (issue #331).
+     *
+     * @param e the failure
+     * @return the tool's JSON error
+     */
+    private static String xdtoDeleteFailure(Exception e)
+    {
+        String ready = XdtoWriteException.jsonOf(e);
+        if (ready != null)
+        {
+            return ready;
+        }
+        Activator.logError("Error deleting XDTO member", e); //$NON-NLS-1$
+        return ToolResult.error("Delete failed: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+    }
+
+    /** The write-transaction result for {@link #writeXdtoMemberDelete}: the removed kind + the content's own export FQN. */
     private static final class XdtoDeleteResult
     {
         final String kind;
@@ -2029,7 +2181,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The write-transaction body for {@link #performXdtoMemberDelete}: re-fetches the XDTOPackage,
+     * The write-transaction body for {@link #writeXdtoMemberDelete}: re-fetches the XDTOPackage,
      * reads its (possibly {@code null} / never-materialized) content directly - no ATTACH needed for a
      * delete of an EXISTING member, since a package that already has a member was necessarily
      * materialized + attached by an earlier create/modify - derives the content's OWN export FQN (for
@@ -2047,8 +2199,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         Object inTx = tx.getObjectById(pkgBmId);
         if (!(inTx instanceof XDTOPackage))
         {
-            throw new XdtoWriteException(ToolResult.error("The XDTO package could not be resolved " //$NON-NLS-1$
-                + "inside the transaction.").toJson()); //$NON-NLS-1$
+            throw new XdtoWriteException(xdtoPackageUnresolvedError());
         }
         XDTOPackage txPkg = (XDTOPackage)inTx;
         Package content = txPkg.getPackage();
