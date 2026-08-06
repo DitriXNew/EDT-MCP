@@ -403,21 +403,45 @@ public class GitToolTest
                 GitTool.unmaskableCredentialUrl(url));
         }
 
-        // The authority runs to the first '/', wider than RFC 3986 - which would end it at the '?'
-        // or the '#'. Not because git reads such a URL as a credential: it ends the host portion at
-        // the first of '/', '?' and '#' too, so it sends no credential at all here and takes
+        // A '?' or a '#' in front of the '@' blinds the redaction exactly as whitespace does, and it
+        // does so ALONE - there is no whitespace anywhere in these two. The authority runs to the
+        // first '/', wider than RFC 3986, which would end it at the delimiter and never even see the
+        // '@'. Not because git reads such a URL as a credential: it ends the host portion at the
+        // first of '/', '?' and '#' too, so it sends no credential at all here and takes
         // 'user:s3cr3t' for the HOST. The reason is the REDACTION - its userinfo scan bails at that
-        // same character and finds no '@', so an RFC-shaped check would let the URL through and the
-        // redaction would then mask what it takes for a query and print the first half of the secret
-        // verbatim ('https://user:s3cr3t?*** b@example.com/r.git').
+        // same character and finds no '@', so the redaction masks what it takes for a query and
+        // prints everything in front of it verbatim ('https://user:s3cr3t?***').
         assertTrue("a '?' inside the userinfo must not hide the credential from this check", //$NON-NLS-1$
-            GitTool.unmaskableCredentialUrl("https://user:s3cr3t?a\u0020b@example.com/r.git")); //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl("https://user:s3cr3t?x@example.com/r.git")); //$NON-NLS-1$
         assertTrue("...and neither must a '#'", //$NON-NLS-1$
-            GitTool.unmaskableCredentialUrl("https://user:s3cr3t#a\u0020b@example.com/r.git")); //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl("https://user:s3cr3t#x@example.com/r.git")); //$NON-NLS-1$
+        // The delimiter rule asks only whether the userinfo scan REACHES an '@' before it stops, the
+        // one thing the redaction depends on: here it does, the credential is masked
+        // ('https://***@example.com?***'), and refusing would be over-reach. Widen the rule to "any
+        // '?' in the authority" and this turns red.
+        // (Whitespace is judged blind to position instead: it ends every later scan too, so nothing
+        // behind it is masked either. Two different reaches, not one rule applied twice.)
+        assertFalse("a delimiter AFTER the userinfo hides nothing - the credential is masked", //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl("https://user:s3cr3t@example.com?x=1")); //$NON-NLS-1$
+        // ...and not even when a SECOND '@' follows the delimiter. Judging the rule against the LAST
+        // '@' would read that query address as the userinfo and refuse this remote forever, although
+        // the userinfo scan stopped at the '?' long before it and masked the real credential.
+        assertFalse("a query that merely CONTAINS an '@' must not turn a masked credential into a " //$NON-NLS-1$
+            + "refusal", //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl("https://user:s3cr3t@example.com?to=a@b")); //$NON-NLS-1$
+        // The accepted over-reach, stated rather than discovered: with no '@' before the delimiter
+        // the scan reports "no userinfo" and the whole prefix is printed verbatim. That prefix is a
+        // plain host here, but nothing tells it from 'user:s3cr3t', so the shape is refused - and the
+        // input guard rejects every remote URL with a '?' anyway, so this tool never stores one.
+        assertTrue("a URL whose only '@' sits behind the delimiter is refused, host or credential", //$NON-NLS-1$
+            GitTool.unmaskableCredentialUrl("https://example.com?to=a@b")); //$NON-NLS-1$
         // ...while a secret in the QUERY of a credential-free URL stays out of scope by decision: the
         // authority ends at the first '/', so that one is the redaction's business, not the refusal's.
         assertFalse(GitTool.unmaskableCredentialUrl(
             "https://example.com/r.git?access_token=sec\u0020ret")); //$NON-NLS-1$
+        // ...and an '@' in the query of a URL WITH a path is not in the authority at all: it ended at
+        // the first '/' long before.
+        assertFalse(GitTool.unmaskableCredentialUrl("https://example.com/r.git?to=a@b")); //$NON-NLS-1$
 
         // An unreadable authority that carries NO credential has nothing to mask, so nothing to
         // refuse either - refusing it would be an outage for no gain.

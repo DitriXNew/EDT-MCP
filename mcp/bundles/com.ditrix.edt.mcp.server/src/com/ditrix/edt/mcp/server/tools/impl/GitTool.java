@@ -298,21 +298,27 @@ public class GitTool implements IMcpTool
      */
     private static final int MAX_REMOTE_NAME_CHARS = 80;
 
+    /** How many links of a cause chain {@link #configReadFailureLog} names; a chain can be cyclic. */
+    private static final int MAX_LOGGED_CAUSE_DEPTH = 5;
+
     /**
      * Refusal for a repository whose configuration cannot be read: the check FAILS CLOSED, because a
      * remote that cannot be inspected cannot be shown to be safe.
      * <p>
-     * The underlying exception is logged, never embedded: JGit's {@code ConfigInvalidException} quotes
-     * the offending configuration line, which is exactly where the credential lives.
+     * The underlying exception's MESSAGE is withheld everywhere - from this text and from the EDT log
+     * alike - because JGit can quote the offending configuration in it, which is exactly where the
+     * credential lives. Only the exception types are logged ({@link #configReadFailureLog}).
      */
     private static final String CONFIG_UNREADABLE_REFUSAL =
         "The git configuration could not be read, so this tool cannot tell whether a stored remote " //$NON-NLS-1$
         + "carries a credential it would be unable to mask in git's output. The operation is " //$NON-NLS-1$
         + "refused instead of run blind. The file at fault is not necessarily this repository's own " //$NON-NLS-1$
         + "config: reading it loads the user and the system configuration as well, and a failure in " //$NON-NLS-1$
-        + "any of the three arrives here the same way - so check all three, repair the broken one " //$NON-NLS-1$
-        + "and retry. The underlying error is in the EDT error log, and is deliberately not repeated " //$NON-NLS-1$
-        + "here because it can quote the offending line, credentials included."; //$NON-NLS-1$
+        + "any of the three - or of a file they '[include]' - arrives here the same way, so check " //$NON-NLS-1$
+        + "them in a terminal, repair the broken one and retry. Only the failure's exception type " //$NON-NLS-1$
+        + "reaches the EDT error log: the " //$NON-NLS-1$
+        + "message itself is withheld, here and there, because it can quote the offending " //$NON-NLS-1$
+        + "configuration, credentials included."; //$NON-NLS-1$
 
     /**
      * Subcommands that rewrite the WORKING TREE, after which the Eclipse workspace must be refreshed
@@ -516,12 +522,12 @@ public class GitTool implements IMcpTool
      * repository's stored state.
      * <p>
      * The stored-remote check is the one that cannot be replaced by masking: a credential hidden
-     * behind ASCII whitespace in the authority is INVISIBLE to {@link #redactCredentialUrls} (every
-     * scan there that LOOKS for a credential stops at whitespace; {@link #urlLimit} does not, but it
-     * only bounds where one URL ends), so {@code remote -v} / {@code push} would print such a stored
-     * remote verbatim; a control character in the authority is refused alongside it because it can
-     * never be legitimate there. The remotes are read from the {@link Repository} this call already
-     * holds - no extra git process is started for it.
+     * behind ASCII whitespace - or behind a {@code ?} / {@code #} - in the authority is INVISIBLE to
+     * {@link #redactCredentialUrls} (its userinfo scan stops at all three; {@link #urlLimit} does
+     * not, but it only bounds where one URL ends), so {@code remote -v} / {@code push} would print
+     * such a stored remote verbatim; a control character in the authority is refused alongside them
+     * because it can never be legitimate there. The remotes are read from the {@link Repository} this
+     * call already holds - no extra git process is started for it.
      * <p>
      * {@link #requireConsentFor} deliberately stays OUT of this seam: it may block on a human, which
      * an unattended run - and a unit test - must never trigger, and it has to stay LAST anyway.
@@ -886,12 +892,12 @@ public class GitTool implements IMcpTool
      * an authority at {@code ?} and {@code #} as well; this scan runs on to the first {@code /}. NOT
      * because git would read such a URL as a credential - it does not: git ends the host portion at
      * the first of {@code /}, {@code ?} and {@code #} too, so for
-     * {@code https://user:s3cr3t?a b@example.com/r.git} it sends no credential at all and takes
+     * {@code https://user:s3cr3t?x@example.com/r.git} it sends no credential at all and takes
      * {@code user:s3cr3t} for the HOST. The reason is the REDACTION: its userinfo scan
      * ({@link #userinfoEnd}) bails at that same {@code ?} and so finds no {@code @} at all, leaving
      * {@link #redactCredentialUrls} to mask what it takes for a query and emit
-     * {@code https://user:s3cr3t?*** b@example.com/r.git} - the first half of the secret verbatim.
-     * Judging a stored URL by the RFC shape would let exactly that one past the refusal.
+     * {@code https://user:s3cr3t?***} - the whole secret verbatim. Judging a stored URL by the RFC
+     * shape would not even SEE the {@code @} of that one, and would let it past the refusal.
      *
      * @param url the candidate URL (may be {@code null})
      * @return the authority as git delimits it, or {@code null} when the string carries no
@@ -915,17 +921,31 @@ public class GitTool implements IMcpTool
 
     /**
      * Whether a URL carries a credential this tool cannot be trusted to mask: the authority GIT reads
-     * ({@link #gitAuthorityOf}) holds BOTH a userinfo ({@code @}) and ASCII whitespace or a control
-     * character.
+     * ({@link #gitAuthorityOf}) holds a userinfo ({@code @}) and one of two independent blockers.
      * <p>
-     * Deliberately blind to WHERE the blocker sits. Once ASCII whitespace is anywhere in that
-     * authority the redaction stops there while git reads on to the {@code /}, so a userinfo
-     * separator behind it is invisible: {@code https://user@ho st:s3cr3t@example.com/r.git} is masked
-     * only up to the FIRST {@code @} and hands {@code :s3cr3t@} out verbatim. Deciding here, in a
-     * second place, whether this particular URL is one the walk would still have got right means
-     * re-deriving that boundary and keeping the two in step forever; the few URLs it would spare are
-     * ones whose blocker is in the HOST, which git cannot resolve anyway. So the check stays coarse
-     * and refuses both.
+     * The FIRST is ASCII whitespace, judged blind to where it sits, because it ends every scan
+     * {@link #redactCredentialUrls} makes: {@code https://user@ho st:s3cr3t@example.com/r.git} is
+     * masked only up to the FIRST {@code @} and hands {@code :s3cr3t@} out verbatim.
+     * <p>
+     * The SECOND is a {@code ?} or {@code #} that {@link #userinfoEnd} would hit BEFORE any
+     * {@code @} ({@link #redactionFindsUserinfo}). That walk stops at the first of them, so it then
+     * reports "no userinfo" and the whole authority prefix is emitted verbatim while the query branch
+     * masks only what FOLLOWS: {@code https://user:s3cr3t?x@example.com/r.git} comes out as
+     * {@code https://user:s3cr3t?***}. When an {@code @} comes first the walk finds it and masks
+     * through it as usual, so {@code https://user:s3cr3t@host?to=a@b} is NOT refused - the delimiter
+     * hides nothing there.
+     * <p>
+     * That is a decision about the REDACTION's reach, not about who owns the secret, so it also
+     * refuses a credential-free {@code https://example.com?to=a@b}, whose verbatim prefix is a mere
+     * host. Telling that prefix from {@code user:s3cr3t} would mean guessing; and the input guard in
+     * {@link #parseCommand} rejects every remote URL carrying a {@code ?} or {@code #} anyway, so no
+     * remote this tool created can land here.
+     * <p>
+     * A control character that is not whitespace is NOT part of this predicate's reasoning: it ends
+     * none of those scans and such a URL is masked correctly. It is caught by
+     * {@link #hasWhitespaceOrControl} for the reason stated on
+     * {@link #authorityHasWhitespaceOrControl} - it can never be legitimate in an authority and must
+     * not travel verbatim into the response.
      * <p>
      * The {@code @} is still required: an authority with whitespace but no userinfo carries no
      * secret to protect, and refusing it would be an outage for no gain.
@@ -936,7 +956,39 @@ public class GitTool implements IMcpTool
     static boolean unmaskableCredentialUrl(String url)
     {
         String authority = gitAuthorityOf(url);
-        return authority != null && authority.indexOf('@') >= 0 && hasWhitespaceOrControl(authority);
+        if (authority == null || authority.indexOf('@') < 0)
+        {
+            return false;
+        }
+        return hasWhitespaceOrControl(authority) || !redactionFindsUserinfo(authority);
+    }
+
+    /**
+     * Whether {@link #redactCredentialUrls} would locate this authority's userinfo separator at all.
+     * <p>
+     * Mirrors {@link #userinfoEnd}'s stop set: that walk takes the LAST {@code @} it passes and gives
+     * up at the first {@code /}, {@code ?}, {@code #} or whitespace, so an {@code @} behind one of
+     * those is invisible to it. The {@code /} is absent here because {@link #gitAuthorityOf} has
+     * already cut there.
+     *
+     * @param authority the authority as {@link #gitAuthorityOf} delimits it
+     * @return {@code true} when an {@code @} is reachable before the walk would stop
+     */
+    private static boolean redactionFindsUserinfo(String authority)
+    {
+        for (int i = 0; i < authority.length(); i++)
+        {
+            char c = authority.charAt(i);
+            if (c == '@')
+            {
+                return true;
+            }
+            if (c == '?' || c == '#' || isAsciiWhitespace(c))
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     /**
@@ -948,8 +1000,9 @@ public class GitTool implements IMcpTool
      * probe process is added - and both {@code remote.<name>.url} and {@code remote.<name>.pushurl}
      * are read as LISTS, because {@code url} is multi-valued and {@code remote -v} prints every value.
      * <p>
-     * Two limits are deliberate and stated in the tool guide: a {@code url.<base>.insteadOf} rewrite
-     * rule is NOT inspected (the effective URL is git's to compute), and of git's two include forms
+     * Two limits are deliberate and stated in the tool guide: a {@code url.<base>.insteadOf} or
+     * {@code .pushInsteadOf} rewrite rule is NOT inspected - both rewrite the effective URL (the
+     * second one for push only), and that URL is git's to compute - and of git's two include forms
      * JGit follows only the UNCONDITIONAL one: {@code Config} resolves an {@code [include] path}
      * entry through {@code FileBasedConfig.readIncludedConfig}, so remotes defined in such a file
      * ARE enumerated here, while a conditional {@code [includeIf "..."]} section is not evaluated at
@@ -998,11 +1051,48 @@ public class GitTool implements IMcpTool
         catch (RuntimeException e) // NOSONAR fail closed: an unreadable config cannot be shown to be safe
         {
             // JGit wraps an IOException / ConfigInvalidException from the reload in an unchecked
-            // exception. Logged, never returned: a ConfigInvalidException quotes the offending line.
-            Activator.logError("git: reading the repository config to check stored remotes failed", e); //$NON-NLS-1$
+            // exception. The THROWABLE is deliberately not handed on: its message can quote the
+            // configuration (see configReadFailureLog), and the EDT error log is permanent - writing
+            // it there would move the leak rather than close it.
+            Activator.logError(configReadFailureLog(e), null);
             return CONFIG_UNREADABLE_REFUSAL;
         }
         return null;
+    }
+
+    /**
+     * The EDT-log line for the fail-closed path: what failed, and the exception TYPES behind it -
+     * never their messages.
+     * <p>
+     * A JGit configuration error can carry the configuration itself. A bad {@code [include]} entry is
+     * reported as {@code Invalid line in config file: <ConfigLine>}, and {@code ConfigLine.toString()}
+     * renders {@code section.subsection.name=value} - the VALUE included; a broken section header is
+     * reported as {@code Bad section entry: <name>}. This path is reached exactly when that file may
+     * hold a credential, so passing the throwable to a permanent log would move the leak from the
+     * response into the EDT error log instead of closing it.
+     * <p>
+     * A class name can carry nothing, so the cause chain is rendered by TYPE. Bounded, because a
+     * cause chain can be cyclic.
+     *
+     * @param failure the exception the configuration read threw (may be {@code null})
+     * @return the message to log; it embeds no configuration content
+     */
+    static String configReadFailureLog(Throwable failure)
+    {
+        StringBuilder types = new StringBuilder();
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < MAX_LOGGED_CAUSE_DEPTH; depth++)
+        {
+            if (depth > 0)
+            {
+                types.append(" <- "); //$NON-NLS-1$
+            }
+            types.append(current.getClass().getName());
+            current = current.getCause();
+        }
+        return "git: reading the repository config to check stored remotes failed (" + types //$NON-NLS-1$
+            + "). The exception message is withheld on purpose: it can quote the configuration, " //$NON-NLS-1$
+            + "credential values included."; //$NON-NLS-1$
     }
 
     /**
@@ -1034,63 +1124,48 @@ public class GitTool implements IMcpTool
      * message travels back to the client, into the model's context and into the request history, so
      * echoing any part of the offending value would leak exactly what the refusal exists to protect.
      * <p>
-     * It also says WHERE the repair has to happen. The check keys on the SUBCOMMAND, so
+     * The name is quoted ONCE, in the opening sentence, and no command carries it: where one needs
+     * the name it is written as a literal {@code <name>} placeholder. A subsection name is untrusted
+     * configuration text that git accepts shell metacharacters in, and these commands are meant to be
+     * pasted into a terminal.
+     * <p>
+     * It says WHERE the repair has to happen. The check keys on the SUBCOMMAND, so
      * {@code remote set-url} and {@code remote remove} - the two commands that could clear the entry
      * - are refused by this very pre-flight while the entry is still there. A remedy phrased as if
      * this tool could run it would send an unattended caller into an endless retry of a command that
      * can never succeed, so the message points at a terminal instead and states that the four
      * remote-reaching subcommands stay refused until the entry is gone.
      * <p>
-     * And it says a remedy that actually WORKS on the shapes the check fires for. Those vary along
-     * TWO axes, and a command that fits only one of them re-creates the very "endless retry" this
-     * text exists to prevent.
+     * It names remove-and-re-add rather than {@code set-url}, because that pair is the one repair
+     * that fits every shape {@link #carriesUnmaskableCredential} fires on. A plain
+     * {@code git remote set-url <name> <url>} writes {@code url} only, so it would leave a poisoned
+     * {@code pushurl} ({@link #REMOTE_URL_KEYS}) exactly where it is; and against a MULTI-valued
+     * {@code url} ({@code remote set-url --add}, which is why that key is read as a list) it refuses
+     * to run at all ("remote.&lt;name&gt;.url has multiple values"). Either way the poisoned value
+     * survives and the next command earns this same refusal - the endless retry again.
      * <p>
-     * The first axis is WHICH KEY carries the offending value: {@link #carriesUnmaskableCredential}
-     * walks {@link #REMOTE_URL_KEYS}, so a poisoned {@code pushurl} is refused even when the
-     * {@code url} beside it is clean. A plain {@code git remote set-url <name> <url>} writes
-     * {@code url} only and would leave that {@code pushurl} exactly where it is - the next push
-     * would earn this same refusal - so the one-step repair below names {@code --push} for that
-     * case, as the drop already did. And the opening sentence names both keys: a caller who
-     * inspected {@code url}, found it clean and was never told {@code pushurl} was read too would
-     * have nowhere left to look.
-     * <p>
-     * The second axis is HOW MANY values that key holds, and there the two shapes need OPPOSITE
-     * commands. On a SINGLE-valued {@code url} - what {@code remote add} produces, and
-     * the ordinary shape - a plain {@code git remote set-url <name> <url>} repairs it in one go,
-     * while {@code remote set-url --delete} FAILS there ("Will not delete all non-push URLs"): git
-     * refuses to remove a remote's last non-push url. On a MULTI-valued one - {@code url} is
-     * multi-valued ({@code remote set-url --add}), which is why {@link #carriesUnmaskableCredential}
-     * reads it as a list - it is the other way round: the plain {@code set-url} refuses to run
-     * ("remote.&lt;name&gt;.url has multiple values") and leaves the poisoned value in place, so the
-     * offending values have to be dropped first and the clean URL set only after. The message
-     * therefore states the single-value step first, scopes the drop to the multi-valued shape, and
-     * names {@code remote remove} plus a re-add as the fallback that works whatever SHAPE is stored
-     * in this repository's config.
-     * <p>
-     * And it names WHERE ELSE the entry can live, because every command above is repository-scoped
-     * while the check is not: {@link #storedRemoteRefusal} reads {@code repo.getConfig()}, the MERGED
-     * configuration (JGit walks the base chain, and a file repository chains repository - user -
-     * system), so a remote defined only in {@code ~/.gitconfig} or the system file is refused here
-     * too. For that one {@code git remote set-url} and {@code git remote remove} answer "No such
-     * remote" and exit non-zero, which is the endless retry again - one file down. So the message
-     * says the entry may sit in the user or system configuration and names a command that clears it
-     * THERE.
+     * And it names a SECOND remedy, scoped to a configuration FILE, because every {@code git remote}
+     * command is repository-scoped while this check is not: {@link #storedRemoteRefusal} reads
+     * {@code repo.getConfig()}, the MERGED configuration (JGit walks the base chain, and a file
+     * repository chains repository - user - system), so a remote defined only in {@code ~/.gitconfig}
+     * or the system file is refused here too. For that one the repository-scoped commands answer
+     * "No such remote" and exit non-zero, which would leave the caller with no way out at all.
      *
      * @param remote the remote's subsection name (untrusted text)
      * @return the actionable, leak-free message
      */
     private static String unmaskableRemoteRefusal(String remote)
     {
-        String name = safeRemoteName(remote);
-        return "The remote '" + name + "' has a stored URL whose credentials contain a whitespace " //$NON-NLS-1$ //$NON-NLS-2$
-            + "or control character. Such a credential cannot be masked reliably in git's output, " //$NON-NLS-1$
-            + "so the command is refused instead of run - and the URL is not echoed here for the " //$NON-NLS-1$
-            + "same reason. Repair it OUTSIDE this tool, in a terminal: drop the remote and add it " //$NON-NLS-1$
-            + "again pointing at a URL with no embedded credentials ('git remote remove " + name //$NON-NLS-1$ //$NON-NLS-2$
-            + "', then 'git remote add'), and let a git credential helper or an ssh key supply the " //$NON-NLS-1$
-            + "secret. The offending entry may be your user or system git configuration rather " //$NON-NLS-1$
-            + "than this repository's. Retrying through this tool cannot work: while the entry is " //$NON-NLS-1$
-            + "stored, every remote, push, fetch and pull command here gets this same refusal."; //$NON-NLS-1$
+        return "The remote '" + safeRemoteName(remote) + "' has a stored URL whose credential " //$NON-NLS-1$ //$NON-NLS-2$
+            + "cannot be masked reliably in git's output, so the command is refused instead of run " //$NON-NLS-1$
+            + "- and the URL is not echoed here for the same reason. Repair it OUTSIDE this tool, " //$NON-NLS-1$
+            + "in a terminal: 'git remote remove <name>', then 'git remote add' with a URL that " //$NON-NLS-1$
+            + "embeds no credentials, and let a git credential helper or an ssh key supply the " //$NON-NLS-1$
+            + "secret. If the entry is inherited from your user or system git configuration, those " //$NON-NLS-1$
+            + "answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
+            + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
+            + "--system). Retrying through this tool cannot work: while the entry is stored, every " //$NON-NLS-1$
+            + "remote, push, fetch and pull command here gets this same refusal."; //$NON-NLS-1$
     }
 
     /**
@@ -2092,10 +2167,12 @@ public class GitTool implements IMcpTool
      * {@link #delimiterStart} behind {@link #queryStart} / {@link #fragmentStart} all stop at
      * {@link #isAsciiWhitespace}; {@link #urlLimit} does NOT - it only bounds where one URL ends and
      * scans on past whitespace), so a credential hidden BEHIND a space, tab or newline inside the
-     * authority cannot be masked here at all. That case is not patched into this walk - it is refused
-     * upstream by {@link #storedRemoteRefusal} (stored remotes) and by the input guard in
-     * {@link #parseCommand}, because no free-text predicate can fail closed on git's output without
-     * also refusing ordinary text. A control character that is not whitespace ends none of these
+     * authority cannot be masked here at all. A {@code ?} or {@code #} in front of the {@code @} ends
+     * {@link #userinfoEnd} the same way; the query branch below then masks from that delimiter on,
+     * which leaves what precedes it - the credential - verbatim. Neither case is patched into this
+     * walk: both are refused upstream by {@link #storedRemoteRefusal} (stored remotes) and by the
+     * input guard in {@link #parseCommand}, because no free-text predicate can fail closed on git's
+     * output without also refusing ordinary text. A control character that is not whitespace ends none of these
      * scans and IS masked here; it is refused upstream for a different reason - it cannot occur in a
      * legitimate authority and must not travel verbatim into the response.
      *

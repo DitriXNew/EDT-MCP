@@ -46,6 +46,12 @@ import com.ditrix.edt.mcp.server.tools.impl.GitTool;
  * direct {@code storedRemoteRefusal} call - because the contract being pinned is the ORDER, not the
  * shape of the refactor. What may never happen is that neither is there, or that consent comes
  * first.
+ * <p>
+ * The second case here pins a wiring of the same kind inside {@code storedRemoteRefusal}: its
+ * fail-closed branch must report through {@code configReadFailureLog}. What that helper produces is
+ * asserted by {@code GitToolStoredRemoteTest}; that the branch still calls it - rather than handing
+ * the throwable, whose message can quote the configuration, to the permanent EDT log - is only
+ * visible in the compiled method.
  */
 public class GitToolPreflightOrderRatchetTest
 {
@@ -58,6 +64,12 @@ public class GitToolPreflightOrderRatchetTest
 
     /** The gate that may block on a human: it has to come last. */
     private static final String CONSENT_CALL = "requireConsentFor"; //$NON-NLS-1$
+
+    /** The method whose fail-closed branch must not log a configuration-read exception. */
+    private static final String STORED_REMOTE_REFUSAL = "storedRemoteRefusal"; //$NON-NLS-1$
+
+    /** The helper that turns that exception into a log line carrying no configuration. */
+    private static final String LOG_SANITIZER = "configReadFailureLog"; //$NON-NLS-1$
 
     /** Only calls into GitTool itself count - a same-named method elsewhere is not the contract. */
     private static final String OWNER = "GitTool"; //$NON-NLS-1$
@@ -101,6 +113,30 @@ public class GitToolPreflightOrderRatchetTest
             + "command this tool refuses anyway must fail on its own error instead of sitting in " //$NON-NLS-1$
             + "front of a human (or burning the consent timeout) for a call that could never run.", //$NON-NLS-1$
             preFlightAt < consentAt);
+    }
+
+    @Test
+    public void storedRemoteRefusalReportsThroughTheLogSanitizer() throws IOException
+    {
+        ClassFile gitTool = ClassFile.read(GitTool.class, STORED_REMOTE_REFUSAL);
+        List<byte[]> bodies = gitTool.bodies();
+        // Positive control, as above: a parse that read nothing would fail exactly like a pass.
+        assertTrue("no bytecode was read for GitTool." + STORED_REMOTE_REFUSAL + "(): a wiring " //$NON-NLS-1$ //$NON-NLS-2$
+            + "ratchet that reads nothing proves nothing", //$NON-NLS-1$
+            !bodies.isEmpty() && bodies.get(0).length > 0);
+
+        boolean sanitized = false;
+        for (byte[] body : bodies)
+        {
+            sanitized = sanitized || firstOffsetOf(gitTool.staticCallsIn(body),
+                List.of(LOG_SANITIZER)) >= 0;
+        }
+
+        assertTrue("GitTool." + STORED_REMOTE_REFUSAL + "() no longer calls " + LOG_SANITIZER //$NON-NLS-1$ //$NON-NLS-2$
+            + ": the fail-closed branch is the one place that holds a configuration-read " //$NON-NLS-1$
+            + "exception, and JGit puts configuration text - a credential value included - in " //$NON-NLS-1$
+            + "its message. Report through the sanitizer, never the throwable (issue #314).", //$NON-NLS-1$
+            sanitized);
     }
 
     /**

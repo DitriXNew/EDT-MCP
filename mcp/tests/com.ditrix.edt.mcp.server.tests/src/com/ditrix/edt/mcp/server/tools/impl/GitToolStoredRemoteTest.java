@@ -22,6 +22,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.Config;
@@ -29,6 +33,8 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.junit.After;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -37,10 +43,10 @@ import com.google.gson.JsonParser;
  * Covers {@link GitTool#storedRemoteRefusal}: the pre-flight that REFUSES a command which would
  * print or use a remote whose STORED credential cannot be masked (issue #314). The command carries
  * no secret here - it sits in {@code remote.<name>.url} / {@code remote.<name>.pushurl}, where ASCII
- * whitespace inside the authority ends the output redaction's scan before the {@code @}, so what
- * follows could not be masked at all. A control character is refused alongside it for a different
- * reason: it ends none of those scans, but it can never be legitimate in an authority and must not
- * travel verbatim into the response.
+ * whitespace - or a {@code ?} / {@code #} in front of the {@code @} - ends the output redaction's
+ * scan before that {@code @}, so what precedes it could not be masked at all. A control character is
+ * refused alongside them for a different reason: it ends none of those scans, but it can never be
+ * legitimate in an authority and must not travel verbatim into the response.
  *
  * <p>The last section covers {@link GitTool#preflightRefusal}, the entry point {@code execute()}
  * actually calls: the predicate can be right and still be wired to nothing, so the refusal is also
@@ -89,6 +95,12 @@ public class GitToolStoredRemoteTest
 
     /** The file JGit reloads - and the one the fail-closed case corrupts. */
     private static final String CONFIG_FILE = "config"; //$NON-NLS-1$
+
+    /**
+     * Shortest exception message the log-line case will look for inside the logged text. A message of
+     * one or two characters could occur there by coincidence and turn the assertion into noise.
+     */
+    private static final int MIN_TELLTALE_MESSAGE_CHARS = 8;
 
     /**
      * The section name that makes the corrupt fixture unparseable. Deliberately unlike any English
@@ -205,14 +217,18 @@ public class GitToolStoredRemoteTest
     {
         // An RFC-shaped authority scan stops at the '?' or the '#', finds no '@' at all and would
         // let the remote through - and the redaction, whose userinfo scan bails at that same
-        // character, would then mask what it takes for a query and print the first half of the
-        // secret verbatim. Not a claim about git's own parser: git ends the host portion at the
-        // first of '/', '?' and '#' too and sends no credential for this shape at all. The scan has
-        // to run to the first '/' because the REDACTION cannot cope, not because git would.
+        // character, would then mask what it takes for a query and print everything in front of it
+        // verbatim. Not a claim about git's own parser: git ends the host portion at the first of
+        // '/', '?' and '#' too and sends no credential for this shape at all. The scan has to run to
+        // the first '/' because the REDACTION cannot cope, not because git would.
+        //
+        // The fixture carries NO whitespace on purpose. With a space in it the case would be refused
+        // by the whitespace rule and say nothing at all about the delimiter - which is exactly how
+        // this shape slipped through: the URL below was accepted until the delimiter was judged too.
         for (char delimiter : new char[] { '?', '#' })
         {
             Repository repo = newRepository("git-stored-userinfo-delimiter"); //$NON-NLS-1$
-            String poisoned = "https://user:" + SECRET + delimiter + "a" + SPACE + "b@" + HOST //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            String poisoned = "https://user:" + SECRET + delimiter + "x@" + HOST //$NON-NLS-1$ //$NON-NLS-2$
                 + "/team/repo.git"; //$NON-NLS-1$
             storeRemoteUrls(repo, ORIGIN, URL_KEY, poisoned);
 
@@ -276,22 +292,21 @@ public class GitToolStoredRemoteTest
     }
 
     @Test
-    public void testTheRemedyTextNamesTheDropBeforeTheSetUrl() throws Exception
+    public void testTheRemedyFitsAMultiValuedUrlToo() throws Exception
     {
         // What is pinned here is the message's WORDING, not the effect of the commands it offers:
         // like every case in this file it starts no git process (see the class comment), it reads
-        // the refusal string and asserts which commands appear in it and in which order. Nothing
-        // below shows that either command clears anything - no test in this bundle runs
-        // 'remote set-url --delete' or 'remote remove' at all.
+        // the refusal string and asserts which commands appear in it. Nothing below shows that any
+        // of them clears anything - no test in this bundle runs 'remote remove' at all.
         //
         // Git's behaviour is the RATIONALE for that wording, cited rather than exercised: 'remote
         // set-url --add' leaves url multi-valued, and against a multi-valued url a plain
         // 'git remote set-url <name> <url>' answers "remote.<name>.url has multiple values" and
-        // exits non-zero without touching the config. A message that named only that command would
+        // exits non-zero without touching the config. A message that named THAT command would
         // therefore leave the poisoned value in place and earn the next command this same refusal -
-        // the endless retry the text exists to prevent. Hence the drop ('remote set-url --delete',
-        // or 'remote remove' plus a re-add) has to be named BEFORE the plain set-url this branch
-        // ends with, which is exactly what the ordering assertion below reads out of the text.
+        // the endless retry the text exists to prevent. Hence the remedy is remove-and-re-add,
+        // which clears the section whatever it holds, and this fixture is the shape that rules the
+        // one-step alternative out.
         Repository repo = newRepository("git-stored-multi-value-remedy"); //$NON-NLS-1$
         storeRemoteUrls(repo, ORIGIN, URL_KEY, "https://" + HOST + "/team/mirror.git", //$NON-NLS-1$ //$NON-NLS-2$
             poisonedUrl(SPACE));
@@ -471,6 +486,36 @@ public class GitToolStoredRemoteTest
             refusal.contains("origin")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testTheSuggestedCommandsCarryNoConfigSuppliedName() throws Exception
+    {
+        // The name is untrusted configuration text and git accepts characters in it that a shell
+        // reads as syntax, so the refusal quotes it ONCE - to say which remote is at fault - and
+        // spells every command with a literal '<name>' placeholder. An operator pasting a suggested
+        // line into a terminal must not run something .git/config chose for them.
+        String hostile = "or&i|gin"; //$NON-NLS-1$
+        Repository repo = newRepository("git-stored-shell-name"); //$NON-NLS-1$
+        storeRemoteUrls(repo, hostile, URL_KEY, poisonedUrl(SPACE));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("the remote's name has no bearing on WHETHER it is refused", refusal); //$NON-NLS-1$
+        // Positive control: the name IS quoted, or the operator cannot tell which remote to repair -
+        // an assertion that merely counted zero would pass on a message that named nothing.
+        assertTrue("the refusal must still name the remote: " + refusal, refusal.contains(hostile)); //$NON-NLS-1$
+        assertEquals("the name may appear ONCE: no command the message offers may carry it: " //$NON-NLS-1$
+            + refusal, 1, occurrencesOf(refusal, hostile));
+        // ...and that once has to be the OPENING sentence, before any command. Counting alone would
+        // pass a message that dropped the opening quote and interpolated the name into
+        // 'git remote remove or&i|gin' instead - exactly the paste this case exists to prevent.
+        assertTrue("the name must be quoted BEFORE the commands, not inside one: " + refusal, //$NON-NLS-1$
+            refusal.indexOf(hostile) < refusal.indexOf("git remote remove")); //$NON-NLS-1$
+        // ...and where a command needs the name, the literal placeholder has to stand there.
+        assertTrue("a command that needs the name must spell it '<name>': " + refusal, //$NON-NLS-1$
+            refusal.contains("git remote remove <name>")); //$NON-NLS-1$
+        assertRefusalStatesTheFix(refusal);
+    }
+
     // ==================== fail closed ====================
 
     @Test
@@ -515,6 +560,102 @@ public class GitToolStoredRemoteTest
             refusal.contains(UNPARSEABLE_MARKER));
         assertFalse("nor where the configuration lives: " + refusal, //$NON-NLS-1$
             refusal.contains(repo.getDirectory().getPath()));
+    }
+
+    @Test
+    public void testTheFailClosedPathLogsNoConfigurationContent() throws Exception
+    {
+        // The refusal says nothing (the case above), but this path also LOGS, and the EDT error log
+        // is permanent - so a throwable handed to it would move the leak rather than close it.
+        // JGit reports an '[include]' entry whose key is not 'path' as "Invalid line in config file:
+        // <ConfigLine>", and ConfigLine renders 'section.name=VALUE': the exception carries a
+        // configuration value verbatim, and here that value is the credential.
+        Repository repo = newRepository("git-stored-log-leak"); //$NON-NLS-1$
+        assertTrue("fixture: a fresh repository has no remotes", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).isEmpty());
+        String credentialUrl = "https://user:" + SECRET + "@" + HOST + "/r.git"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String broken = "[remote \"" + ORIGIN + "\"]\n\turl = " + credentialUrl //$NON-NLS-1$ //$NON-NLS-2$
+            + "\n[include]\n\tnotpath = " + credentialUrl + "\n"; //$NON-NLS-1$ //$NON-NLS-2$
+
+        Throwable thrown = configReadFailure(repo, broken);
+
+        // Positive control: with no credential inside JGit's own exception there would be nothing
+        // for the log line to withhold, and this case would pass on an empty premise.
+        String reported = causeChainMessages(thrown);
+        assertTrue("fixture: JGit's exception must really quote the credential: " + reported, //$NON-NLS-1$
+            reported.contains(SECRET));
+
+        String logged = GitTool.configReadFailureLog(thrown);
+
+        assertFalse("the log line must not carry the credential: " + logged, //$NON-NLS-1$
+            logged.contains(SECRET));
+        assertFalse("nor the host, nor any other configuration content: " + logged, //$NON-NLS-1$
+            logged.contains(HOST));
+        // And not by luck of WHICH link happens to quote it: no message from the chain may be
+        // embedded at all. Asserting the credential alone would stay green on a log line that
+        // rendered the outermost exception, whose own message names the file rather than the value -
+        // and it is the same rendering that would carry the cause along in production.
+        for (Throwable link = thrown; link != null; link = link.getCause())
+        {
+            String message = link.getMessage();
+            if (message != null && message.length() >= MIN_TELLTALE_MESSAGE_CHARS)
+            {
+                assertFalse("no exception message may reach the log line: " + logged, //$NON-NLS-1$
+                    logged.contains(message));
+            }
+        }
+        // ...and it must still be a usable report: the exception TYPE names what failed, and a type
+        // name can carry no configuration.
+        assertTrue("the log line must name what failed: " + logged, //$NON-NLS-1$
+            logged.contains(thrown.getClass().getName()));
+
+        // ...while the caller still gets the generic refusal, from the same unreadable state.
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+        assertNotNull("a configuration that cannot be read must still be refused", refusal); //$NON-NLS-1$
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testTheFailClosedPathAttachesNoThrowableToTheEdtLog() throws Exception
+    {
+        // The case above pins what configReadFailureLog RENDERS; this one pins what the fail-closed
+        // branch actually HANDS to the log. They are different claims: 'logError(sanitized, e)' would
+        // keep every assertion above green while Eclipse wrote the whole cause chain - JGit's
+        // exception among it - into a permanent file. So the plug-in's own log is listened to while
+        // the production path runs, and the recorded Status is read back.
+        Bundle bundle = FrameworkUtil.getBundle(GitTool.class);
+        assertNotNull("this case can only observe the log from inside OSGi; without the bundle it " //$NON-NLS-1$
+            + "would 'pass' by seeing nothing at all", bundle); //$NON-NLS-1$
+        ILog log = Platform.getLog(bundle);
+        List<IStatus> recorded = new ArrayList<>();
+        ILogListener listener = (status, plugin) -> recorded.add(status);
+        String refusal;
+        log.addLogListener(listener);
+        try
+        {
+            Repository repo = newRepository("git-stored-log-status"); //$NON-NLS-1$
+            String credentialUrl = "https://user:" + SECRET + "@" + HOST + "/r.git"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            configReadFailure(repo, "[include]\n\tnotpath = " + credentialUrl + "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+
+        assertNotNull("a configuration that cannot be read must be refused", refusal); //$NON-NLS-1$
+        // Positive control: a listener that recorded nothing would make this case pass without ever
+        // having looked at a log entry.
+        assertFalse("the fail-closed branch must really log, or nothing here was observed", //$NON-NLS-1$
+            recorded.isEmpty());
+        for (IStatus status : recorded)
+        {
+            assertNull("no throwable may be attached - Eclipse writes its whole cause chain, and " //$NON-NLS-1$
+                + "JGit puts configuration text in it: " + status.getMessage(), //$NON-NLS-1$
+                status.getException());
+            assertFalse("nor may the credential reach the message: " + status.getMessage(), //$NON-NLS-1$
+                status.getMessage().contains(SECRET));
+        }
     }
 
     // ==================== the pre-flight execute() actually runs ====================
@@ -611,12 +752,12 @@ public class GitToolStoredRemoteTest
     {
         String lower = refusal.toLowerCase(Locale.ROOT);
         assertTrue("the refusal must say WHAT is wrong: " + refusal, //$NON-NLS-1$
-            lower.contains("whitespace or control character")); //$NON-NLS-1$
-        // The remedy names ONE command on purpose. 'git remote set-url' repairs a single-valued url
-        // but not a multi-valued one; 'set-url --delete' refuses to remove a remote's last non-push
-        // url. Dropping the remote and adding it again is the only step that works whatever shape
-        // the entry has, so that is what the message says - a remedy that fits one shape only would
-        // send an unattended caller into the retry loop this text exists to prevent.
+            lower.contains("cannot be masked")); //$NON-NLS-1$
+        // The repository-scoped remedy names remove-and-re-add on purpose. 'git remote set-url'
+        // writes 'url' only, so it would leave a poisoned 'pushurl' in place, and against a
+        // multi-valued url it refuses to run at all. Dropping the remote and adding it again is the
+        // only step that works whatever shape the entry has - a remedy that fits one shape only
+        // would send an unattended caller into the retry loop this text exists to prevent.
         assertTrue("the refusal must say HOW to fix it: " + refusal, //$NON-NLS-1$
             lower.contains("git remote remove")); //$NON-NLS-1$
         // ...and WHERE. The pre-flight keys on the SUBCOMMAND, so 'remote set-url' and
@@ -637,6 +778,30 @@ public class GitToolStoredRemoteTest
         // commands answer "No such remote", so the caller has to be told where else to look.
         assertTrue("the refusal must say the entry may be inherited from the user or system " //$NON-NLS-1$
             + "configuration: " + refusal, lower.contains("user or system")); //$NON-NLS-1$ //$NON-NLS-2$
+        // ...and give a remedy that reaches THERE. Naming the scope without a command that clears it
+        // leaves the caller with 'No such remote' and no way out at all, which is the same retry
+        // loop one file down.
+        assertTrue("...and name a command that clears it in that file, section included: " + refusal, //$NON-NLS-1$
+            lower.contains("--remove-section remote.<name>")); //$NON-NLS-1$
+        assertTrue("...for both files a remote can be inherited from: " + refusal, //$NON-NLS-1$
+            lower.contains("--global") && lower.contains("--system")); //$NON-NLS-1$
+    }
+
+    /**
+     * Counts non-overlapping occurrences of {@code needle}.
+     *
+     * @param text the message under test
+     * @param needle the substring to count
+     * @return how many times it occurs
+     */
+    private static int occurrencesOf(String text, String needle)
+    {
+        int count = 0;
+        for (int at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length()))
+        {
+            count++;
+        }
+        return count;
     }
 
     /**
@@ -697,6 +862,52 @@ public class GitToolStoredRemoteTest
     private static String poisonedUrl(char offender)
     {
         return "https://user:" + SECRET + offender + "ok@" + HOST + "/team/repo.git"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * Overwrites a repository's configuration with text JGit cannot load, and returns the exception
+     * the reload throws - the very object the fail-closed path catches.
+     *
+     * @param repo the repository whose configuration to break
+     * @param brokenConfig the configuration text to write
+     * @return the unchecked exception JGit threw
+     * @throws Exception when the file cannot be written
+     */
+    private static Throwable configReadFailure(Repository repo, String brokenConfig) throws Exception
+    {
+        File configFile = new File(repo.getDirectory(), CONFIG_FILE);
+        Files.write(configFile.toPath(), brokenConfig.getBytes(StandardCharsets.UTF_8));
+        // JGit reloads when the size OR the timestamp changed; both are moved, so the case does not
+        // depend on which of the two this filesystem notices.
+        configFile.setLastModified(System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(1));
+        try
+        {
+            repo.getConfig().getSubsections(REMOTE_SECTION);
+        }
+        catch (RuntimeException expected)
+        {
+            return expected;
+        }
+        fail("fixture: this configuration loaded fine, so the fail-closed path is never reached"); //$NON-NLS-1$
+        return null;
+    }
+
+    /**
+     * Every message in a throwable's cause chain, joined. Bounded: a cause chain can be cyclic.
+     *
+     * @param failure the exception to walk
+     * @return the messages, one per line
+     */
+    private static String causeChainMessages(Throwable failure)
+    {
+        StringBuilder messages = new StringBuilder();
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < 10; depth++)
+        {
+            messages.append(current.getMessage()).append('\n');
+            current = current.getCause();
+        }
+        return messages.toString();
     }
 
     /**
