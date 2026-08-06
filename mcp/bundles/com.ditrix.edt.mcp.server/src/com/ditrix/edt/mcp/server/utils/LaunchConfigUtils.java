@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunch;
@@ -613,8 +614,78 @@ public final class LaunchConfigUtils
     }
 
     /**
+     * Refuses to put a SECRET into a launch configuration that is SHARED.
+     *
+     * <p>A launch configuration is either <em>local</em> — kept in the workspace metadata
+     * ({@code .metadata/.plugins/org.eclipse.debug.core/.launches/*.launch}) — or <em>shared</em>, in
+     * which case its {@code .launch} file is an ordinary resource inside a project and is therefore
+     * normally committed to version control. The platform reads
+     * {@link #ATTR_LAUNCH_USER_PASSWORD} back as a plain launch attribute
+     * ({@code ILaunchConfiguration.getAttribute(String, String)}), so it is serialised into that file
+     * in the clear: writing it onto a shared configuration would publish the infobase password to
+     * everyone who clones the repository.
+     *
+     * <p>The refusal is scoped to the case where something secret would actually be written. OS
+     * authentication stores no password at all, and an empty password (the demo-base case) is not a
+     * secret — those keep working on a shared configuration, so the guard costs no legitimate use.
+     * The user name is not treated as a secret: it is what a human puts in the very same section of
+     * the launch dialog when sharing a configuration on purpose.
+     *
+     * @param config   the launch configuration about to be written; never {@code null}
+     * @param password the password that would be written (may be {@code null})
+     * @param osAuth   {@code true} when OS authentication was requested, so no password is written
+     * @return the reason to refuse the write, or {@code null} when nothing secret would leave the
+     *     workspace metadata
+     */
+    static String sharedSecretRefusal(ILaunchConfiguration config, String password, boolean osAuth)
+    {
+        if (osAuth || password == null || password.isEmpty())
+        {
+            // Nothing secret is written, so there is nothing to leak into a committed file.
+            return null;
+        }
+        if (config.isLocal())
+        {
+            // Workspace metadata: still cleartext, but private to this workspace - the guide says so.
+            return null;
+        }
+        IFile file = config.getFile();
+        String where = file == null ? "" : " stored as '" + file.getFullPath() + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "it is a SHARED launch configuration" + where + ", and the password would be written " //$NON-NLS-1$ //$NON-NLS-2$
+            + "into that file in the clear - shared configurations live inside the project and are " //$NON-NLS-1$
+            + "normally committed to version control (filling that section in by hand in the launch " //$NON-NLS-1$
+            + "dialog writes the same password to the same file). Make the configuration local " //$NON-NLS-1$
+            + "(launch dialog -> Common -> Local file), or use access='OS', or pass an empty " //$NON-NLS-1$
+            + "password and let the client ask"; //$NON-NLS-1$
+    }
+
+    /**
+     * Removes a secret from a platform message before it becomes part of a tool answer.
+     *
+     * <p>The messages reported below are the platform's own and normally name a resource, not an
+     * attribute value — but nothing in the API guarantees that, and the tool's contract is that the
+     * password is never returned. Cheap insurance on the one string that travels back to the caller.
+     *
+     * @param message the platform's message (may be {@code null})
+     * @param secret  the value that must not appear in it ({@code null}/empty means nothing to hide)
+     * @return the message with every occurrence of the secret masked
+     */
+    static String withoutSecret(String message, String secret)
+    {
+        if (message == null || secret == null || secret.isEmpty())
+        {
+            return message;
+        }
+        return message.replace(secret, "***"); //$NON-NLS-1$
+    }
+
+    /**
      * Writes {@link #clientCredentialAttributes} onto a launch configuration, so the launched
      * CLIENT authenticates by itself.
+     *
+     * <p>Refuses the write entirely when it would put a password into a SHARED configuration — see
+     * {@link #sharedSecretRefusal}. All or nothing: a half-written client-user section (mode
+     * switched, credentials missing) leaves the launch dialog in a state nobody asked for.
      *
      * @param config   the runtime-client launch configuration to update
      * @param user     the infobase user (may be {@code null}/empty for OS auth)
@@ -628,6 +699,11 @@ public final class LaunchConfigUtils
         if (config == null)
         {
             return "launch configuration is not available"; //$NON-NLS-1$
+        }
+        String sharedRefusal = sharedSecretRefusal(config, password, osAuth);
+        if (sharedRefusal != null)
+        {
+            return sharedRefusal;
         }
         try
         {
@@ -650,8 +726,10 @@ public final class LaunchConfigUtils
         catch (CoreException e)
         {
             Activator.logError("Could not store client credentials on the launch configuration", e); //$NON-NLS-1$
-            // The message is the platform's own and names no credential - it is safe to report.
-            return e.getMessage();
+            // The message is the platform's own and normally names the resource, not the value that
+            // failed to save - but "normally" is not a guarantee, and this string goes back out to
+            // the caller in a tool whose contract is that the password is never returned.
+            return withoutSecret(e.getMessage(), password);
         }
     }
 

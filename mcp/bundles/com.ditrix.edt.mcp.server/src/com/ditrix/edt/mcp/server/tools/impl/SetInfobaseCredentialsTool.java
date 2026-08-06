@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
@@ -67,6 +68,11 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * thread; the bounded Job guarantees the call returns. The credentials are recorded as a success
  * the instant {@code updateSettings} commits (before the cosmetic name read-back), so a timeout
  * AFTER the commit still reports success.
+ *
+ * <p>A Job that outran the deadline is cancelled, but cancellation is cooperative and this one has
+ * no monitor poll to honour it, so it keeps running. It therefore checks — on the writing side —
+ * whether the caller has already been answered before it touches the launch configuration: a call
+ * that reported a failure must not leave a user and a password behind it.
  */
 public class SetInfobaseCredentialsTool implements IMcpTool
 {
@@ -90,12 +96,21 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * Stand-in "client write failed" reason for the persist-first record taken BEFORE the client
      * half runs. It only ever reaches the caller when the call ends between the agent commit and
      * the moment the client's outcome is recorded (the bounded Job's deadline), so the agent
-     * credentials really are stored. Cancellation is cooperative, so the launch-configuration save
-     * may in fact have completed by then — this deliberately UNDER-claims: reporting a client that
-     * turns out to be configured is harmless, the reverse is the bug issue #359 is about.
+     * credentials really are stored. The launch-configuration save is skipped once the caller has
+     * been answered (see {@link #configureClient}), but the two events can interleave, so this
+     * deliberately UNDER-claims: reporting a client that turns out to be configured is harmless,
+     * the reverse is the bug issue #359 is about.
      */
     private static final String CLIENT_WRITE_UNFINISHED =
         "the call ended before the launch configuration's outcome was known"; //$NON-NLS-1$
+
+    /**
+     * Reason recorded when the client half is skipped because the caller has already been answered.
+     * It is what keeps a call that reported a failure from mutating a launch configuration behind
+     * the caller's back — see {@link #configureClient}.
+     */
+    private static final String CLIENT_WRITE_ABANDONED =
+        "the call had already returned, so the launch configuration was left untouched"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -242,6 +257,19 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * reason), whereas the reverse order would leave a launch configuration silently rewritten by a
      * call that answered {@code success:false}.
      *
+     * <p><strong>It also runs only while the caller is still waiting.</strong> The store Job is
+     * joined with a bounded timeout; when that deadline elapses the caller is answered and
+     * {@link #awaitStoreJob} cancels the Job — but cancellation is COOPERATIVE and cannot stop a
+     * Job that is inside {@code getApplication}/{@code storeCredentials}. The Job therefore reaches
+     * this point regardless, which is why the check lives HERE, on the side that writes: an answered
+     * call must not go on to put a user and a password into a launch configuration behind the
+     * caller's back. In the case the answer was an ERROR (the deadline elapsed before the agent
+     * credentials committed) the flag is set long before this method runs, so the write cannot
+     * happen at all; in the case the answer was the persist-first success the two can still
+     * interleave, and its message already says the client's outcome was unknown.
+     *
+     * @param callerAnswered raised the moment the bounded join stops waiting; {@code null} is
+     *     treated as "still waiting"
      * @param configName the launch configuration named as the target, or {@code null}/empty when the
      *     target was given as projectName + applicationId
      * @param config the resolved launch configuration to write to; only read when {@code configName}
@@ -252,8 +280,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * @return {@code null} when nothing failed — including the case where no launch configuration
      *     was named and nothing was written; otherwise the reason the write failed
      */
-    static String configureClient(String configName, ILaunchConfiguration config, String user,
-            String password, boolean osAuth)
+    static String configureClient(AtomicBoolean callerAnswered, String configName,
+            ILaunchConfiguration config, String user, String password, boolean osAuth)
     {
         if (configName == null || configName.isEmpty())
         {
@@ -261,6 +289,10 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             // client stays unconfigured, and buildSuccess() says so out loud rather than letting the
             // caller read "credentials stored" as "a launch will now work".
             return null;
+        }
+        if (callerAnswered != null && callerAnswered.get())
+        {
+            return CLIENT_WRITE_ABANDONED;
         }
         return LaunchConfigUtils.applyClientCredentials(config, user, password, osAuth);
     }
@@ -398,6 +430,11 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         // which can loop indefinitely on an unbounded worker thread (DesignerSessionPool retries); the
         // Job + short join keeps the call unattended-safe (the UI thread is never blocked).
         final AtomicReference<String> jobResult = new AtomicReference<>();
+        // Raised the moment the join stops waiting, and read by the Job before it writes the launch
+        // configuration. The Job outlives the call whenever the deadline elapses (cancellation is
+        // cooperative), so this is what keeps an answered - possibly FAILED - call from mutating a
+        // launch configuration afterwards.
+        final AtomicBoolean callerAnswered = new AtomicBoolean();
 
         Job storeJob = new Job("Store infobase credentials: " + finalApplicationId) //$NON-NLS-1$
         {
@@ -444,8 +481,9 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 // The agent half has committed, so now — and only now — the CLIENT half. Writing it
                 // after the commit means a failure of the agent half leaves the launch configuration
                 // untouched instead of silently rewritten by a call that answered success:false.
-                String clientError = configureClient(finalClientConfigName, finalClientConfig, finalUser,
-                    finalPassword, InfobaseAccessSupport.isOsAccess(finalAccess));
+                String clientError = configureClient(callerAnswered, finalClientConfigName,
+                    finalClientConfig, finalUser, finalPassword,
+                    InfobaseAccessSupport.isOsAccess(finalAccess));
                 jobResult.set(buildSuccess(finalProjectName, finalApplicationId, finalApplicationId,
                     storedUser, passwordSet, accessKind, finalClientConfigName, clientError));
 
@@ -470,7 +508,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         storeJob.setSystem(true);
         storeJob.schedule();
 
-        return awaitStoreJob(storeJob, jobResult, projectName, applicationId);
+        return awaitStoreJob(storeJob, jobResult, callerAnswered, projectName, applicationId);
     }
 
     /**
@@ -545,13 +583,47 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * on timeout cancels the Job and returns the recorded success (persist-first) or a graceful timeout
      * error; on interruption restores the interrupt flag and returns the recorded JSON (if any) or a
      * graceful interrupted error.
+     *
+     * <p>Every exit raises {@code callerAnswered} FIRST, before the answer is even built. A Job that
+     * outran the deadline keeps running — {@link Job#cancel()} only asks it to stop, and this one has
+     * no monitor poll to honour it — so the flag is the one thing that stops it from writing a launch
+     * configuration for a call that has already reported a failure (see {@link #configureClient}).
+     *
+     * @param job the scheduled store Job
+     * @param jobResult the JSON the Job records; read only after the flag is raised
+     * @param callerAnswered raised here, read by the Job before the client write
+     * @param projectName the target project name (for the timeout message)
+     * @param applicationId the target application ID (for the timeout message)
+     * @return the tool-result JSON
      */
-    static String awaitStoreJob(Job job, AtomicReference<String> jobResult, String projectName,
-            String applicationId)
+    static String awaitStoreJob(Job job, AtomicReference<String> jobResult, AtomicBoolean callerAnswered,
+            String projectName, String applicationId)
+    {
+        return awaitStoreJob(job, jobResult, callerAnswered, projectName, applicationId,
+            TimeUnit.SECONDS.toMillis(CREDENTIALS_TIMEOUT_SECONDS));
+    }
+
+    /**
+     * {@link #awaitStoreJob(Job, AtomicReference, AtomicBoolean, String, String)} with the deadline
+     * spelled out, so the behaviour AT the deadline can be driven without waiting
+     * {@link #CREDENTIALS_TIMEOUT_SECONDS} seconds for it. The overload above is the production
+     * entry point and supplies that constant.
+     *
+     * @param job the scheduled store Job
+     * @param jobResult the JSON the Job records; read only after the flag is raised
+     * @param callerAnswered raised here, read by the Job before the client write
+     * @param projectName the target project name (for the timeout message)
+     * @param applicationId the target application ID (for the timeout message)
+     * @param timeoutMillis how long to wait for the Job before answering without it
+     * @return the tool-result JSON
+     */
+    static String awaitStoreJob(Job job, AtomicReference<String> jobResult, AtomicBoolean callerAnswered,
+            String projectName, String applicationId, long timeoutMillis)
     {
         try
         {
-            boolean finished = job.join(TimeUnit.SECONDS.toMillis(CREDENTIALS_TIMEOUT_SECONDS), null);
+            boolean finished = job.join(timeoutMillis, null);
+            callerAnswered.set(true);
             if (!finished)
             {
                 job.cancel();
@@ -561,6 +633,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
         catch (InterruptedException e)
         {
+            callerAnswered.set(true);
+            job.cancel();
             Thread.currentThread().interrupt();
             return jobResult.get() != null ? jobResult.get()
                 : ToolResult.error("Storing infobase credentials was interrupted.").toJson(); //$NON-NLS-1$

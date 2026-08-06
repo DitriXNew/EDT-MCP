@@ -25,10 +25,16 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.junit.Test;
@@ -249,17 +255,46 @@ public class SetInfobaseCredentialsToolTest
     /** The launch configuration name a client-targeting call carries. */
     private static final String CONFIG_NAME = "TestConfiguration - thin client"; //$NON-NLS-1$
 
+    /**
+     * Ceiling for every latch below. It is a deadlock guard, not a timing assumption: each latch is
+     * released by the test itself, so a wait that actually runs this long is a hang, not a slow box.
+     */
+    private static final int LATCH_TIMEOUT_SECONDS = 30;
+
+    /** The caller is still waiting: the state every ordinary client write happens in. */
+    private static AtomicBoolean stillWaiting()
+    {
+        return new AtomicBoolean(false);
+    }
+
+    /**
+     * A LOCAL launch configuration (workspace metadata) handing out {@code copy}.
+     * <p>
+     * Said out loud because {@code LaunchConfigUtils} refuses to write a password into a SHARED
+     * configuration, and an unstubbed mock reports {@code isLocal() == false}, i.e. shared.
+     *
+     * @param copy the working copy the configuration hands out
+     * @return the mocked configuration
+     */
+    private static ILaunchConfiguration localConfig(ILaunchConfigurationWorkingCopy copy) throws CoreException
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.isLocal()).thenReturn(true);
+        when(config.getWorkingCopy()).thenReturn(copy);
+        return config;
+    }
+
     @Test
     public void configureClientWritesTheLaunchConfigurationWhenOneWasNamed() throws CoreException
     {
         // launchConfigurationName target: the client's own attributes are written, so the launched
         // 1C client authenticates instead of popping the platform's "Infobase access" dialog.
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
-        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
-        when(config.getWorkingCopy()).thenReturn(copy);
+        ILaunchConfiguration config = localConfig(copy);
 
         assertNull("a clean client write reports no error", //$NON-NLS-1$
-            SetInfobaseCredentialsTool.configureClient(CONFIG_NAME, config, "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$
+            SetInfobaseCredentialsTool.configureClient(stillWaiting(), CONFIG_NAME, config, "Admin", //$NON-NLS-1$
+                "pwd", false)); //$NON-NLS-1$
 
         verify(copy).setAttribute(LaunchConfigUtils.ATTR_LAUNCH_USER_NAME, "Admin"); //$NON-NLS-1$
         verify(copy).setAttribute(LaunchConfigUtils.ATTR_LAUNCH_USER_PASSWORD, "pwd"); //$NON-NLS-1$
@@ -278,9 +313,11 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
 
         assertNull("no launch configuration named is not a failure", //$NON-NLS-1$
-            SetInfobaseCredentialsTool.configureClient(null, config, "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$
+            SetInfobaseCredentialsTool.configureClient(stillWaiting(), null, config, "Admin", "pwd", //$NON-NLS-1$ //$NON-NLS-2$
+                false));
         assertNull("an empty name is the same as none", //$NON-NLS-1$
-            SetInfobaseCredentialsTool.configureClient("", config, "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            SetInfobaseCredentialsTool.configureClient(stillWaiting(), "", config, "Admin", "pwd", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                false));
 
         verify(config, never()).getWorkingCopy();
     }
@@ -291,13 +328,12 @@ public class SetInfobaseCredentialsToolTest
         // A configuration that refuses the save must become a reported failure: the agent-side
         // credentials still commit, and the message tells the caller the client is NOT covered.
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
-        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
-        when(config.getWorkingCopy()).thenReturn(copy);
+        ILaunchConfiguration config = localConfig(copy);
         doThrow(new CoreException(new Status(IStatus.ERROR, "test", "launch config is read-only"))) //$NON-NLS-1$ //$NON-NLS-2$
             .when(copy).doSave();
 
-        String error =
-            SetInfobaseCredentialsTool.configureClient(CONFIG_NAME, config, "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
+        String error = SetInfobaseCredentialsTool.configureClient(stillWaiting(), CONFIG_NAME, config,
+            "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNotNull("a failed client write must be reported", error); //$NON-NLS-1$
         assertTrue("the reason must reach the caller: " + error, error.contains("read-only")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -307,12 +343,135 @@ public class SetInfobaseCredentialsToolTest
     public void configureClientPassesOsAuthenticationThrough() throws CoreException
     {
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
-        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
-        when(config.getWorkingCopy()).thenReturn(copy);
+        ILaunchConfiguration config = localConfig(copy);
 
-        SetInfobaseCredentialsTool.configureClient(CONFIG_NAME, config, "Admin", "pwd", true); //$NON-NLS-1$ //$NON-NLS-2$
+        SetInfobaseCredentialsTool.configureClient(stillWaiting(), CONFIG_NAME, config, "Admin", "pwd", //$NON-NLS-1$ //$NON-NLS-2$
+            true);
 
         verify(copy).setAttribute(LaunchConfigUtils.ATTR_LAUNCH_OS_INFOBASE_ACCESS, true);
+    }
+
+    // ======== The call is over: no launch-configuration write behind the caller's back ========
+
+    @Test
+    public void configureClientWritesNothingOnceTheCallerHasBeenAnswered() throws CoreException
+    {
+        // The bounded join gives up after 30s, cancels the Job and answers the caller - but
+        // cancellation is COOPERATIVE and this Job polls no monitor, so it runs on and reaches the
+        // client half anyway. When the deadline elapsed BEFORE the agent credentials committed the
+        // caller was told the call failed; writing a user and a password into the launch
+        // configuration after that is a side effect of a failed call, which is exactly what must
+        // not happen.
+        ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
+        ILaunchConfiguration config = localConfig(copy);
+
+        String error = SetInfobaseCredentialsTool.configureClient(new AtomicBoolean(true), CONFIG_NAME,
+            config, "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("an abandoned client write must be reported, not silently skipped", error); //$NON-NLS-1$
+        assertTrue("the reason must say the call was already over: " + error, //$NON-NLS-1$
+            error.contains("already returned")); //$NON-NLS-1$
+        verify(config, never()).getWorkingCopy();
+        verify(copy, never()).doSave();
+    }
+
+    @Test
+    public void awaitStoreJobAnswersTheCallerAndSaysSoBeforeItReturns()
+    {
+        // The flag the check above reads is raised HERE, and it has to be raised on every way out -
+        // a path that returns without raising it leaves the Job free to write.
+        AtomicBoolean callerAnswered = new AtomicBoolean();
+        AtomicReference<String> jobResult = new AtomicReference<>(SUCCESS_JSON);
+        // Never scheduled, so join() returns immediately and the test does not wait out the 30s
+        // budget; what is under test is the bookkeeping around the join, not the join itself.
+        Job job = new Job("test: never scheduled") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                return Status.OK_STATUS;
+            }
+        };
+
+        String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult, callerAnswered,
+            "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(SUCCESS_JSON, result);
+        assertTrue("awaitStoreJob must raise callerAnswered before it returns: without it a job " //$NON-NLS-1$
+            + "that outran the deadline goes on to write the launch configuration for a call that " //$NON-NLS-1$
+            + "already reported a failure", callerAnswered.get()); //$NON-NLS-1$
+    }
+
+    /**
+     * The defect itself, end to end: a store Job that outruns the deadline must not write the launch
+     * configuration once the caller has been told the call failed.
+     * <p>
+     * Everything here is ordered by latches rather than by timing: the Job signals that it is RUNNING
+     * (so the cancel on the timeout path cannot simply dequeue it before it starts), the caller's
+     * wait is given a 1 ms deadline it cannot meet, and only THEN is the Job let through to its
+     * client half. So the write it attempts is unambiguously a write after the answer - the exact
+     * sequence that used to put a user and a password into a launch configuration behind the back of
+     * a call that returned {@code success:false}.
+     *
+     * @throws Exception when the latches or the job join are interrupted
+     */
+    @Test
+    public void aJobThatOutranTheDeadlineWritesNoLaunchConfigurationAfterwards() throws Exception
+    {
+        ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
+        ILaunchConfiguration config = localConfig(copy);
+        AtomicBoolean callerAnswered = new AtomicBoolean();
+        AtomicReference<String> jobResult = new AtomicReference<>();
+        AtomicReference<String> clientOutcome = new AtomicReference<>();
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch answered = new CountDownLatch(1);
+
+        Job job = new Job("test: slower than the deadline") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                running.countDown();
+                try
+                {
+                    // Stand in for the agent half still grinding away when the caller gives up.
+                    answered.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                clientOutcome.set(SetInfobaseCredentialsTool.configureClient(callerAnswered,
+                    CONFIG_NAME, config, "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$
+                return Status.OK_STATUS;
+            }
+        };
+        job.setSystem(true);
+        job.schedule();
+        try
+        {
+            assertTrue("the job must be RUNNING before the deadline elapses, or cancel() would " //$NON-NLS-1$
+                + "simply dequeue it and the write under test would never be attempted", //$NON-NLS-1$
+                running.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+
+            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult, callerAnswered,
+                "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue("the caller must be told the call timed out: " + result, //$NON-NLS-1$
+                result.contains("timed out")); //$NON-NLS-1$
+            answered.countDown();
+            job.join();
+
+            assertNotNull("the job's client half must report that it stood down", //$NON-NLS-1$
+                clientOutcome.get());
+            verify(config, never()).getWorkingCopy();
+            verify(copy, never()).doSave();
+        }
+        finally
+        {
+            answered.countDown();
+            job.join();
+        }
     }
 
     // ==================== What the answer SAYS about the client ====================
