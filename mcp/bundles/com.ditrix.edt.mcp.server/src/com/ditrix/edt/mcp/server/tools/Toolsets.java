@@ -167,6 +167,7 @@ public final class Toolsets
             "export_configuration_to_xml", "import_configuration_from_xml", "build_external_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "create_infobase", "delete_infobase", "set_infobase_credentials", "create_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "get_problem_summary", "get_project_errors", "validate_xdto_package", "get_markers", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "code_review", //$NON-NLS-1$
             "get_event_log", //$NON-NLS-1$
             "get_mcp_history", //$NON-NLS-1$
             "list_git_branches", "switch_git_branch", "set_branch_infobase", "create_git_branch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$

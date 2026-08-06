@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**85 tools.**
+**86 tools.**
 
 ## Core
 
@@ -135,6 +135,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 |------|-------------|
 | [`build_external_objects`](build_external_objects.md) | Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL o… |
 | [`clean_project`](clean_project.md) | Clean EDT project and trigger full revalidation. Direction: DISK -> MODEL - re-imports the on-disk src/ .mdo files into the in-memory model. Refreshes files… |
+| [`code_review`](code_review.md) | Review BSL code quality with the BSL Language Server engine: its FULL diagnostic catalog (magic number, cyclomatic/cognitive complexity, method/line length,… |
 | [`create_git_branch`](create_git_branch.md) | Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's c… |
 | [`create_infobase`](create_infobase.md) | Create a new FILE infobase (1C database) OR register an existing one, and bind it to a configuration project so it appears in get_applications. mode='create'… |
 | [`create_project`](create_project.md) | Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'ex… |

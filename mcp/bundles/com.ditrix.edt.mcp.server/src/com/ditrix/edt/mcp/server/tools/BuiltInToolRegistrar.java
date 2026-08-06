@@ -10,6 +10,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.CodeReviewTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateGitBranchTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
@@ -138,6 +139,7 @@ public final class BuiltInToolRegistrar
         registry.register(new CreateProjectTool());
         registry.register(new GetProblemSummaryTool());
         registry.register(new GetProjectErrorsTool());
+        registry.register(new CodeReviewTool());
         registry.register(new GetMarkersTool());
         registry.register(new GetEventLogTool());
         registry.register(new GetMcpHistoryTool());
