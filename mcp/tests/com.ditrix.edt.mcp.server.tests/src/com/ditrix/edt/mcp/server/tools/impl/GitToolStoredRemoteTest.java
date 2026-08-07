@@ -1266,6 +1266,91 @@ public class GitToolStoredRemoteTest
             + "check refuse for it", GitTool.storedRemoteRefusal(repo, List.of(PUSH))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testOnlyWhatGitSkipsAfterALegacyKeyIsSkipped() throws Exception
+    {
+        // Measured byte by byte, because "whitespace" is not one set here. git CONSUMES a space, a
+        // tab, runs and mixtures of them, and a carriage return - the value comes back clean. It
+        // does NOT consume a vertical tab or a form feed: 'URL:<VT>https://host/r.git' comes out of
+        // 'git remote get-url' with the byte still on it.
+        //
+        // So skipping "any whitespace" deleted exactly the control byte this check refuses on, and
+        // handed back a value git prints with it. Only what git skips is skipped now.
+        for (String indent : List.of(" ", "\t", "  ", " \t", "\r", "")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Repository repo = newRepository("git-stored-legacy-indent"); //$NON-NLS-1$
+            File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+            assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+                dir.mkdirs() || dir.isDirectory());
+            Files.write(new File(dir, "upstream").toPath(),
+                ("URL:" + indent + "git@github.com:acme/repo.git\n") //$NON-NLS-1$
+                    .getBytes(StandardCharsets.UTF_8));
+
+            assertNull("git skips this indent, so the value behind it is clean and must not be " //$NON-NLS-1$
+                + "refused", GitTool.storedRemoteRefusal(repo, List.of(PUSH))); //$NON-NLS-1$
+        }
+
+        // ...and the two git does NOT skip stay on the value, where they are exactly what a control
+        // byte refusal is for.
+        for (char kept : new char[]{0x0B, 0x0C})
+        {
+            Repository repo = newRepository("git-stored-legacy-kept"); //$NON-NLS-1$
+            File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+            assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+                dir.mkdirs() || dir.isDirectory());
+            Files.write(new File(dir, "upstream").toPath(),
+                ("URL:" + kept + "https://" + HOST + "/team/repo.git\n") //$NON-NLS-1$ //$NON-NLS-2$
+                    .getBytes(StandardCharsets.UTF_8));
+
+            String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+            assertNotNull(hex(kept) + " is printed by git, not skipped - it must be judged", //$NON-NLS-1$
+                refusal);
+            assertRefusalIsActionable(refusal);
+            assertRefusalLeaksNothing(refusal);
+        }
+    }
+
+    @Test
+    public void testGitsDottedRemoteSectionIsJudgedToo() throws Exception
+    {
+        // git's other spelling of a remote: '[remote.origin]' with a dot instead of a subsection.
+        // Measured - native git prints it in 'remote -v' like any other remote, credential and all -
+        // while JGit reports it as a SECTION called 'remote.origin' and getSubsections("remote")
+        // returns NOTHING, so the walk over subsections never saw it.
+        Repository repo = newRepository("git-stored-dotted-section"); //$NON-NLS-1$
+        File gitDir = repo.getDirectory();
+        Files.write(new File(gitDir, CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 0\n[remote.origin]\n\turl = " //$NON-NLS-1$
+                + poisonedUrl(SPACE) + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        // Positive control, and the whole premise: JGit really does hand this back as a section and
+        // not as a subsection, so nothing but the new walk can produce a refusal here.
+        assertTrue("fixture: JGit must report it as a SECTION", //$NON-NLS-1$
+            repo.getConfig().getSections().contains("remote.origin")); //$NON-NLS-1$
+        assertTrue("fixture: ...and NOT as a subsection of 'remote'", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).isEmpty());
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("git prints a dotted remote like any other, so it must be judged", refusal); //$NON-NLS-1$
+        assertRefusalNamesTheRemoteAndTheFix(refusal, ORIGIN);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testACleanDottedRemoteSectionIsNotRefused() throws Exception
+    {
+        // The other side: the dotted spelling is legal and ordinary, so reading it may not turn
+        // every repository that uses it into an outage.
+        Repository repo = newRepository("git-stored-dotted-clean"); //$NON-NLS-1$
+        Files.write(new File(repo.getDirectory(), CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 0\n[remote.origin]\n" //$NON-NLS-1$
+                + "\turl = git@github.com:acme/repo.git\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        assertNull("a dotted remote carrying git's documented ssh form is not a credential", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
     // ==================== fail closed ====================
 
     @Test

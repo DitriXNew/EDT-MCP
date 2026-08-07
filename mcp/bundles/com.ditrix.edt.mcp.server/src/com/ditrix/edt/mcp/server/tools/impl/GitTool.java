@@ -289,6 +289,14 @@ public class GitTool implements IMcpTool
     /** The git config section that holds the remotes ({@code [remote "<name>"]}). */
     private static final String REMOTE_SECTION = "remote"; //$NON-NLS-1$
 
+    /**
+     * The prefix of git's OTHER spelling of a remote, {@code [remote.origin]} - a section whose
+     * name carries the remote in it instead of a subsection. Native git reads it and prints such a
+     * remote in {@code remote -v}; JGit reports it as a plain section, so it never appears in
+     * {@code getSubsections("remote")}.
+     */
+    private static final String DOTTED_REMOTE_PREFIX = "remote."; //$NON-NLS-1$
+
     /** The config section declaring repository-format extensions ({@code [extensions]}). */
     private static final String EXTENSIONS_SECTION = "extensions"; //$NON-NLS-1$
 
@@ -1607,10 +1615,29 @@ public class GitTool implements IMcpTool
             Config effective = withWorktreeConfig(repo, config);
             for (String remote : effective.getSubsections(REMOTE_SECTION))
             {
-                StoredRemoteFlaw flaw = remoteEntryFlaw(effective, remote);
+                StoredRemoteFlaw flaw = remoteEntryFlaw(effective, REMOTE_SECTION, remote, remote);
                 if (flaw != null)
                 {
                     return unprintableRemoteRefusal(remote, flaw, RemoteSource.CONFIG);
+                }
+            }
+            // git's other spelling of the same thing: '[remote.origin]' with a dot instead of a
+            // subsection. Measured - native git prints such a remote in 'remote -v' like any
+            // other, while JGit reports it as a SECTION named 'remote.origin' and
+            // getSubsections("remote") returns nothing at all, so the walk above cannot see it.
+            // Judged by the same predicate, so the two spellings cannot drift apart.
+            for (String section : effective.getSections())
+            {
+                if (!section.regionMatches(true, 0, DOTTED_REMOTE_PREFIX, 0,
+                    DOTTED_REMOTE_PREFIX.length()))
+                {
+                    continue;
+                }
+                String dotted = section.substring(DOTTED_REMOTE_PREFIX.length());
+                StoredRemoteFlaw flaw = remoteEntryFlaw(effective, section, null, dotted);
+                if (flaw != null)
+                {
+                    return unprintableRemoteRefusal(dotted, flaw, RemoteSource.CONFIG);
                 }
             }
             // A remote GROUP: 'git fetch <group>' and 'git remote update' print 'Fetching <value>'
@@ -1776,6 +1803,24 @@ public class GitTool implements IMcpTool
      * @param directory which legacy directory the file came from
      * @return the pieces to judge
      */
+    /**
+     * Whether git treats this character as INDENT after a legacy key - measured, one byte at a
+     * time, because "whitespace" is not the same set here as anywhere else.
+     * <p>
+     * Consumed by git (the value comes back clean): space, tab, runs and mixtures of the two, and a
+     * carriage return. NOT consumed: vertical tab and form feed - {@code URL:<VT>https://host/r.git}
+     * comes back out of {@code git remote get-url} with the byte still on it. Treating those two as
+     * indent would delete exactly the control byte this check refuses on, and hand the caller a
+     * value git prints with it. So they are left where they are and judged.
+     *
+     * @param c the character after the key
+     * @return {@code true} when git would skip it
+     */
+    private static boolean isLegacyIndent(char c)
+    {
+        return c == ' ' || c == '\t' || c == '\r';
+    }
+
     private static List<String> legacyValuesOf(String line, String directory)
     {
         String value = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line; //$NON-NLS-1$
@@ -1809,7 +1854,7 @@ public class GitTool implements IMcpTool
                 // such a line, and judging it would only invent refusals.
                 return List.of();
             }
-            while (after < value.length() && isAsciiWhitespace(value.charAt(after)))
+            while (after < value.length() && isLegacyIndent(value.charAt(after)))
             {
                 after++;
             }
@@ -1982,16 +2027,17 @@ public class GitTool implements IMcpTool
      * @param remote the remote's subsection name
      * @return the flaw, or {@code null} when the entry may be printed
      */
-    private static StoredRemoteFlaw remoteEntryFlaw(Config config, String remote)
+    private static StoredRemoteFlaw remoteEntryFlaw(Config config, String section, String subsection,
+        String name)
     {
-        StoredRemoteFlaw flaw = storedTextFlaw(remote);
+        StoredRemoteFlaw flaw = storedTextFlaw(name);
         if (flaw == StoredRemoteFlaw.UNMASKABLE_CREDENTIAL)
         {
             return flaw;
         }
         for (String key : REMOTE_URL_KEYS)
         {
-            for (String url : config.getStringList(REMOTE_SECTION, remote, key))
+            for (String url : config.getStringList(section, subsection, key))
             {
                 StoredRemoteFlaw urlFlaw = storedTextFlaw(url);
                 if (urlFlaw == StoredRemoteFlaw.UNMASKABLE_CREDENTIAL)
