@@ -313,11 +313,13 @@ public class GitTool implements IMcpTool
      * {@code remotes/<name>} carries {@code URL:} lines, {@code branches/<name>} a bare URL, and
      * {@code git remote get-url} prints either verbatim while JGit's config knows nothing of them.
      */
-    private static final List<String> LEGACY_REMOTE_DIRECTORIES =
-        List.of("remotes", "branches"); //$NON-NLS-1$ //$NON-NLS-2$
+    private static final String LEGACY_REMOTES_DIRECTORY = "remotes"; //$NON-NLS-1$
 
     /** The one of those two whose format ends a URL at {@code #} and reads the tail as a HEAD. */
     private static final String LEGACY_BRANCHES_DIRECTORY = "branches"; //$NON-NLS-1$
+
+    private static final List<String> LEGACY_REMOTE_DIRECTORIES =
+        List.of(LEGACY_REMOTES_DIRECTORY, LEGACY_BRANCHES_DIRECTORY);
 
     /**
      * Where an offending entry lives. Not decoration: each one needs a DIFFERENT repair, and naming
@@ -1769,20 +1771,28 @@ public class GitTool implements IMcpTool
     private static List<String> legacyValuesOf(String line, String directory)
     {
         String value = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line; //$NON-NLS-1$
-        for (int i = 0; i < value.length(); i++)
+        // ONLY for remotes/, whose format is 'key: value'. A branches/ file has no keys at all - its
+        // line IS the value - so taking a prefix off there removes text git prints, and worse: the
+        // thing removed ends in a colon, which is the password marker itself. 'user: sec ret@host'
+        // in a branches/ file would lose the very ':' that condemns it and be waved through, while
+        // 'git remote get-url' printed it whole. Two formats, two readings.
+        if (LEGACY_REMOTES_DIRECTORY.equals(directory))
         {
-            char c = value.charAt(i);
-            if (c == ':')
+            for (int i = 0; i < value.length(); i++)
             {
-                if (i + 1 < value.length() && value.charAt(i + 1) == ' ')
+                char c = value.charAt(i);
+                if (c == ':')
                 {
-                    value = value.substring(i + 2);
+                    if (i + 1 < value.length() && value.charAt(i + 1) == ' ')
+                    {
+                        value = value.substring(i + 2);
+                    }
+                    break;
                 }
-                break;
-            }
-            if (!Character.isLetter(c))
-            {
-                break;
+                if (!Character.isLetter(c))
+                {
+                    break;
+                }
             }
         }
         int head = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? value.indexOf('#') : -1;

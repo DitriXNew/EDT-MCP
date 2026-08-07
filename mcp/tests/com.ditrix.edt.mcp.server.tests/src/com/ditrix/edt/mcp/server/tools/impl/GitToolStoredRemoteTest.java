@@ -1146,6 +1146,51 @@ public class GitToolStoredRemoteTest
             + refusal, refusal.contains("--worktree --remove-section")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testABranchesFileKeepsItsWholeLineAsTheValue() throws Exception
+    {
+        // The 'URL: ' key strip belongs to the remotes/ format, where a line is 'key: value'. A
+        // branches/ file has no keys - its line IS the value - and taking a prefix off there removes
+        // text git prints. Worse: what gets removed ends in a colon, and a colon before an '@' is
+        // the password marker itself, so the strip deleted the one thing that condemns this value.
+        //
+        // Measured: 'git remote get-url bad' on this file prints 'user: sec ret@example.com:path'
+        // whole, credential and space and all.
+        Repository repo = newRepository("git-stored-branches-verbatim"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        String value = "user:" + SPACE + "sec" + SPACE + "ret@" + HOST + ":path"; //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(dir, "bad").toPath(), //$NON-NLS-1$
+            (value + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        // Positive control: with the prefix taken off - the remotes/ reading - the marker is gone and
+        // the remainder is harmless, which is exactly how this slipped through.
+        assertNull("fixture: the stripped remainder must look clean, or the case proves nothing", //$NON-NLS-1$
+            GitTool.storedTextFlaw("sec" + SPACE + "ret@" + HOST + ":path")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a branches/ line is the value whole - the password marker in it must be " //$NON-NLS-1$
+            + "seen", refusal); //$NON-NLS-1$
+        assertRefusalIsActionable(refusal);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testARemotesFileStillHasItsKeyPrefixTaken() throws Exception
+    {
+        // The other half of the split: remotes/ really is 'key: value', and judging the raw line
+        // there would refuse every legacy file ever written, because 'URL:' ends in a colon.
+        Repository repo = newRepository("git-stored-remotes-prefix"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        Files.write(new File(dir, "upstream").toPath(),
+            ("URL: git@github.com:acme/repo.git\nPush: refs/heads/main\n") //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertNull("a remotes/ file carrying git's documented ssh remote is not a credential", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
     // ==================== fail closed ====================
 
     @Test
