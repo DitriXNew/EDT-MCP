@@ -47,11 +47,12 @@ import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
  * <li>an ordinary call ({@code invokevirtual/special/static/interface}) into the nest;</li>
  * <li>a lambda / method reference, resolved through {@code BootstrapMethods} to the method that
  * actually holds the body;</li>
- * <li>ANY reference to a nest member - construction, a constructor reference, a static call that
- * triggers its {@code <clinit>}: everything that class declares becomes reachable, because whoever
- * holds the instance decides when to run it. Modelling those JVM edges one at a time is how a blind
- * spot gets built, so the coarse rule is the safe one. That is what makes an anonymous
- * {@code Supplier} a followed edge rather than a hiding place.</li>
+ * <li>ANY reference to a nest member - construction, a constructor reference, a static call, or
+ * merely READING one of its fields: everything that class declares becomes reachable, because
+ * whoever holds the instance decides when to run it. Modelling those JVM edges one at a time is how
+ * a blind spot gets built (a holder touched only by {@code getstatic} was exactly that), so the
+ * coarse rule is the safe one. That is what makes an anonymous {@code Supplier} a followed edge
+ * rather than a hiding place.</li>
  * </ul>
  *
  * <h2>Why the gate's own callback may be skipped, and only then</h2>
@@ -59,18 +60,18 @@ import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
  * would report every branch as ungated. It is skipped - but the skip has to be EARNED, or it becomes
  * the hole it is meant to close. Four rules together:
  * <ul>
- * <li>the body is left unfollowed only when the method that created the callback also calls a gate
- * entry point ({@link #GATE_ENTRIES}, each proven to reach the gate). A method that builds a
- * {@code DeleteWrite} and never goes near the gate is walked like any other code;</li>
+ * <li>the first thing that runs after a callback is BUILT must be a gate entry point
+ * ({@link #GATE_ENTRIES}, each proven to reach the gate), and that invocation must belong to that
+ * one value: two callbacks built before the same gate call authorize NEITHER, because nothing here
+ * can say which of them was the argument. Every weaker phrasing was tried and every one is a
+ * per-method aggregate in disguise - "calls a gate somewhere" and even "the next call is the gate"
+ * are both satisfied by a harmless callback while a second one is leaked past it. The exemption is
+ * decided per CREATION, never per method;</li>
  * <li>the only thing that may INVOKE {@code DeleteWrite.perform} is the gate, and a method HANDLE on
  * it counts as an invocation. Converting the callback to some other functional interface
  * ({@code write::perform}) is the one way to run it without an invoke instruction;</li>
- * <li>the first thing that runs after a callback is BUILT must be a gate entry point. Anything that
- * can hold on to the value - a local, a helper taking {@code Object}, a second callback standing in
- * for it at the gate call - would put the write where nothing here reads it, and no rule about the
- * method as a whole can tell those apart without tracking which value went where;</li>
  * <li>the same applies to a nest member that IMPLEMENTS the callback type: referencing it is a
- * followed edge unless its creator hands it to the gate.</li>
+ * followed edge unless that construction itself was handed straight to the gate.</li>
  * </ul>
  * The direction is deliberate: where the rules cannot tell, they treat the write as ungated. Handing
  * the gate a callback that wraps another one ({@code deleteWithConsent(preview, w::get)}), or a
@@ -97,11 +98,18 @@ import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
  * </ul>
  *
  * <h2>What it still does NOT prove, stated plainly</h2>
+ * The rules above are a NAME-based predicate over external calls plus a reachability walk over one
+ * nest. Two consequences follow from that alone, and everything in this list is one of them: a verb
+ * it has not been taught, on an owner outside the families, reads as a read; and it sees only the
+ * static type at the call site.
  * <ul>
  * <li>a write through a seam in NEITHER the list nor the families, under a verb that reads like a
  * query - a brand-new helper class that is not named {@code *Writer} and does not touch BM, EMF,
- * refactoring or resources - is invisible here, and is covered only by the transaction-boundary
- * rules in CLAUDE.md;</li>
+ * refactoring, the workspace or {@code java.nio} - is invisible here, and is covered only by the
+ * transaction-boundary rules in CLAUDE.md;</li>
+ * <li>the value analysis is instruction ADJACENCY, not dataflow. It answers "was this callback the
+ * argument of the very next call, alone?" - which is enough to refuse every shape that stores or
+ * shares it, and is why the rule is strict rather than clever;</li>
  * <li>owners are compared by SIMPLE name and by the STATIC type at the call site - that is all the
  * constant pool spells - so two same-named classes from different packages are one owner here, and a
  * family rule keyed on {@code EList} does not follow into {@code BasicEList};</li>
@@ -319,11 +327,44 @@ public class DeleteMetadataConsentSinglePointRatchetTest
 
         // Running the lookup first proves nothing if its ANSWER can be thrown away: passing a
         // hand-built XdtoLookup would satisfy every assertion above and the unit tests too, and the
-        // prompt would be back for a target that is not there. The branch may not build one.
-        assertTrue(XDTO_BRANCH + "() constructs an " + XDTO_LOOKUP_TYPE + " of its own, so what it " //$NON-NLS-1$ //$NON-NLS-2$
-            + "hands to " + XDTO_GATE + " need not be what the lookup found. The only " //$NON-NLS-1$ //$NON-NLS-2$
-            + "lookup outcome it may pass on is the one it got back (issue #331 review).", //$NON-NLS-1$
-            nest.firstOffsetOf(branch, XDTO_LOOKUP_TYPE + "#<init>") < 0); //$NON-NLS-1$
+        // prompt would be back for a target that is not there.
+        //
+        // Forbidding it in THIS method is not enough - a helper that runs the real lookup and then
+        // returns a fresh successful one reads exactly the same from here. So the whole class is
+        // pinned instead: the only code that may build a lookup outcome is the lookup's own
+        // transaction body, which is the only place that has actually asked the model. Anything
+        // else - a factory, a copy, an XdtoLookup::new handed on - grows this set and fails.
+        Set<String> constructors = nest.methodsReaching(XDTO_LOOKUP_TYPE + "#<init>"); //$NON-NLS-1$
+        assertEquals("only the transaction body of " + XDTO_LOOKUP + "() may build an " //$NON-NLS-1$ //$NON-NLS-2$
+            + XDTO_LOOKUP_TYPE + ": it is the one place that asked the model. Any other producer " //$NON-NLS-1$
+            + "can hand " + XDTO_GATE + " an outcome the lookup never found, and the prompt is back " //$NON-NLS-1$ //$NON-NLS-2$
+            + "for a target that is not there (issue #331 review).", //$NON-NLS-1$
+            lookupTransactionBodies(nest), constructors);
+    }
+
+    /**
+     * The bodies {@code locateXdtoMemberInModel} hands to the BM transaction - the only code entitled
+     * to say what the lookup found. Derived from the class, never named: the compiler chooses what a
+     * lambda body is called ({@code lambda$0} here, {@code lambda$new$0} elsewhere), and a pin that
+     * spelled the name would be pinning the compiler.
+     *
+     * @param nest the parsed classes
+     * @return the node keys of those bodies
+     */
+    private static Set<String> lookupTransactionBodies(Nest nest)
+    {
+        Set<String> bodies = new TreeSet<>();
+        String lookup = nest.requireSingleDeclaration(SELF, XDTO_LOOKUP.substring(SELF.length() + 1));
+        for (Callback callback : nest.callbacksIn(lookup))
+        {
+            if (SELF.equals(callback.implOwner))
+            {
+                bodies.add(callback.node());
+            }
+        }
+        assertTrue(XDTO_LOOKUP + "() no longer runs its lookup in a transaction body, so there is " //$NON-NLS-1$
+            + "nothing to attribute the outcome to", !bodies.isEmpty()); //$NON-NLS-1$
+        return bodies;
     }
 
     // ---- the ratchet's own controls ------------------------------------------------------------
@@ -359,8 +400,9 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             + "That helper is not parsed here and never will be, so the only thing that can catch " //$NON-NLS-1$
             + "this is requiring the gate to be the very next thing that runs.", //$NON-NLS-1$
             !bypass.unconsumed.isEmpty());
-        assertTrue("... and it is the only thing that catches it: the walk is satisfied here.", //$NON-NLS-1$
-            bypass.escapes.isEmpty());
+        assertTrue("... and once the handover is refused, nothing authorized that callback, so its " //$NON-NLS-1$
+            + "body is walked like any other code and the write inside it surfaces too: " //$NON-NLS-1$
+            + bypass.escapes, !bypass.escapes.isEmpty());
     }
 
     /**
@@ -420,6 +462,47 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             + "outside MUTATIONS. If only the named list decided what a write is, this branch would " //$NON-NLS-1$
             + "be invisible while the list's own positive control stayed green - which is exactly " //$NON-NLS-1$
             + "the failure mode the verb rule exists for.", !bypass.escapes.isEmpty()); //$NON-NLS-1$
+    }
+
+    /**
+     * Two callbacks, one gate call, and the gate really is the first invocation after both. Every
+     * rule phrased about the METHOD is satisfied; only asking the question per CREATION sees it.
+     */
+    @Test
+    public void theAnalysisCatchesASecondCallbackRidingOnTheFirstOnesAuthorization()
+    {
+        Analysis bypass = analyseFixture(ConsentRatchetFixtures.TwoCallbackBypass.class);
+
+        assertTrue("the fixture builds a harmless callback and a leaked one back to back, then " //$NON-NLS-1$
+            + "gates the harmless one. 'This method calls a gate' and 'the next CALL is the gate' " //$NON-NLS-1$
+            + "are both true of the leaked one as well - it shares the very same invocation.", //$NON-NLS-1$
+            !bypass.unconsumed.isEmpty());
+        assertTrue("... and the leaked body must then be walked like any other code, because " //$NON-NLS-1$
+            + "nothing authorized it: " + bypass.escapes, !bypass.escapes.isEmpty()); //$NON-NLS-1$
+    }
+
+    /** A nested holder reached only by reading its static field: no call names it. */
+    @Test
+    public void theAnalysisCatchesAWriteReachedThroughAStaticField()
+    {
+        Analysis bypass = analyseFixture(ConsentRatchetFixtures.StaticFieldBypass.class);
+
+        assertTrue("the write is a Function in a static field of a nested holder, run through " //$NON-NLS-1$
+            + "apply(). The only instruction naming the holder is a getstatic, so recording " //$NON-NLS-1$
+            + "invocations alone leaves the class - and its <clinit> - unopened.", //$NON-NLS-1$
+            !bypass.escapes.isEmpty());
+    }
+
+    /** A delete on disk with plain Java: the verb the fail-closed list had forgotten. */
+    @Test
+    public void theAnalysisCatchesAFileDeletedWithPlainJava()
+    {
+        Analysis bypass = analyseFixture(ConsentRatchetFixtures.FileDeleteBypass.class);
+
+        assertTrue("the fixture calls Files.delete. It is not an Eclipse resource, not a *Writer " //$NON-NLS-1$
+            + "and on no mutation list - and this is the tool whose entire job is deleting things, " //$NON-NLS-1$
+            + "so a predicate that calls itself fail-closed cannot let 'delete' through.", //$NON-NLS-1$
+            !bypass.escapes.isEmpty());
     }
 
     /** A generated setter on a concrete model class: no family owns it, only the verb sees it. */
@@ -590,14 +673,24 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         {
             return false; // assembling a message or a JSON payload changes nothing outside the method
         }
-        // The verb first, the owner second. The constant pool spells the STATIC type, so keying the
-        // EMF mutators on the interface name would miss every generated one: EObject.eSet and
+        // The refactoring service goes first, because it is the one place where a name that reads
+        // like a mutation is not one: createMdObjectDeleteRefactoring BUILDS a delete, it does not
+        // run it, and only running it writes.
+        if (owner.startsWith("IRefactoring") || owner.endsWith("RefactoringService")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return !readShaped(name)
+                && !(name.startsWith("create") && !containsAny(name, "Perform", "Apply", "Execute")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        // Then the verb, and only then the owner. The constant pool spells the STATIC type, so keying
+        // the EMF mutators on the interface name would miss every generated one: EObject.eSet and
         // Import.setNamespace are the same act. Iterator.remove belongs here too - on the iterator of
         // a containment EList it writes straight through to the model. The infix forms catch the
-        // implementation classes' own spelling (InternalEList.basicRemove).
-        if (startsWithAny(name, "set", "unset", "remove", "insert", "move", "rename", "replace", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+        // implementation classes' own spelling (InternalEList.basicRemove, doDelete).
+        if (startsWithAny(name, "set", "unset", "remove", "delete", "insert", "move", "rename", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+            "replace", "write", "append", "truncate", "destroy", "discard", "purge", "drop", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
             "eSet", "eUnset", "eInvoke", "save", "persist", "commit") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-            || containsAny(name, "Remove", "Unset", "Clear") || "clear".equals(name)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            || containsAny(name, "Remove", "Delete", "Unset", "Clear", "Write") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            || "clear".equals(name)) //$NON-NLS-1$
         {
             return true;
         }
@@ -615,33 +708,32 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         // nobody anticipated - rewriteNamespaceReferences, ensureExtInfo, configureDynamicListQuery,
         // rebindHandler all exist in this repo today - counts as a write until it reads like a read.
         if ("IBmTransaction".equals(owner) || "EcoreUtil".equals(owner) || "EList".equals(owner) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            || RESOURCES.contains(owner) || (owner.endsWith("Writer") && !JDK_WRITERS.contains(owner))) //$NON-NLS-1$
+            || RESOURCES.contains(owner) || FILES.contains(owner) || owner.endsWith("Writer")) //$NON-NLS-1$
         {
             return !readShaped(name);
-        }
-        // The refactoring service: BUILDING a refactoring is inert, only running it writes - which is
-        // why 'create' is a read here and nowhere else, and only while it stays a pure factory.
-        if (owner.startsWith("IRefactoring") || owner.endsWith("RefactoringService")) //$NON-NLS-1$ //$NON-NLS-2$
-        {
-            return !readShaped(name)
-                && !(name.startsWith("create") && !containsAny(name, "Perform", "Apply", "Execute")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         }
         return false;
     }
 
-    /** Owners whose mutators are local bookkeeping: a message being built, never the model. */
-    private static final Set<String> LOCAL_VALUES =
-        Set.of("String", "StringBuilder", "StringBuffer"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
     /**
-     * ... and the {@code *Writer}s that write into MEMORY. The on-disk ones are deliberately absent:
-     * a metadata file rewritten through a {@code FileWriter} is exactly as destructive as one
-     * rewritten through the model.
+     * Owners whose mutators are local bookkeeping: a message being built, never the model. The
+     * in-memory {@code *Writer}s belong here and the on-disk ones deliberately do not - a metadata
+     * file rewritten through a {@code FileWriter} is exactly as destructive as one rewritten through
+     * the model.
      */
-    private static final Set<String> JDK_WRITERS = Set.of("StringWriter", "CharArrayWriter"); //$NON-NLS-1$ //$NON-NLS-2$
+    private static final Set<String> LOCAL_VALUES = Set.of("String", "StringBuilder", //$NON-NLS-1$ //$NON-NLS-2$
+        "StringBuffer", "StringWriter", "CharArrayWriter"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     private static final Set<String> RESOURCES = Set.of("IResource", "IFolder", "IFile", "IContainer", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "IProject", "IWorkspaceRoot", "IWorkspace"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
+     * The plain-Java way to the same disk. {@code delete_metadata} is about removing things, and
+     * nothing stops a branch from removing them without the workspace: {@code Files.delete} is not
+     * an Eclipse resource, not a {@code *Writer} and not on any list.
+     */
+    private static final Set<String> FILES =
+        Set.of("Files", "File", "Path", "FileChannel", "RandomAccessFile"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
     /**
      * Whether a method NAME reads like a query. Deliberately about the name and nothing else: on a
@@ -797,12 +889,29 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         }
     }
 
-    /** One method of one class: its ordinary calls and the callbacks it creates. */
+    /**
+     * A class named by a FIELD instruction. Reading a static field of a nested class is a way of
+     * getting at its code - through whatever the field holds, and through its {@code <clinit>} - that
+     * leaves no call behind, so the walk has to see it as a reference in its own right.
+     */
+    private static final class Reference
+    {
+        private final String owner;
+
+        Reference(String owner)
+        {
+            this.owner = owner;
+        }
+    }
+
+    /** One method of one class: its calls, the callbacks it creates, the classes it names. */
     private static final class MethodBody
     {
         private final List<Call> calls = new ArrayList<>();
 
         private final List<Callback> callbacks = new ArrayList<>();
+
+        private final List<Reference> references = new ArrayList<>();
     }
 
     /**
@@ -884,6 +993,12 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             return body == null ? List.of() : body.callbacks;
         }
 
+        List<Reference> referencesIn(String node)
+        {
+            MethodBody body = methods.get(node);
+            return body == null ? List.of() : body.references;
+        }
+
         /** Whether any method creates a callback of {@code type} - the walk's own positive control. */
         boolean hasCallbackOfType(String type)
         {
@@ -933,19 +1048,6 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             return first;
         }
 
-        /** Whether {@code node} hands anything to one of the gate's entry points. */
-        private boolean callsAGate(String node, String unit, Set<String> gateEntries)
-        {
-            for (Call call : callsIn(node))
-            {
-                if (inUnit(call.owner, unit) && gateEntries.contains(call.name))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         /**
          * Every place a write callback is built without going STRAIGHT into the gate.
          *
@@ -955,11 +1057,14 @@ public class DeleteMetadataConsentSinglePointRatchetTest
          * taking {@code Object} hides it. Both fail for the same reason: without tracking WHICH value
          * went where, any rule about the method as a whole can be satisfied by a second callback.</p>
          *
-         * <p>So the rule is about the value's only safe lifetime: the first invocation after the one
-         * that CREATES the callback must be an authorization step. Then it was never stored, never
-         * passed anywhere else, and no second callback can stand in for it - which is how every branch
-         * in this tool already writes it. A branch that wants a named local instead has to make the
-         * gate call the next thing it does.</p>
+         * <p>So the rule is about the value's only safe lifetime: the very next thing the method DOES
+         * after building the callback - the next invocation or the next callback creation, whichever
+         * comes first - must be an authorization step. Then the value was never stored, never handed
+         * anywhere else, and no second callback can stand in for it, because a second creation is
+         * itself the violation. Looking only at the next CALL was not enough: two callbacks built
+         * back to back share the gate invocation that follows them, and the leaked one rides in on
+         * the harmless one's authorization. This is how every branch in this tool already writes it;
+         * a branch that wants a named local has to make the gate call the next thing it does.</p>
          *
          * @param unit the analysed class
          * @param writeType the gate's callback type
@@ -976,26 +1081,11 @@ public class DeleteMetadataConsentSinglePointRatchetTest
                 {
                     continue;
                 }
-                List<Integer> created = new ArrayList<>();
-                for (Callback callback : method.getValue().callbacks)
+                for (int at : creationsOf(method.getKey(), writeType))
                 {
-                    if (writeType.equals(callback.type))
+                    if (!handedStraightToTheGate(method.getKey(), at, unit, gateEntries))
                     {
-                        created.add(callback.offset);
-                    }
-                }
-                for (Call call : method.getValue().calls)
-                {
-                    if ("<init>".equals(call.name) && implementsType(call.owner, writeType)) //$NON-NLS-1$
-                    {
-                        created.add(call.offset); // a named / anonymous implementation of it
-                    }
-                }
-                for (int at : created)
-                {
-                    Call next = firstCallAfter(method.getKey(), at);
-                    if (next == null || !(inUnit(next.owner, unit) && gateEntries.contains(next.name)))
-                    {
+                        Call next = nextCallAfter(method.getKey(), at);
                         offenders.add(method.getKey() + " -> " //$NON-NLS-1$
                             + (next == null ? "nothing" : next.target())); //$NON-NLS-1$
                     }
@@ -1004,8 +1094,77 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             return offenders;
         }
 
+        /** Every offset in {@code node} at which a value of {@code writeType} comes into existence. */
+        private List<Integer> creationsOf(String node, String writeType)
+        {
+            List<Integer> created = new ArrayList<>();
+            for (Callback callback : callbacksIn(node))
+            {
+                if (writeType.equals(callback.type))
+                {
+                    created.add(callback.offset);
+                }
+            }
+            for (Call call : callsIn(node))
+            {
+                if ("<init>".equals(call.name) && implementsType(call.owner, writeType)) //$NON-NLS-1$
+                {
+                    created.add(call.offset); // a named / anonymous implementation of it
+                }
+            }
+            return created;
+        }
+
+        /**
+         * Whether the callback created at {@code offset} goes straight into an authorization step.
+         * This is the per-VALUE question the whole exemption rests on, so nothing here may be
+         * answered about the method as a whole.
+         *
+         * @param node the method holding the creation
+         * @param offset where the callback is created
+         * @param unit the analysed class
+         * @param gateEntries the methods a callback may legitimately be handed to
+         * @return whether the next thing that happens is the handover
+         */
+        private boolean handedStraightToTheGate(String node, int offset, String unit,
+            Set<String> gateEntries)
+        {
+            Call next = nextCallAfter(node, offset);
+            if (next == null || !(inUnit(next.owner, unit) && gateEntries.contains(next.name)))
+            {
+                return false;
+            }
+            // ... and that invocation must belong to THIS value alone. One gate call authorizes one
+            // callback; when two creations both point at it, one of them is riding on the other's
+            // authorization and nothing here can say which - so neither is exempt. Without this the
+            // rule is still a per-method aggregate wearing a per-value disguise.
+            for (Callback callback : callbacksIn(node))
+            {
+                if (callback.offset != offset && callback.offset < next.offset
+                    && callback.offset > lastCallBefore(node, next.offset))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** The offset of the last invocation strictly before {@code offset}, or -1. */
+        private int lastCallBefore(String node, int offset)
+        {
+            int best = -1;
+            for (Call call : callsIn(node))
+            {
+                if (call.offset < offset && call.offset > best)
+                {
+                    best = call.offset;
+                }
+            }
+            return best;
+        }
+
         /** The first invocation instruction after {@code offset} in {@code node}, or {@code null}. */
-        private Call firstCallAfter(String node, int offset)
+        private Call nextCallAfter(String node, int offset)
         {
             Call best = null;
             for (Call call : callsIn(node))
@@ -1041,7 +1200,6 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             while (!queue.isEmpty())
             {
                 String from = queue.poll();
-                boolean authorizes = callsAGate(from, unit, gateEntries);
                 for (Call call : callsIn(from))
                 {
                     if (!inUnit(call.owner, unit))
@@ -1052,11 +1210,22 @@ public class DeleteMetadataConsentSinglePointRatchetTest
                     {
                         queue.add(call.node());
                     }
-                    expand(call.owner, unit, gatedType, authorizes, seen, queue);
+                    expand(call.owner, unit, gatedType,
+                        handedStraightToTheGate(from, call.offset, unit, gateEntries), seen, queue);
+                }
+                // A class this method only READS a static field of never appears as a call owner, so
+                // without this a nested holder - a static Function built from a method reference, run
+                // through apply() - would be touched by the branch and still be invisible.
+                for (Reference reference : referencesIn(from))
+                {
+                    expand(reference.owner, unit, gatedType, false, seen, queue);
                 }
                 for (Callback callback : callbacksIn(from))
                 {
-                    if (authorizes && gatedType.equals(callback.type))
+                    // Per CREATION, never per method: "this method calls a gate somewhere" exempts
+                    // every callback built in it, and a branch that builds two only has to gate one.
+                    if (gatedType.equals(callback.type)
+                        && handedStraightToTheGate(from, callback.offset, unit, gateEntries))
                     {
                         continue;
                     }
@@ -1073,7 +1242,9 @@ public class DeleteMetadataConsentSinglePointRatchetTest
                     // gated ones included.
                     if ("<init>".equals(callback.implMethod)) //$NON-NLS-1$
                     {
-                        expand(callback.implOwner, unit, gatedType, authorizes, seen, queue);
+                        expand(callback.implOwner, unit, gatedType,
+                            handedStraightToTheGate(from, callback.offset, unit, gateEntries), seen,
+                            queue);
                     }
                 }
             }
@@ -1478,6 +1649,11 @@ public class DeleteMetadataConsentSinglePointRatchetTest
                     int nameAndType = refNameAndTypes[ref];
                     into.calls.add(new Call(pc, simpleName(nameOf(classNames, refOwners[ref])),
                         text(nameAndTypeNames[nameAndType]), text(nameAndTypeDescriptors[nameAndType])));
+                }
+                else if (opcode >= 0xB2 && opcode <= 0xB5) // getstatic / putstatic / getfield / putfield
+                {
+                    int ref = readUnsignedShort(code, pc + 1);
+                    into.references.add(new Reference(simpleName(nameOf(classNames, refOwners[ref]))));
                 }
                 else if (opcode == 0xBA) // invokedynamic: creates a callback, does not run it
                 {

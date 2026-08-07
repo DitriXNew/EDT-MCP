@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -75,6 +78,17 @@ public final class ConsentRatchetFixtures
         {
             return write.perform();
         }
+
+        /**
+         * The same, for the fixture that builds two callbacks and gates only one.
+         *
+         * @param write the callback
+         * @return its result
+         */
+        public static String runAny(TwoCallbackBypass.DeleteWrite write)
+        {
+            return write.perform();
+        }
     }
 
     /**
@@ -119,6 +133,153 @@ public final class ConsentRatchetFixtures
             DeleteWrite write = () -> sink.mutate();
             Runner.run(write);
             return deleteWithConsent("preview", write); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Builds TWO callbacks back to back and hands the harmless one to the gate. Every rule phrased
+     * about the method as a whole is satisfied - a gate call is there, and it is even the first
+     * invocation after both creations - and the second callback rides in on the first one's
+     * authorization while being run somewhere else entirely.
+     */
+    public static final class TwoCallbackBypass
+    {
+        /** This fixture's own callback type. */
+        @FunctionalInterface
+        interface DeleteWrite
+        {
+            /**
+             * Performs the branch's mutation.
+             *
+             * @return the branch's result
+             */
+            String perform();
+        }
+
+        /**
+         * The single authorization point.
+         *
+         * @param preview what is being authorized
+         * @param write the mutation, run only when consent is granted
+         * @return the mutation's result, or the refusal
+         */
+        String deleteWithConsent(String preview, DeleteWrite write)
+        {
+            return preview.isEmpty() ? "denied" : write.perform(); //$NON-NLS-1$
+        }
+
+        /**
+         * The dispatch entry point.
+         *
+         * @param sink the fixture's write API
+         * @return the branch's result
+         */
+        String executeOnUiThread(Sink sink)
+        {
+            DeleteWrite harmless = () -> "{}"; //$NON-NLS-1$
+            DeleteWrite leaked = () -> sink.mutate();
+            String gated = deleteWithConsent("preview", harmless); //$NON-NLS-1$
+            return gated + Runner.runAny(leaked);
+        }
+    }
+
+    /**
+     * Reaches its write through a STATIC FIELD of a nested holder. Nothing in the entry point is a
+     * call into the holder - the only instruction naming it is a {@code getstatic} - so a walk that
+     * records invocations alone never opens the class, and both the field's function and the
+     * {@code <clinit>} that built it stay invisible.
+     */
+    public static final class StaticFieldBypass
+    {
+        /** This fixture's own callback type. */
+        @FunctionalInterface
+        interface DeleteWrite
+        {
+            /**
+             * Performs the branch's mutation.
+             *
+             * @return the branch's result
+             */
+            String perform();
+        }
+
+        /** The holder: touched only by reading its field. */
+        static final class Holder
+        {
+            static final Function<Sink, String> WRITE = sink -> sink.mutate();
+
+            private Holder()
+            {
+                // Constants.
+            }
+        }
+
+        /**
+         * The single authorization point.
+         *
+         * @param preview what is being authorized
+         * @param write the mutation, run only when consent is granted
+         * @return the mutation's result, or the refusal
+         */
+        String deleteWithConsent(String preview, DeleteWrite write)
+        {
+            return preview.isEmpty() ? "denied" : write.perform(); //$NON-NLS-1$
+        }
+
+        /**
+         * The dispatch entry point.
+         *
+         * @param sink the fixture's write API
+         * @return the branch's result
+         */
+        String executeOnUiThread(Sink sink)
+        {
+            return Holder.WRITE.apply(sink);
+        }
+    }
+
+    /**
+     * Deletes on disk with plain Java. {@code java.nio.file.Files} is not an Eclipse resource, not a
+     * {@code *Writer} and on no list - and this is the tool whose whole job is deleting things.
+     */
+    public static final class FileDeleteBypass
+    {
+        /** This fixture's own callback type. */
+        @FunctionalInterface
+        interface DeleteWrite
+        {
+            /**
+             * Performs the branch's mutation.
+             *
+             * @return the branch's result
+             */
+            String perform();
+        }
+
+        /**
+         * The single authorization point.
+         *
+         * @param preview what is being authorized
+         * @param write the mutation, run only when consent is granted
+         * @return the mutation's result, or the refusal
+         */
+        String deleteWithConsent(String preview, DeleteWrite write)
+        {
+            return preview.isEmpty() ? "denied" : write.perform(); //$NON-NLS-1$
+        }
+
+        /**
+         * The dispatch entry point.
+         *
+         * @param victim the file this branch removes behind everyone's back
+         * @param sink the fixture's write API
+         * @return the branch's result
+         * @throws IOException never - the shape only has to compile
+         */
+        String executeOnUiThread(Path victim, Sink sink) throws IOException
+        {
+            Files.delete(victim);
+            return deleteWithConsent("preview", () -> sink.mutate()); //$NON-NLS-1$
         }
     }
 
@@ -202,8 +363,8 @@ public final class ConsentRatchetFixtures
         String executeOnUiThread(Sink sink)
         {
             DeleteWrite write = () -> sink.mutate();
-            Supplier<String> escape = write::perform;
             String gated = deleteWithConsent("preview", write); //$NON-NLS-1$
+            Supplier<String> escape = write::perform;
             return gated + escape.get();
         }
     }
