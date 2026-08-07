@@ -423,7 +423,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (subsystemChain != null)
         {
             return createNestedSubsystem(new NestedSubsystemRequest(project, projectName, config,
-                subsystemChain, props, expectedNotExists, normReport));
+                normFqn, subsystemChain, props, expectedNotExists, normReport));
         }
 
         CreateTarget target = MetadataNodeResolver.resolveForCreate(config, normFqn);
@@ -1119,6 +1119,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final IProject project;
         final String projectName;
         final Configuration config;
+        /** The address EXACTLY as requested (type-normalized); the well-formedness check needs the
+         * raw text, which the trimmed {@link #chain} no longer carries. */
+        final String normFqn;
         /** The parsed subsystem chain; the last entry is the node to create. */
         final String[] chain;
         final Props props;
@@ -1126,11 +1129,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final MdNameNormalizer.Report normReport;
 
         NestedSubsystemRequest(IProject project, String projectName, Configuration config, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-            String[] chain, Props props, boolean expectedNotExists, MdNameNormalizer.Report normReport)
+            String normFqn, String[] chain, Props props, boolean expectedNotExists,
+            MdNameNormalizer.Report normReport)
         {
             this.project = project;
             this.projectName = projectName;
             this.config = config;
+            this.normFqn = normFqn;
             this.chain = chain;
             this.props = props;
             this.expectedNotExists = expectedNotExists;
@@ -1160,6 +1165,16 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      */
     private String createNestedSubsystem(NestedSubsystemRequest req)
     {
+        // FIRST, before anything reads the parsed chain: the chain is built from TRIMMED segments and
+        // survives a stray trailing separator, so an address that reads differently from a well-formed
+        // one would otherwise be acted on AS the well-formed one - ' Child ' stored as 'Child',
+        // '...Child.' created as '...Child'. The identifier check below cannot see either, because by
+        // then the name is already the trimmed one.
+        String malformed = SubsystemUtils.malformedSegmentError(req.normFqn);
+        if (malformed != null)
+        {
+            return ToolResult.error(malformed).toJson();
+        }
         final String name = req.chain[req.chain.length - 1];
         if (!isValidIdentifier(name))
         {

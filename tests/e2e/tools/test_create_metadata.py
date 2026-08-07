@@ -2341,6 +2341,23 @@ def test_nested_subsystem_with_a_missing_parent_is_a_clear_error():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_nested_subsystem_address_with_a_malformed_segment_is_refused_by_name():
+    # A stray trailing '.' and a padded segment are the two ways an address can READ differently
+    # from the well-formed one and still parse into the same chain (String.split drops trailing
+    # empty segments; the chain is built from TRIMMED segments). Both must be refused, and the
+    # refusal must say what is wrong with the address - not the generic "cannot resolve a create
+    # target", whose list of kinds does not even mention subsystems.
+    base = "Subsystem.%s.Subsystem.E2EStray" % _FIXTURE_SUBSYSTEM
+    for bad, expected in ((base + ".", "empty segment"),
+                          (base + "..", "empty segment"),
+                          ("Subsystem.%s.Subsystem. E2EStray " % _FIXTURE_SUBSYSTEM, "padded segment")):
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": bad})
+        e = assert_error(r, "malformed nested-subsystem address %r" % bad)
+        assert_error_quality(e, names=[bad], suggests=[expected])
+    assert_no_diff("a rejected malformed address must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_nested_subsystem_duplicate_is_rejected():
     # The duplicate guard applies to the CHAIN, not just to top-level names: a second create of the
     # same child must be refused, and expectedNotExists must sharpen the refusal the same way it

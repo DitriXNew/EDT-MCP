@@ -361,23 +361,90 @@ public class SubsystemUtilsTest
         assertNull(SubsystemUtils.nestedChain(null));
     }
 
+    // ========== malformedSegmentError (the well-formedness gate of the create branch) ==========
+
     @Test
-    public void testNestedChainRefusesAPaddedSegment()
+    public void testWellFormedAddressIsNotRefused()
+    {
+        // The CONTROL for every refusal below. Without it the whole group would still pass if the
+        // check simply refused everything.
+        assertNull(SubsystemUtils.malformedSegmentError("Subsystem.Sales.Subsystem.Child")); //$NON-NLS-1$
+        assertNull(SubsystemUtils.malformedSegmentError(
+            "Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog")); //$NON-NLS-1$
+        assertNull(SubsystemUtils.malformedSegmentError("Подсистема.Продажи.Subsystem.Orders")); //$NON-NLS-1$
+        assertNull(SubsystemUtils.malformedSegmentError(null));
+    }
+
+    @Test
+    public void testAPaddedSegmentIsRefusedByName()
     {
         // parseSubsystemPath TRIMS each segment, which is right for a lookup and wrong for a create:
-        // the create would store 'Child' for ' Child ' and navigate to 'Sales' for ' Sales ', while
-        // the ordinary create path refuses both (findObject matches the owner name verbatim, and the
-        // identifier check rejects a leading space). Refusing here keeps the two paths saying the
-        // same thing about the same input.
-        assertNotNull("the unpadded address is the control - it must still be a chain", //$NON-NLS-1$
-            SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Child")); //$NON-NLS-1$
-        assertNull(SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem. Child")); //$NON-NLS-1$
-        assertNull(SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Child ")); //$NON-NLS-1$
-        assertNull(SubsystemUtils.nestedChain("Subsystem. Sales .Subsystem.Child")); //$NON-NLS-1$
-        assertNull(SubsystemUtils.nestedChain(" Subsystem.Sales.Subsystem.Child ")); //$NON-NLS-1$
+        // it would store 'Child' for ' Child ' and navigate to 'Sales' for ' Sales ', while the
+        // ordinary create path refuses both (findObject matches the owner name verbatim, and the
+        // identifier check rejects a leading space).
+        String padded = SubsystemUtils.malformedSegmentError("Subsystem.Sales.Subsystem. Child "); //$NON-NLS-1$
+        assertNotNull("a padded segment must be refused", padded); //$NON-NLS-1$
+        assertTrue("the refusal must quote the offending segment: " + padded, //$NON-NLS-1$
+            padded.contains("' Child '")); //$NON-NLS-1$
+        assertNotNull(SubsystemUtils.malformedSegmentError("Subsystem. Sales .Subsystem.Child")); //$NON-NLS-1$
+        // Whitespace around the WHOLE address is the same fault: it lands in the first or the last
+        // segment, and the refusal must still name THAT segment rather than the whole address.
+        String outer = SubsystemUtils.malformedSegmentError(" Subsystem.Sales.Subsystem.Child "); //$NON-NLS-1$
+        assertNotNull(outer);
+        assertTrue("the refusal must quote the offending segment: " + outer, //$NON-NLS-1$
+            outer.contains("' Subsystem'")); //$NON-NLS-1$
+        // A segment that is nothing BUT whitespace is padded, not empty - it must not be mislabelled.
+        String blank = SubsystemUtils.malformedSegmentError("Subsystem.Sales.Subsystem. "); //$NON-NLS-1$
+        assertNotNull(blank);
+        assertFalse("a blank segment is padded, not empty: " + blank, //$NON-NLS-1$
+            blank.contains("EMPTY segment")); //$NON-NLS-1$
         // ...while the LOOKUP parser keeps tolerating it - the two really do differ on purpose.
         assertArrayEquals(new String[] { "Sales", "Child" }, //$NON-NLS-1$ //$NON-NLS-2$
             SubsystemUtils.parseSubsystemPath("Subsystem. Sales .Subsystem. Child ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATrailingSeparatorIsRefusedAndNotSilentlyDropped()
+    {
+        // String.split() DROPS trailing empty strings, so 'Subsystem.Sales.Subsystem.Child.' splits
+        // into the same four segments as the clean address: the stray separator is invisible unless
+        // the split is given an explicit -1 limit. Accepting it would act on an address the caller
+        // did not type - the same defect class as the padded segment above, and the same verdict
+        // get_project_errors already gives an empty segment.
+        for (String stray : new String[] {
+            "Subsystem.Sales.Subsystem.Child.", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem.Child..", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem.Child..."}) //$NON-NLS-1$
+        {
+            String err = SubsystemUtils.malformedSegmentError(stray);
+            assertNotNull("a stray trailing separator must be refused: " + stray, err); //$NON-NLS-1$
+            assertTrue("the refusal must say WHAT is wrong: " + err, err.contains("EMPTY segment")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the refusal must quote the address: " + err, err.contains(stray)); //$NON-NLS-1$
+            // ...and the parser really does read it as the clean chain - which is exactly why the
+            // check above cannot be left to it.
+            assertArrayEquals("the parser reads the stray address as the clean chain", //$NON-NLS-1$
+                new String[] { "Sales", "Child" }, SubsystemUtils.parseSubsystemPath(stray)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testLeadingAndMidStringEmptySegmentsNeverReachTheCreateBranch()
+    {
+        // The symmetric spellings. These are refused one step EARLIER - split keeps a leading or
+        // mid-string empty string, so the arity / empty-name checks in parseSubsystemPath fire and
+        // the address is not a subsystem chain at all. Pinned so a later change to that parse cannot
+        // quietly let them through on the assumption that malformedSegmentError covers them.
+        for (String bad : new String[] {
+            ".Subsystem.Sales.Subsystem.Child", //$NON-NLS-1$
+            "Subsystem.Sales..Subsystem.Child", //$NON-NLS-1$
+            "Subsystem..Subsystem.Child", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem..Child", //$NON-NLS-1$
+            ".", //$NON-NLS-1$
+            "..."}) //$NON-NLS-1$
+        {
+            assertNull("must not be read as a nested-subsystem chain: " + bad, //$NON-NLS-1$
+                SubsystemUtils.nestedChain(bad));
+        }
     }
 
     @Test
