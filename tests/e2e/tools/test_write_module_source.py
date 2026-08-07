@@ -22,7 +22,7 @@ import re
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains,
-    assert_diff_contains, assert_no_diff, e2e_test, PROJECT,
+    assert_diff_contains, assert_no_diff, e2e_test, PROJECT, _fail,
 )
 
 MODULE = "CommonModules/OK/Module.bsl"
@@ -298,3 +298,219 @@ def test_searchreplace_with_matching_expectedhash_succeeds():
     })
     assert_ok(r, "searchReplace with a matching expectedHash must be accepted")
     assert_diff_contains("Значение = 7;", "the hash-guarded searchReplace must persist to disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# dryRun (preview, no write)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DRYRUN_SRC = "Процедура Демо() Экспорт\n\tВозврат;\nКонецПроцедуры\n"
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_dryrun_previews_without_writing():
+    """dryRun runs the full pipeline (guards + compute + syntax check) but writes NOTHING:
+    the response is a preview echoing the would-be content, and the project on disk is
+    untouched. Uses replace+overwrite so the ONLY reason nothing lands is dryRun itself
+    (a bare replace would be rejected by the lost-update guard, masking the point)."""
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "overwrite": True, "source": _DRYRUN_SRC, "dryRun": True,
+    })
+    assert_ok(r, "dryRun preview must succeed")
+    assert_contains(r.text, "status: preview", "response must be marked status: preview")
+    assert_contains(r.text, "written: false", "preview must state nothing was written")
+    assert_contains(r.text, "Процедура Демо", "preview must echo the would-be content")
+    assert_no_diff("a dryRun must not touch the project on disk")
+    # An independent read-back proves the preview did NOT persist (belt and suspenders).
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_not_contains(src.text, "Процедура Демо", "previewed content must NOT be on disk")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_dryrun_syntax_error_is_reported_and_no_write():
+    """The BSL syntax check runs in dryRun too: previewing unbalanced BSL returns the
+    syntax error (not a preview) and still writes nothing."""
+    bad = "Процедура Broken() Экспорт\n\t// no EndProcedure\n"
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "overwrite": True, "source": bad, "dryRun": True,
+    })
+    assert_error(r, "a dryRun over invalid BSL must report the syntax error")
+    assert_no_diff("a failed dryRun must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# replaceMethod (swap a whole method by name)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_TWO_METHODS = (
+    "Функция Add(A, B) Экспорт\n"
+    "\tВозврат A + B;\n"
+    "КонецФункции\n"
+    "\n"
+    "Процедура Test() Экспорт\n"
+    "\tРезультат = Add(1, 2);\n"
+    "КонецПроцедуры\n"
+)
+
+
+def _seed_two_methods():
+    seed = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replace", "source": _TWO_METHODS, "overwrite": True,
+    })
+    assert_ok(seed, "seed a two-method module")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replacemethod_swaps_named_method_only():
+    """replaceMethod swaps ONE method by name: the new body lands, the old body is gone,
+    and the OTHER method is left intact. No oldSource needed (expectedHash IS needed - see
+    test_replacemethod_requires_expected_hash)."""
+    _seed_two_methods()
+    token = _read_content_hash()
+    new_test = ("Процедура Test() Экспорт\n"
+                "\tСлагаемое = 2;\n"
+                "\tAdd(1, Слагаемое);\n"
+                "КонецПроцедуры")
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replaceMethod", "methodName": "Test", "source": new_test, "expectedHash": token,
+    })
+    assert_ok(r, "replaceMethod must succeed for an existing method")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Слагаемое = 2;", "the new method body must be on disk")
+    assert_not_contains(src.text, "Результат = Add(1, 2);", "the old method body must be gone")
+    assert_contains(src.text, "Функция Add(A, B)", "the untouched sibling method must remain")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replacemethod_unknown_method_rejected_and_keeps_content():
+    """An unknown methodName is rejected with the available method names, and nothing is
+    written (the seeded content survives)."""
+    _seed_two_methods()
+    token = _read_content_hash()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replaceMethod", "methodName": "NoSuchMethod_e2e",
+        "source": "Процедура X() Экспорт\nКонецПроцедуры", "expectedHash": token,
+    })
+    err = assert_error(r, "replaceMethod for an absent method must be rejected")
+    # Actionable: the error lists the real method names so the caller can correct it.
+    assert_contains(err, "Test", "not-found error should list the available methods")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Результат = Add(1, 2);",
+                    "a rejected replaceMethod must not have altered the module")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replacemethod_missing_methodname_rejected():
+    """replaceMethod without methodName is rejected before any file work."""
+    _seed_two_methods()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replaceMethod", "source": "Процедура X() Экспорт\nКонецПроцедуры",
+    })
+    err = assert_error(r, "replaceMethod without methodName must be rejected")
+    assert_contains(err, "methodName", "the error must name the missing methodName param")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replacemethod_requires_expected_hash():
+    """replaceMethod blindly swaps the whole method body, so (unlike insertBefore/insertAfter,
+    which only ADD text) it requires expectedHash - without one, a stale read could silently
+    clobber a concurrent edit to the same method. Rejected before the method lookup even runs,
+    and nothing is written."""
+    _seed_two_methods()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replaceMethod", "methodName": "Test",
+        "source": "Процедура Test() Экспорт\nКонецПроцедуры",
+    })
+    err = assert_error(r, "replaceMethod without expectedHash must be rejected")
+    assert_error_quality(err, names=["expectedHash"], suggests=["read_module_source"],
+                          ctx="missing expectedHash names the param + steers to re-read")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Результат = Add(1, 2);",
+                    "a rejected replaceMethod must not have altered the module")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_replacemethod_dryrun_previews_without_writing():
+    """replaceMethod honors dryRun: the preview shows the swapped module, disk is untouched."""
+    _seed_two_methods()
+    token = _read_content_hash()
+    new_test = "Процедура Test() Экспорт\n\tВозврат;\nКонецПроцедуры"
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "replaceMethod", "methodName": "Test", "source": new_test, "dryRun": True,
+        "expectedHash": token,
+    })
+    assert_ok(r, "replaceMethod dryRun must succeed")
+    assert_contains(r.text, "status: preview", "must be a preview")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Результат = Add(1, 2);",
+                    "a dryRun replaceMethod must NOT change the module on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# insertBefore / insertAfter (add a method next to a named anchor)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_NEW_SUB = "\nФункция Sub(A, B) Экспорт\n\tВозврат A - B;\nКонецФункции\n"
+
+
+def _order_ok(text, first, second, third):
+    """True when first < second < third by first-occurrence index (all must be present)."""
+    i1, i2, i3 = text.find(first), text.find(second), text.find(third)
+    return -1 < i1 < i2 < i3
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_insertafter_places_method_after_anchor():
+    """insertAfter splices source right after the anchor method: the new method lands
+    BETWEEN the anchor (Add) and the next method (Test), and both originals survive."""
+    _seed_two_methods()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "insertAfter", "methodName": "Add", "source": _NEW_SUB,
+    })
+    assert_ok(r, "insertAfter must succeed for an existing anchor")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Функция Sub(A, B)", "the new method must be on disk")
+    assert_contains(src.text, "Функция Add(A, B)", "the anchor method must survive")
+    assert_contains(src.text, "Процедура Test()", "the sibling method must survive")
+    if not _order_ok(src.text, "Функция Add", "Функция Sub", "Процедура Test"):
+        _fail("insertAfter must place Sub AFTER Add and BEFORE Test")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_insertbefore_places_method_before_anchor():
+    """insertBefore splices source right before the anchor method: the new method lands
+    BEFORE Test (and after Add)."""
+    _seed_two_methods()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "insertBefore", "methodName": "Test", "source": _NEW_SUB,
+    })
+    assert_ok(r, "insertBefore must succeed for an existing anchor")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_contains(src.text, "Функция Sub(A, B)", "the new method must be on disk")
+    if not _order_ok(src.text, "Функция Add", "Функция Sub", "Процедура Test"):
+        _fail("insertBefore Test must place Sub before Test (and after Add)")
+
+
+@e2e_test(tool="write_module_source", kind="write")
+def test_insert_unknown_anchor_rejected_and_keeps_content():
+    """insert modes share the method-not-found guard: an unknown anchor is rejected with
+    the available method names and nothing is written."""
+    _seed_two_methods()
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "insertAfter", "methodName": "NoSuchAnchor_e2e", "source": _NEW_SUB,
+    })
+    err = assert_error(r, "insertAfter for an absent anchor must be rejected")
+    assert_contains(err, "Add", "not-found error should list the available methods")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_not_contains(src.text, "Функция Sub", "a rejected insert must not have written anything")
