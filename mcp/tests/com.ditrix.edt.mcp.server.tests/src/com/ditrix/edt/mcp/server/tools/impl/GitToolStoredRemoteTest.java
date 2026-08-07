@@ -958,6 +958,77 @@ public class GitToolStoredRemoteTest
             + "check", GitTool.storedRemoteRefusal(repo, List.of(PUSH))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testARemoteGROUPIsJudgedThoughItHasNoRemoteSection() throws Exception
+    {
+        // '[remotes] grp = <url>' needs no [remote] subsection at all, and 'git fetch grp' prints
+        // one 'Fetching <value>' line per member. Measured on git 2.35.1: the line came out as
+        // 'Fetching https://user:s3cr3t' - the credential verbatim, cut at the space, exactly the
+        // shape the redaction cannot mask. Enumerating [remote] subsections alone never sees it.
+        Repository repo = newRepository("git-stored-remote-group"); //$NON-NLS-1$
+        StoredConfig config = repo.getConfig();
+        config.setString("remotes", null, "mygroup", poisonedUrl(SPACE)); //$NON-NLS-1$ //$NON-NLS-2$
+        config.save();
+        // Positive control: there is NO [remote] subsection here, so the refusal cannot come from
+        // the enumeration this check started life with.
+        assertTrue("fixture: no remote subsection may exist, or this case proves nothing", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).isEmpty());
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a remote group git would print must be judged too", refusal); //$NON-NLS-1$
+        assertRefusalNamesTheRemoteAndTheFix(refusal, "mygroup"); //$NON-NLS-1$
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testGitsLegacyRemoteFilesAreJudged() throws Exception
+    {
+        // '$GIT_DIR/remotes/<name>' and '$GIT_DIR/branches/<name>' are not configuration at all,
+        // and JGit's config never mentions them - but 'git remote get-url <name>' prints what
+        // stands in them. Measured on git 2.35.1 for both directories: the full URL came back with
+        // the credential and the space in it.
+        for (String directory : List.of("remotes", "branches")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Repository repo = newRepository("git-stored-legacy-" + directory); //$NON-NLS-1$
+            storeRemoteUrls(repo, ORIGIN, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$
+            File dir = new File(repo.getDirectory(), directory);
+            // JGit's init() already creates some of these, so "exists afterwards" is the condition,
+            // not "was created by this call".
+            assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+            String entry = "oldstyle"; //$NON-NLS-1$
+            Files.write(new File(dir, entry).toPath(),
+                ("URL: " + poisonedUrl(SPACE) + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+            // Positive control: the configuration itself is clean, so nothing but the legacy file
+            // can produce a refusal.
+            assertNull("fixture: the stored config must be clean", //$NON-NLS-1$
+                GitTool.storedTextFlaw("https://" + HOST + "/team/repo.git")); //$NON-NLS-1$
+
+            String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+            assertNotNull(directory + "/<name> is printed by 'git remote get-url' and must be " //$NON-NLS-1$
+                + "judged", refusal); //$NON-NLS-1$
+            assertRefusalNamesTheRemoteAndTheFix(refusal, entry);
+            assertRefusalLeaksNothing(refusal);
+        }
+    }
+
+    @Test
+    public void testACleanLegacyRemoteFileIsNotRefused() throws Exception
+    {
+        // The other side: these files are ordinary in old repositories, so reading them may not turn
+        // every one of them into an outage.
+        Repository repo = newRepository("git-stored-legacy-clean"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        Files.write(new File(dir, "upstream").toPath(), //$NON-NLS-1$
+            ("URL: git@github.com:acme/repo.git\nPush: refs/heads/main\n") //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertNull("a legacy file carrying git's documented ssh remote is not a credential", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
     // ==================== fail closed ====================
 
     @Test

@@ -301,6 +301,27 @@ public class GitTool implements IMcpTool
     private static final String REPOSITORY_CONFIG_FILE = "config"; //$NON-NLS-1$
 
     /**
+     * The section holding remote GROUPS ({@code [remotes] mygroup = <url> <url>}), whose members
+     * {@code git fetch <group>} and {@code git remote update} print one per line as
+     * {@code Fetching <value>} - a value that needs no {@code [remote]} subsection to exist.
+     */
+    private static final String REMOTE_GROUP_SECTION = "remotes"; //$NON-NLS-1$
+
+    /**
+     * git's LEGACY per-remote files, relative to the git directory. Not configuration:
+     * {@code remotes/<name>} carries {@code URL:} lines, {@code branches/<name>} a bare URL, and
+     * {@code git remote get-url} prints either verbatim while JGit's config knows nothing of them.
+     */
+    private static final List<String> LEGACY_REMOTE_DIRECTORIES =
+        List.of("remotes", "branches"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** Most legacy files read per directory; beyond that the directory is refused, not walked. */
+    private static final int MAX_LEGACY_REMOTE_FILES = 256;
+
+    /** Most bytes read from one legacy file; a genuine one is a line or two. */
+    private static final int MAX_LEGACY_REMOTE_BYTES = 64 * 1024;
+
+    /**
      * The schemes for which a userinfo without a password marker is a LOGIN, not a credential -
      * git's documented SSH remote spelling. One list, asked by {@link #isPlainSshUser} on the input
      * side and by {@link #isPlainSshLogin} on the stored side.
@@ -1444,6 +1465,21 @@ public class GitTool implements IMcpTool
      * {@code jgit/config} is a THIRD, JGit-only file, not a replacement for the XDG one). A remote
      * defined in any of them is enumerated here.
      * <p>
+     * WHERE a remote URL is looked for, and where it is NOT - the list is git's own grammar, not a
+     * guess, and what is missing from it is written down rather than left to be discovered:
+     * <ul>
+     * <li>READ: {@code remote.<name>.url} and {@code .pushurl} (both multi-valued), the subsection
+     * NAME, the members of a remote GROUP ({@code [remotes] <group> = ...}), and git's legacy
+     * {@code $GIT_DIR/remotes/*} / {@code $GIT_DIR/branches/*} files - measured: each of those is
+     * printed verbatim by a command in {@link #REMOTE_SUBCOMMANDS}.</li>
+     * <li>NOT read: {@code remote.pushDefault} and {@code branch.<name>.remote} /
+     * {@code .pushRemote}. They can hold a URL, but the only place git puts one is a transport
+     * error, and there it strips the userinfo itself ({@code fatal: unable to access
+     * 'https://example.com/r.git/'} - measured on git 2.35.1, the credential gone). Nothing to
+     * leak, so nothing to refuse.</li>
+     * <li>NOT read: {@code url.<base>.insteadOf} rewrites and conditional {@code [includeIf]}
+     * sections, both below.</li>
+     * </ul>
      * Two limits are deliberate and stated in the tool guide: a {@code url.<base>.insteadOf} or
      * {@code .pushInsteadOf} rewrite rule is NOT inspected - both rewrite the effective URL (the
      * second one for push only), and that URL is git's to compute - and of git's two include forms
@@ -1494,6 +1530,24 @@ public class GitTool implements IMcpTool
                     return unprintableRemoteRefusal(remote, flaw);
                 }
             }
+            // A remote GROUP: 'git fetch <group>' and 'git remote update' print 'Fetching <value>'
+            // for each entry, and the value is a URL git never had a [remote] subsection for.
+            for (String group : effective.getNames(REMOTE_GROUP_SECTION))
+            {
+                for (String member : effective.getStringList(REMOTE_GROUP_SECTION, null, group))
+                {
+                    StoredRemoteFlaw flaw = storedTextFlaw(member);
+                    if (flaw != null)
+                    {
+                        return unprintableRemoteRefusal(group, flaw);
+                    }
+                }
+            }
+            String legacy = legacyRemoteRefusal(repo);
+            if (legacy != null)
+            {
+                return legacy;
+            }
         }
         // NOSONAR fail closed: a configuration that cannot be read cannot be shown to be safe
         catch (IOException | ConfigInvalidException | RuntimeException e)
@@ -1506,6 +1560,124 @@ public class GitTool implements IMcpTool
             return CONFIG_UNREADABLE_REFUSAL;
         }
         return null;
+    }
+
+    /**
+     * Judges git's LEGACY per-remote files, {@code $GIT_DIR/remotes/*} and
+     * {@code $GIT_DIR/branches/*}, which hold a URL and are not configuration at all.
+     * <p>
+     * They are still live: {@code git remote get-url <name>} and {@code git remote show -n} print
+     * what stands in them, verbatim - measured, credential and all - and JGit's configuration never
+     * mentions them. Judged line by line, and only as much of the format is honoured as it takes to
+     * find the value: a {@code remotes/} file carries {@code URL:} / {@code Push:} / {@code Pull:}
+     * lines, a {@code branches/} file a bare URL. The key prefix HAS to come off - it ends in a
+     * colon, and a colon in front of an {@code @} is exactly what marks a password, so judging the
+     * raw line would refuse every legacy file ever written. The prefix is only recognised when a
+     * SPACE follows the colon, so a bare {@code https://...} line keeps its scheme and is judged as
+     * the URL it is rather than as plain text.
+     * <p>
+     * Bounded on both sides: at most {@value #MAX_LEGACY_REMOTE_FILES} files per directory and
+     * {@value #MAX_LEGACY_REMOTE_BYTES} bytes each, because both are untrusted content in a
+     * repository that may have been produced by someone else. Anything larger is refused rather
+     * than read - it cannot be shown to be safe, and no genuine file of either kind is that big.
+     *
+     * @param repo the repository the command would run in
+     * @return the refusal message, or {@code null} when these files hold nothing un-printable
+     * @throws IOException when a file cannot be read
+     */
+    private static String legacyRemoteRefusal(Repository repo) throws IOException
+    {
+        File gitDir = repo.getDirectory();
+        if (gitDir == null)
+        {
+            return null;
+        }
+        for (String directory : LEGACY_REMOTE_DIRECTORIES)
+        {
+            File[] files = new File(gitDir, directory).listFiles();
+            if (files == null)
+            {
+                continue;
+            }
+            if (files.length > MAX_LEGACY_REMOTE_FILES)
+            {
+                return unprintableRemoteRefusal(directory, StoredRemoteFlaw.UNMASKABLE_CREDENTIAL);
+            }
+            for (File file : files)
+            {
+                String refusal = legacyFileRefusal(file);
+                if (refusal != null)
+                {
+                    return refusal;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Judges one legacy remote file - its NAME, which {@code git remote} lists, and its CONTENT,
+     * which {@code git remote get-url} prints.
+     *
+     * @param file the file to judge
+     * @return the refusal message, or {@code null}
+     * @throws IOException when the file cannot be read
+     */
+    private static String legacyFileRefusal(File file) throws IOException
+    {
+        if (!file.isFile())
+        {
+            return null;
+        }
+        StoredRemoteFlaw nameFlaw = storedTextFlaw(file.getName());
+        if (nameFlaw != null)
+        {
+            return unprintableRemoteRefusal(file.getName(), nameFlaw);
+        }
+        if (file.length() > MAX_LEGACY_REMOTE_BYTES)
+        {
+            return unprintableRemoteRefusal(file.getName(), StoredRemoteFlaw.UNMASKABLE_CREDENTIAL);
+        }
+        String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        for (String line : content.split("\n")) //$NON-NLS-1$
+        {
+            StoredRemoteFlaw flaw = storedTextFlaw(legacyValueOf(line));
+            if (flaw != null)
+            {
+                return unprintableRemoteRefusal(file.getName(), flaw);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The VALUE of one line of a legacy remote file: what follows a {@code URL: } / {@code Push: } /
+     * {@code Pull: } key, or the whole line when there is none.
+     * <p>
+     * The key is recognised only as letters, a colon and then a SPACE. That last requirement is what
+     * keeps a bare {@code https://host/r.git} line intact - {@code https:} is letters and a colon
+     * too - so such a line is still judged as a URL by the same rule as everywhere else, instead of
+     * losing its scheme and falling to the plain-text rule.
+     *
+     * @param line one line of the file
+     * @return the part of it git would use as an address
+     */
+    private static String legacyValueOf(String line)
+    {
+        for (int i = 0; i < line.length(); i++)
+        {
+            char c = line.charAt(i);
+            if (c == ':')
+            {
+                return i + 1 < line.length() && line.charAt(i + 1) == ' '
+                    ? line.substring(i + 2).trim() : line.trim();
+            }
+            if (!Character.isLetter(c))
+            {
+                break;
+            }
+        }
+        return line.trim();
     }
 
     /**
@@ -1750,7 +1922,9 @@ public class GitTool implements IMcpTool
             + "secret. If the entry is inherited from your user or system git configuration, those " //$NON-NLS-1$
             + "answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
             + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
-            + "--system). Retrying through this tool cannot work: while the entry is stored, every " //$NON-NLS-1$
+            + "--system); and if it is one of git's legacy files, '.git/remotes/<name>' or " //$NON-NLS-1$
+            + "'.git/branches/<name>', delete that file. Retrying through this tool cannot work: " //$NON-NLS-1$
+            + "while the entry is stored, every " //$NON-NLS-1$
             + "remote, push, fetch and pull command here gets this same refusal."; //$NON-NLS-1$
     }
 
