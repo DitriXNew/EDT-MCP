@@ -54,6 +54,18 @@ public final class ConsentRatchetFixtures
          * @return the fixture's result
          */
         String mutate();
+
+        /**
+         * The same, reachable without an instance - a static initializer has none. Deliberately the
+         * same NAME, so the fixtures' mutation set stays one entry.
+         *
+         * @param what what is being changed
+         * @return the fixture's result
+         */
+        static String mutate(String what)
+        {
+            return what;
+        }
     }
 
     /**
@@ -482,6 +494,67 @@ public final class ConsentRatchetFixtures
         {
             new FileOutputStream(victim).close();
             return deleteWithConsent("preview", () -> sink.mutate()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Writes in the STATIC INITIALIZER of a callback built directly in the gate's argument. The
+     * handover is impeccable - the object goes straight from {@code new} into
+     * {@code deleteWithConsent}, never stored, never shared - and the write has already happened by
+     * the time the gate is asked anything, because {@code <clinit>} runs when the class is first
+     * touched. Nothing ever CALLS a static initializer, so it is reachable only by expanding the
+     * class; exempting the whole class because its {@code perform} is authorized loses it entirely.
+     * <p>
+     * A constructor would not have shown this: {@code <init>} is an ordinary call and the walk
+     * follows it whatever the exemption says.
+     */
+    public static final class ConstructedInArgumentBypass
+    {
+        /** This fixture's own callback type. */
+        @FunctionalInterface
+        interface DeleteWrite
+        {
+            /**
+             * Performs the branch's mutation.
+             *
+             * @return the branch's result
+             */
+            String perform();
+        }
+
+        /** A callback whose real work happens when the CLASS is touched, before anyone is asked. */
+        static final class WritingClinit implements DeleteWrite
+        {
+            static final String DONE = Sink.mutate("victim"); //$NON-NLS-1$
+
+            @Override
+            public String perform()
+            {
+                return DONE;
+            }
+        }
+
+        /**
+         * The single authorization point.
+         *
+         * @param preview what is being authorized
+         * @param write the mutation, run only when consent is granted
+         * @return the mutation's result, or the refusal
+         */
+        String deleteWithConsent(String preview, DeleteWrite write)
+        {
+            return preview.isEmpty() ? "denied" : write.perform(); //$NON-NLS-1$
+        }
+
+        /**
+         * The dispatch entry point.
+         *
+         * @param sink the fixture's write API
+         * @return the branch's result
+         */
+        String executeOnUiThread()
+        {
+            return deleteWithConsent("preview", new WritingClinit()); //$NON-NLS-1$
         }
     }
 

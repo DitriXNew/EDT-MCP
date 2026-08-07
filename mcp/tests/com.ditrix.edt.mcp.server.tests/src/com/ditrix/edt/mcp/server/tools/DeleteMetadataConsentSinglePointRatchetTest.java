@@ -72,8 +72,13 @@ import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
  * <li>the only thing that may INVOKE {@code DeleteWrite.perform} is the gate, and a method HANDLE on
  * it counts as an invocation. Converting the callback to some other functional interface
  * ({@code write::perform}) is the one way to run it without an invoke instruction;</li>
- * <li>the same applies to a nest member that IMPLEMENTS the callback type: referencing it is a
- * followed edge unless that construction itself was handed straight to the gate.</li>
+ * <li>a nest member that IMPLEMENTS the callback type is exempt in exactly ONE method - the one the
+ * gate invokes after an ALLOW - and only when that construction was itself handed straight to the
+ * gate. Never the whole class: {@code <clinit>} runs when the class is first touched, which is
+ * before the gate has been asked anything, and nothing ever CALLS a static initializer, so
+ * exempting the class is all that stands between the walk and a write the consent precedes. (A
+ * constructor is safe for a duller reason - {@code <init>} is an ordinary call and the walk follows
+ * it whatever the exemption says.)</li>
  * </ul>
  * The direction is deliberate: where the rules cannot tell, they treat the write as ungated. Handing
  * the gate a callback that wraps another one ({@code deleteWithConsent(preview, w::get)}), or a
@@ -118,6 +123,12 @@ import com.ditrix.edt.mcp.server.tools.impl.DeleteMetadataTool;
  * next call without being stored, and was it the only one?" - which is enough to refuse every shape
  * that parks or shares the value, and is why the rule is strict rather than clever. It does not
  * follow branches, so it reasons about instruction ORDER and not about execution paths;</li>
+ * <li>for the same reason {@link #everyGateEntryPointReallyReachesTheGate} proves that each
+ * forwarding step CALLS the gate, not that it forwards the very callback it was handed. A parameter
+ * lives in a local slot, and telling one slot from another is the dataflow this check does not do -
+ * so a forwarding step that gated some OTHER callback and dropped its own would pass. What stands
+ * behind it instead is that these steps are three-line forwarders, reviewed as such, and that every
+ * callback they could substitute is subject to the creation rules above;</li>
  * <li>owners are compared by SIMPLE name and by the STATIC type at the call site - that is all the
  * constant pool spells - so two same-named classes from different packages are one owner here, and a
  * family rule keyed on {@code EList} does not follow into {@code BasicEList};</li>
@@ -166,6 +177,9 @@ public class DeleteMetadataConsentSinglePointRatchetTest
 
     /** The callback type a branch hands to the gate, relative to its declaring class. */
     private static final String WRITE_CALLBACK_SUFFIX = "$DeleteWrite"; //$NON-NLS-1$
+
+    /** Its single method - the ONE thing an authorized implementation is exempt in. */
+    private static final String WRITE_CALLBACK_METHOD = "perform"; //$NON-NLS-1$
 
     /** The consent seam the gate asks through. */
     private static final String ASK = "DeleteMetadataTool$ConsentRequester#request"; //$NON-NLS-1$
@@ -297,7 +311,7 @@ public class DeleteMetadataConsentSinglePointRatchetTest
     {
         Nest nest = readTool();
         String gate = nest.requireSingleDeclaration(SELF, GATE);
-        String callback = SELF + WRITE_CALLBACK_SUFFIX + "#perform"; //$NON-NLS-1$
+        String callback = SELF + WRITE_CALLBACK_SUFFIX + '#' + WRITE_CALLBACK_METHOD;
         Set<String> invokers = nest.methodsReaching(callback);
 
         assertEquals("a DeleteWrite callback must be invoked ONLY by " + GATE + ": that single " //$NON-NLS-1$ //$NON-NLS-2$
@@ -489,6 +503,27 @@ public class DeleteMetadataConsentSinglePointRatchetTest
             + "nothing authorized it: " + bypass.escapes, !bypass.escapes.isEmpty()); //$NON-NLS-1$
     }
 
+    /**
+     * The write in the STATIC INITIALIZER of a callback built in the gate's own argument. The
+     * handover is perfect; the write is simply earlier than the question. A constructor would not
+     * have shown this - {@code <init>} is an ordinary call, followed whatever the exemption says -
+     * which is why the fixture uses the one member nothing ever calls.
+     */
+    @Test
+    public void theAnalysisCatchesAWriteInTheCallbacksStaticInitializer()
+    {
+        Analysis bypass = analyseFixture(ConsentRatchetFixtures.ConstructedInArgumentBypass.class);
+
+        assertTrue("the callback goes straight from new into the gate - never stored, never shared " //$NON-NLS-1$
+            + "- so the handover is impeccable and the exemption is deserved. But it is deserved by " //$NON-NLS-1$
+            + "ONE method, the one the gate invokes after an ALLOW: <clinit> has already run by " //$NON-NLS-1$
+            + "then, nothing ever calls it, and exempting the whole CLASS is the only thing " //$NON-NLS-1$
+            + "standing between the walk and a write the consent precedes.", //$NON-NLS-1$
+            !bypass.escapes.isEmpty());
+        assertTrue("... and the handover itself must still be accepted, or this fixture would be " //$NON-NLS-1$
+            + "proving the wrong thing: " + bypass.unconsumed, bypass.unconsumed.isEmpty()); //$NON-NLS-1$
+    }
+
     /** The second callback built with a CONSTRUCTOR: invisible to a check that counts only lambdas. */
     @Test
     public void theAnalysisCatchesASecondCallbackMadeWithAConstructor()
@@ -583,7 +618,7 @@ public class DeleteMetadataConsentSinglePointRatchetTest
     {
         Nest fixtures = read(ConsentRatchetFixtures.class);
         String perform = binaryName(ConsentRatchetFixtures.MethodHandleBypass.class)
-            + WRITE_CALLBACK_SUFFIX + "#perform"; //$NON-NLS-1$
+            + WRITE_CALLBACK_SUFFIX + '#' + WRITE_CALLBACK_METHOD;
 
         Set<String> calling = fixtures.methodsCalling(perform);
         Set<String> reaching = fixtures.methodsReaching(perform);
@@ -690,7 +725,7 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         }
         return new Analysis(ungated, escapes,
             nest.callbacksNotHandedStraightToTheGate(unit, writeType, gateEntries),
-            nest.methodsReaching(writeType + "#perform")); //$NON-NLS-1$
+            nest.methodsReaching(writeType + '#' + WRITE_CALLBACK_METHOD));
     }
 
     private static Analysis analyseFixture(Class<?> fixture)
@@ -1341,13 +1376,22 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         private void expand(String owner, String unit, String gatedType, boolean authorizes,
             Set<String> seen, Deque<String> queue)
         {
-            if (owner.equals(unit) || !inUnit(owner, unit)
-                || (authorizes && implementsType(owner, gatedType)))
+            if (owner.equals(unit) || !inUnit(owner, unit))
             {
                 return;
             }
+            // An authorized implementation of the callback type is exempt in ONE method: the one the
+            // gate invokes after an ALLOW. Skipping the whole CLASS was the same class-instead-of-
+            // value mistake as before, and here it is worse than elsewhere: <init> and <clinit> run
+            // when the object is BUILT, which is before the gate has been asked anything at all. A
+            // write in a constructor would have been exempted by the consent it precedes.
+            boolean exemptTheCallback = authorizes && implementsType(owner, gatedType);
             for (String member : methodsOf.getOrDefault(owner, Set.of()))
             {
+                if (exemptTheCallback && member.startsWith(owner + '#' + WRITE_CALLBACK_METHOD))
+                {
+                    continue;
+                }
                 if (seen.add(member))
                 {
                     queue.add(member);
