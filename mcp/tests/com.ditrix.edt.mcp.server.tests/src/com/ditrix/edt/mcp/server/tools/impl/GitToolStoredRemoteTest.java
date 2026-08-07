@@ -904,32 +904,39 @@ public class GitToolStoredRemoteTest
     }
 
     @Test
-    public void testTheWorktreeConfigNeedsRepositoryFormatVersionOne() throws Exception
+    public void testTheWorktreeConfigIsReadAtTheDEFAULTFormatVersionToo() throws Exception
     {
-        // 'extensions.*' is a repository-FORMAT setting, and git honours it only from format
-        // version 1 on. At version 0 it ignores the extension and never reads config.worktree, so a
-        // check that read the file anyway would take a repository git is perfectly happy with off
-        // the air. (The same rule is why the switch is read from .git/config itself and not from
-        // the merged chain - one left behind in a user's ~/.gitconfig turns nothing on for git.
-        // That half is argued from git's semantics; only the version half is reproducible here,
-        // because putting a switch into the USER configuration would mean writing to the machine's
-        // own ~/.gitconfig.)
-        Repository repo = newRepository("git-stored-worktree-version"); //$NON-NLS-1$
+        // MEASURED, not read off the documentation. 'extensions.*' is a repository-FORMAT setting
+        // and the manual ties extensions to format version 1, so this case first asserted the
+        // opposite - that version 0 keeps the file unread. Git disagrees: with the switch in
+        // .git/config and 'repositoryformatversion = 0' - the default every ordinary repository
+        // carries - 'git remote -v' prints the remote from config.worktree all the same
+        // (git 2.35.1). A version gate here would not be a second belt, it would be a hole in
+        // exactly the repositories most likely to exist.
+        Repository repo = newRepository("git-stored-worktree-version-zero"); //$NON-NLS-1$
         File gitDir = repo.getDirectory();
         Files.write(new File(gitDir, CONFIG_FILE).toPath(),
             ("[core]\n\trepositoryformatversion = 0\n[extensions]\n\tworktreeConfig = true\n" //$NON-NLS-1$
                 + "[remote \"" + ORIGIN + "\"]\n\turl = https://" + HOST + "/team/clean.git\n") //$NON-NLS-1$ //$NON-NLS-2$
                     .getBytes(StandardCharsets.UTF_8));
+        String poisonedRemote = "wt-at-version-zero"; //$NON-NLS-1$
         Files.write(new File(gitDir, "config.worktree").toPath(), //$NON-NLS-1$
-            ("[remote \"ignored\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$
+            ("[remote \"" + poisonedRemote + "\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$
                 .getBytes(StandardCharsets.UTF_8));
-        // Positive control: the switch really IS declared - so the only thing keeping the file
-        // unread is the format version, which is exactly what this case is about.
-        assertTrue("fixture: extensions.worktreeConfig must be declared", //$NON-NLS-1$
-            repo.getConfig().getBoolean("extensions", "worktreeConfig", false)); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control (a): the version really is the default one, or this case is not about it.
+        assertEquals("fixture: the repository must carry format version 0", 0, //$NON-NLS-1$
+            repo.getConfig().getInt("core", "repositoryformatversion", -1)); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control (b): JGit is still blind to the file, so the refusal can only come from
+        // this check reading it.
+        assertFalse("fixture: JGit must not see the worktree remote by itself", //$NON-NLS-1$
+            repo.getConfig().getSubsections(REMOTE_SECTION).contains(poisonedRemote));
 
-        assertNull("format version 0 means git ignores the extension - and so must this check", //$NON-NLS-1$
-            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("git reads config.worktree at format version 0 as well, so this check must " //$NON-NLS-1$
+            + "read it too", refusal); //$NON-NLS-1$
+        assertRefusalNamesTheRemoteAndTheFix(refusal, poisonedRemote);
+        assertRefusalLeaksNothing(refusal);
     }
 
     @Test

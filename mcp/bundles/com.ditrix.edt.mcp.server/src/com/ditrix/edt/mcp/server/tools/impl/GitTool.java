@@ -300,12 +300,6 @@ public class GitTool implements IMcpTool
     /** The repository's own configuration file, beside it. */
     private static final String REPOSITORY_CONFIG_FILE = "config"; //$NON-NLS-1$
 
-    /** {@code core.repositoryformatversion} - extensions are honoured from version 1 on. */
-    private static final String CORE_SECTION = "core"; //$NON-NLS-1$
-
-    /** The key naming that version. */
-    private static final String FORMAT_VERSION_KEY = "repositoryformatversion"; //$NON-NLS-1$
-
     /**
      * The schemes for which a userinfo without a password marker is a LOGIN, not a credential -
      * git's documented SSH remote spelling. One list, asked by {@link #isPlainSshUser} on the input
@@ -1538,11 +1532,22 @@ public class GitTool implements IMcpTool
      * fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new object has no
      * cached content to go stale.
      * <p>
-     * The switch is read from the REPOSITORY's own file, never from the merged chain. It is a
-     * repository-FORMAT setting: git honours {@code extensions.*} out of {@code .git/config} and
-     * only from format version 1 on, so an {@code extensions.worktreeConfig = true} left in a
-     * user's {@code ~/.gitconfig} turns nothing on for git - and must turn nothing on here either,
-     * or a stale {@code config.worktree} git ignores would take a repository off the air.
+     * The switch is read from the REPOSITORY's own file, never from the merged chain, and NOT
+     * gated on {@code core.repositoryformatversion}. Both halves are what git was measured doing
+     * (2.35.1), not what its documentation suggests:
+     * <ul>
+     * <li>with the switch only in a user's {@code ~/.gitconfig} - via {@code GIT_CONFIG_GLOBAL} -
+     * {@code git remote -v} prints NOTHING from {@code config.worktree}. So an inherited one must
+     * turn nothing on here either, or a stale file git ignores would take a repository off the
+     * air;</li>
+     * <li>with the switch in {@code .git/config} and {@code repositoryformatversion = 0} - the
+     * default every ordinary repository carries - git prints the remote from
+     * {@code config.worktree} all the same. A version gate here would therefore not be a second
+     * belt but a hole: exactly the entries git reads and we would not.</li>
+     * </ul>
+     * The asymmetry is deliberate. Widening what is INSPECTED can only add refusals, which is the
+     * safe direction; narrowing the condition that switches the file on is what keeps a stale
+     * entry elsewhere from refusing a healthy repository.
      * <p>
      * LINKED worktrees are outside this - and outside the whole check - for a reason that is not
      * ours: JGit 6.8 gives such a repository no repository-level configuration at all. Its
@@ -1569,8 +1574,7 @@ public class GitTool implements IMcpTool
         FileBasedConfig repositoryOnly =
             new FileBasedConfig(null, new File(gitDir, REPOSITORY_CONFIG_FILE), repo.getFS());
         repositoryOnly.load();
-        if (repositoryOnly.getInt(CORE_SECTION, FORMAT_VERSION_KEY, 0) < 1
-            || !repositoryOnly.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false))
+        if (!repositoryOnly.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false))
         {
             return config;
         }
