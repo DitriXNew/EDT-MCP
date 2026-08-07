@@ -299,6 +299,8 @@ public class RenameMetadataObjectTool implements IMcpTool
         {
         case TIMED_OUT:
             return timeoutError(objectFqn, newName, confirm, timeoutMs, progress.getPhase());
+        case TIMED_OUT_BEFORE_START:
+            return notStartedError(objectFqn, newName, timeoutMs);
         case INTERRUPTED:
             return ToolResult.error("The rename of '" + objectFqn + "' was interrupted while " //$NON-NLS-1$ //$NON-NLS-2$
                 + "waiting for it. " + stateAdvice(confirm, progress.getPhase())).toJson(); //$NON-NLS-1$
@@ -306,8 +308,15 @@ public class RenameMetadataObjectTool implements IMcpTool
             return ToolResult.error("The rename of '" + objectFqn + "' was cancelled before it " //$NON-NLS-1$ //$NON-NLS-2$
                 + "started, so nothing was renamed. Retry; if it keeps happening, EDT is shutting " //$NON-NLS-1$
                 + "down or another operation is cancelling background jobs.").toJson(); //$NON-NLS-1$
-        default:
+        case COMPLETED:
             break;
+        default:
+            // Fail CLOSED on an outcome added to BoundedJob later. The old 'default: break' fell
+            // through and returned the (possibly null) payload below, which for a cascade rename
+            // means answering an agent with silence about a model it may have changed.
+            return ToolResult.error("The rename of '" + objectFqn + "' ended in an unrecognised " //$NON-NLS-1$ //$NON-NLS-2$
+                + "state (" + result.getOutcome() + "), so whether it applied is unknown. Check " //$NON-NLS-1$ //$NON-NLS-2$
+                + "the object's name with get_metadata_objects before retrying.").toJson(); //$NON-NLS-1$
         }
 
         Throwable failure = result.getFailure();
@@ -319,6 +328,30 @@ public class RenameMetadataObjectTool implements IMcpTool
             return ToolResult.error(failure.getMessage()).toJson();
         }
         return resultRef.get();
+    }
+
+    /**
+     * Builds the error for a rename the deadline caught while it was still QUEUED.
+     *
+     * <p>Deliberately NOT {@link #timeoutError}: every branch there ends in "it is not cancelled
+     * and may still apply", and here the opposite is true — OUR cancel is what kept the rename
+     * from starting. Telling an agent a cascade may still land when it never began would send it
+     * checking, or worse re-renaming, for nothing.
+     *
+     * @param objectFqn the rename target
+     * @param newName the requested new Name
+     * @param timeoutMs the bound that elapsed, in milliseconds
+     * @return the error JSON
+     */
+    private static String notStartedError(String objectFqn, String newName, long timeoutMs)
+    {
+        long seconds = Math.max(1, Math.round(timeoutMs / 1000.0));
+        return ToolResult.error("Renaming '" + objectFqn + "' to '" + newName + "' did not START " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "within " + seconds + (seconds == 1 ? " second" : " seconds") + ": the deadline " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + "elapsed while the work was still queued, and cancelling it kept it from starting. " //$NON-NLS-1$
+            + "NOTHING was renamed and the model is untouched - no check or cleanup is needed. " //$NON-NLS-1$
+            + "EDT's job scheduler is saturated - retry when it is less busy, or pass a larger '" //$NON-NLS-1$
+            + KEY_TIMEOUT + "' (seconds).").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -376,10 +409,12 @@ public class RenameMetadataObjectTool implements IMcpTool
         switch (phase)
         {
         case QUEUED:
-            return "The rename never reached EDT's UI thread - the background job had not started, " //$NON-NLS-1$
-                + "or something else is holding that thread - so nothing was renamed. It is not " //$NON-NLS-1$
-                + "cancelled and may still apply: check the object's name with " //$NON-NLS-1$
-                + "get_metadata_objects before retrying."; //$NON-NLS-1$
+            // A job that never started is reported as TIMED_OUT_BEFORE_START and never reaches
+            // here, so this phase means the work IS running and waiting on the UI thread.
+            return "The rename was still waiting for EDT's UI thread - something else is holding " //$NON-NLS-1$
+                + "it - so nothing was renamed yet. It is not cancelled and may still apply once " //$NON-NLS-1$
+                + "that thread frees up: check the object's name with get_metadata_objects " //$NON-NLS-1$
+                + "before retrying."; //$NON-NLS-1$
         case AWAITING_CONSENT:
             return "The rename was at the destructive-operation consent gate, so nothing had been " //$NON-NLS-1$
                 + "rewritten - but an answer arriving later still starts it. Set " //$NON-NLS-1$

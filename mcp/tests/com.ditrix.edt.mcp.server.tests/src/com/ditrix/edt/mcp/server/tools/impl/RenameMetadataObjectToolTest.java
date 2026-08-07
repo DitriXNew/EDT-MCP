@@ -17,7 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+import org.eclipse.core.runtime.jobs.IJobChangeListener;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.eclipse.ltk.core.refactoring.Change;
 import org.eclipse.ltk.core.refactoring.CompositeChange;
 import org.eclipse.ltk.core.refactoring.NullChange;
@@ -543,6 +548,68 @@ public class RenameMetadataObjectToolTest
         assertTrue("the wedged run must have timed out: " + error, //$NON-NLS-1$
             error.contains("did not finish within")); //$NON-NLS-1$
         return elapsedMs;
+    }
+
+    /**
+     * A rename the deadline caught while it was still QUEUED never ran, and cancelling it is what
+     * kept it from running — so the error must say the model is UNTOUCHED, not that the rename
+     * "may still apply". That sentence is what an agent uses to decide whether to go inspecting
+     * (or re-renaming) a configuration nothing ever touched.
+     *
+     * <p>The job is held before the work by an {@code aboutToRun} listener that puts THIS job (by
+     * name) to sleep — the platform's own way of refusing a start, and the same lever
+     * {@code BoundedJobTest} uses.
+     */
+    @Test
+    public void testRenameThatNeverStartedSaysTheModelIsUntouched()
+    {
+        // A UNIQUE target, so the name-matching listener below cannot reach into a foreign job:
+        // the job name is derived from the FQN, and 'Catalog.Products' is a value other tests (and
+        // a real EDT) genuinely use — putting THAT job to sleep would wedge something else.
+        String objectFqn = "Catalog.NeverStarted" + System.nanoTime(); //$NON-NLS-1$
+        String jobName = RenameMetadataObjectTool.NAME + ": " + objectFqn; //$NON-NLS-1$
+        AtomicBoolean ran = new AtomicBoolean(false);
+        AtomicBoolean held = new AtomicBoolean(false);
+        IJobChangeListener sleeper = new JobChangeAdapter()
+        {
+            @Override
+            public void aboutToRun(IJobChangeEvent event)
+            {
+                if (jobName.equals(event.getJob().getName()))
+                {
+                    held.set(event.getJob().sleep());
+                }
+            }
+        };
+        Job.getJobManager().addJobChangeListener(sleeper);
+        String error;
+        try
+        {
+            error = RenameMetadataObjectTool.runRenameBounded(objectFqn, "Goods", //$NON-NLS-1$
+                true, SHORT_TIMEOUT_MS, progress -> {
+                    ran.set(true);
+                    progress.enter(RenameProgress.Phase.APPLYING);
+                    return WEDGED_PAYLOAD;
+                });
+        }
+        finally
+        {
+            Job.getJobManager().removeJobChangeListener(sleeper);
+        }
+
+        // Asserted first, and about the LISTENER rather than only the effect: an ambient scheduler
+        // stall would also leave the action unrun, and the test would pass without ever producing
+        // the scenario it claims to judge.
+        assertTrue("this test must be the reason the rename was held, not ambient scheduler luck", //$NON-NLS-1$
+            held.get());
+        assertFalse("the rename must have been held before it started", ran.get()); //$NON-NLS-1$
+        assertNotNull("a rename that never started must still answer", error); //$NON-NLS-1$
+        assertTrue("it must say the rename did not START: " + error, //$NON-NLS-1$
+            error.contains("did not START")); //$NON-NLS-1$
+        assertTrue("it must say the model is untouched: " + error, //$NON-NLS-1$
+            error.contains("NOTHING was renamed and the model is untouched")); //$NON-NLS-1$
+        assertFalse("a rename that our own cancel stopped must NOT be advertised as one that may " //$NON-NLS-1$
+            + "still apply: " + error, error.contains("may still apply")); //$NON-NLS-1$
     }
 
     /**

@@ -15,6 +15,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+import org.eclipse.core.runtime.jobs.IJobChangeListener;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.BoundedJob.Outcome;
@@ -130,6 +134,89 @@ public class BoundedJobTest
             started.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
         assertTrue("work polling its monitor must see the cancellation the deadline raises", //$NON-NLS-1$
             observedCancel.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
+    }
+
+    /**
+     * A deadline that elapses while the job is still QUEUED must NOT be reported as an ordinary
+     * timeout: cancelling a queued job is what stops it from ever starting, so telling the caller
+     * the work "may still be running" would be the exact opposite of the truth — and that sentence
+     * is what an agent uses to decide whether its configuration is damaged (issue #365 review).
+     *
+     * <p>The scenario is produced the way the platform itself allows: an {@code aboutToRun}
+     * listener puts THIS job (matched by name, so no other job in the JVM is touched) to sleep, so
+     * the scheduler holds it without ever entering the work while {@code join} keeps blocking.
+     * {@code IJobManager.suspend()} would NOT do — its contract makes {@code join} on a waiting job
+     * return immediately, which produces {@code NOT_RUN}, a different branch entirely.
+     */
+    @Test
+    public void testDeadlineOnAStillQueuedJobIsNotReportedAsWorkStillRunning()
+    {
+        String jobName = "test: never-started work " + System.nanoTime(); //$NON-NLS-1$
+        AtomicBoolean ran = new AtomicBoolean(false);
+        AtomicBoolean held = new AtomicBoolean(false);
+        IJobChangeListener sleeper = new JobChangeAdapter()
+        {
+            @Override
+            public void aboutToRun(IJobChangeEvent event)
+            {
+                if (jobName.equals(event.getJob().getName()))
+                {
+                    held.set(event.getJob().sleep());
+                }
+            }
+        };
+        Job.getJobManager().addJobChangeListener(sleeper);
+        BoundedJob.Result result;
+        try
+        {
+            result = BoundedJob.run(jobName, SHORT_TIMEOUT_MS, monitor -> ran.set(true));
+        }
+        finally
+        {
+            Job.getJobManager().removeJobChangeListener(sleeper);
+        }
+
+        // Asserted first, and about the LISTENER rather than only the effect: without this, an
+        // ambient scheduler stall would satisfy "the work did not run" and the test would pass
+        // having never produced the scenario it claims to judge.
+        assertTrue("this test must be the reason the job was held, not ambient scheduler luck", //$NON-NLS-1$
+            held.get());
+        assertFalse("the job must have been held before the work for this test to say anything", //$NON-NLS-1$
+            ran.get());
+        assertEquals("a deadline that caught the job still queued is not an ordinary timeout", //$NON-NLS-1$
+            Outcome.TIMED_OUT_BEFORE_START, result.getOutcome());
+        assertFalse("a run that never started is not a success", result.isSuccess()); //$NON-NLS-1$
+        assertTrue("the call must still return on its deadline (waited " + result.getElapsedMs() //$NON-NLS-1$
+            + "ms)", result.getElapsedMs() < SANE_RETURN_MS); //$NON-NLS-1$
+    }
+
+    /**
+     * The counterpart: work that DID start and then wedged must stay an ordinary {@code TIMED_OUT}.
+     * Without this, a discriminator that answered "never started" too eagerly would silently tell
+     * callers their half-finished operation never happened — the same lie, mirrored.
+     */
+    @Test
+    public void testWedgedWorkThatDidStartStaysAnOrdinaryTimeout() throws Exception
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch started = new CountDownLatch(1);
+        try
+        {
+            BoundedJob.Result result = BoundedJob.run("test: started then wedged", //$NON-NLS-1$
+                SHORT_TIMEOUT_MS, monitor -> {
+                    started.countDown();
+                    release.await(WEDGE_CEILING_MS, TimeUnit.MILLISECONDS);
+                });
+
+            assertTrue("the work must have started", //$NON-NLS-1$
+                started.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
+            assertEquals("work that started and wedged is still in flight, not never-started", //$NON-NLS-1$
+                Outcome.TIMED_OUT, result.getOutcome());
+        }
+        finally
+        {
+            release.countDown();
+        }
     }
 
     /**

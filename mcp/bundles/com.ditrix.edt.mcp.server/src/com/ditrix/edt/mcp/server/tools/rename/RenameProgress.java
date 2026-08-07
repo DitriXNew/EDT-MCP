@@ -30,9 +30,13 @@ public final class RenameProgress
     public enum Phase
     {
         /**
-         * The work never reached the service. Either the background job had not started or the UI
-         * thread had not run the request yet — the two are indistinguishable from outside, and
-         * neither resolved, built or changed anything.
+         * The work never reached the service: it is running but still waiting for the UI thread to
+         * take the request. Nothing resolved, built or changed.
+         * <p>
+         * NB the other way of not reaching the service — the background job never starting at all —
+         * does not show up here: {@code BoundedJob} answers that case with its own
+         * {@code TIMED_OUT_BEFORE_START}, which is why this phase can be reported as work that is
+         * still in flight.
          */
         QUEUED,
         /**

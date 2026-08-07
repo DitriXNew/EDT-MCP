@@ -21,6 +21,7 @@ Use to rename an existing object or member and have all callers updated automati
 
 ## Timeout, and what the model is left in
 The cascade runs on EDT's UI thread and cannot be preempted, so `timeout` bounds only how long the CALL waits - it does not stop the rename. When it expires the call fails with an error that names the stage the rename had reached, because that stage is what decides your next move:
+- the rename never STARTED (the deadline elapsed while it was still queued and cancelling it kept it from starting) - the model is untouched and nothing needs checking; EDT's job scheduler is saturated, so retry when it is less busy or raise `timeout`;
 - a PREVIEW (confirm not set) can never apply anything, so its timeout means only that the change points were not computed in time - nothing was or will be renamed;
 - on an execute, still building the refactoring or still at the destructive-operation consent gate - nothing was rewritten yet, but the rename is not cancelled and may still apply;
 - past the consent gate, in the apply phase - the configuration may be PARTIALLY renamed; inspect it with `get_metadata_objects` / `get_project_errors` and reload with `clean_project` (or revert in version control) before renaming again;
