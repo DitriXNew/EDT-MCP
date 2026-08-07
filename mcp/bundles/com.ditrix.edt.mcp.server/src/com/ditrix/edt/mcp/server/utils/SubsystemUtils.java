@@ -21,6 +21,15 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  */
 public final class SubsystemUtils
 {
+    /**
+     * The CANONICAL English type token of a subsystem segment - the single spelling EDT itself
+     * stores in a nested subsystem's FQN ({@code Subsystem.Sales.Subsystem.Orders}, as serialized
+     * into {@code parentSubsystem}). Every ACCEPTED spelling still comes from the shared bilingual
+     * catalogue through {@link #isSubsystemTypeToken}; this constant is only how the canonical form
+     * is WRITTEN back.
+     */
+    private static final String SUBSYSTEM_TOKEN = "Subsystem"; //$NON-NLS-1$
+
     private SubsystemUtils()
     {
     }
@@ -64,22 +73,123 @@ public final class SubsystemUtils
      */
     public static Subsystem resolveByFqn(Configuration config, String fqn)
     {
-        if (config == null)
-        {
-            return null;
-        }
         String[] names = parseSubsystemPath(fqn);
         if (names == null)
         {
             return null;
         }
+        return resolveByPath(config, names, names.length);
+    }
 
+    /**
+     * The parsed chain of an address that names a NESTED subsystem - a subsystem chain of depth 2 or
+     * more, e.g. {@code Subsystem.Sales.Subsystem.Orders} - or {@code null} for anything else
+     * (including a plain top-level {@code Subsystem.Sales}).
+     *
+     * <p>This is the gate {@code create_metadata} dispatches on, kept here rather than in the tool so
+     * the answer comes from the ONE bilingual token catalogue every subsystem consumer already
+     * shares: EVERY position of the chain is judged by {@link #isSubsystemTypeToken}, so the tokens
+     * may be English or Russian independently at each level
+     * ({@code Подсистема.Продажи.Subsystem.Orders}).</p>
+     *
+     * <p>Stricter than {@link #parseSubsystemPath} in one respect: a PADDED segment
+     * ({@code Subsystem. Sales .Subsystem.Child}) is refused. The parser trims each segment because
+     * a LOOKUP has only one reading of a padded name, but a CREATE both stores the leaf and
+     * navigates by the ancestors, and the ordinary create path refuses padding on both counts -
+     * {@code MetadataTypeUtils.findObject} matches the owner name verbatim and the identifier check
+     * rejects a leading space. Trimming here would silently create {@code Child} for
+     * {@code ' Child '}: a different node from the one requested. Refused means the address falls
+     * through to the ordinary path, which answers it exactly as it answers a padded
+     * {@code Catalog. Products .Attribute.W}.</p>
+     *
+     * @param fqn the requested address (may be {@code null})
+     * @return the parsed chain of subsystem names (length &gt;= 2), or {@code null} when the address
+     *     is not a nested-subsystem chain
+     */
+    public static String[] nestedChain(String fqn)
+    {
+        String[] names = parseSubsystemPath(fqn);
+        if (names == null || names.length < 2 || hasPaddedSegment(fqn))
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        return names;
+    }
+
+    /**
+     * Whether {@code fqn} carries whitespace around itself or around any of its dot-separated
+     * segments - the padding {@link #nestedChain} refuses.
+     */
+    private static boolean hasPaddedSegment(String fqn)
+    {
+        if (!fqn.equals(fqn.trim()))
+        {
+            return true;
+        }
+        for (String segment : fqn.split("\\.")) //$NON-NLS-1$
+        {
+            if (!segment.equals(segment.trim()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Resolves the subsystem addressed by the FIRST {@code depth} names of a parsed chain.
+     *
+     * <p>The PREFIX overload exists so a caller that has to address the PARENT of a chain - a
+     * nested-subsystem create, whose leaf does not exist yet - walks the very same descent as
+     * {@link #resolveByFqn} instead of re-splitting the FQN and re-implementing the walk. Name
+     * matching is case-insensitive at every level, exactly as for a whole chain.</p>
+     *
+     * @param config the configuration to resolve against
+     * @param names the parsed chain of subsystem names (see {@link #parseSubsystemPath})
+     * @param depth how many leading names to follow; {@code 0} addresses the configuration itself
+     *     and therefore resolves to nothing
+     * @return the resolved subsystem, or {@code null} when any segment does not resolve
+     */
+    public static Subsystem resolveByPath(Configuration config, String[] names, int depth)
+    {
+        if (config == null || names == null || depth <= 0 || depth > names.length)
+        {
+            return null;
+        }
         Subsystem current = findChild(config.getSubsystems(), names[0]);
-        for (int i = 1; i < names.length && current != null; i++)
+        for (int i = 1; i < depth && current != null; i++)
         {
             current = findChild(current.getSubsystems(), names[i]);
         }
         return current;
+    }
+
+    /**
+     * Renders the first {@code depth} names of a parsed chain back as a canonical FQN
+     * ({@code Subsystem.Sales.Subsystem.Orders}) - the inverse of {@link #parseSubsystemPath},
+     * with every type token written in the canonical English spelling regardless of how the
+     * caller spelled it.
+     *
+     * @param names the parsed chain of subsystem names
+     * @param depth how many leading names to render
+     * @return the canonical FQN, or {@code null} when the request is out of range
+     */
+    public static String chainFqn(String[] names, int depth)
+    {
+        if (names == null || depth <= 0 || depth > names.length)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < depth; i++)
+        {
+            if (i > 0)
+            {
+                sb.append('.');
+            }
+            sb.append(SUBSYSTEM_TOKEN).append('.').append(names[i]);
+        }
+        return sb.toString();
     }
 
     /**
@@ -266,7 +376,7 @@ public final class SubsystemUtils
         {
             return false;
         }
-        return "Subsystem".equals(MetadataTypeUtils.toEnglishSingular(token.trim())); //$NON-NLS-1$
+        return SUBSYSTEM_TOKEN.equals(MetadataTypeUtils.toEnglishSingular(token.trim()));
     }
 
     private static Subsystem findChild(Iterable<Subsystem> children, String name)

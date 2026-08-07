@@ -2216,3 +2216,192 @@ def test_create_table_without_a_title_still_reports_the_generated_titles_locale(
     # guess, which in an en_CA-only configuration would be an invisible 'en' key.
     form_xml = read_disk("src/Catalogs/Catalog/Forms/ItemForm/Form.form")
     assert "<key>en</key>" in form_xml,         "the generated title must be keyed by a declared language code: %s" % form_xml[:400]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Nested subsystems (issue #351) — Subsystem.Parent.Subsystem.Child, any depth
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# A nested subsystem LOOKS like a member but is structurally a TOP object: EDT stores it in its
+# own .mdo under Subsystems/<Parent>/Subsystems/<Child>/ with a <parentSubsystem> back-reference,
+# and the parent registers it by NAME in its own <subsystems> list. Both files therefore have to
+# be written, and Configuration.mdo (which lists only top-level subsystems) must NOT be.
+#
+# The fixture's single subsystem is Subsystem.Subsystem — the parent used below.
+
+_FIXTURE_SUBSYSTEM = "Subsystem"
+_PARENT_MDO = "src/Subsystems/Subsystem/Subsystem.mdo"
+
+
+def _nested_mdo(*chain):
+    """The .mdo path of a nested subsystem addressed by names BELOW the fixture subsystem."""
+    path = "src/Subsystems/" + _FIXTURE_SUBSYSTEM
+    for name in chain:
+        path += "/Subsystems/" + name
+    return path + "/" + chain[-1] + ".mdo"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_nested_subsystem_lands_on_disk():
+    # The headline case of issue #351: a depth-2 chain create_metadata used to refuse outright.
+    child = "E2ENestedSub"
+    fqn = "Subsystem.%s.Subsystem.%s" % (_FIXTURE_SUBSYSTEM, child)
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "create the nested subsystem %s" % fqn)
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+    assert r.structured.get("kind") == "Subsystem", \
+        "kind must be the Subsystem EClass: %r" % (r.structured,)
+    assert r.structured.get("fqn") == fqn, \
+        "the result must carry the canonical chain FQN: %r" % (r.structured,)
+    assert r.structured.get("persisted") is True, \
+        "create must report persisted=true once both .mdo files are exported: %r" % (r.structured,)
+
+    # The child's OWN .mdo, in the nested folder, with the back-reference to its parent.
+    child_mdo = _nested_mdo(child)
+    poll_disk_contains(child_mdo, "<name>%s</name>" % child,
+                       ctx="the nested subsystem needs its own .mdo")
+    poll_disk_contains(child_mdo,
+                       "<parentSubsystem>Subsystem.%s</parentSubsystem>" % _FIXTURE_SUBSYSTEM,
+                       ctx="the nested subsystem must point back at its parent")
+    # ...and the PARENT registers it by name. That line appears only because the parent .mdo is
+    # exported too: a create that exported the child alone would leave the parent's list empty.
+    poll_disk_contains(_PARENT_MDO, "<subsystems>%s</subsystems>" % child,
+                       ctx="the parent .mdo must register the new child")
+    # Configuration.mdo lists TOP-level subsystems only - the child must not leak into it.
+    assert_not_contains(read_disk("src/Configuration/Configuration.mdo"), child,
+                        "a nested subsystem must not be registered at configuration level")
+
+    # MODEL read-back over the wire: the tree really carries the new child.
+    wait_for_project_ready()
+    d = call("list_subsystems", {"projectName": PROJECT})
+    assert_ok(d, "list_subsystems read-back")
+    assert_contains(d.text, fqn, "MODEL read-back: the nested subsystem is in the tree")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_nested_subsystem_with_russian_tokens():
+    # Bilingual at EVERY position: normalizeFqn canonicalizes only the LEADING token, so a chain
+    # whose SECOND token is Russian is exactly the shape that used to fall through. The result must
+    # come back as the canonical address, not as the half-translated one that was requested.
+    child = "E2ENestedSubRu"
+    requested = "Подсистема.%s.Подсистема.%s" % (_FIXTURE_SUBSYSTEM, child)
+    canonical = "Subsystem.%s.Subsystem.%s" % (_FIXTURE_SUBSYSTEM, child)
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": requested,
+        "properties": [{"name": "synonym", "value": "Nested RU", "language": "en"}],
+    })
+    assert_ok(r, "create %s" % requested)
+    assert r.structured.get("fqn") == canonical, \
+        "a Russian-spelled chain must come back canonicalized: %r" % (r.structured,)
+    child_mdo = _nested_mdo(child)
+    poll_disk_contains(child_mdo, "<name>%s</name>" % child,
+                       ctx="the Russian-addressed nested subsystem must land on disk")
+    poll_disk_contains(child_mdo, "<value>Nested RU</value>",
+                       ctx="the synonym must be written like on any other create")
+    poll_disk_contains(_PARENT_MDO, "<subsystems>%s</subsystems>" % child,
+                       ctx="the parent must register the Russian-addressed child too")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_nested_subsystem_depth_three():
+    # Depth is not special-cased: the parent of a depth-3 chain is itself a nested subsystem, so
+    # this passes only if the walk descends through a child created moments earlier.
+    mid, leaf = "E2EDepth2", "E2EDepth3"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Subsystem.%s.Subsystem.%s" % (_FIXTURE_SUBSYSTEM, mid)}),
+        "seed the intermediate subsystem")
+    wait_for_project_ready()
+    deep = "Subsystem.%s.Subsystem.%s.Subsystem.%s" % (_FIXTURE_SUBSYSTEM, mid, leaf)
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": deep})
+    assert_ok(r, "create the depth-3 chain %s" % deep)
+    assert r.structured.get("fqn") == deep, \
+        "the depth-3 result must carry the whole chain: %r" % (r.structured,)
+    leaf_mdo = _nested_mdo(mid, leaf)
+    poll_disk_contains(leaf_mdo, "<name>%s</name>" % leaf,
+                       ctx="the depth-3 leaf needs its own .mdo two folders down")
+    poll_disk_contains(leaf_mdo,
+                       "<parentSubsystem>Subsystem.%s.Subsystem.%s</parentSubsystem>"
+                       % (_FIXTURE_SUBSYSTEM, mid),
+                       ctx="the leaf must point back at the NESTED parent, by its full chain")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_nested_subsystem_with_a_missing_parent_is_a_clear_error():
+    # Acceptance criterion 2 of #351: the refusal has to stay legible where the parent is absent,
+    # and it must name the chain that is missing rather than the leaf.
+    missing = "E2ENoSuchParent"
+    fqn = "Subsystem.%s.Subsystem.Whatever" % missing
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    e = assert_error(r, "nested subsystem under a parent that does not exist")
+    assert_error_quality(e, names=["Subsystem." + missing],
+                         suggests=["not found", "list_subsystems"])
+    assert_no_diff("a rejected nested-subsystem create must not change the project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_nested_subsystem_duplicate_is_rejected():
+    # The duplicate guard applies to the CHAIN, not just to top-level names: a second create of the
+    # same child must be refused, and expectedNotExists must sharpen the refusal the same way it
+    # does everywhere else.
+    child = "E2ENestedDup"
+    fqn = "Subsystem.%s.Subsystem.%s" % (_FIXTURE_SUBSYSTEM, child)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed the child")
+    wait_for_project_ready()
+    e = assert_error(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                     "duplicate nested subsystem")
+    assert_error_quality(e, names=[fqn], suggests=["already exists"])
+    e2 = assert_error(call("create_metadata",
+                           {"projectName": PROJECT, "fqn": fqn, "expectedNotExists": True}),
+                      "duplicate nested subsystem with expectedNotExists")
+    assert_error_quality(e2, names=[fqn], suggests=["precondition failed", "stale"])
+    # A same-named child under a DIFFERENT parent is a different address and must be allowed.
+    sibling = "E2ENestedDupParent"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + sibling}),
+              "create a second top-level subsystem")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "Subsystem.%s.Subsystem.%s" % (sibling, child)}),
+              "the same child name under another parent is a different node")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_nested_chain_reproduces_the_dead_end_parent_shape_of_342():
+    # The scenario #342 could only prove with a unit test, now built LIVE: two top-level subsystems
+    # spelled with ё and е, where the ё one is a DEAD END and the е one carries the child. Before
+    # #351 the fixture could not hold a nested subsystem at all, so the backtracking resolver had
+    # no live evidence.
+    yo_parent, ye_parent, child = "Мёд", "Мед", "Вес"
+    # normalizeYo=false keeps the ё spelling; the default would rewrite it into its е twin and the
+    # two parents would collide.
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + yo_parent,
+                                       "normalizeYo": False}),
+              "create the ё-spelled dead-end parent")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Subsystem." + ye_parent}),
+              "create the е-spelled live parent")
+    wait_for_project_ready()
+    r = call("create_metadata",
+             {"projectName": PROJECT, "fqn": "Subsystem.%s.Subsystem.%s" % (ye_parent, child)})
+    assert_ok(r, "nest the child under the е-spelled parent only")
+    wait_for_project_ready()
+
+    # The shape is real on disk: the child sits under the е parent, and the ё parent stays childless.
+    poll_disk_contains("src/Subsystems/%s/Subsystems/%s/%s.mdo" % (ye_parent, child, child),
+                       "<parentSubsystem>Subsystem.%s</parentSubsystem>" % ye_parent,
+                       ctx="the child belongs to the е-spelled parent")
+    assert_not_contains(read_disk("src/Subsystems/%s/%s.mdo" % (yo_parent, yo_parent)), child,
+                        "the ё-spelled parent must stay a DEAD END")
+
+    # ...and that is what makes the #342 behaviour testable live: the ё-spelled address of the whole
+    # chain still resolves, because the resolver backtracks to the parent's е twin instead of
+    # stopping at the childless ё parent.
+    requested = "Subsystem.%s.Subsystem.%s" % (yo_parent, child)
+    g = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [requested], "severity": "NONE"})
+    assert_ok(g, "address the chain through the dead-end ё parent")
+    assert g.structured.get("objectsNotFound") == [], \
+        "the ё-spelled chain must not be reported missing: %r" % (g.structured,)
+    assert g.structured.get("objectsResolved") == [requested], \
+        "the ё-spelled chain must resolve through the parent's е twin: %r" % (g.structured,)
