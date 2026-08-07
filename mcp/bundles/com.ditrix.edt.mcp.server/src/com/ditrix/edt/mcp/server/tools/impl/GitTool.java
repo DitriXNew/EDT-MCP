@@ -20,6 +20,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -314,6 +315,25 @@ public class GitTool implements IMcpTool
      */
     private static final List<String> LEGACY_REMOTE_DIRECTORIES =
         List.of("remotes", "branches"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** The one of those two whose format ends a URL at {@code #} and reads the tail as a HEAD. */
+    private static final String LEGACY_BRANCHES_DIRECTORY = "branches"; //$NON-NLS-1$
+
+    /**
+     * Where an offending entry lives. Not decoration: each one needs a DIFFERENT repair, and naming
+     * a command that leaves the entry in place is the retry loop the refusal exists to prevent.
+     */
+    private enum RemoteSource
+    {
+        /** A {@code [remote "<name>"]} section, wherever in the merged configuration it sits. */
+        CONFIG,
+
+        /** A {@code remotes.<group>} key - a plain config key, not a remote. */
+        GROUP,
+
+        /** {@code $GIT_DIR/remotes/<name>} or {@code $GIT_DIR/branches/<name>} - not config at all. */
+        LEGACY_FILE
+    }
 
     /** Most legacy files read per directory; beyond that the directory is refused, not walked. */
     private static final int MAX_LEGACY_REMOTE_FILES = 256;
@@ -1527,19 +1547,22 @@ public class GitTool implements IMcpTool
                 StoredRemoteFlaw flaw = remoteEntryFlaw(effective, remote);
                 if (flaw != null)
                 {
-                    return unprintableRemoteRefusal(remote, flaw);
+                    return unprintableRemoteRefusal(remote, flaw, RemoteSource.CONFIG);
                 }
             }
             // A remote GROUP: 'git fetch <group>' and 'git remote update' print 'Fetching <value>'
             // for each entry, and the value is a URL git never had a [remote] subsection for.
-            for (String group : effective.getNames(REMOTE_GROUP_SECTION))
+            // RECURSIVE: a group declared in an inherited configuration - or in the
+            // config.worktree layer put underneath - is read by git all the same, and the
+            // two-argument getNames() would stop at the top link.
+            for (String group : effective.getNames(REMOTE_GROUP_SECTION, null, true))
             {
                 for (String member : effective.getStringList(REMOTE_GROUP_SECTION, null, group))
                 {
                     StoredRemoteFlaw flaw = storedTextFlaw(member);
                     if (flaw != null)
                     {
-                        return unprintableRemoteRefusal(group, flaw);
+                        return unprintableRemoteRefusal(group, flaw, RemoteSource.GROUP);
                     }
                 }
             }
@@ -1594,21 +1617,29 @@ public class GitTool implements IMcpTool
         }
         for (String directory : LEGACY_REMOTE_DIRECTORIES)
         {
-            File[] files = new File(gitDir, directory).listFiles();
-            if (files == null)
+            File parent = new File(gitDir, directory);
+            if (!parent.isDirectory())
             {
                 continue;
             }
-            if (files.length > MAX_LEGACY_REMOTE_FILES)
+            // Streamed, not listed: listFiles() builds one File per entry BEFORE anything can
+            // look at how many there are, so a directory stuffed with entries would be paid for
+            // in full just to find out it is over the bound. The stream stops at the bound.
+            int seen = 0;
+            try (DirectoryStream<Path> entries = Files.newDirectoryStream(parent.toPath()))
             {
-                return unprintableRemoteRefusal(directory, StoredRemoteFlaw.UNMASKABLE_CREDENTIAL);
-            }
-            for (File file : files)
-            {
-                String refusal = legacyFileRefusal(file);
-                if (refusal != null)
+                for (Path entry : entries)
                 {
-                    return refusal;
+                    if (++seen > MAX_LEGACY_REMOTE_FILES)
+                    {
+                        return unprintableRemoteRefusal(directory,
+                            StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, RemoteSource.LEGACY_FILE);
+                    }
+                    String refusal = legacyFileRefusal(entry.toFile(), directory);
+                    if (refusal != null)
+                    {
+                        return refusal;
+                    }
                 }
             }
         }
@@ -1623,7 +1654,7 @@ public class GitTool implements IMcpTool
      * @return the refusal message, or {@code null}
      * @throws IOException when the file cannot be read
      */
-    private static String legacyFileRefusal(File file) throws IOException
+    private static String legacyFileRefusal(File file, String directory) throws IOException
     {
         if (!file.isFile())
         {
@@ -1632,52 +1663,78 @@ public class GitTool implements IMcpTool
         StoredRemoteFlaw nameFlaw = storedTextFlaw(file.getName());
         if (nameFlaw != null)
         {
-            return unprintableRemoteRefusal(file.getName(), nameFlaw);
+            return unprintableRemoteRefusal(file.getName(), nameFlaw, RemoteSource.LEGACY_FILE);
         }
         if (file.length() > MAX_LEGACY_REMOTE_BYTES)
         {
-            return unprintableRemoteRefusal(file.getName(), StoredRemoteFlaw.UNMASKABLE_CREDENTIAL);
+            return unprintableRemoteRefusal(file.getName(),
+                StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, RemoteSource.LEGACY_FILE);
         }
         String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
         for (String line : content.split("\n")) //$NON-NLS-1$
         {
-            StoredRemoteFlaw flaw = storedTextFlaw(legacyValueOf(line));
-            if (flaw != null)
+            for (String value : legacyValuesOf(line, directory))
             {
-                return unprintableRemoteRefusal(file.getName(), flaw);
+                StoredRemoteFlaw flaw = storedTextFlaw(value);
+                if (flaw != null)
+                {
+                    return unprintableRemoteRefusal(file.getName(), flaw, RemoteSource.LEGACY_FILE);
+                }
             }
         }
         return null;
     }
 
     /**
-     * The VALUE of one line of a legacy remote file: what follows a {@code URL: } / {@code Push: } /
-     * {@code Pull: } key, or the whole line when there is none.
+     * The value(s) of one line of a legacy remote file - everything on it that git will use as an
+     * address or a ref, each piece judged on its own.
      * <p>
-     * The key is recognised only as letters, a colon and then a SPACE. That last requirement is what
-     * keeps a bare {@code https://host/r.git} line intact - {@code https:} is letters and a colon
-     * too - so such a line is still judged as a URL by the same rule as everywhere else, instead of
-     * losing its scheme and falling to the plain-text rule.
+     * The KEY comes off first: {@code URL: } / {@code Push: } / {@code Pull: } in a
+     * {@code remotes/} file. It has to, because it ends in a colon, and a colon in front of an
+     * {@code @} is exactly what marks a password - the raw line would refuse every legacy file ever
+     * written. The key is recognised only as letters, a colon and then a SPACE, which keeps a bare
+     * {@code https://host/r.git} line intact ({@code https:} is letters and a colon too) so it is
+     * still judged as the URL it is.
+     * <p>
+     * A {@code branches/} file then splits at {@code #}. There that character is NOT a URL
+     * fragment: the documented format is {@code <url>#<head>}, and git turns the tail into a REF -
+     * measured, {@code https://example.com/r.git#sec:ret@x} produced
+     * {@code fatal: invalid refspec 'refs/heads/sec:ret@x:refs/heads/bh'}, the text printed as a
+     * refspec with nothing masked. Judging it as a fragment would hand it to the redaction, which
+     * never sees a URL there at all. This is not the query/fragment boundary of a URL - that one is
+     * about a fragment the redaction DOES mask, and it stays where it is.
+     * <p>
+     * Nothing is trimmed beyond the line terminator. {@link String#trim} removes every character up
+     * to {@code U+0020}, so it would eat exactly the control bytes this check exists to catch,
+     * before {@link #storedTextFlaw} ever saw them; a lone trailing {@code \r} is dropped because
+     * that is a line ending, not content.
      *
-     * @param line one line of the file
-     * @return the part of it git would use as an address
+     * @param line one line of the file, terminator included
+     * @param directory which legacy directory the file came from
+     * @return the pieces to judge
      */
-    private static String legacyValueOf(String line)
+    private static List<String> legacyValuesOf(String line, String directory)
     {
-        for (int i = 0; i < line.length(); i++)
+        String value = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line; //$NON-NLS-1$
+        for (int i = 0; i < value.length(); i++)
         {
-            char c = line.charAt(i);
+            char c = value.charAt(i);
             if (c == ':')
             {
-                return i + 1 < line.length() && line.charAt(i + 1) == ' '
-                    ? line.substring(i + 2).trim() : line.trim();
+                if (i + 1 < value.length() && value.charAt(i + 1) == ' ')
+                {
+                    value = value.substring(i + 2);
+                }
+                break;
             }
             if (!Character.isLetter(c))
             {
                 break;
             }
         }
-        return line.trim();
+        int head = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? value.indexOf('#') : -1;
+        return head < 0 ? List.of(value)
+            : List.of(value.substring(0, head), value.substring(head + 1));
     }
 
     /**
@@ -1911,21 +1968,59 @@ public class GitTool implements IMcpTool
      * @param flaw what makes the entry unprintable
      * @return the actionable, leak-free message
      */
-    private static String unprintableRemoteRefusal(String remote, StoredRemoteFlaw flaw)
+    private static String unprintableRemoteRefusal(String remote, StoredRemoteFlaw flaw,
+        RemoteSource source)
     {
         return "The remote '" + safeRemoteName(remote) + "' is stored with " + flawClause(flaw) //$NON-NLS-1$ //$NON-NLS-2$
             + " - in one of its URLs, or in the remote's " //$NON-NLS-1$
             + "own name - so the command is refused instead of run, and the offending value is not " //$NON-NLS-1$
             + "echoed here for the same reason. Repair it OUTSIDE this tool, " //$NON-NLS-1$
-            + "in a terminal: 'git remote remove <name>', then 'git remote add' with a name and a " //$NON-NLS-1$
-            + "URL that embed no credentials, and let a git credential helper or an ssh key supply the " //$NON-NLS-1$
-            + "secret. If the entry is inherited from your user or system git configuration, those " //$NON-NLS-1$
-            + "answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
-            + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
-            + "--system); and if it is one of git's legacy files, '.git/remotes/<name>' or " //$NON-NLS-1$
-            + "'.git/branches/<name>', delete that file. Retrying through this tool cannot work: " //$NON-NLS-1$
-            + "while the entry is stored, every " //$NON-NLS-1$
+            + "in a terminal: " + repairClause(source) //$NON-NLS-1$
+            + " Retrying through this tool cannot work: while the entry is stored, every " //$NON-NLS-1$
             + "remote, push, fetch and pull command here gets this same refusal."; //$NON-NLS-1$
+    }
+
+    /**
+     * The repair to advise, chosen by WHERE the entry lives.
+     * <p>
+     * One clause per source, because the repository's rule is that an error names a fix that
+     * actually works: {@code git remote remove} is right for a {@code [remote "<name>"]} section and
+     * useless for the other two. Measured, not assumed - {@code git remote remove} against a group
+     * leaves {@code remotes.<group>} exactly where it was, and against a remote that lives in
+     * {@code config.worktree} it answers {@code error: Could not remove config section
+     * 'remote.<name>'} and the remote is still listed afterwards. An advised command that leaves the
+     * entry in place would send an unattended caller into the retry loop this text exists to
+     * prevent.
+     *
+     * @param source where the offending entry lives
+     * @return the sentence naming the repair, ending in a full stop
+     */
+    private static String repairClause(RemoteSource source)
+    {
+        if (source == RemoteSource.GROUP)
+        {
+            return "a remote GROUP is a plain configuration key, not a remote - " //$NON-NLS-1$
+                + "'git remote remove' does not touch it. Drop the key that lists it: " //$NON-NLS-1$
+                + "'git config --unset-all remotes.<name>' (add --global or --system when it is " //$NON-NLS-1$
+                + "inherited, or --worktree when this repository uses extensions.worktreeConfig), " //$NON-NLS-1$
+                + "then re-add the group with addresses that embed no credentials."; //$NON-NLS-1$
+        }
+        if (source == RemoteSource.LEGACY_FILE)
+        {
+            return "this one is git's LEGACY per-remote file, not configuration - " //$NON-NLS-1$
+                + "'git remote remove' does not know it. Delete the file itself, " //$NON-NLS-1$
+                + "'.git/remotes/<name>' or '.git/branches/<name>', and declare the remote with " //$NON-NLS-1$
+                + "'git remote add' instead, pointing at a URL that embeds no credentials."; //$NON-NLS-1$
+        }
+        return "'git remote remove <name>', then 'git remote add' with a name and a " //$NON-NLS-1$
+            + "URL that embed no credentials, and let a git credential helper or an ssh key supply " //$NON-NLS-1$
+            + "the secret. If the entry is inherited from your user or system git configuration, " //$NON-NLS-1$
+            + "those answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
+            + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
+            + "--system); and if this repository uses extensions.worktreeConfig, the entry may sit " //$NON-NLS-1$
+            + "in '.git/config.worktree', where 'git remote remove' answers 'Could not remove " //$NON-NLS-1$
+            + "config section' - there it is 'git config --worktree --remove-section " //$NON-NLS-1$
+            + "remote.<name>'."; //$NON-NLS-1$
     }
 
     /**

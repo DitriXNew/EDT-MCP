@@ -977,7 +977,14 @@ public class GitToolStoredRemoteTest
         String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
 
         assertNotNull("a remote group git would print must be judged too", refusal); //$NON-NLS-1$
-        assertRefusalNamesTheRemoteAndTheFix(refusal, "mygroup"); //$NON-NLS-1$
+        assertTrue("the refusal must name the group to fix: " + refusal, //$NON-NLS-1$
+            refusal.contains("mygroup")); //$NON-NLS-1$
+        assertRefusalIsActionable(refusal);
+        // ...and the remedy has to be the one that WORKS here. A group is a plain config key:
+        // 'git remote remove' leaves 'remotes.<group>' exactly where it was - measured - so advising
+        // it would send an unattended caller round the same refusal for ever.
+        assertTrue("a group must be cleared by unsetting its KEY: " + refusal, //$NON-NLS-1$
+            refusal.contains("--unset-all remotes.<name>")); //$NON-NLS-1$
         assertRefusalLeaksNothing(refusal);
     }
 
@@ -1008,7 +1015,13 @@ public class GitToolStoredRemoteTest
 
             assertNotNull(directory + "/<name> is printed by 'git remote get-url' and must be " //$NON-NLS-1$
                 + "judged", refusal); //$NON-NLS-1$
-            assertRefusalNamesTheRemoteAndTheFix(refusal, entry);
+            assertTrue("the refusal must name the file to fix: " + refusal, //$NON-NLS-1$
+                refusal.contains(entry));
+            assertRefusalIsActionable(refusal);
+            // A legacy file is not configuration at all, so the remedy is to delete it - 'git remote
+            // remove' does not know it exists.
+            assertTrue("a legacy file must be cleared by deleting it: " + refusal, //$NON-NLS-1$
+                refusal.contains(".git/remotes/<name>")); //$NON-NLS-1$
             assertRefusalLeaksNothing(refusal);
         }
     }
@@ -1027,6 +1040,110 @@ public class GitToolStoredRemoteTest
 
         assertNull("a legacy file carrying git's documented ssh remote is not a credential", //$NON-NLS-1$
             GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testALegacyLineKeepsItsBytesUntilItIsJudged() throws Exception
+    {
+        // The value was trimmed before judging, and String.trim() removes everything up to U+0020 -
+        // that is, exactly the control bytes this check exists to catch. git prints the line as it
+        // stands, so the byte has to survive until storedTextFlaw has seen it.
+        Repository repo = newRepository("git-stored-legacy-control"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        Files.write(new File(dir, "withcontrol").toPath(), //$NON-NLS-1$
+            ("URL: https://" + HOST + "/team/repo.git" + "\u0001" + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a control byte at the end of a legacy line is printed by git and must be " //$NON-NLS-1$
+            + "judged, not trimmed away", refusal); //$NON-NLS-1$
+        assertRefusalIsActionable(refusal);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testALegacyLineWithCRLFIsNotRefusedForItsLineEnding() throws Exception
+    {
+        // The other side of not trimming: a CR is a control byte too, and a legacy file written on
+        // Windows ends every line with one. Refusing those would turn the fix above into an outage
+        // for every CRLF repository, so the line TERMINATOR is dropped and nothing else is.
+        Repository repo = newRepository("git-stored-legacy-crlf"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        Files.write(new File(dir, "crlf").toPath(), //$NON-NLS-1$
+            ("URL: https://" + HOST + "/team/repo.git\r\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        assertNull("a CRLF line ending is not a credential and not a stray control byte", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testTheHeadOfALegacyBranchesFileIsJudgedAsAREF() throws Exception
+    {
+        // The documented format of a branches/ file is '<url>#<head>', and git turns the tail into a
+        // REF, not a URL fragment: measured, 'https://example.com/r.git#sec:ret@x' produced
+        // "fatal: invalid refspec 'refs/heads/sec:ret@x:refs/heads/bh'" - the text printed in a
+        // refspec with nothing masked. Judging it as a fragment would hand it to the redaction,
+        // which never sees a URL there at all.
+        //
+        // This is NOT the query/fragment boundary of a URL. That one is about a fragment the
+        // redaction DOES mask, it is an open question with the author, and it stays where it is.
+        Repository repo = newRepository("git-stored-legacy-head"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        Files.write(new File(dir, "withhead").toPath(),
+            ("https://" + HOST + "/team/repo.git#user:" + SECRET + SPACE + "ok@x\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("the head of a branches/ file lands in a refspec git prints - judge it", //$NON-NLS-1$
+            refusal);
+        assertRefusalIsActionable(refusal);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testAGroupInheritedFromABaseConfigurationIsEnumerated() throws Exception
+    {
+        // getNames(section) is NOT recursive - it stops at the top link of the chain. With the
+        // config.worktree layer on top, a group declared in .git/config sits one link down, and git
+        // reads it all the same. The two-argument call would walk straight past it.
+        Repository repo = newRepository("git-stored-group-inherited"); //$NON-NLS-1$
+        File gitDir = repo.getDirectory();
+        Files.write(new File(gitDir, CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 1\n[extensions]\n\tworktreeConfig = true\n" //$NON-NLS-1$
+                + "[remotes]\n\tinherited = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                    .getBytes(StandardCharsets.UTF_8));
+        // The worktree layer exists and is EMPTY, so it is the top link and the group is below it.
+        Files.write(new File(gitDir, "config.worktree").toPath(), //$NON-NLS-1$
+            "[core]\n\tbare = false\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a group one link down the chain is read by git and must be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the group: " + refusal, refusal.contains("inherited")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testTheConfigRemedyNamesTheWorktreeScopeToo() throws Exception
+    {
+        // Self-audit, same class as the group remedy: measured, 'git remote remove' against a remote
+        // that lives in config.worktree answers "error: Could not remove config section
+        // 'remote.<name>'" and the remote is STILL listed afterwards. A message that named only that
+        // command would send an unattended caller round the same refusal for ever.
+        Repository repo = newRepository("git-stored-worktree-remedy"); //$NON-NLS-1$
+        storeRemoteUrls(repo, ORIGIN, URL_KEY, poisonedUrl(SPACE));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("the poisoned remote must be refused", refusal); //$NON-NLS-1$
+        assertRefusalStatesTheFix(refusal);
+        assertTrue("...and the remedy must reach a remote that lives in config.worktree: " //$NON-NLS-1$
+            + refusal, refusal.contains("--worktree --remove-section")); //$NON-NLS-1$
     }
 
     // ==================== fail closed ====================
@@ -1253,6 +1370,29 @@ public class GitToolStoredRemoteTest
     }
 
     /**
+     * Asserts what EVERY refusal says, whatever source the entry came from: what is wrong, that the
+     * repair happens outside this tool, where instead, and that retrying here cannot work.
+     * <p>
+     * Split out from {@link #assertRefusalStatesTheFix} when the remedy stopped being one sentence:
+     * a remote GROUP and a LEGACY file need different commands, and asserting the
+     * {@code [remote "<name>"]} remedy against them would demand text that would be wrong there.
+     *
+     * @param refusal the message under test
+     */
+    private static void assertRefusalIsActionable(String refusal)
+    {
+        String lower = refusal.toLowerCase(Locale.ROOT);
+        assertTrue("the refusal must say WHAT is wrong: " + refusal, //$NON-NLS-1$
+            lower.contains("cannot be masked")); //$NON-NLS-1$
+        assertTrue("the refusal must say the repair happens OUTSIDE this tool: " + refusal, //$NON-NLS-1$
+            lower.contains("outside this tool")); //$NON-NLS-1$
+        assertTrue("...and name where instead - a terminal: " + refusal, //$NON-NLS-1$
+            lower.contains("terminal")); //$NON-NLS-1$
+        assertTrue("...and warn that retrying it through this tool cannot work: " + refusal, //$NON-NLS-1$
+            lower.contains("cannot work")); //$NON-NLS-1$
+    }
+
+    /**
      * Asserts everything an actionable refusal says APART from the remote's name: what is wrong, how
      * to repair it, where that repair has to happen, which configuration the entry may live in, and
      * that retrying through this tool cannot work. Split out because a name too long or too hostile
@@ -1264,8 +1404,6 @@ public class GitToolStoredRemoteTest
     private static void assertRefusalStatesTheFix(String refusal)
     {
         String lower = refusal.toLowerCase(Locale.ROOT);
-        assertTrue("the refusal must say WHAT is wrong: " + refusal, //$NON-NLS-1$
-            lower.contains("cannot be masked")); //$NON-NLS-1$
         // The repository-scoped remedy names remove-and-re-add on purpose. 'git remote set-url'
         // writes 'url' only, so it would leave a poisoned 'pushurl' in place, and against a
         // multi-valued url it refuses to run at all. Dropping the remote and adding it again is the
@@ -1278,12 +1416,7 @@ public class GitToolStoredRemoteTest
         // message while the entry is there (testEverySubcommandThatCanReachARemoteIsChecked pins
         // that 'remote' is one of them). A remedy that reads as if this tool could run it sends an
         // unattended caller into an endless retry, so the message must send it to a terminal.
-        assertTrue("the refusal must say the repair happens OUTSIDE this tool: " + refusal, //$NON-NLS-1$
-            lower.contains("outside this tool")); //$NON-NLS-1$
-        assertTrue("...and name where instead - a terminal: " + refusal, //$NON-NLS-1$
-            lower.contains("terminal")); //$NON-NLS-1$
-        assertTrue("...and warn that retrying it through this tool cannot work: " + refusal, //$NON-NLS-1$
-            lower.contains("cannot work")); //$NON-NLS-1$
+        assertRefusalIsActionable(refusal);
         // ...and it has to say WHERE the entry may live, because the commands it names are
         // REPOSITORY-scoped while the check is not: storedRemoteRefusal reads repo.getConfig(), the
         // merged configuration, whose getSubsections walks the base chain (repository -> user ->
