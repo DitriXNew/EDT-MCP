@@ -777,6 +777,47 @@ public class GitToolTest
     }
 
     @Test
+    public void testAQueryTheRedactionCannotReachIsRefused()
+    {
+        // Whitespace in the AUTHORITY stops the redaction's query scan before it ever sees the '?',
+        // so a query it would have masked whole is printed as it stands - and this shape carries no
+        // '@' at all, which is why every userinfo rule walks past it.
+        String hidden = "https://exa\u0020mple.com/repo.git?access_token=ghp_s3cr3t"; //$NON-NLS-1$
+        assertEquals("a query the redaction cannot get to must be refused", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, GitTool.storedTextFlaw(hidden));
+        // Positive control: this is what the caller would otherwise be handed - the whole thing.
+        assertEquals("the redaction masks nothing here", hidden, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(hidden));
+        assertEquals("...and a fragment is hidden from it the same way", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://exa\u0020mple.com/r.git#access_token=ghp_s3cr3t")); //$NON-NLS-1$
+
+        // No guess is made about the CONTENT, deliberately: the redaction masks a query wholesale
+        // rather than telling 'access_token' from 'depth', and a check that refused only the
+        // token-looking ones would be that same list of parameter names by another name. So this is
+        // refused too - and it costs nothing real, because whitespace before the first '/' is
+        // whitespace in the HOST and such a remote cannot fetch at all (measured: "fatal: unable to
+        // access '...': URL using bad/illegal format or missing URL").
+        assertEquals("a harmless query behind the same blindness is refused on the same rule", //$NON-NLS-1$
+            GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL,
+            GitTool.storedTextFlaw("https://exa\u0020mple.com/repo.git?depth=1")); //$NON-NLS-1$
+
+        // ...and the DECLARED query/fragment boundary is untouched: where the redaction reaches the
+        // query, it stays the redaction's business. These two are the ones that would turn red if
+        // this rule were widened into "a query is suspicious".
+        assertNull("a query the redaction reaches is masked, so it is still not refused", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/r.git?access_token=sec\u0020ret")); //$NON-NLS-1$
+        assertNull("...and neither is one with a ':'-marked '@' in it", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/r.git?tok:en@x")); //$NON-NLS-1$
+        // ...and whitespace in an authority with nothing behind it is still not refused: there is
+        // nothing there the redaction failed to mask.
+        assertNull("whitespace in an authority alone is not a leak", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://exa\u0020mple.com/team/repo.git")); //$NON-NLS-1$
+        assertNull("...nor whitespace in the PATH before a query the redaction reaches", //$NON-NLS-1$
+            GitTool.storedTextFlaw("https://example.com/team/my\u0020repo.git")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testStoredTextFlawRefusesARawControlCharacterOnItsOwn()
     {
         // The second thing the redaction cannot do: it masks credentials, it never REMOVES a byte.

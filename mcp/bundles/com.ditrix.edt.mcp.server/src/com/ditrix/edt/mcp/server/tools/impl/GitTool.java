@@ -1056,6 +1056,10 @@ public class GitTool implements IMcpTool
      * <tr><td>{@code ssh://git@host} login</td><td>allow</td><td>allow</td></tr>
      * <tr><td>bare {@code <token>@host}</td><td>allow - masked</td><td>REFUSE - nothing masks it</td></tr>
      * <tr><td>{@code user:pass@host}</td><td>allow - masked</td><td>REFUSE - nothing masks it</td></tr>
+     * <tr><td>whitespace in it, then a {@code ?} / {@code #}</td><td colspan="2">REFUSE - the
+     * redaction's query scan cannot get past the whitespace, so the query it would have masked
+     * whole is printed instead ({@link #unreachableDelimiter}). A query it CAN reach stays its
+     * business.</td></tr>
      * </table>
      * A control character is refused by step 2 here and, when no userinfo makes this predicate fire
      * at all, by {@link #storedTextFlaw} one level up - see {@link #authorityHasWhitespaceOrControl}.
@@ -1260,6 +1264,14 @@ public class GitTool implements IMcpTool
             int query = earliest(queryStart(text, scanFrom, limit), fragmentStart(text, scanFrom, limit));
             if (query < 0)
             {
+                if (unreachableDelimiter(text, scanFrom, limit))
+                {
+                    // There IS a query here and the redaction's own scan cannot get to it, so the
+                    // whole of it would be printed. It masks a query WHOLESALE precisely because it
+                    // will not tell one parameter from another; when it cannot do that at all, the
+                    // same reasoning says refuse.
+                    return true;
+                }
                 plainFrom = authorityEnd;
             }
             else
@@ -1276,6 +1288,47 @@ public class GitTool implements IMcpTool
             }
             cursor = limit;
         }
+    }
+
+    /**
+     * Whether this URL carries a {@code ?} or {@code #} that {@link #redactCredentialUrls}'s own
+     * query scan cannot get to.
+     * <p>
+     * That scan stops at the first ASCII whitespace ({@link #delimiterStart}), so whitespace in the
+     * AUTHORITY blinds it to everything behind - including a query it would otherwise have masked
+     * whole. {@code https://exa mple.com/repo.git?access_token=<secret>} is the shape: no
+     * {@code @} anywhere, so the userinfo rule never fires, and the token is printed as it stands.
+     * <p>
+     * Asked only when the reachable scan found nothing, and answered by looking for the same two
+     * delimiters WITHOUT stopping at whitespace. So the rule is not "a query is suspicious" - it is
+     * the reach of the redaction again: a query it reaches stays its business (the declared
+     * query/fragment boundary is untouched, {@code https://example.com/r.git?access_token=sec ret}
+     * is still not refused here), and a query it cannot reach becomes ours.
+     * <p>
+     * No guess about the CONTENT is made, deliberately. The redaction masks a query wholesale
+     * because telling {@code access_token} from {@code depth} would mean keeping a list of every
+     * service's parameter names; a check that refused only the "token-looking" ones would be that
+     * list by another name. So {@code https://exa mple.com/repo.git?depth=1} is refused too - and
+     * that costs nothing real: whitespace before the first {@code /} is whitespace in the HOST, and
+     * such a remote cannot fetch at all ({@code fatal: unable to access '...': URL using
+     * bad/illegal format} - measured on git 2.35.1). There is no healthy value of this shape.
+     *
+     * @param text the text being walked
+     * @param from where the redaction's own scan began
+     * @param limit where this URL stops
+     * @return {@code true} when a delimiter sits behind the point that scan gave up at
+     */
+    private static boolean unreachableDelimiter(String text, int from, int limit)
+    {
+        for (int i = from; i < limit; i++)
+        {
+            char c = text.charAt(i);
+            if (c == '?' || c == '#')
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
