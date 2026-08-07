@@ -4239,7 +4239,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
+    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). With launchConfigurationName the launched 1C CLIENT is configured too so it stops asking for a password (issue #359); with projectName + applicationId only the agent is - check clientConfigured in the result. Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -4255,7 +4255,7 @@
           "type": "string"
         },
         "launchConfigurationName": {
-          "description": "Exact runtime-client config name from list_configurations (preferred target).",
+          "description": "Exact runtime-client config name from list_configurations (preferred target: the only shape that also configures the launched 1C client).",
           "type": "string"
         },
         "password": {
@@ -4263,7 +4263,7 @@
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name; required if launchConfigurationName is omitted.",
+          "description": "EDT project name; required if launchConfigurationName is omitted. Configures the designer agent only - this call does not touch any launch configuration's own client-user settings.",
           "type": "string"
         },
         "user": {
@@ -4288,6 +4288,10 @@
         "applicationName": {
           "description": "Display name of the target application (falls back to the application ID).",
           "type": "string"
+        },
+        "clientConfigured": {
+          "description": "True when THIS call also wrote the launched client's own authentication onto a launch configuration - only possible when the target was given as launchConfigurationName. False means this call did not configure the client (no configuration named, or the write failed); see message.",
+          "type": "boolean"
         },
         "message": {
           "description": "Human-readable status message.",
