@@ -322,6 +322,14 @@ public class GitTool implements IMcpTool
         List.of(LEGACY_REMOTES_DIRECTORY, LEGACY_BRANCHES_DIRECTORY);
 
     /**
+     * The three line keys git recognises in a {@code remotes/} file, spelled as it spells them -
+     * the match is case-SENSITIVE and anchored at the start of the line, which is what was measured:
+     * {@code url:}, {@code Url:}, an indented key and {@code URL :} all yield no address at all.
+     */
+    private static final List<String> LEGACY_REMOTE_KEYS =
+        List.of("URL:", "Push:", "Pull:"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /**
      * Where an offending entry lives. Not decoration: each one needs a DIFFERENT repair, and naming
      * a command that leaves the entry in place is the retry loop the refusal exists to prevent.
      */
@@ -1778,22 +1786,34 @@ public class GitTool implements IMcpTool
         // 'git remote get-url' printed it whole. Two formats, two readings.
         if (LEGACY_REMOTES_DIRECTORY.equals(directory))
         {
-            for (int i = 0; i < value.length(); i++)
+            // Exactly git's own reading, measured rather than guessed: the line has to BEGIN with
+            // one of three keys, case and all, and any run of whitespace after the colon - or none
+            // - is indent, not value. Demanding a single space instead ('URL: ' only) left the key
+            // on an ordinary 'URL:git@github.com:acme/repo.git', and the colon of that key then
+            // read as the password marker in front of the '@' - a REFUSAL on a healthy repository,
+            // which is worse than a missed leak: a leak leaves things as they were, a false refusal
+            // breaks what worked.
+            int after = -1;
+            for (String key : LEGACY_REMOTE_KEYS)
             {
-                char c = value.charAt(i);
-                if (c == ':')
+                if (value.startsWith(key))
                 {
-                    if (i + 1 < value.length() && value.charAt(i + 1) == ' ')
-                    {
-                        value = value.substring(i + 2);
-                    }
-                    break;
-                }
-                if (!Character.isLetter(c))
-                {
+                    after = key.length();
                     break;
                 }
             }
+            if (after < 0)
+            {
+                // git recognises nothing else here - 'url:' in lower case, an indented key and
+                // 'URL :' were all measured to yield no address at all - so it prints nothing from
+                // such a line, and judging it would only invent refusals.
+                return List.of();
+            }
+            while (after < value.length() && isAsciiWhitespace(value.charAt(after)))
+            {
+                after++;
+            }
+            value = value.substring(after);
         }
         int head = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? value.indexOf('#') : -1;
         return head < 0 ? List.of(value)

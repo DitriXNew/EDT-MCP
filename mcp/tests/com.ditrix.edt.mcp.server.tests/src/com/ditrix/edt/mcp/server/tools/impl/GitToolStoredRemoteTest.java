@@ -1191,6 +1191,81 @@ public class GitToolStoredRemoteTest
             GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
     }
 
+    @Test
+    public void testEverySpellingGitAcceptsAfterALegacyKeyIsNotRefused() throws Exception
+    {
+        // A FALSE REFUSAL, and those matter more here than a missed leak: a leak leaves things as
+        // they were, a refusal breaks a repository that worked. Demanding 'URL: ' with exactly one
+        // space left the key sitting on 'URL:git@github.com:acme/repo.git', and the colon of the KEY
+        // then read as the password marker in front of the '@'.
+        //
+        // The spellings below are the ones git was measured to accept - key, colon, then any run of
+        // whitespace or none.
+        String[] healthy = {
+            "URL: git@github.com:acme/repo.git", //$NON-NLS-1$
+            "URL:git@github.com:acme/repo.git", //$NON-NLS-1$
+            "URL:\tgit@github.com:acme/repo.git", //$NON-NLS-1$
+            "URL:   git@github.com:acme/repo.git", //$NON-NLS-1$
+            "Push:refs/heads/main", //$NON-NLS-1$
+        };
+        for (String line : healthy)
+        {
+            Repository repo = newRepository("git-stored-legacy-spelling"); //$NON-NLS-1$
+            File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+            assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+                dir.mkdirs() || dir.isDirectory());
+            Files.write(new File(dir, "upstream").toPath(),
+                (line + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+            assertNull("git accepts this spelling and it carries no credential, so it must not be " //$NON-NLS-1$
+                + "refused: " + line, GitTool.storedRemoteRefusal(repo, List.of(PUSH))); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAPoisonedLegacyValueIsStillRefusedWhateverTheIndent() throws Exception
+    {
+        // The other side: widening the indent may not open a way past the check. Same spellings,
+        // this time carrying the credential the refusal exists for.
+        String[] poisoned = {
+            "URL: user:s3cr3t" + SPACE + "ok@bad.example/r.git", //$NON-NLS-1$ //$NON-NLS-2$
+            "URL:user:s3cr3t" + SPACE + "ok@bad.example/r.git", //$NON-NLS-1$ //$NON-NLS-2$
+            "URL:\tuser:s3cr3t" + SPACE + "ok@bad.example/r.git", //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (String line : poisoned)
+        {
+            Repository repo = newRepository("git-stored-legacy-poisoned"); //$NON-NLS-1$
+            File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+            assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+                dir.mkdirs() || dir.isDirectory());
+            Files.write(new File(dir, "poisoned").toPath(),
+                (line + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+            String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+            assertNotNull("the indent may not open a way past the check: " + line, refusal); //$NON-NLS-1$
+            assertRefusalIsActionable(refusal);
+            assertRefusalLeaksNothing(refusal);
+        }
+    }
+
+    @Test
+    public void testALineGitDoesNotRecogniseIsNotJudged() throws Exception
+    {
+        // git reads only 'URL:' / 'Push:' / 'Pull:', case and position included - measured: 'url:'
+        // in lower case yields no address at all, so nothing from such a line is ever printed.
+        // Judging it anyway would only invent refusals out of text git ignores.
+        Repository repo = newRepository("git-stored-legacy-unknown-key"); //$NON-NLS-1$
+        File dir = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", dir.mkdirs() || dir.isDirectory()); //$NON-NLS-1$
+        Files.write(new File(dir, "ignored").toPath(),
+            ("url: user:s3cr3t" + SPACE + "ok@bad.example/r.git\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        assertNull("git prints nothing from a line it does not recognise, so neither may this " //$NON-NLS-1$
+            + "check refuse for it", GitTool.storedRemoteRefusal(repo, List.of(PUSH))); //$NON-NLS-1$
+    }
+
     // ==================== fail closed ====================
 
     @Test
