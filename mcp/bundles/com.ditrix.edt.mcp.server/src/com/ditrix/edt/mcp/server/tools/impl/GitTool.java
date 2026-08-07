@@ -964,60 +964,115 @@ public class GitTool implements IMcpTool
             return false;
         }
         int start = marker + SCHEME_SEPARATOR.length();
-        int slash = url.indexOf('/', start);
-        return unmaskableAuthority(url, start, slash < 0 ? url.length() : slash);
+        return unmaskableAuthority(url, start, gitAuthorityEnd(url, start, url.length()), true);
     }
 
     /**
-     * Whether the authority in {@code text[start, to)} holds a userinfo ({@code @}) the redaction
-     * cannot be trusted to mask - one of two independent blockers.
+     * Whether an authority holds a userinfo the redaction cannot be trusted to mask. THE rule -
+     * there is no second one anywhere in this check.
      * <p>
-     * The FIRST is ASCII whitespace, judged blind to where it sits, because it ends every scan
-     * {@link #redactCredentialUrls} makes: {@code https://user@ho st:s3cr3t@example.com/r.git} is
-     * masked only up to the FIRST {@code @} and hands {@code :s3cr3t@} out verbatim.
+     * Every authority is judged here, wherever it sits, and by the same boundary
+     * ({@link #gitAuthorityEnd}). A URL standing in another URL's path used to get its own,
+     * slightly different, parallel version of this logic, and four review rounds in a row found the
+     * next place where the two spellings disagreed. What position may change is one FACT, passed in
+     * as {@code redactionScans}: whether {@link #redactCredentialUrls} looks at this URL at all. It
+     * changes no rule.
      * <p>
-     * The SECOND is a {@code ?} or {@code #} that {@link #userinfoEnd} would hit BEFORE any
-     * {@code @} ({@link #redactionFindsUserinfo}). That walk stops at the first of them, so it then
-     * reports "no userinfo" and the whole authority prefix is emitted verbatim while the query branch
-     * masks only what FOLLOWS: {@code https://user:s3cr3t?x@example.com/r.git} comes out as
-     * {@code https://user:s3cr3t?***}. When an {@code @} comes first the walk finds it and masks
-     * through it as usual, so {@code https://user:s3cr3t@host?to=a@b} is NOT refused - the delimiter
-     * hides nothing there.
+     * In order, and each step is the same for every caller:
+     * <ol>
+     * <li>NO userinfo - no {@code @} before the authority ends - and there is nothing to protect,
+     * whoever reads it. An authority with whitespace but no {@code @} is an odd host, not a
+     * secret, and refusing it would be an outage for no gain. The {@code @} taken is the LAST one,
+     * git's own reading: an email-style user name means
+     * {@code user@corp.com:secret@host} closes its userinfo at the second.</li>
+     * <li>ASCII whitespace or a control character in the authority - refused wherever it sits and
+     * whoever is reading. Every scan {@link #redactCredentialUrls} makes FOR a credential stops
+     * there, so {@code https://user@ho st:s3cr3t@example.com/r.git} is masked only to the FIRST
+     * {@code @} and hands {@code :s3cr3t@} out verbatim; and no legitimate authority carries
+     * either character.</li>
+     * <li>git's documented SSH LOGIN ({@link #isPlainSshLogin}) - {@code ssh://git@host/r.git}, a
+     * user name with no password marker. Not a secret, so nothing to mask and nothing to refuse.
+     * The input guard accepts exactly this spelling; refusing it here would judge one form by two
+     * rules.</li>
+     * <li>What is left IS a credential, and it survives only if the redaction really will mask it.
+     * That needs BOTH: that the redaction scans this URL ({@code redactionScans}), and that its own
+     * walk reaches the {@code @} ({@link #redactionFindsUserinfo}) - a {@code ?} or {@code #} in
+     * front of it stops {@link #userinfoEnd}, which then reports "no userinfo" while the query
+     * branch masks only what FOLLOWS, so {@code https://user:s3cr3t?x@example.com/r.git} comes out
+     * as {@code https://user:s3cr3t?***}. When the {@code @} comes first nothing is hidden and
+     * {@code https://user:s3cr3t@host?to=a@b} is not refused.</li>
+     * </ol>
+     * Step 4 is about the REDACTION's reach, not about who owns the secret, so it also refuses a
+     * credential-free {@code https://example.com?to=a@b}, whose verbatim prefix is a mere host.
+     * Telling that prefix from {@code user:s3cr3t} would mean guessing; and the input guard in
+     * {@link #parseCommand} rejects every remote URL carrying a {@code ?} or {@code #} anyway.
      * <p>
-     * That is a decision about the REDACTION's reach, not about who owns the secret, so it also
-     * refuses a credential-free {@code https://example.com?to=a@b}, whose verbatim prefix is a mere
-     * host. Telling that prefix from {@code user:s3cr3t} would mean guessing; and the input guard in
-     * {@link #parseCommand} rejects every remote URL carrying a {@code ?} or {@code #} anyway, so no
-     * remote this tool created can land here.
-     * <p>
-     * A control character that is not whitespace is NOT part of this predicate's reasoning: it ends
-     * none of those scans and such a URL is masked correctly. It is refused one level up, by
-     * {@link #storedTextFlaw}, for the reason stated on {@link #authorityHasWhitespaceOrControl}.
-     * <p>
-     * The {@code @} is still required: an authority with whitespace but no userinfo carries no
-     * secret to protect, and refusing it would be an outage for no gain.
+     * So the whole matrix reduces to one row per position, differing only where the FACT differs:
+     * <table border="1">
+     * <caption>authority x position</caption>
+     * <tr><th>authority</th><th>top level (scanned)</th><th>nested (not scanned)</th></tr>
+     * <tr><td>whitespace in it</td><td>REFUSE</td><td>REFUSE</td></tr>
+     * <tr><td>{@code ssh://git@host} login</td><td>allow</td><td>allow</td></tr>
+     * <tr><td>bare {@code <token>@host}</td><td>allow - masked</td><td>REFUSE - nothing masks it</td></tr>
+     * <tr><td>{@code user:pass@host}</td><td>allow - masked</td><td>REFUSE - nothing masks it</td></tr>
+     * </table>
+     * A control character is refused by step 2 here and, when no userinfo makes this predicate fire
+     * at all, by {@link #storedTextFlaw} one level up - see {@link #authorityHasWhitespaceOrControl}.
      *
      * @param text the text the authority sits in
      * @param start the first index of the authority
      * @param end the index the authority stops before
+     * @param redactionScans whether {@link #redactCredentialUrls} scans the URL this authority
+     *            belongs to - a fact about where it sits, never a different rule
      * @return {@code true} when the authority carries a credential this tool cannot mask
      */
-    private static boolean unmaskableAuthority(String text, int start, int end)
+    private static boolean unmaskableAuthority(String text, int start, int end, boolean redactionScans)
     {
-        boolean userinfo = false;
+        // The LAST '@' before the authority ends, the separator git itself reads: an email-style
+        // user name means 'user@corp.com:secret@host' closes its userinfo at the second one.
+        int lastAt = -1;
         for (int i = start; i < end; i++)
         {
             if (text.charAt(i) == '@')
             {
-                userinfo = true;
-                break;
+                lastAt = i;
             }
         }
-        if (!userinfo)
+        if (lastAt < 0)
         {
+            // No userinfo: nothing here is a secret, whoever reads it.
             return false;
         }
-        return hasWhitespaceOrControl(text, start, end) || !redactionFindsUserinfo(text, start, end);
+        if (hasWhitespaceOrControl(text, start, end))
+        {
+            // No legitimate authority carries either, and every scan the redaction makes FOR a
+            // credential stops at whitespace - so this is un-maskable wherever it sits.
+            return true;
+        }
+        if (isPlainSshLogin(text, start - SCHEME_SEPARATOR.length(), start, lastAt))
+        {
+            // git's documented ssh remote. Not a secret, so there is nothing to mask or refuse.
+            return false;
+        }
+        // What is left IS a credential. It survives only if the redaction will mask it, which takes
+        // both: that the redaction scans this URL at all, and that its own walk reaches the '@'.
+        return !redactionScans || !redactionFindsUserinfo(text, start, end);
+    }
+
+    /**
+     * Where a URL's authority ends, as GIT delimits it - at the first {@code /}, or at
+     * {@code limit}. The single boundary: every caller that judges an authority uses this one, so a
+     * nested URL cannot end up measured differently from a top-level one.
+     *
+     * @param text the text being walked
+     * @param authorityStart the first index after {@value #SCHEME_SEPARATOR}
+     * @param limit the index this URL may not be scanned past
+     * @return the index the authority stops before
+     */
+    private static int gitAuthorityEnd(String text, int authorityStart, int limit)
+    {
+        int slash = text.indexOf('/', authorityStart);
+        return slash < 0 || slash > limit ? limit : slash;
     }
 
     /**
@@ -1148,9 +1203,8 @@ public class GitTool implements IMcpTool
             // The same bound the redaction computes once per URL, and for the same reason: without
             // it a scan would run on into the NEXT URL.
             int limit = urlLimit(text, authorityStart);
-            int slash = text.indexOf('/', authorityStart);
-            int authorityEnd = slash < 0 || slash > limit ? limit : slash;
-            if (unmaskableAuthority(text, authorityStart, authorityEnd))
+            int authorityEnd = gitAuthorityEnd(text, authorityStart, limit);
+            if (unmaskableAuthority(text, authorityStart, authorityEnd, true))
             {
                 return true;
             }
@@ -1260,23 +1314,12 @@ public class GitTool implements IMcpTool
             {
                 continue;
             }
-            int userinfoStart = marker + SCHEME_SEPARATOR.length();
-            int lastAt = -1;
-            for (int i = userinfoStart; i < to; i++)
-            {
-                char c = text.charAt(i);
-                if (c == '@')
-                {
-                    // The LAST one before the authority ends: git takes an email-style user name,
-                    // so the real separator of 'user@corp.com:secret@host' is the second '@'.
-                    lastAt = i;
-                }
-                else if (c == '/' || c == '?' || c == '#' || isAsciiWhitespace(c))
-                {
-                    break;
-                }
-            }
-            if (lastAt >= 0 && !isPlainSshLogin(text, marker, userinfoStart, lastAt))
+            int authorityStart = marker + SCHEME_SEPARATOR.length();
+            // The SAME judge and the SAME boundary the top level uses. The one thing this position
+            // changes is a FACT, not a rule: the redaction never scans this URL, so the "would its
+            // walk reach the '@'" half cannot save anything here.
+            if (unmaskableAuthority(text, authorityStart, gitAuthorityEnd(text, authorityStart, to),
+                false))
             {
                 return true;
             }

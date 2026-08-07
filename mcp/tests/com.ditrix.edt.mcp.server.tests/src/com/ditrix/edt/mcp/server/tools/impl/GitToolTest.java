@@ -640,6 +640,82 @@ public class GitToolTest
     }
 
     @Test
+    public void testTheSAMEAuthorityRuleAppliesAtEveryPosition()
+    {
+        // The matrix, in one place. Four rounds of review each found the next pair where a nested
+        // authority was judged by a rule that differed from the top level's - a password marker
+        // required here but not there, a scan that stopped at whitespace here but not there. There
+        // is now one predicate and one boundary; the ONLY thing position changes is a fact - does
+        // the redaction scan this URL at all - so exactly two of these eight cells may differ, and
+        // both differ in the safe direction.
+        //
+        // Read it as a table: same authority, once alone and once inside another URL's path.
+        String[][] matrix = {
+            // authority                       top level                 nested
+            {"user:s3cr3t\u0020ok@host.example", "REFUSE", "REFUSE"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"ghp_s3cr3t@host.example", "ALLOW", "REFUSE"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"user:s3cr3t@host.example", "ALLOW", "REFUSE"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        };
+        for (String[] row : matrix)
+        {
+            String top = "https://" + row[0] + "/x.git"; //$NON-NLS-1$ //$NON-NLS-2$
+            String nested = "https://clean.example/r/https://" + row[0] + "/x.git"; //$NON-NLS-1$ //$NON-NLS-2$
+            assertVerdict("top level: " + row[0], row[1], top); //$NON-NLS-1$
+            assertVerdict("nested: " + row[0], row[2], nested); //$NON-NLS-1$
+        }
+        // The ssh row needs its own scheme, so it is spelled out rather than squeezed into the
+        // table above. It is the row that must read ALLOW on both sides: git documents it.
+        assertVerdict("top level: ssh login", "ALLOW", "ssh://git@host.example/x.git"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertVerdict("nested: ssh login", "ALLOW", //$NON-NLS-1$ //$NON-NLS-2$
+            "https://clean.example/r/ssh://git@host.example/x.git"); //$NON-NLS-1$
+        // Its PASSWORD variant is not exempt - a ':' is a password wherever it rides - so it falls
+        // back to the ordinary row and reads exactly like 'user:pass@host': allowed at the top
+        // level because the redaction masks it there, refused nested because nothing does. Written
+        // out because the obvious guess is "a password must always be refused", and that guess is
+        // what this whole check does NOT do: it refuses what cannot be masked, not every secret.
+        // (This case first asserted REFUSE on both sides and the matrix caught it.)
+        assertVerdict("top level: ssh with a password", "ALLOW", //$NON-NLS-1$ //$NON-NLS-2$
+            "ssh://git:s3cr3t@host.example/x.git"); //$NON-NLS-1$
+        assertEquals("...and that is the masking it relies on", //$NON-NLS-1$
+            "ssh://***@host.example/x.git", //$NON-NLS-1$
+            GitTool.redactCredentialUrls("ssh://git:s3cr3t@host.example/x.git")); //$NON-NLS-1$
+        assertVerdict("nested: ssh with a password", "REFUSE", //$NON-NLS-1$ //$NON-NLS-2$
+            "https://clean.example/r/ssh://git:s3cr3t@host.example/x.git"); //$NON-NLS-1$
+
+        // The two cells that DO differ differ for one stated reason, and this is that reason: at the
+        // top level the redaction masks them, nested it does not touch the text at all. Asserting
+        // the verdicts alone would leave "they differ" unexplained - and unnoticed if it changed.
+        assertEquals("the top-level token is allowed because it is MASKED", //$NON-NLS-1$
+            "https://***@host.example/x.git", //$NON-NLS-1$
+            GitTool.redactCredentialUrls("https://ghp_s3cr3t@host.example/x.git")); //$NON-NLS-1$
+        String nestedToken = "https://clean.example/r/https://ghp_s3cr3t@host.example/x.git"; //$NON-NLS-1$
+        assertEquals("...and the nested one is refused because nothing masks it", nestedToken, //$NON-NLS-1$
+            GitTool.redactCredentialUrls(nestedToken));
+    }
+
+    /**
+     * Asserts the verdict of {@link GitTool#storedTextFlaw} on one authority, in the words the
+     * matrix above is written in.
+     *
+     * @param where which cell of the matrix this is, for the failure message
+     * @param expected {@code "REFUSE"} or {@code "ALLOW"}
+     * @param text the stored value to judge
+     */
+    private static void assertVerdict(String where, String expected, String text)
+    {
+        GitTool.StoredRemoteFlaw flaw = GitTool.storedTextFlaw(text);
+        if ("REFUSE".equals(expected)) //$NON-NLS-1$
+        {
+            assertEquals(where + " -> " + text, //$NON-NLS-1$
+                GitTool.StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, flaw);
+        }
+        else
+        {
+            assertNull(where + " -> " + text, flaw); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testANestedSshLoginIsNotACredential()
     {
         // The same doctrine the INPUT guard rules by: for ssh, a userinfo with no password marker is
