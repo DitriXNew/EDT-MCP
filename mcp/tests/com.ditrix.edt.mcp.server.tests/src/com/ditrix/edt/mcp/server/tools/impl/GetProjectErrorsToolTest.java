@@ -60,6 +60,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -292,6 +293,106 @@ public class GetProjectErrorsToolTest
         assertNull(error);
         assertEquals(0, shown[0]);
         assertEquals(0, filteredOut[0]);
+    }
+
+    // ========== buildIfMatches: hasQuickFix ==========
+
+    @Test
+    public void testHasQuickFixTrueWhenCheckHasARegisteredFix()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("doc-comment-parameter-section"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        when(fixRepository.hasFixes(uid)).thenReturn(true);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertTrue(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenCheckHasNoRegisteredFix()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("no-fix-check"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        when(fixRepository.hasFixes(uid)).thenReturn(false);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenFixRepositoryIsNull()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("doc-comment-parameter-section"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, null, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenCheckUidCannotBeResolved()
+    {
+        // No checkRepository -> resolveCheckUid returns null -> hasQuickFix must be false, not an NPE.
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), null, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenFixRepositoryThrows()
+    {
+        // A repository hiccup on this one marker must degrade to hasQuickFix=false, not abort the
+        // whole buildIfMatches call - the try/catch guard this test pins (mirrors how the
+        // object-presentation resolution just above already degrades instead of aborting).
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("doc-comment-parameter-section"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        when(fixRepository.hasFixes(uid)).thenThrow(new RuntimeException("repository unavailable")); //$NON-NLS-1$
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
     }
 
     // ========== buildIfMatches: filters ==========

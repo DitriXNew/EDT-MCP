@@ -36,52 +36,110 @@ from harness import (
     split_markdown_row,
 )
 
-_AMBIGUITY_RANGE_RE = re.compile(r"variant=<1\.\.(\d+)>")
+_INDEX_RANGE_RE = re.compile(r"index=<1\.\.(\d+)>")
+_VARIANT_RANGE_RE = re.compile(r"variant=<1\.\.(\d+)>")
+
+# The three per-marker refusal reasons ApplyQuickFixTool documents (see noFixAvailableError,
+# the interactiveFixBundle guard, and the getSelectedFixVariant==null guard in
+# ApplyQuickFixTool.java) - the only refusals that mean "this candidate genuinely has no
+# headless fix", as opposed to a service/environment failure that happens to also produce an
+# error message.
+_ACCEPTABLE_REFUSAL_MARKERS = (
+    "No quick-fix is available",
+    "INTERACTIVE IDE action",
+    "did not accept the selected variant",
+)
+
+
+def _is_acceptable_refusal(error_text):
+    """True when `error_text` names one of ApplyQuickFixTool's documented per-marker refusal
+    reasons. A bare message-length check would also accept a universally broken tool (a
+    service-unavailable or internal error is just as "long"), which defeats the point of a
+    mandatory invariant."""
+    return any(marker in error_text for marker in _ACCEPTABLE_REFUSAL_MARKERS)
+
+
+def _resolve_variant_ambiguity(args, r):
+    """Given a Result `r` that reported a 'variant=<1..N>' ambiguity for `args` (the SAME
+    marker's fix has several registered variants), tries every variant 1..N in order and
+    returns the first successful Result, or the LAST refusal if none of them applied - a
+    later variant can be the real automated edit while an earlier one is merely interactive,
+    or refused for an unrelated reason, so stopping at the first refusal can silently skip
+    the variant that actually works."""
+    m = _VARIANT_RANGE_RE.search(r.error_text() or "")
+    variant_count = int(m.group(1)) if m else 1
+    last = r
+    for variant in range(1, variant_count + 1):
+        last = call("apply_quick_fix", dict(args, variant=variant))
+        if not last.is_error:
+            return last
+    return last
 
 
 def _apply_resolving_ambiguity(args):
     """Applies a quick-fix for `args`'s locator, resolving whatever ambiguity the tool
     reports instead of committing to the first option offered.
 
-    An 'index=<1..N>' ambiguity (several MARKERS share the same locator) still just picks
-    index=1: which marker instance gets picked cannot change whether the CHECK's registered
-    fix is interactive - that is a property of the check id, shared by every marker of it -
-    so there is nothing to gain from trying every index.
+    Both 'index=<1..N>' (several MARKERS share the same locator) and 'variant=<1..N>' (the
+    same marker's fix has several registered variants) ambiguities are exhausted in order,
+    stopping at the first attempt that is NOT refused. Quick-fix applicability is decided per
+    marker (EDT's `prepareFix`/`getApplicableFixVariants` take the specific marker instance,
+    not just the check id) - so committing to index=1 the way this used to work could
+    silently skip a sibling marker of the SAME check that actually has a headless fix while
+    index=1 does not.
 
-    A 'variant=<1..N>' ambiguity is different: it is the SAME marker's fix that has several
-    registered variants, and variant 1 can be the interactive one while a later variant is
-    the real automated edit. So every variant in the advertised range is tried in order,
-    stopping at the first one that is NOT refused as INTERACTIVE.
-
-    Returns the last Result obtained: applied, or refused for a reason unrelated to
-    ambiguity/interactivity (including "every variant is interactive").
+    Returns the LAST Result obtained: applied, or the final refusal once every advertised
+    index/variant has been tried.
     """
     r = call("apply_quick_fix", args)
-    if r.is_error and "index=" in (r.error_text() or ""):
-        args = dict(args, index=1)
-        r = call("apply_quick_fix", args)
     if r.is_error and "variant=" in (r.error_text() or ""):
-        m = _AMBIGUITY_RANGE_RE.search(r.error_text() or "")
-        variant_count = int(m.group(1)) if m else 1
-        for variant in range(1, variant_count + 1):
-            r = call("apply_quick_fix", dict(args, variant=variant))
-            if not (r.is_error and "INTERACTIVE" in (r.error_text() or "")):
-                break
-    return r
+        return _resolve_variant_ambiguity(args, r)
+    if not (r.is_error and "index=" in (r.error_text() or "")):
+        return r
+
+    m = _INDEX_RANGE_RE.search(r.error_text() or "")
+    index_count = int(m.group(1)) if m else 1
+    last = r
+    for index in range(1, index_count + 1):
+        last = call("apply_quick_fix", dict(args, index=index))
+        if not last.is_error:
+            return last
+        if "variant=" in (last.error_text() or ""):
+            last = _resolve_variant_ambiguity(dict(args, index=index), last)
+            if not last.is_error:
+                return last
+    return last
+
+
+_DETAILED_SCAN_LIMIT = 1000  # Pagination.clampLimit's own cap - the highest get_project_errors accepts.
 
 
 def _scan_detailed_rows(project):
     """Yields each detailed-table row of get_project_errors(project) as a 7-cell dict:
     desc, loc, modulePath, line, checkId, fix, hasDocs.
 
+    Requests the tool's maximum limit rather than relying on its smaller default: a
+    truncated scan would silently read as "no fixable marker beyond the cut exists", and a
+    truncated before/after count comparison would misreport a real fix as having "done
+    nothing" once the fixed marker's surviving siblings sit beyond the cut. Raises E2ESkip
+    when the response still reports the limit reached - the marker set is then incomplete
+    and neither discovery nor a count comparison can draw a reliable conclusion from it.
+
     Rows are split with the shared escape-aware parser (harness.split_markdown_row): a
     literal '|' inside a cell is escaped as '\\|' by production, and a naive split would
     cut such a row into 8+ cells, so the exact-7 filter below would silently DROP a real,
     fixable marker. The parser's own contract is pinned by test_markdown_table.py.
     """
-    r = call("get_project_errors", {"projectName": project, "responseFormat": "detailed"})
+    r = call("get_project_errors",
+             {"projectName": project, "responseFormat": "detailed", "limit": _DETAILED_SCAN_LIMIT})
     assert_ok(r, "get_project_errors detailed scan")
-    for line in (r.text or "").splitlines():
+    text = r.text or ""
+    if "limit reached" in text:
+        raise E2ESkip(
+            "get_project_errors hit its %d-row limit scanning %s - the marker set is "
+            "incomplete, so a fixable-marker scan/count here would be unreliable"
+            % (_DETAILED_SCAN_LIMIT, project))
+    for line in text.splitlines():
         cells = split_markdown_row(line)
         if len(cells) != 7 or cells[0].lower() == "description":  # skip the header row too
             continue
@@ -111,6 +169,23 @@ def _count_markers(project, check_id, module_path):
     """
     return sum(1 for row in _scan_detailed_rows(project)
                if row["checkId"] == check_id and row["modulePath"] == module_path)
+
+
+def _restore_extension_fixture():
+    """Reverts the EXTENSION fixture (model + disk) after a fix mutated it.
+
+    Mirrors test_create_metadata.py's _restore_extension_fixture(): reset -> clean_project ->
+    wait_for_project_ready() -> a SECOND reset, not just a single reset + clean_project. Without
+    the wait and the second reset, the applied fix's own async disk export can race clean_project
+    (or clean_project can be issued while the project is still BUILDING and refuse), leaving the
+    extension fixture dirty for whichever test runs next.
+    """
+    reset_all_fixtures()
+    r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
+    assert_ok(r_clean, "clean_project after apply_quick_fix must succeed, "
+              "or the extension model/tree stays polluted for later tests")
+    wait_for_project_ready()
+    reset_all_fixtures()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -153,13 +228,17 @@ def test_never_reports_success_without_actually_changing_anything():
             checked += 1
 
             if r.is_error:
-                # Acceptable outcome 1: refused. The message must EXPLAIN why, so the caller
-                # knows what to do next rather than being left with a bare failure.
+                # Acceptable outcome 1: refused for one of the tool's documented per-marker
+                # reasons (no fix available, interactive-only, or the engine silently refusing
+                # the selection). A bare message-length check would also accept a service/
+                # environment failure (e.g. "Quick-fix services are not available") - which is
+                # exactly the universally-broken-tool case this invariant exists to catch.
                 err = r.error_text() or ""
-                if len(err.strip()) < 20:
+                if not _is_acceptable_refusal(err):
                     raise AssertionError(
-                        "a refused quick-fix must explain why, got %r for %s in %s"
-                        % (err, c["checkId"], c["modulePath"]))
+                        "a refused quick-fix must be one of the documented reasons (no fix "
+                        "available, interactive-only, or selection refused), got an unexpected "
+                        "error for %s in %s: %r" % (c["checkId"], c["modulePath"], err))
                 continue
 
             # Acceptable outcome 2: claimed applied -> the effect must be real.
@@ -176,10 +255,7 @@ def test_never_reports_success_without_actually_changing_anything():
         if checked == 0:
             raise AssertionError("no candidate was exercised")
     finally:
-        reset_all_fixtures()
-        r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
-        assert_ok(r_clean, "clean_project after apply_quick_fix must succeed, "
-                  "or the extension model/tree stays polluted for later tests")
+        _restore_extension_fixture()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -252,10 +328,7 @@ def test_apply_a_discovered_fixable_marker():
     finally:
         # The fix mutated the extension (model + disk); the per-test reset only covers the
         # BASE, so revert + re-sync the extension here to keep the whole tree clean.
-        reset_all_fixtures()
-        r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
-        assert_ok(r_clean, "clean_project after apply_quick_fix must succeed, "
-                  "or the extension model/tree stays polluted for later tests")
+        _restore_extension_fixture()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

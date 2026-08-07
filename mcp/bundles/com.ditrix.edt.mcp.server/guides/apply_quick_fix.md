@@ -1,5 +1,3 @@
-## Guide
-
 Applies EDT's **official quick-fix** (auto-fix) to a single validation marker — the headless
 counterpart of the **Quick Fix** action in the EDT *Problems* view. It runs the platform's own fix
 through `IFixManager` (prepare → list applicable variants → select → execute → finish), so the result

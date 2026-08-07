@@ -348,4 +348,25 @@ public class ApplyQuickFixToolTest
         assertEquals(unnamed, variants.get(0));
         assertEquals(withDetailsOnly, variants.get(1));
     }
+
+    @Test
+    public void testSortVariantsDeterministicallyBreaksTiesOnDetailsWhenDescriptionsMatch()
+    {
+        // Two variants sharing the SAME non-empty description but different details: the
+        // collapsed describe() text used as the sort key would tie them, leaving their relative
+        // order exactly as unstable as getApplicableFixVariants()'s own encounter order - the
+        // collision the two-level (description, details) comparator exists to close.
+        FixVariantDescriptor toB = new FixVariantDescriptor("Rename variable", "to 'b'"); //$NON-NLS-1$ //$NON-NLS-2$
+        FixVariantDescriptor toA = new FixVariantDescriptor("Rename variable", "to 'a'"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<FixVariantDescriptor> order1 = new ArrayList<>(List.of(toB, toA));
+        List<FixVariantDescriptor> order2 = new ArrayList<>(List.of(toA, toB));
+        ApplyQuickFixTool.sortVariantsDeterministically(order1);
+        ApplyQuickFixTool.sortVariantsDeterministically(order2);
+
+        assertEquals("both encounter orders must sort identically even though describe() text ties", //$NON-NLS-1$
+            order1.get(0), order2.get(0));
+        assertEquals(toA, order1.get(0));
+        assertEquals(toB, order1.get(1));
+    }
 }

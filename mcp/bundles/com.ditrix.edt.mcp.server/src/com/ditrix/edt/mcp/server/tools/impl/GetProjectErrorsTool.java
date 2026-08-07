@@ -2604,8 +2604,22 @@ public class GetProjectErrorsTool implements IMcpTool
         String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
         CheckUid checkUid = resolveCheckUid(marker, shortUid, checkRepository);
         String symbolicCheckId = checkUid != null ? checkUid.getCheckId() : null;
-        boolean hasQuickFix = checkUid != null && fixRepository != null && fixRepository.hasFixes(checkUid);
-        
+        // Best-effort, like the object-presentation resolution below: a repository hiccup on ONE
+        // marker (stale registration, transient service state) must not abort the whole listing -
+        // just leave this row's flag unset.
+        boolean hasQuickFix = false;
+        if (checkUid != null && fixRepository != null)
+        {
+            try
+            {
+                hasQuickFix = fixRepository.hasFixes(checkUid);
+            }
+            catch (Exception e)
+            {
+                hasQuickFix = false;
+            }
+        }
+
         // checkId filter: match either the short UID (e.g. "SU23") or the symbolic id
         // (e.g. "semicolon-missing"). The short UID alone is rarely what callers type.
         if (checkId != null && !checkId.isEmpty() && !checkIdMatches(shortUid, symbolicCheckId, checkId))

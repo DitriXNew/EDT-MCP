@@ -60,6 +60,17 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
+     * Test seam: runs the migration against a supplied store, so the one mechanism that keeps a
+     * default-off tool disabled on upgrade can be verified without an Eclipse runtime.
+     *
+     * @param store the preference store to migrate
+     */
+    static void ensureMigratedForTest(IPreferenceStore store)
+    {
+        INSTANCE.ensureMigrated(store);
+    }
+
+    /**
      * Applies the tool-enablement preference MIGRATIONS once per store, lazily on the first read.
      * <p>
      * A tool that ships DISABLED by default gets that from {@code DEFAULT_DISABLED_TOOLS} - but only on
@@ -77,17 +88,6 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      *
      * @param store the preference store to migrate (never {@code null} here)
      */
-    /**
-     * Test seam: runs the migration against a supplied store, so the one mechanism that keeps a
-     * default-off tool disabled on upgrade can be verified without an Eclipse runtime.
-     *
-     * @param store the preference store to migrate
-     */
-    static void ensureMigratedForTest(IPreferenceStore store)
-    {
-        INSTANCE.ensureMigrated(store);
-    }
-
     private void ensureMigrated(IPreferenceStore store)
     {
         int storedVersion = store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION);

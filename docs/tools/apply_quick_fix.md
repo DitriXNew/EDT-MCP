@@ -13,8 +13,6 @@ Apply EDT's official quick-fix (auto-fix) to one validation marker — the headl
 | variant | — | integer | 1-based fix-variant index, required only when the chosen marker's fix exposes more than one variant (the error then lists them). If supplied, it must be >= 1 (0 or negative is rejected, never silently treated as 'omitted') and is validated strictly against the CURRENT variant count and rejected when out of range - even against a single variant - so a stale selector is never silently applied to the wrong fix. |
 
 ## Guide
-## Guide
-
 Applies EDT's **official quick-fix** (auto-fix) to a single validation marker — the headless
 counterpart of the **Quick Fix** action in the EDT *Problems* view. It runs the platform's own fix
 through `IFixManager` (prepare → list applicable variants → select → execute → finish), so the result

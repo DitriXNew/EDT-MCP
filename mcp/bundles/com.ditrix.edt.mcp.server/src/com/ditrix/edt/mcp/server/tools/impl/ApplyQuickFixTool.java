@@ -170,10 +170,10 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         IFixManager fixManager = Activator.getDefault().getFixManager();
         IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
         ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
-        if (markerManager == null || fixManager == null || dtProjectManager == null)
+        if (markerManager == null || fixManager == null || dtProjectManager == null || checkRepository == null)
         {
             return ToolResult.error("Quick-fix services are not available " //$NON-NLS-1$
-                + "(IMarkerManager / IFixManager / IDtProjectManager).").toJson(); //$NON-NLS-1$
+                + "(IMarkerManager / IFixManager / IDtProjectManager / ICheckRepository).").toJson(); //$NON-NLS-1$
         }
 
         IDtProject dtProject = dtProjectManager.getDtProject(project);
@@ -240,7 +240,11 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             }
             ErrorInfo loc = new ErrorInfo();
             GetProjectErrorsTool.populateModuleLocation(marker, loc);
-            if (modulePath != null && !modulePath.isEmpty() && !modulePath.equals(loc.modulePath))
+            // Case-insensitive, like the checkId half of the same locator (checkIdMatchesExact) -
+            // a caller reconstructing the locator rather than copying it verbatim should not be
+            // rejected by a module-path case mismatch the checkId half would have tolerated.
+            if (modulePath != null && !modulePath.isEmpty()
+                && (loc.modulePath == null || !modulePath.equalsIgnoreCase(loc.modulePath)))
             {
                 return;
             }
@@ -385,7 +389,20 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         }
         finally
         {
-            fixManager.finishFix(handle);
+            try
+            {
+                fixManager.finishFix(handle);
+            }
+            catch (Exception e)
+            {
+                // Cleanup-only: standard try/finally semantics would let a finishFix failure
+                // DISCARD the try block's real outcome (a genuinely applied fix reported as a
+                // failure - risking a caller double-applying it - or a more diagnostic exception
+                // replaced by this cleanup-time one). Swallow it instead; a session-cleanup
+                // hiccup is not worth masking the actual result.
+                Activator.logWarning("finishFix failed for check '" + chosen.checkId + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + e.getMessage());
+            }
         }
     }
 
@@ -590,9 +607,16 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
      * FRESH {@link FixProcessHandle}, so a {@code variant=N} selector chosen from ONE call's
      * {@link #multipleVariantsError} listing must still resolve to the SAME variant on a
      * follow-up call, even though the underlying Collection could enumerate the same variant
-     * set in a different order each time. Sorting by the exact text
-     * {@code multipleVariantsError} shows the caller pins the listing to content, not
-     * incidental Collection iteration order.
+     * set in a different order each time.
+     * <p>
+     * Sorted by ({@code description}, {@code details}) - both fields, not the collapsed
+     * {@link #describe} text {@code multipleVariantsError} shows the caller: two variants can
+     * share the same non-empty description while differing only in details, in which case
+     * {@code describe} alone would tie them and leave their relative order exactly as unstable
+     * as the input Collection it exists to neutralize. Two variants tied on BOTH fields are
+     * genuinely indistinguishable from the data this class exposes (the same conclusion
+     * {@link MarkerMatch#DETERMINISTIC_ORDER} reaches for two markers identical across every
+     * field) - there is no further signal to break that tie on.
      * <p>
      * Package-visible (not {@code private}) so this pure ordering decision is unit-testable
      * without a live {@link IFixManager} session.
@@ -602,7 +626,21 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
      */
     static void sortVariantsDeterministically(List<FixVariantDescriptor> variants)
     {
-        variants.sort(Comparator.comparing(ApplyQuickFixTool::describe));
+        variants.sort(Comparator
+            .comparing(ApplyQuickFixTool::descriptionSortKey, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(ApplyQuickFixTool::detailsSortKey, Comparator.nullsFirst(Comparator.naturalOrder())));
+    }
+
+    private static String descriptionSortKey(FixVariantDescriptor variant)
+    {
+        String desc = variant.getDescription();
+        return desc != null && !desc.isEmpty() ? desc : null;
+    }
+
+    private static String detailsSortKey(FixVariantDescriptor variant)
+    {
+        String details = variant.getDetails();
+        return details != null && !details.isEmpty() ? details : null;
     }
 
     /** A fix variant's human description, falling back to its details / a placeholder. */
