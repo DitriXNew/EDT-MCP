@@ -18,11 +18,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.stream.Stream;
@@ -62,7 +60,7 @@ import org.junit.Test;
 public class OrphanedJavadocTest
 {
     /**
-     * The sites allowed to stay, BY IDENTITY - file plus {@link #fingerprint} of the block
+     * The sites allowed to stay, BY IDENTITY - file plus {@link #identityOf} of the block
      * itself. Deliberately not a count: a budget of "one per file" answers "how many", and
      * the question that matters is "the same one?". Fixing the listed block while
      * introducing another in the same file keeps the count at one and would slip through;
@@ -72,19 +70,30 @@ public class OrphanedJavadocTest
      * Both entries are the last two sites of issue #353, deferred because the open PR #330
      * edits exactly these two files; they come out as soon as that PR lands.
      */
-    private static final Map<String, Set<String>> KNOWN_ORPHANS = new HashMap<>();
+    private static final Map<String, List<String>> KNOWN_ORPHANS = new HashMap<>();
     static
     {
         KNOWN_ORPHANS.put("mcp/bundles/com.ditrix.edt.mcp.server/src" //$NON-NLS-1$
             + "/com/ditrix/edt/mcp/server/preferences/PreferenceConstants.java", //$NON-NLS-1$
-            Set.of("Default: all tools enabled (empty string = no disabled tools")); //$NON-NLS-1$
+            List.of(
+                "Default: all tools enabled (empty string = no disabled tools)" //$NON-NLS-1$
+            ));
         KNOWN_ORPHANS.put("mcp/bundles/com.ditrix.edt.mcp.server/src" //$NON-NLS-1$
             + "/com/ditrix/edt/mcp/server/preferences/ToolSettingsService.java", //$NON-NLS-1$
-            Set.of("Applies the tool-enablement preference MIGRATIONS once per s")); //$NON-NLS-1$
+            List.of(
+                "Applies the tool-enablement preference MIGRATIONS once per store, lazily on the " //$NON-NLS-1$
+                    + "first read. <p> A tool that ships DISABLED by default gets that from {@code " //$NON-NLS-1$
+                    + "DEFAULT_DISABLED_TOOLS} - but only on a store that never persisted its own value. An " //$NON-NLS-1$
+                    + "installation that had already saved the Tools tab (or an \"all tools\" preset) holds " //$NON-NLS-1$
+                    + "an explicit list that predates the new tool, so without this the powerful {@code " //$NON-NLS-1$
+                    + "git} tool would silently arrive ENABLED on upgrade. Version 1 therefore adds it to " //$NON-NLS-1$
+                    + "such a stored list; the user can still enable it deliberately afterwards. @param " //$NON-NLS-1$
+                    + "store the preference store to migrate (never {@code null} here)" //$NON-NLS-1$
+            ));
     }
 
-    /** How much of a block's opening text identifies it. */
-    private static final int FINGERPRINT_LENGTH = 60;
+    /** How much of a block's text the REPORT shows; the identity is always the whole of it. */
+    private static final int DISPLAY_LENGTH = 60;
 
     /** The source trees this ratchet covers; the first two must exist. */
     private static final String[] SOURCE_ROOTS = {
@@ -119,13 +128,7 @@ public class OrphanedJavadocTest
     @Test
     public void noOrphanedJavadocOutsideTheAllowList()
     {
-        Map<String, List<Orphan>> scanned = scanSources();
-        List<String> problems = new ArrayList<>();
-        for (Map.Entry<String, List<Orphan>> entry : scanned.entrySet())
-        {
-            problems.addAll(unpardoned(entry.getKey(), entry.getValue(),
-                KNOWN_ORPHANS.getOrDefault(entry.getKey(), Set.of())));
-        }
+        List<String> problems = unpardonedAcross(scanSources(), KNOWN_ORPHANS);
         assertTrue(refusalText(problems), problems.isEmpty());
     }
 
@@ -139,17 +142,20 @@ public class OrphanedJavadocTest
      * @param pardoned the fingerprints this file is allowed to keep
      * @return one message per orphan nobody pardoned
      */
-    static List<String> unpardoned(String path, List<Orphan> orphans, Set<String> pardoned)
+    static List<String> unpardoned(String path, List<Orphan> orphans, List<String> pardoned)
     {
+        // A MULTISET, consumed one pardon per block: with a set, two identical blocks would
+        // both be covered by the single pardon written for one of them.
+        List<String> remaining = new ArrayList<>(pardoned);
         List<String> problems = new ArrayList<>();
         for (Orphan orphan : orphans)
         {
             // BY IDENTITY, never by how many: "one orphan is allowed here" would pardon a
             // brand-new block the moment the pardoned one is fixed.
-            if (!pardoned.contains(orphan.fingerprint))
+            if (!remaining.remove(orphan.identity))
             {
                 problems.add(path + ':' + orphan.line + " -> orphaned javadoc \"" //$NON-NLS-1$
-                    + orphan.fingerprint + "...\""); //$NON-NLS-1$
+                    + display(orphan.identity) + '"');
             }
         }
         return problems;
@@ -164,35 +170,92 @@ public class OrphanedJavadocTest
      * @param pardoned the fingerprints this file is allowed to keep
      * @return one message per pardon that has outlived its block
      */
-    static List<String> stalePardons(String path, List<Orphan> orphans, Set<String> pardoned)
+    static List<String> stalePardons(String path, List<Orphan> orphans, List<String> pardoned)
     {
-        Set<String> present = new HashSet<>();
+        List<String> present = new ArrayList<>();
         for (Orphan orphan : orphans)
         {
-            present.add(orphan.fingerprint);
+            present.add(orphan.identity);
         }
         List<String> stale = new ArrayList<>();
         for (String one : pardoned)
         {
-            if (!present.contains(one))
+            // Also a multiset: two pardons for one surviving block leave one of them stale.
+            if (!present.remove(one))
             {
                 stale.add(path + ": pardons a block that is no longer orphaned - \"" //$NON-NLS-1$
-                    + one + "...\""); //$NON-NLS-1$
+                    + display(one) + '"');
             }
         }
         return stale;
     }
 
     /**
-     * The pardon must name a SITE, not a quantity — asserted on the DECISION, not just on
-     * the fingerprints that feed it. The case it exists for: someone fixes the block a file
-     * is allow-listed for and introduces a different one in the same file. The count is
-     * still one, so a budget waves it through; an identity does not.
+     * Every file's findings, with each file's OWN pardons. Extracted so that "look the
+     * pardons up by file" is a decision a test can revert — a global union of every pardon
+     * would let one file's entry excuse another file's block, and nothing would say so.
+     *
+     * @param scanned every scanned file mapped to its orphans
+     * @param pardons the allow-list
+     * @return one message per orphan nobody pardoned
+     */
+    static List<String> unpardonedAcross(Map<String, List<Orphan>> scanned,
+        Map<String, List<String>> pardons)
+    {
+        List<String> problems = new ArrayList<>();
+        for (Map.Entry<String, List<Orphan>> entry : scanned.entrySet())
+        {
+            problems.addAll(unpardoned(entry.getKey(), entry.getValue(),
+                pardons.getOrDefault(entry.getKey(), List.of())));
+        }
+        return problems;
+    }
+
+    /**
+     * The pardons that no longer name a block that is still orphaned — including the ones
+     * whose FILE is gone from the scan, which is the case a per-file walk over the scan
+     * results would silently skip.
+     *
+     * @param scanned every scanned file mapped to its orphans
+     * @param pardons the allow-list
+     * @return one message per pardon that has outlived its block
+     */
+    static List<String> stalePardonsAcross(Map<String, List<Orphan>> scanned,
+        Map<String, List<String>> pardons)
+    {
+        List<String> stale = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : pardons.entrySet())
+        {
+            if (!scanned.containsKey(entry.getKey()))
+            {
+                stale.add(entry.getKey() + ": allow-listed but no such source file was scanned"); //$NON-NLS-1$
+                continue;
+            }
+            stale.addAll(stalePardons(entry.getKey(), scanned.get(entry.getKey()), entry.getValue()));
+        }
+        return stale;
+    }
+
+    /**
+     * @param identity a block's full identity
+     * @return at most {@link #DISPLAY_LENGTH} characters of it, elided when it is longer
+     */
+    static String display(String identity)
+    {
+        return identity.length() <= DISPLAY_LENGTH ? identity
+            : identity.substring(0, DISPLAY_LENGTH) + "..."; //$NON-NLS-1$
+    }
+
+    /**
+     * The pardon must name a SITE, not a quantity — asserted on the DECISION, not on the
+     * identities that feed it. The case it exists for: someone fixes the block a file is
+     * allow-listed for and introduces a different one in the same file. The count is still
+     * one, so a budget waves it through; an identity does not.
      */
     @Test
     public void aPardonDoesNotTransferToADifferentBlock()
     {
-        Set<String> pardoned = Set.of("The pardoned block."); //$NON-NLS-1$
+        List<String> pardoned = List.of("The pardoned block."); //$NON-NLS-1$
         List<Orphan> sameBlock = List.of(new Orphan(3, "The pardoned block.")); //$NON-NLS-1$
         List<Orphan> differentBlock = List.of(new Orphan(6, "A NEW orphan nobody pardoned.")); //$NON-NLS-1$
 
@@ -207,6 +270,97 @@ public class OrphanedJavadocTest
             stalePardons("A.java", sameBlock, pardoned).isEmpty()); //$NON-NLS-1$
         assertEquals("but once that block is fixed the pardon must go", //$NON-NLS-1$
             1, stalePardons("A.java", differentBlock, pardoned).size()); //$NON-NLS-1$
+    }
+
+    /**
+     * The identity is the WHOLE block, not its opening words. Two blocks can share a long
+     * opening — copy-paste is how — and a prefix would let the second inherit the first's
+     * pardon: fix the pardoned block, add the look-alike, and every check stays green.
+     */
+    @Test
+    public void aPardonDoesNotTransferToABlockThatMerelyStartsTheSameWay()
+    {
+        String shared = "The tool-enablement migration runs once per store, lazily, on the first read"; //$NON-NLS-1$
+        assertTrue("the shared opening must be longer than the report shows", //$NON-NLS-1$
+            shared.length() > DISPLAY_LENGTH);
+        String pardonedBlock = shared + " and adds the tool to a stored list."; //$NON-NLS-1$
+        String lookAlike = shared + " and removes the tool from a stored list."; //$NON-NLS-1$
+        assertEquals("the two differ only past the displayed prefix", //$NON-NLS-1$
+            display(pardonedBlock), display(lookAlike));
+
+        List<String> pardoned = List.of(pardonedBlock);
+        assertTrue("the pardoned block is still pardoned", //$NON-NLS-1$
+            unpardoned("A.java", List.of(new Orphan(3, pardonedBlock)), pardoned).isEmpty()); //$NON-NLS-1$
+        assertEquals("the look-alike is a DIFFERENT block and must be reported", //$NON-NLS-1$
+            1, unpardoned("A.java", List.of(new Orphan(9, lookAlike)), pardoned).size()); //$NON-NLS-1$
+        assertEquals("and the pardon it did not match is stale", //$NON-NLS-1$
+            1, stalePardons("A.java", List.of(new Orphan(9, lookAlike)), pardoned).size()); //$NON-NLS-1$
+    }
+
+    /**
+     * One pardon covers one block. Two identical blocks are two debts, and writing the
+     * pardon once must not settle both — a set would, a multiset does not.
+     */
+    @Test
+    public void onePardonCoversOneBlock()
+    {
+        List<Orphan> twins = List.of(new Orphan(3, "Same text."), new Orphan(9, "Same text.")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("one pardon, two identical blocks - the second is still owed", //$NON-NLS-1$
+            1, unpardoned("A.java", twins, List.of("Same text.")).size()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("two pardons cover both", //$NON-NLS-1$
+            unpardoned("A.java", twins, List.of("Same text.", "Same text.")).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("and a third pardon has nothing left to cover", //$NON-NLS-1$
+            1, stalePardons("A.java", twins, //$NON-NLS-1$
+                List.of("Same text.", "Same text.", "Same text.")).size()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * A pardon belongs to ONE file, and a pardon whose file has left the scan must be
+     * reported rather than quietly kept. Both are decisions of the cross-file reduction,
+     * invisible to a test that hands one file's pardons straight to {@link #unpardoned}.
+     */
+    @Test
+    public void pardonsAreSelectedPerFile()
+    {
+        Map<String, List<Orphan>> scanned = new LinkedHashMap<>();
+        scanned.put("a/A.java", List.of(new Orphan(3, "Pardoned in A."))); //$NON-NLS-1$ //$NON-NLS-2$
+        scanned.put("b/B.java", List.of(new Orphan(4, "Pardoned in A."))); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<String, List<String>> pardons = new LinkedHashMap<>();
+        pardons.put("a/A.java", List.of("Pardoned in A.")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<String> problems = unpardonedAcross(scanned, pardons);
+        assertEquals("A's pardon must not excuse the same block in B", 1, problems.size()); //$NON-NLS-1$
+        assertTrue("and the one reported is B's", problems.get(0).startsWith("b/B.java")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A pardon for a file nobody scanned: a renamed or deleted file must not leave its
+        // pardon lying around for whatever takes its path next.
+        Map<String, List<String>> orphanedPardon = new LinkedHashMap<>();
+        orphanedPardon.put("gone/Gone.java", List.of("Pardoned in a file that no longer exists.")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> stale = stalePardonsAcross(scanned, orphanedPardon);
+        assertEquals("a pardon whose file was not scanned is stale", 1, stale.size()); //$NON-NLS-1$
+        assertTrue("and it says so", stale.get(0).contains("no such source file was scanned")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The report shows a prefix, and the length it advertises has to be the length it
+     * produces — this whole change exists because the compiler does not read prose.
+     */
+    @Test
+    public void theDisplayedPrefixHonoursItsAdvertisedLength()
+    {
+        StringBuilder longIdentity = new StringBuilder();
+        while (longIdentity.length() < DISPLAY_LENGTH * 2)
+        {
+            longIdentity.append("word "); //$NON-NLS-1$
+        }
+        String shown = display(longIdentity.toString());
+        assertEquals("exactly DISPLAY_LENGTH characters, plus the ellipsis", //$NON-NLS-1$
+            DISPLAY_LENGTH + 3, shown.length());
+        assertTrue("elided", shown.endsWith("...")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String short_ = "short"; //$NON-NLS-1$
+        assertEquals("a short identity is shown whole, with no ellipsis", //$NON-NLS-1$
+            short_, display(short_));
     }
 
     /**
@@ -248,7 +402,7 @@ public class OrphanedJavadocTest
         List<Orphan> was = orphanedJavadoc(before);
         assertEquals("one orphan to start with", 1, was.size()); //$NON-NLS-1$
         assertEquals("identified by its own opening words", //$NON-NLS-1$
-            "The pardoned block.", was.get(0).fingerprint); //$NON-NLS-1$
+            "The pardoned block.", was.get(0).identity); //$NON-NLS-1$
 
         // Same file, same COUNT, different block: the pardon must not transfer.
         String after = String.join("\n", //$NON-NLS-1$
@@ -265,14 +419,14 @@ public class OrphanedJavadocTest
         assertEquals("still exactly one - a count cannot tell these two apart", //$NON-NLS-1$
             was.size(), now.size());
         assertTrue("but the identity differs, which is what the allow-list keys on", //$NON-NLS-1$
-            !was.get(0).fingerprint.equals(now.get(0).fingerprint));
+            !was.get(0).identity.equals(now.get(0).identity));
 
         // The line moves when anything above it is edited; the identity must not.
         String shifted = "// a new line at the top\n" + before; //$NON-NLS-1$
         assertEquals("an edit above the block moves its line", //$NON-NLS-1$
             was.get(0).line + 1, orphanedJavadoc(shifted).get(0).line);
         assertEquals("but must not change which block it is", //$NON-NLS-1$
-            was.get(0).fingerprint, orphanedJavadoc(shifted).get(0).fingerprint);
+            was.get(0).identity, orphanedJavadoc(shifted).get(0).identity);
     }
 
     /**
@@ -303,17 +457,7 @@ public class OrphanedJavadocTest
     @Test
     public void allowListHasNoStaleEntries()
     {
-        Map<String, List<Orphan>> scanned = scanSources();
-        List<String> stale = new ArrayList<>();
-        for (Map.Entry<String, Set<String>> entry : KNOWN_ORPHANS.entrySet())
-        {
-            if (!scanned.containsKey(entry.getKey()))
-            {
-                stale.add(entry.getKey() + ": allow-listed but no such source file was scanned"); //$NON-NLS-1$
-                continue;
-            }
-            stale.addAll(stalePardons(entry.getKey(), scanned.get(entry.getKey()), entry.getValue()));
-        }
+        List<String> stale = stalePardonsAcross(scanSources(), KNOWN_ORPHANS);
         assertTrue("Stale KNOWN_ORPHANS entries - drop them to tighten the ratchet:\n  " //$NON-NLS-1$
             + String.join("\n  ", stale), stale.isEmpty()); //$NON-NLS-1$
     }
@@ -815,11 +959,11 @@ public class OrphanedJavadocTest
                     if (headOpen)
                     {
                         orphans.put(Integer.valueOf(startOffset),
-                            new Orphan(startLine, fingerprint(source, startOffset, i)));
+                            new Orphan(startLine, identityOf(source, startOffset, i)));
                     }
                     pending = startOffset;
                     pendingLine = startLine;
-                    pendingText = fingerprint(source, startOffset, i);
+                    pendingText = identityOf(source, startOffset, i);
                 }
                 continue;
             }
@@ -888,34 +1032,39 @@ public class OrphanedJavadocTest
     /**
      * One block that documents nothing: WHERE it is (for the reader) and WHICH one it is
      * (for the allow-list). The line moves whenever anything above it is edited, so it can
-     * report but must never identify; the {@link #fingerprint} does the identifying.
+     * report but must never identify; the {@link #identityOf} does the identifying.
      */
     static final class Orphan
     {
         final int line;
 
-        final String fingerprint;
+        final String identity;
 
-        Orphan(int line, String fingerprint)
+        Orphan(int line, String identity)
         {
             this.line = line;
-            this.fingerprint = fingerprint;
+            this.identity = identity;
         }
     }
 
     /**
-     * The identity of a site: the opening words of the block itself, normalised. Chosen so
+     * The identity of a site: the block's own text, whitespace-normalised, WHOLE. Chosen so
      * that an edit ABOVE the block - which moves its line and nothing else - leaves it
      * unchanged, while replacing the block with a different one does not. Rewording the
-     * block's opening also changes it, and that is intended: an allow-listed block that was
-     * rewritten deserves a fresh look rather than an inherited pardon.
+     * block also changes it, and that is intended: an allow-listed block that was rewritten
+     * deserves a fresh look rather than an inherited pardon.
+     * <p>
+     * Deliberately NOT truncated. A prefix is enough to read but not to identify: two blocks
+     * opening with the same words would share one pardon, and fixing the pardoned one while
+     * adding the other would keep every check green. {@link #display} does the shortening,
+     * and only for the message.
      *
      * @param source the whole file
      * @param from the offset of the block's {@code /**}
      * @param to the offset just past its {@code *}{@code /}
-     * @return a short, whitespace-normalised prefix of the block's text
+     * @return the whole block's text, whitespace-normalised
      */
-    static String fingerprint(String source, int from, int to)
+    static String identityOf(String source, int from, int to)
     {
         String body = source.substring(from, Math.min(to, source.length()));
         StringBuilder out = new StringBuilder();
@@ -938,10 +1087,6 @@ public class OrphanedJavadocTest
             }
             space = false;
             out.append(c);
-            if (out.length() >= FINGERPRINT_LENGTH)
-            {
-                break;
-            }
         }
         return out.toString();
     }
