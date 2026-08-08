@@ -84,6 +84,29 @@ public class OrphanedJavadocTest
     };
 
     /**
+     * What the detector cannot see, printed WITH every refusal. Only the first entry can
+     * produce a wrong accusation; the rest can only ever miss one, which is the trade this
+     * detector makes on purpose — a ratchet that reddens on legal code is switched off by
+     * the first person it inconveniences.
+     * <p>
+     * The unicode-escape gap is left open deliberately, not postponed: the input is
+     * unreachable here (every {@code \\uXXXX} in this repository sits inside a literal or a
+     * comment, never in a structural position — checked, not assumed), and the cure is
+     * worse than the disease, since translating escapes moves the very line numbers this
+     * detector reports by.
+     */
+    private static final String KNOWN_LIMITS =
+        "If you believe this is a FALSE alarm, these are the detector's known blind spots:\n" //$NON-NLS-1$
+            + "  - a structural token spelled as a unicode escape (\\u003b for ';') is not translated,\n" //$NON-NLS-1$
+            + "    so a declaration head can stay open past it. This is the ONLY one that can accuse\n" //$NON-NLS-1$
+            + "    wrongly; if it bit you, say so on the issue rather than working around it.\n" //$NON-NLS-1$
+            + "  - a head opened by a type-parameter list alone (<T>) or by non-sealed is not seen;\n" //$NON-NLS-1$
+            + "  - 'default' is not a head-opening modifier (a 'default:' switch label is commoner);\n" //$NON-NLS-1$
+            + "  - a ',' at depth 0 closes the head, so 'throws A, B', 'implements A, B', '<A, B>'\n" //$NON-NLS-1$
+            + "    and a multi-declarator field give it up early.\n" //$NON-NLS-1$
+            + "The last three can only MISS a defect, never report one. Details: OrphanedJavadocTest."; //$NON-NLS-1$
+
+    /**
      * The modifiers that OPEN a declaration head. {@code default} is deliberately absent:
      * a {@code default:} switch label is far commoner than a {@code default} method
      * signature split across lines, and treating it as a head would refuse legal code —
@@ -108,10 +131,44 @@ public class OrphanedJavadocTest
                     + entry.getValue() + (budget > 0 ? " (allow-listed: " + budget + ')' : "")); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        assertTrue("Javadoc blocks that document nothing (a member was inserted between the block and " //$NON-NLS-1$
+        assertTrue(refusalText(problems), problems.isEmpty());
+    }
+
+    /**
+     * The whole refusal, in one place so it can be asserted rather than hoped for. It
+     * names {@link #KNOWN_LIMITS} because the person who needs to know what the detector
+     * CANNOT see is the one holding the refusal, not the one who opens this file — a
+     * refusal nobody can argue with costs somebody an hour.
+     *
+     * @param problems the offending files, already formatted
+     * @return the assertion message
+     */
+    static String refusalText(List<String> problems)
+    {
+        return "Javadoc blocks that document nothing (a member was inserted between the block and " //$NON-NLS-1$
             + "its declaration). MOVE each block back to the declaration it describes - do NOT just " //$NON-NLS-1$
             + "delete it, it is usually that declaration's only documentation:\n  " //$NON-NLS-1$
-            + String.join("\n  ", problems), problems.isEmpty()); //$NON-NLS-1$
+            + String.join("\n  ", problems) //$NON-NLS-1$
+            + "\n\n" + KNOWN_LIMITS; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal has to be arguable: it must name the offending places AND what the
+     * detector is known not to see. Asserted rather than assumed, because the blind spots
+     * are easy to drop from the message while leaving them true.
+     */
+    @Test
+    public void theRefusalNamesBothTheFindingsAndTheBlindSpots()
+    {
+        String text = refusalText(List.of("Foo.java -> orphaned javadoc starting at line(s) [42]")); //$NON-NLS-1$
+        assertTrue("the refusal must name the offending place", text.contains("Foo.java")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and the line it is accusing", text.contains("[42]")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("it must say what to do - move the block, not delete it", //$NON-NLS-1$
+            text.contains("MOVE each block back")); //$NON-NLS-1$
+        assertTrue("and it must carry the known blind spots, or a false alarm is unarguable", //$NON-NLS-1$
+            text.contains(KNOWN_LIMITS));
+        assertTrue("naming the one blind spot that can accuse wrongly", //$NON-NLS-1$
+            text.contains("unicode escape")); //$NON-NLS-1$
     }
 
     /**
@@ -520,21 +577,9 @@ public class OrphanedJavadocTest
      * documentation — a ratchet that reddens on legal code is worse than one that misses,
      * because it blocks work that is not even wrong.
      * <p>
-     * Known limits, every one of them a MISS and never a false refusal — the trade the
-     * whole design makes, because a ratchet that reddens on legal code gets switched off:
-     * <ul>
-     *   <li>a head opened by a type-parameter list alone ({@code <T>}) or by
-     *       {@code non-sealed} is not recognised;</li>
-     *   <li>{@code default} is deliberately not a head-opening modifier — a
-     *       {@code default:} switch label is far commoner than a split signature;</li>
-     *   <li>a {@code ,} at depth 0 closes the head, which is what keeps an annotated enum
-     *       constant from accusing its neighbour; the cost is that a head is also given up
-     *       early at {@code throws A, B}, {@code implements A, B}, {@code <A, B>} and a
-     *       multi-declarator field;</li>
-     *   <li>a structural token spelled as a unicode escape ({@code \\u003b} for {@code ;})
-     *       is not translated. Checked rather than assumed: every {@code \\uXXXX} in this
-     *       repository sits inside a literal or a comment, never in a structural position.</li>
-     * </ul>
+     * What it cannot see is listed ONCE, in {@link #KNOWN_LIMITS}, which every refusal
+     * prints — so the reader holding the refusal and the reader opening this file get the
+     * same list and it cannot drift between them.
      *
      * @param source the contents of one {@code .java} file
      * @return the 1-based start lines of the javadoc blocks that document nothing, ascending
