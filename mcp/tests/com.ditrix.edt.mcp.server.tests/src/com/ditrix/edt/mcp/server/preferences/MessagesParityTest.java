@@ -94,11 +94,6 @@ public class MessagesParityTest
         assertKeyParity(PLUGIN_EN, PLUGIN_RU);
     }
 
-    /**
-     * Every {@code public static String} field of {@code preferences.Messages} resolves after class
-     * init: non-null and not the Eclipse NLS "missing message" placeholder (which would mean the
-     * field is declared but absent from {@code messages.properties}).
-     */
     /** The NLS Messages classes whose fields must all resolve (both bundles this feature ships). */
     private static final String[] MESSAGES_CLASSES = {
         "com.ditrix.edt.mcp.server.preferences.Messages", //$NON-NLS-1$
@@ -106,6 +101,11 @@ public class MessagesParityTest
         "com.ditrix.edt.mcp.server.ui.Messages" //$NON-NLS-1$
     };
 
+    /**
+     * Every {@code public static String} field of {@code preferences.Messages} resolves after class
+     * init: non-null and not the Eclipse NLS "missing message" placeholder (which would mean the
+     * field is declared but absent from {@code messages.properties}).
+     */
     @Test
     public void testMessagesFieldsResolve() throws ReflectiveOperationException
     {

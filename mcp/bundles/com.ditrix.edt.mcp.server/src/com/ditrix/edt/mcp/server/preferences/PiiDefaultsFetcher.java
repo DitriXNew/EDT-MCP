@@ -314,6 +314,9 @@ public final class PiiDefaultsFetcher
         return null; // NOSONAR null is a deliberate "unexpected shape" signal, not an empty collection
     }
 
+    /** Stem of every row-validation rejection message (java:S1192). */
+    private static final String ERR_REJECTED_RULE = "Rejected: rule #"; //$NON-NLS-1$
+
     /**
      * Validates every rule row against the S1 codec schema: it must be an object with a
      * non-empty, length-bounded {@code "regex"} string that {@code Pattern.compile}s
@@ -322,9 +325,6 @@ public final class PiiDefaultsFetcher
      *
      * @return an error message for the first offending row, or {@code null} if all rows are safe
      */
-    /** Stem of every row-validation rejection message (java:S1192). */
-    private static final String ERR_REJECTED_RULE = "Rejected: rule #"; //$NON-NLS-1$
-
     private static String validateRows(JsonArray rules)
     {
         for (int i = 0; i < rules.size(); i++)
