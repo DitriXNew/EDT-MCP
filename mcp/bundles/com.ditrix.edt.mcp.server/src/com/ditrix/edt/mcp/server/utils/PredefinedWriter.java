@@ -9,9 +9,11 @@ package com.ditrix.edt.mcp.server.utils;
 import java.math.BigDecimal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -217,6 +219,14 @@ public final class PredefinedWriter
     private static final String RU_PREDEFINED_YO = MetadataLanguageUtils.cp(0x043f, 0x0440, 0x0435, 0x0434,
         0x043e, 0x043f, 0x0440, 0x0435, 0x0434, 0x0435, 0x043b, 0x0451, 0x043d, 0x043d, 0x044b, 0x0435);
 
+    /**
+     * The FQN kind tokens this writer accepts in the {@code Predefined} position, lowercase.
+     * THE single source of both {@link #isPredefinedToken} and {@link #acceptedKindTokens}, so what
+     * is accepted and what is published cannot drift apart.
+     */
+    private static final Set<String> KIND_TOKENS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList("predefined", RU_PREDEFINED, RU_PREDEFINED_YO))); //$NON-NLS-1$
+
     private PredefinedWriter()
     {
         // utility class
@@ -283,11 +293,30 @@ public final class PredefinedWriter
         {
             return false;
         }
-        String t = token.trim().toLowerCase(Locale.ROOT);
         // Accept English "predefined" and EXACTLY the two valid Russian spellings (the 'е' and the
         // natural 'ё' form). A blanket yo-normalization of the token would be too loose - it would
         // also accept a 'ё' misplaced onto any of RU_PREDEFINED's five 'е' positions.
-        return "predefined".equals(t) || RU_PREDEFINED.equals(t) || RU_PREDEFINED_YO.equals(t); //$NON-NLS-1$
+        return KIND_TOKENS.contains(token.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * The FQN kind tokens this writer accepts in the {@code Predefined} position - every spelling
+     * {@link #parseRef} reads as the predefined segment, lowercase.
+     *
+     * <p>Published so a regression check can compare this set with the NESTED-kind catalogue that
+     * {@code get_project_errors} advertises a {@code ...Predefined.<Item>} address through, and do
+     * it in BOTH directions. The lists are independent: this one is written out here because the
+     * two Russian spellings are enumerated deliberately (see {@link #isPredefinedToken}), while the
+     * catalogue keeps its own pair - so a spelling can appear on either side alone. A token the
+     * catalogue publishes and this writer does not is an address we document and then refuse; a
+     * token this writer accepts and the catalogue does not is an address that resolves but whose
+     * Russian form the marker filter cannot translate. Only set EQUALITY sees both.</p>
+     *
+     * @return the accepted tokens, lowercase and unmodifiable (never {@code null})
+     */
+    public static Set<String> acceptedKindTokens()
+    {
+        return KIND_TOKENS;
     }
 
     // ============================================================================================
