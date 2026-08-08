@@ -907,6 +907,37 @@ def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
     _fail("expected %s to no longer contain %r [%s]" % (rel_path, substr, ctx))
 
 
+def poll_disk_count(rel_path, substr, expected, timeout=10, ctx=""):
+    """Poll until ONE named fixture file contains substr EXACTLY `expected` times.
+
+    The COUNT sibling of poll_disk_contains, for the "written exactly once" class of assertion
+    (an idempotent re-add must not duplicate a row). Presence is not enough there: a write that
+    is a no-op IN THE MODEL still force-exports, so the file is rewritten, and a bare
+    `read_disk(f).count(x) == n` can land mid-rewrite and read 0 - failing with "must NOT
+    duplicate", which describes the exact opposite of what happened. Waiting for the count makes
+    the assertion say what it means, and a real duplicate still fails (the count settles at 2 and
+    never reaches `expected`).
+
+    A missing file keeps polling: the export may not have created it yet."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    deadline = time.time() + timeout
+    last = ""
+    actual = None
+    while time.time() < deadline:
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                last = f.read()
+            actual = last.count(substr)
+            if actual == expected:
+                return
+        except FileNotFoundError:
+            last = "(file does not exist yet)"
+        time.sleep(0.5)
+    _fail("expected %s to contain %r exactly %d time(s), last saw %s [%s]; it holds:\n%s"
+          % (rel_path, substr, expected,
+             "no file" if actual is None else "%d" % actual, ctx, last[:700]))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Live-infobase helpers (used only by the gated test_live_roundtrip.py suite)
 # ──────────────────────────────────────────────────────────────────────────────
