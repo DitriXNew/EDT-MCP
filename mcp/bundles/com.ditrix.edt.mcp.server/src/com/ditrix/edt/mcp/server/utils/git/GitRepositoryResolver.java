@@ -143,16 +143,62 @@ public final class GitRepositoryResolver
             return new Resolution(project, mapped, false, null);
         }
 
-        Repository discovered = discoverRepository(project);
-        if (discovered != null)
-        {
-            return new Resolution(project, discovered, true, null);
-        }
+        return resolutionOf(project, projectName, discoverRepository(project));
+    }
 
+    /**
+     * Turns the discovery step's outcome into a {@link Resolution}.
+     * <p>
+     * The three branches are three different answers, and the middle one is the reason this method
+     * exists: a {@code .git} directory that could not be OPENED is not "no repository". Reporting it
+     * as one would tell the caller to share a project that is already shared, and leave the broken
+     * configuration - the actual fault - unmentioned.
+     * <p>
+     * Package-visible so all three are unit-testable: {@link #resolve} itself needs a live EDT
+     * workspace.
+     *
+     * @param project the resolved project handle
+     * @param projectName the project's name, for the message
+     * @param discovery what {@link #discoverRepository} found
+     * @return the repository, the configuration-repair error, or the not-a-git-project error
+     */
+    static Resolution resolutionOf(IProject project, String projectName, Discovery discovery)
+    {
+        if (discovery.repository() != null)
+        {
+            return new Resolution(project, discovery.repository(), true, null);
+        }
+        if (discovery.configUnreadable())
+        {
+            return failed(ToolResult.error(configUnreadableMessage(projectName)).toJson());
+        }
         return failed(ToolResult.error("No git repository found for project '" + projectName //$NON-NLS-1$
             + "'. The project is not inside a git working tree, or is not shared with the EGit " //$NON-NLS-1$
             + "team provider. Share the project with Git (Team -> Share Project) or verify its " //$NON-NLS-1$
             + "location is inside an existing git clone.").toJson()); //$NON-NLS-1$
+    }
+
+    /**
+     * The error for a repository that exists but could not be opened. It names the configuration,
+     * because that is what {@link FileRepositoryBuilder#build()} loads and therefore what a failure
+     * there is almost always about; and it withholds the failure's own message for the reason spelled
+     * out on {@link #discoverFromLocation}.
+     * <p>
+     * The closing sentence is scoped to what THIS plug-in writes, and deliberately not wider: JGit
+     * logs a malformed user configuration through its own logger before it throws, and that entry is
+     * the platform's. Promising "it is nowhere in any log" would be a claim this code cannot keep.
+     *
+     * @param projectName the project's name
+     * @return the actionable, leak-free message
+     */
+    private static String configUnreadableMessage(String projectName)
+    {
+        return "The git repository for project '" + projectName + "' could not be opened. Opening " //$NON-NLS-1$ //$NON-NLS-2$
+            + "it reads the repository, user and system git configuration, so a malformed one of " //$NON-NLS-1$
+            + "those is the usual cause: check them in a terminal, repair the broken file and retry. " //$NON-NLS-1$
+            + "This plug-in logs only the failure's exception types - the message itself is withheld, " //$NON-NLS-1$
+            + "here and in what it logs, because it can quote the configuration, credentials " //$NON-NLS-1$
+            + "included."; //$NON-NLS-1$
     }
 
     /**
@@ -169,8 +215,11 @@ public final class GitRepositoryResolver
         }
         catch (RuntimeException e)
         {
-            Activator.logError("git-branch tools: RepositoryMapping lookup failed for project '" //$NON-NLS-1$
-                + project.getName() + "'", e); //$NON-NLS-1$
+            // Sanitized for the reason spelled out on discoverFromLocation: this lookup can open a
+            // repository too, and JGit's configuration parser quotes the offending line.
+            Activator.logError(GitFailureLog.typesOnly(
+                "git-branch tools: RepositoryMapping lookup failed for project '" //$NON-NLS-1$
+                    + project.getName() + "'", e), null); //$NON-NLS-1$
             return null;
         }
     }
@@ -178,23 +227,107 @@ public final class GitRepositoryResolver
     /**
      * Discovers a git repository by walking up from the project's filesystem
      * location looking for a {@code .git} directory, when the project is not
-     * EGit-shared. The returned {@link Repository} (if any) is owned by the caller.
+     * EGit-shared. The discovered {@link Repository} (if any) is owned by the caller.
      */
-    private static Repository discoverRepository(IProject project)
+    private static Discovery discoverRepository(IProject project)
     {
         if (project.getLocation() == null)
         {
-            return null;
+            return Discovery.none();
         }
+        return discoverFromLocation(project.getLocation().toFile(), project.getName());
+    }
+
+    /**
+     * The discovery step's outcome. A {@link Repository}-or-{@code null} return cannot express it:
+     * "no {@code .git} anywhere up the tree" and "a {@code .git} that could not be OPENED" call for
+     * different errors ({@link #resolutionOf}), and collapsing the second into the first hides a
+     * broken configuration behind "share the project with Git".
+     */
+    static final class Discovery
+    {
+        private static final Discovery NONE = new Discovery(null, false);
+
+        private static final Discovery UNREADABLE = new Discovery(null, true);
+
+        private final Repository repository;
+
+        private final boolean configUnreadable;
+
+        private Discovery(Repository repository, boolean configUnreadable)
+        {
+            this.repository = repository;
+            this.configUnreadable = configUnreadable;
+        }
+
+        /** @return the outcome for "this location is not inside a git working tree". */
+        static Discovery none()
+        {
+            return NONE;
+        }
+
+        /** @return the outcome for "a repository is there, but opening it failed". */
+        static Discovery unreadable()
+        {
+            return UNREADABLE;
+        }
+
+        /**
+         * @param repository the opened, caller-owned repository
+         * @return the outcome carrying it
+         */
+        static Discovery of(Repository repository)
+        {
+            return new Discovery(repository, false);
+        }
+
+        /** @return the discovered, caller-owned repository, or {@code null} when there is none. */
+        Repository repository()
+        {
+            return repository;
+        }
+
+        /** @return {@code true} when a repository was found but could not be opened. */
+        boolean configUnreadable()
+        {
+            return configUnreadable;
+        }
+    }
+
+    /**
+     * The discovery step WITH its failure handling, and without an {@link IProject}: opens the
+     * repository under {@code location}, or logs the failure - message withheld - and reports it as
+     * {@link Discovery#unreadable()}, which {@link #resolutionOf} turns into its own error rather
+     * than into "no git repository found".
+     * <p>
+     * Package-visible so the failure branch is testable at all. It is not cosmetic: opening a
+     * repository loads the repository, user and system configuration, so a configuration that is
+     * already malformed when the first call arrives fails HERE - before any check the caller runs on
+     * the opened repository. What it throws names the file at fault, and when that file is the USER
+     * config it still carries the offending line itself
+     * ({@code Invalid line in config file: include.notpath=https://user:...}) in its cause chain.
+     * Handing that throwable to {@link Activator#logError} would write a credential into the
+     * permanent EDT error log, so only the exception types are logged ({@link GitFailureLog}, whose
+     * javadoc says what that does and does not promise).
+     *
+     * @param location the project's filesystem location
+     * @param projectName the project's name, for the log line
+     * @return the discovered, caller-owned repository; {@link Discovery#none()} when there is none;
+     *         {@link Discovery#unreadable()} when there is one but it could not be opened
+     */
+    static Discovery discoverFromLocation(File location, String projectName)
+    {
         try
         {
-            return discoverFromDirectory(project.getLocation().toFile());
+            Repository discovered = discoverFromDirectory(location);
+            return discovered == null ? Discovery.none() : Discovery.of(discovered);
         }
         catch (IOException | IllegalArgumentException e)
         {
-            Activator.logError("git-branch tools: git-dir discovery failed for project '" //$NON-NLS-1$
-                + project.getName() + "'", e); //$NON-NLS-1$
-            return null;
+            Activator.logError(GitFailureLog.typesOnly(
+                "git-branch tools: git-dir discovery failed for project '" //$NON-NLS-1$
+                    + projectName + "'", e), null); //$NON-NLS-1$
+            return Discovery.unreadable();
         }
     }
 
@@ -208,7 +341,11 @@ public final class GitRepositoryResolver
      * @param dir the filesystem directory to search upward from
      * @return the discovered, caller-owned repository, or {@code null} when no {@code .git} directory is
      *         found anywhere up the tree
-     * @throws IOException propagated from {@link FileRepositoryBuilder#build()}
+     * @throws IOException propagated from {@link FileRepositoryBuilder#build()}, which loads the
+     *             repository, user and system configuration - a malformed one fails here, as an
+     *             {@link IOException} or an {@link IllegalArgumentException} depending on which file
+     *             it was, which is why {@link #discoverFromLocation} catches both and withholds the
+     *             message when it logs
      */
     static Repository discoverFromDirectory(File dir) throws IOException
     {

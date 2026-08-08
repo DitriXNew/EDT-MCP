@@ -692,6 +692,12 @@ public class MetadataTypeUtilsTest
         addOwner(owners, "Form", FormElementWriter::isFormToken);
         addOwner(owners, "Handler", FormElementWriter::isHandlerToken);
         addOwner(owners, "Subsystem", SubsystemUtils::isSubsystemTypeToken);
+        // ...and the create_metadata dispatch gate for a NESTED subsystem (issue #351), which reads
+        // the token at BOTH positions of the chain. Its own owner entry on purpose: the single-token
+        // predicate above says nothing about the SECOND position, and translating only the leading
+        // segment of an address is exactly the defect #342 was about.
+        addOwner(owners, "Subsystem",
+            t -> SubsystemUtils.nestedChain(t + ".Parent." + t + ".Child") != null);
         addOwner(owners, "Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
         // Resolver groups are built by a FULL pass over the resolver's own map, and its
         // applicability is decided by THAT, never by asking the resolver about the canonical token.
