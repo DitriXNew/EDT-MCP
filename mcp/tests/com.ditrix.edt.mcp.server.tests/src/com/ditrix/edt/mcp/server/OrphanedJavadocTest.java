@@ -16,11 +16,14 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.stream.Stream;
@@ -94,6 +97,10 @@ public class OrphanedJavadocTest
 
     /** How much of a block's text the REPORT shows; the identity is always the whole of it. */
     private static final int DISPLAY_LENGTH = 60;
+
+    /** The keywords whose declaration opens a TYPE body rather than a block of code. */
+    private static final Set<String> TYPE_KEYWORDS =
+        Set.of("class", "interface", "enum", "record"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /** The source trees this ratchet covers; the first two must exist. */
     private static final String[] SOURCE_ROOTS = {
@@ -622,6 +629,118 @@ public class OrphanedJavadocTest
         assertEquals("a punctuation first token opens the head too", //$NON-NLS-1$
             List.of(Integer.valueOf(5)), orphanedJavadocLines(angle));
 
+        // A block left at the end of a TYPE body after its member was deleted: the '}'
+        // cannot be the declaration it was written for, so nobody documents it. This is
+        // the very accident the issue was filed for, so it must not go quiet.
+        assertEquals("a block left at the end of a type body is an orphan", //$NON-NLS-1$
+            List.of(Integer.valueOf(1)),
+            orphanedJavadocLines("class A { /** old member left behind */ }")); //$NON-NLS-1$
+
+        // Members of a NESTED type are still judged - the rule is about type bodies, not
+        // about the outermost one.
+        String nested = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    class Inner", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        /** Attached. */", //$NON-NLS-1$
+            "        @Deprecated", //$NON-NLS-1$
+            "        /** Dropped. */", //$NON-NLS-1$
+            "        void m() {}", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a nested type is a type body too", //$NON-NLS-1$
+            List.of(Integer.valueOf(7)), orphanedJavadocLines(nested));
+    }
+
+    /**
+     * Executable code is not a place where a declaration can be, so a {@code /** *}{@code /}
+     * block there is an ordinary comment and must never be accused. Measured on the real
+     * tool first: {@code javadoc} renders none of these — but "renders nothing" is not the
+     * same as "is an orphan", because there is no declaration to move them back TO, and the
+     * refusal would tell the reader to do something impossible.
+     * <p>
+     * These are all one bug: the head was left open past the {@code )} of a condition. They
+     * are fixed by one rule — a head can only be open in a TYPE body — so this asserts the
+     * whole family, not the one shape that was reported.
+     */
+    @Test
+    public void detectorNeverAccusesACommentInsideAMethodBody()
+    {
+        String[][] shapes = {
+            {"an unbraced if", "        if (ready)", "            doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"an unbraced while", "        while (ready)", "            doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"an unbraced for", "        for (int i = 0; i < 3; i++)", "            doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"an unbraced do", "        do", "            doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"an unbraced else", "        if (ready) doIt(); else", "            doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"try-with-resources", "        try (AutoCloseable r = open())", "            doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a lambda without braces", "        run(() ->", "            doIt());"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a switch arrow", "        switch (n) { case 1 ->", "            doIt(); }"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a plain statement", "        doIt();", "        doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        };
+        for (String[] shape : shapes)
+        {
+            String source = String.join("\n", //$NON-NLS-1$
+                "class A", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    void m(boolean ready, int n) throws Exception", //$NON-NLS-1$
+                "    {", //$NON-NLS-1$
+                shape[1],
+                "            /** an ordinary comment, spelled with two stars */", //$NON-NLS-1$
+                shape[2],
+                "    }", //$NON-NLS-1$
+                "}"); //$NON-NLS-1$
+            assertEquals("a comment after " + shape[0] + " is not a declaration's javadoc", //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(), orphanedJavadocLines(source));
+        }
+
+        // Nor is a block trailing at the end of a method body - only a TYPE body's is.
+        String trailing = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    void m()", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        doIt();", //$NON-NLS-1$
+            "        /** a trailing note, not documentation */", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a trailing comment in a method body is not an orphan", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(trailing));
+
+        // An anonymous class body is reached through 'new', not a type keyword, so it is
+        // treated as code: a miss there is the safe direction.
+        String anonymous = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    void m()", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        run(new Runnable() {", //$NON-NLS-1$
+            "            /** a note */", //$NON-NLS-1$
+            "            public void run() {}", //$NON-NLS-1$
+            "        });", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("an anonymous class body is code", List.of(), orphanedJavadocLines(anonymous)); //$NON-NLS-1$
+
+        // 'Foo.class' is a class LITERAL, not a declaration. The brace that follows must
+        // stay a block of code. Deliberately with no ';' or ',' between the literal and the
+        // brace: those reset the flag on their own, and a fixture they can rescue proves
+        // nothing about the rule being tested.
+        String classLiteral = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    void m(Object o)", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        if (o == String.class)", //$NON-NLS-1$
+            "        {", //$NON-NLS-1$
+            "            doIt();", //$NON-NLS-1$
+            "            /** a trailing note, not documentation */", //$NON-NLS-1$
+            "        }", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a class literal does not open a type body", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(classLiteral));
+
         // Three blocks, ONE line, two of them dropped: the report counts BLOCKS, so the
         // budget cannot be gamed by writing them on a single line.
         assertEquals("two blocks sharing a line are two findings, not one", //$NON-NLS-1$
@@ -893,6 +1012,12 @@ public class OrphanedJavadocTest
         int pending = -1;
         int pendingLine = -1;
         String pendingText = null;
+        // One entry per open brace: true when it opened a TYPE body. A declaration - and
+        // so a declaration head - can only live in one of those; everything a method body
+        // holds is executable code, where a /** */ block is an ordinary comment.
+        Deque<Boolean> typeBody = new ArrayDeque<>();
+        boolean sawTypeKeyword = false;
+        boolean afterDot = false;
         StringBuilder word = new StringBuilder();
         while (i < source.length())
         {
@@ -910,6 +1035,12 @@ public class OrphanedJavadocTest
                 pending = -1;
                 pendingLine = -1;
                 headOpen = true;
+                // 'Foo.class' is a class LITERAL, not a type declaration - hence afterDot.
+                if (!afterDot && TYPE_KEYWORDS.contains(word.toString()))
+                {
+                    sawTypeKeyword = true;
+                }
+                afterDot = false;
                 word.setLength(0);
             }
             char next = i + 1 < source.length() ? source.charAt(i + 1) : 0;
@@ -956,7 +1087,7 @@ public class OrphanedJavadocTest
                     {
                         orphans.put(Integer.valueOf(pending), new Orphan(pendingLine, pendingText));
                     }
-                    if (headOpen)
+                    if (headOpen && inTypeBody(typeBody))
                     {
                         orphans.put(Integer.valueOf(startOffset),
                             new Orphan(startLine, identityOf(source, startOffset, i)));
@@ -967,7 +1098,11 @@ public class OrphanedJavadocTest
                 }
                 continue;
             }
-            // Everything below is a code token, so a javadoc block before it is attached.
+            // Everything below is a code token, so a javadoc block before it is attached -
+            // unless it is a '}', which closes a body instead of starting a declaration.
+            int wasPending = pending;
+            int wasPendingLine = pendingLine;
+            String wasPendingText = pendingText;
             pending = -1;
             pendingLine = -1;
             if (c == '"' && source.startsWith("\"\"\"", i)) //$NON-NLS-1$
@@ -995,24 +1130,59 @@ public class OrphanedJavadocTest
                 depth++;
                 headOpen = true;
             }
+            else if (c == '{' && depth == 0)
+            {
+                typeBody.push(Boolean.valueOf(sawTypeKeyword));
+                sawTypeKeyword = false;
+                headOpen = false;
+            }
+            else if (c == '}' && depth == 0)
+            {
+                // A block still pending at the end of a TYPE body documents nothing: the
+                // member it was written for was deleted and left it behind. Inside a method
+                // body the same shape is an ordinary trailing comment, so it is left alone.
+                if (wasPending >= 0 && inTypeBody(typeBody))
+                {
+                    orphans.put(Integer.valueOf(wasPending), new Orphan(wasPendingLine, wasPendingText));
+                }
+                typeBody.poll();
+                sawTypeKeyword = false;
+                headOpen = false;
+            }
             else if (c == ')')
             {
                 depth = Math.max(0, depth - 1);
                 headOpen = true;
             }
-            else if (depth == 0 && (c == ';' || c == '{' || c == '}' || c == ',' || c == ':'))
+            else if (depth == 0 && (c == ';' || c == ',' || c == ':'))
             {
                 // The end of whatever came before. ':' is here for a LABEL - 'default:' and
                 // 'case X:' would otherwise leave the head open over the statements below.
+                sawTypeKeyword = false;
                 headOpen = false;
             }
             else
             {
                 headOpen = true;
             }
+            afterDot = c == '.';
             i++;
         }
         return new ArrayList<>(orphans.values());
+    }
+
+    /**
+     * Whether the innermost open brace is a TYPE body (or we are at file level, where types
+     * themselves are declared). Executable code is everything else, and a {@code /** *}{@code /}
+     * block there documents nothing by construction - accusing it would redden the build on
+     * legal code, which is the one failure this ratchet must never have.
+     *
+     * @param typeBody one entry per open brace
+     * @return {@code true} when a declaration could appear here
+     */
+    private static boolean inTypeBody(Deque<Boolean> typeBody)
+    {
+        return typeBody.isEmpty() || typeBody.peek().booleanValue();
     }
 
     /**
