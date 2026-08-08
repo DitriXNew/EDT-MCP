@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import org.eclipse.emf.common.util.EMap;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -413,6 +414,30 @@ public final class SubsystemUtils
             return false;
         }
         return SUBSYSTEM_TOKEN.equals(MetadataTypeUtils.toEnglishSingular(token.trim()));
+    }
+
+    /**
+     * EVERY spelling {@link #isSubsystemTypeToken} accepts, lowercase.
+     *
+     * <p>Published so a regression check can compare this set with the NESTED-kind catalogue the
+     * object filters advertise a {@code Subsystem} segment through, in BOTH directions. The two are
+     * genuinely independent lists - the predicate answers from the TOP-LEVEL type catalogue
+     * ({@code MetadataTypeUtils.toEnglishSingular}), while a nested {@code Subsystem} segment is
+     * translated through the nested-kind catalogue - so either one can gain a spelling the other
+     * does not have. An alias added to the nested catalogue alone is an address the filter
+     * documents and this predicate then refuses; an alias added to the type catalogue alone is an
+     * address this predicate accepts and the filter cannot translate. Asking whether the sets
+     * OVERLAP would see neither.</p>
+     *
+     * <p>Derived from the type catalogue, i.e. from the very map the predicate reads, never from
+     * the nested catalogue it is compared against: a set copied from the other side of a comparison
+     * makes the comparison vacuous.</p>
+     *
+     * @return the accepted tokens, lowercase (never {@code null})
+     */
+    public static Set<String> acceptedTypeTokens()
+    {
+        return MetadataTypeUtils.typeAliases(SUBSYSTEM_TOKEN);
     }
 
     private static Subsystem findChild(Iterable<Subsystem> children, String name)
