@@ -40,9 +40,9 @@ from harness import (
     assert_error_quality,
     assert_tree_unchanged,
     tree_snapshot,
-    poll_diff_contains,
+    poll_disk_contains,
+    poll_disk_count,
     poll_disk_lacks,
-    read_disk,
     wait_for_project_ready,
     e2e_test,
     E2ESkip,
@@ -115,8 +115,10 @@ def test_subsystem_content_add_idempotent_remove():
     # (persisted=false would mean the change is silently discarded on a refresh / clean_project).
     assert add.structured.get("persisted") is True, \
         "the content change must persist to disk, not commit in-memory only: %r" % (add.structured,)
-    # ON-DISK: the object FQN lands in the subsystem's OWN .mdo <content> block.
-    poll_diff_contains(token,
+    # ON-DISK: the object FQN lands in the subsystem's OWN .mdo <content> block. Waited on THAT
+    # file, not on the diff: a diff-wide poll is satisfied by any changed file, so it can release
+    # while the .mdo this test reads is still being written.
+    poll_disk_contains(_subsystem_mdo(sub), token,
                        ctx="the added object must land in the subsystem's <content> block on disk")
 
     # (2) IDEMPOTENT re-add (a plain ref carries no flag) -> nothing added, no duplicate row.
@@ -130,8 +132,14 @@ def test_subsystem_content_add_idempotent_remove():
         "a flagless re-add of a listed object must be a pure no-op: %r" % (again.structured,)
     # Exactly ONE content entry references the object on disk (the added==0 above already proves the
     # re-add created no new item; this pins it on disk).
-    assert read_disk(_subsystem_mdo(sub)).count(token) == 1, \
-        "the idempotent re-add must NOT duplicate the object in the subsystem .mdo"
+    #
+    # WAITED, not read outright: the re-add is a no-op in the MODEL but still force-exports, so the
+    # .mdo is rewritten by the call above. A bare read here lands mid-rewrite and sees 0 occurrences
+    # - which failed as "must NOT duplicate", the exact opposite of what happened, and is why this
+    # was filed as a flake for weeks (issue #370). A real duplicate still fails: the count settles
+    # at 2 and never reaches 1.
+    poll_disk_count(_subsystem_mdo(sub), token, 1,
+                    ctx="the idempotent re-add must NOT duplicate the object in the subsystem .mdo")
 
     # (3) REMOVE -> the object is detached from the content.
     rem = call("modify_metadata", {
@@ -170,7 +178,7 @@ def test_subsystem_content_russian_token():
     assert_ok(r, "add a member addressed by the Russian type tokens")
     assert _content_counts(r, "subsystem content RU add").get("added") == 1, \
         "the bilingual tokens must resolve the same subsystem/member and add it: %r" % (r.structured,)
-    poll_diff_contains(_content_token(const_fqn),
+    poll_disk_contains(_subsystem_mdo(sub), _content_token(const_fqn),
                        ctx="the Russian-token object must serialize to the canonical Constant FQN")
 
 
@@ -279,11 +287,14 @@ def test_subsystem_content_nested():
         "exactly one object must be added to the nested child: %r" % (add_en.structured,)
     assert add_en.structured.get("persisted") is True, \
         "the nested content change must persist to disk, not commit in-memory only: %r" % (add_en.structured,)
+    # Waited on the CHILD's own file: this assertion is about THAT file specifically (it is the whole
+    # point of the test), so a diff-wide poll - satisfied by any of the several files this write
+    # touches - can release before the child .mdo exists.
     token_en = _content_token(const_en_fqn)
-    poll_diff_contains(token_en, ctx="the nested child's content must flush to disk")
-    assert token_en in read_disk(child_mdo), \
-        "the added object must land in the CHILD subsystem's OWN .mdo (%s), proving the nested " \
-        "force-export FQN resolved and persisted: %r" % (child_mdo, add_en.structured)
+    poll_disk_contains(child_mdo, token_en,
+                       ctx="the added object must land in the CHILD subsystem's OWN .mdo (%s), "
+                           "proving the nested force-export FQN resolved and persisted: %r"
+                           % (child_mdo, add_en.structured))
 
     # (2) ADD via a RUSSIAN non-leading type token (Subsystem.Subsystem.Подсистема.Child) -> the
     #     same child .mdo. This is exactly the mixed-language FQN whose export key must come from BM
@@ -299,8 +310,7 @@ def test_subsystem_content_nested():
         "the mixed-language nested change must persist (the export key must be canonicalized): %r" \
         % (add_ru.structured,)
     token_ru = _content_token(const_ru_fqn)
-    poll_diff_contains(token_ru, ctx="the Russian-nested-token content must flush to disk")
-    assert token_ru in read_disk(child_mdo), \
-        "the object added via a Russian non-leading type token must land in the CHILD's OWN .mdo " \
-        "(%s), proving the mixed-language nested FQN was canonicalized for force-export: %r" \
-        % (child_mdo, add_ru.structured)
+    poll_disk_contains(child_mdo, token_ru,
+                       ctx="the object added via a Russian non-leading type token must land in the "
+                           "CHILD's OWN .mdo (%s), proving the mixed-language nested FQN was "
+                           "canonicalized for force-export: %r" % (child_mdo, add_ru.structured))

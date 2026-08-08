@@ -18,6 +18,7 @@ One subtlety about the restart wait: its 3-minute allowance is counted from the 
 
 Two honest caveats about "settled":
 - If the clean build does not finish within `timeout`, the call fails with a timeout error instead of waiting indefinitely. Cancellation is requested, but EDT may still be working on it - poll `list_projects` until the project reports `ready` before relying on the model.
+- The exception is a clean the deadline caught while it was still QUEUED (EDT's job scheduler saturated): cancelling it there stops it from ever starting, so that error says the project is UNTOUCHED and nothing needs polling. Retry when EDT is less busy, or raise `timeout`.
 - If the restart or derived-data wait runs out, that is only logged: the call still reports success. So a `success` means "the clean was driven to completion", not "EDT has certainly finished recomputing". When it matters, confirm with `list_projects`.
 
 ## Notes & gotchas

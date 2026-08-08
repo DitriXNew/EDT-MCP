@@ -3661,6 +3661,10 @@
         "projectName": {
           "description": "EDT project name.",
           "type": "string"
+        },
+        "timeout": {
+          "description": "How long to wait for the cascade itself, in seconds (default 420, clamped to 60..3600). On expiry the call fails with a timeout error naming the stage it reached instead of waiting forever; EDT may still finish the rename afterwards, so verify the model. Does not cover the pre-flight index drain (a separate 60s bound).",
+          "type": "integer"
         }
       },
       "required": [

@@ -30,6 +30,11 @@ HOW THE EFFECT IS VERIFIED (two ways — the model AND the disk):
   from disk and discards the unsaved rename) AFTER each write-metadata test, so
   every test starts from the committed baseline. This test does NOT manage reset.
 
+BOUNDED WAIT (issue #365): the cascade runs on EDT's UI thread and the call waits for
+it with a deadline, exposed as `timeout` (seconds, default 420, clamped 60..3600). On
+expiry the call returns an error naming the stage the rename reached instead of hanging
+the wire. Only the wire contract is testable here — see the section near the bottom.
+
 Whole-call error matrix (server sets isError via ToolResult.error):
   - missing projectName / objectFqn / newName -> "<name> is required" (+ usage)
   - non-existent project                      -> "Project not found: <name>"
@@ -322,6 +327,48 @@ def test_preview_for_catalog_does_not_mutate_catalog():
     after = _catalog_names()
     assert_contains(after, "| Catalog ", "preview must NOT rename: 'Catalog' must still be present")
     assert_not_contains(after, "Goods", "preview must NOT create the target name 'Goods'")
+    assert_no_diff("a preview (confirm=false) must not change the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The cascade bound (issue #365)
+#
+# The rename runs on EDT's UI thread; nothing in that hand-off had an upper bound,
+# so a wedged cascade held the MCP call open until the CLIENT gave up — which aborted
+# the whole run and skipped ~188 tests. The bound now lives on our side, exposed as
+# the `timeout` parameter (seconds, clamped 60..3600).
+#
+# What is verifiable HERE is the wire contract: the parameter is accepted and the
+# rename still works with an explicit value. The expiry itself is NOT reproducible on
+# demand (it needs a wedged EDT), so it is pinned by the unit test that drives the
+# deadline through the IRenameAction seam — see RenameMetadataObjectToolTest.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_explicit_timeout_is_accepted_and_preview_still_works():
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.Calc",
+        "newName": "Compute",
+        "timeout": 900,  # inside the accepted 60..3600 range
+    })
+    assert_ok(r, "preview rename with an explicit timeout")
+    assert_contains(r.text, "action: preview", "an explicit timeout must not change the preview contract")
+    assert_no_diff("a preview (confirm=false) must not change the project on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_out_of_range_timeout_is_clamped_not_rejected():
+    # The schema promises clamping, not rejection: 1 second is below the 60s floor and
+    # must be raised, so the call behaves exactly like the default one above.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.Calc",
+        "newName": "Compute",
+        "timeout": 1,
+    })
+    assert_ok(r, "an out-of-range timeout must be clamped, not rejected")
+    assert_contains(r.text, "action: preview", "a clamped timeout must not change the preview contract")
     assert_no_diff("a preview (confirm=false) must not change the project on disk")
 
 
