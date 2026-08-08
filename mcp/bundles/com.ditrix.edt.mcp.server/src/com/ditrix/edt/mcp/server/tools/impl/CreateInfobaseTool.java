@@ -1786,13 +1786,6 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
-     * Builds the "no standalone-server runtime registered" error message. Behaviour-identical to the
-     * former inline string concatenation, including the optional {@code for version '...'} fragment.
-     *
-     * @param platform the requested platform version mask (may be {@code null}/empty)
-     * @return the error message
-     */
-    /**
      * Returns the given string, or the empty string when it is {@code null}. Behaviour-identical to the
      * former inline {@code platform != null ? platform : ""}.
      *
@@ -1804,6 +1797,13 @@ public class CreateInfobaseTool implements IMcpTool
         return value != null ? value : ""; //$NON-NLS-1$
     }
 
+    /**
+     * Builds the "no standalone-server runtime registered" error message. Behaviour-identical to the
+     * former inline string concatenation, including the optional {@code for version '...'} fragment.
+     *
+     * @param platform the requested platform version mask (may be {@code null}/empty)
+     * @return the error message
+     */
     private static String noRuntimeError(String platform)
     {
         return "No standalone-server runtime registered" //$NON-NLS-1$

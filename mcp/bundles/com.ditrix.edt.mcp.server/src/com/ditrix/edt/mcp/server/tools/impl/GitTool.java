@@ -197,16 +197,6 @@ public class GitTool implements IMcpTool
     private static final String SCHEME_SEPARATOR = "://"; //$NON-NLS-1$
 
     /**
-     * The short options that consume the REST of their cluster as a value, PER SUBCOMMAND - the same
-     * letter differs: {@code -c} takes a commit for {@code commit} but is the value-less
-     * {@code --cached} for {@code ls-files} and {@code blame}, and {@code -n} is a line count for
-     * {@code tag} but {@code --no-stat} for {@code merge}. A cluster scan stops at one of these,
-     * because everything after it is that option's value rather than another flag.
-     * <p>
-     * Only the subcommands whose clusters are scanned appear here; an unlisted one stops at nothing,
-     * which errs toward refusing a cluster rather than letting a file/strategy option through.
-     */
-    /**
      * The short options that take a FILE for the subcommands whose operands are scanned:
      * {@code diff -O<order-file>}, {@code blame -S<revs-file>}, {@code commit}/{@code tag}/
      * {@code merge -F<message-file>}, {@code ls-files -X<exclude-file>}. Their separated spellings
@@ -222,6 +212,16 @@ public class GitTool implements IMcpTool
         "merge", "F", //$NON-NLS-1$ //$NON-NLS-2$
         "ls-files", "X"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * The short options that consume the REST of their cluster as a value, PER SUBCOMMAND - the same
+     * letter differs: {@code -c} takes a commit for {@code commit} but is the value-less
+     * {@code --cached} for {@code ls-files} and {@code blame}, and {@code -n} is a line count for
+     * {@code tag} but {@code --no-stat} for {@code merge}. A cluster scan stops at one of these,
+     * because everything after it is that option's value rather than another flag.
+     * <p>
+     * Only the subcommands whose clusters are scanned appear here; an unlisted one stops at nothing,
+     * which errs toward refusing a cluster rather than letting a file/strategy option through.
+     */
     private static final Map<String, String> VALUE_TAKING_SHORT_OPTIONS = Map.of(
         "diff", "SGlU", //$NON-NLS-1$ //$NON-NLS-2$
         "log", "SGLnU", //$NON-NLS-1$ //$NON-NLS-2$
@@ -249,11 +249,6 @@ public class GitTool implements IMcpTool
     private static final long DRAIN_JOIN_MILLIS = 1000;
 
     /**
-     * Subcommands whose {@code -F} is the short spelling of {@code --file} (read the message from a
-     * file). Scoped, because {@code -F} means {@code --fixed-strings} for {@code log}, which is
-     * legitimate.
-     */
-    /**
      * Subcommands whose {@code -s} is the short spelling of {@code --strategy} (a PROGRAM name).
      * NOT {@code cherry-pick} / {@code revert}: there {@code -s} is {@code --signoff}, which is
      * harmless - their {@code --strategy} is blocked by the long-option list like everywhere else.
@@ -261,6 +256,11 @@ public class GitTool implements IMcpTool
     private static final Set<String> STRATEGY_SUBCOMMANDS =
         Set.of("merge", "pull"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * Subcommands whose {@code -F} is the short spelling of {@code --file} (read the message from a
+     * file). Scoped, because {@code -F} means {@code --fixed-strings} for {@code log}, which is
+     * legitimate.
+     */
     private static final Set<String> MESSAGE_FILE_SUBCOMMANDS =
         Set.of("commit", "tag", "merge"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
@@ -819,15 +819,6 @@ public class GitTool implements IMcpTool
         argv.addAll(tokens);
         return argv;
     }
-
-    /**
-     * @return {@code true} when {@code token} is a blocked long flag - by exact name, its
-     *         {@code --flag=value} form, OR an <b>abbreviation</b> of one. Git resolves any unambiguous
-     *         prefix of a long option (so {@code --upload-pa} means {@code --upload-pack}); we therefore
-     *         reject any {@code --<opt>} whose {@code <opt>} is a prefix of a blocked flag's name. Only
-     *         {@code --} long options are inspected (the dangerous global {@code -c}/{@code -C} shorts are
-     *         already rejected by the rule that the first token must be a bare subcommand).
-     */
 
     /**
      * Whether {@code token} IS a URL carrying userinfo, or carries one as an option VALUE
@@ -1776,6 +1767,24 @@ public class GitTool implements IMcpTool
     }
 
     /**
+     * Whether git treats this character as INDENT after a legacy key - measured, one byte at a
+     * time, because "whitespace" is not the same set here as anywhere else.
+     * <p>
+     * Consumed by git (the value comes back clean): space, tab, runs and mixtures of the two, and a
+     * carriage return. NOT consumed: vertical tab and form feed - {@code URL:<VT>https://host/r.git}
+     * comes back out of {@code git remote get-url} with the byte still on it. Treating those two as
+     * indent would delete exactly the control byte this check refuses on, and hand the caller a
+     * value git prints with it. So they are left where they are and judged.
+     *
+     * @param c the character after the key
+     * @return {@code true} when git would skip it
+     */
+    private static boolean isLegacyIndent(char c)
+    {
+        return c == ' ' || c == '\t' || c == '\r';
+    }
+
+    /**
      * The value(s) of one line of a legacy remote file - everything on it that git will use as an
      * address or a ref, each piece judged on its own.
      * <p>
@@ -1803,24 +1812,6 @@ public class GitTool implements IMcpTool
      * @param directory which legacy directory the file came from
      * @return the pieces to judge
      */
-    /**
-     * Whether git treats this character as INDENT after a legacy key - measured, one byte at a
-     * time, because "whitespace" is not the same set here as anywhere else.
-     * <p>
-     * Consumed by git (the value comes back clean): space, tab, runs and mixtures of the two, and a
-     * carriage return. NOT consumed: vertical tab and form feed - {@code URL:<VT>https://host/r.git}
-     * comes back out of {@code git remote get-url} with the byte still on it. Treating those two as
-     * indent would delete exactly the control byte this check refuses on, and hand the caller a
-     * value git prints with it. So they are left where they are and judged.
-     *
-     * @param c the character after the key
-     * @return {@code true} when git would skip it
-     */
-    private static boolean isLegacyIndent(char c)
-    {
-        return c == ' ' || c == '\t' || c == '\r';
-    }
-
     private static List<String> legacyValuesOf(String line, String directory)
     {
         String value = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line; //$NON-NLS-1$
@@ -2392,7 +2383,14 @@ public class GitTool implements IMcpTool
         return candidate;
     }
 
-
+    /**
+     * @return {@code true} when {@code token} is a blocked long flag - by exact name, its
+     *         {@code --flag=value} form, OR an <b>abbreviation</b> of one. Git resolves any unambiguous
+     *         prefix of a long option (so {@code --upload-pa} means {@code --upload-pack}); we therefore
+     *         reject any {@code --<opt>} whose {@code <opt>} is a prefix of a blocked flag's name. Only
+     *         {@code --} long options are inspected (the dangerous global {@code -c}/{@code -C} shorts are
+     *         already rejected by the rule that the first token must be a bare subcommand).
+     */
     private static boolean isBlockedFlag(String token)
     {
         if (!token.startsWith("--") || token.length() <= 2) //$NON-NLS-1$
@@ -2478,12 +2476,6 @@ public class GitTool implements IMcpTool
 
     // ==================== exec ====================
 
-    /**
-     * Runs {@code argv} as a bounded external process in {@code workTree}, combining stdout+stderr,
-     * capping the output and killing the process on a {@link #TIMEOUT_SECONDS} timeout. Never prompts
-     * (auth failures fail fast). The output stream is drained on a separate thread so a large output can
-     * never deadlock the wait.
-     */
     /**
      * Whether this command can rewrite the working tree, so the Eclipse workspace must be refreshed
      * afterwards. Keyed on the SUBCOMMAND (the first token after {@code git}), matching the set the
@@ -2662,6 +2654,12 @@ public class GitTool implements IMcpTool
         }
     }
 
+    /**
+     * Runs {@code argv} as a bounded external process in {@code workTree}, combining stdout+stderr,
+     * capping the output and killing the process on a {@link #TIMEOUT_SECONDS} timeout. Never prompts
+     * (auth failures fail fast). The output stream is drained on a separate thread so a large output can
+     * never deadlock the wait.
+     */
     String runGit(List<String> argv, File workTree)
     {
         ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
@@ -3823,22 +3821,6 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Sets the safe, non-interactive git environment and drops inherited {@code GIT_*} variables that
-     * could redirect git to another repository, config, object store, exec-path or proxy program than the
-     * resolved one. Auth-related variables (SSH, credential helpers, {@code HOME}, {@code PATH}) and the
-     * machine's own {@code ~/.gitconfig} are deliberately KEPT: authentication and repository config are
-     * the machine's, exactly like the developer's terminal.
-     */
-    /**
-     * Inserts {@code -c core.askPass=} right after the {@code git} executable, so a {@code core.askPass}
-     * configured in the machine's gitconfig cannot pop a GUI credential dialog for this call. The
-     * caller-supplied tokens are untouched (and {@code --config}/{@code --config-env} stay blocked for
-     * them), so this adds no new injection surface.
-     *
-     * @param argv the parsed command ({@code git} first)
-     * @return a new argv with the non-interactive config option applied
-     */
-    /**
      * The hardening options this tool prepends to every git call, exposed so a unit test can assert
      * the non-interactive guarantees without spawning git. Package-private on purpose.
      *
@@ -3849,6 +3831,15 @@ public class GitTool implements IMcpTool
         return withNonInteractiveConfig(List.of("git")); //$NON-NLS-1$
     }
 
+    /**
+     * Inserts {@code -c core.askPass=} right after the {@code git} executable, so a {@code core.askPass}
+     * configured in the machine's gitconfig cannot pop a GUI credential dialog for this call. The
+     * caller-supplied tokens are untouched (and {@code --config}/{@code --config-env} stay blocked for
+     * them), so this adds no new injection surface.
+     *
+     * @param argv the parsed command ({@code git} first)
+     * @return a new argv with the non-interactive config option applied
+     */
     private static List<String> withNonInteractiveConfig(List<String> argv)
     {
         List<String> command = new ArrayList<>(argv.size() + 2);
@@ -3893,6 +3884,13 @@ public class GitTool implements IMcpTool
         return command;
     }
 
+    /**
+     * Sets the safe, non-interactive git environment and drops inherited {@code GIT_*} variables that
+     * could redirect git to another repository, config, object store, exec-path or proxy program than the
+     * resolved one. Auth-related variables (SSH, credential helpers, {@code HOME}, {@code PATH}) and the
+     * machine's own {@code ~/.gitconfig} are deliberately KEPT: authentication and repository config are
+     * the machine's, exactly like the developer's terminal.
+     */
     private static void hardenEnv(Map<String, String> env, File workTree)
     {
         env.put("GIT_TERMINAL_PROMPT", "0"); // a missing credential fails fast, never a hanging prompt //$NON-NLS-1$ //$NON-NLS-2$
