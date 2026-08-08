@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,19 +62,29 @@ import org.junit.Test;
 public class OrphanedJavadocTest
 {
     /**
-     * Files allowed to still carry orphaned blocks, with how many. RATCHET: the number
-     * may only go DOWN. Both entries are the last two sites of issue #353, deferred
-     * because the open PR #330 edits exactly these two files and the cleanup would
-     * collide with it; they come out as soon as that PR lands.
+     * The sites allowed to stay, BY IDENTITY - file plus {@link #fingerprint} of the block
+     * itself. Deliberately not a count: a budget of "one per file" answers "how many", and
+     * the question that matters is "the same one?". Fixing the listed block while
+     * introducing another in the same file keeps the count at one and would slip through;
+     * against identities the new block is unlisted (red) and the pardoned one has vanished
+     * (also red, via {@link #allowListHasNoStaleEntries}).
+     * <p>
+     * Both entries are the last two sites of issue #353, deferred because the open PR #330
+     * edits exactly these two files; they come out as soon as that PR lands.
      */
-    private static final Map<String, Integer> KNOWN_ORPHANS = new HashMap<>();
+    private static final Map<String, Set<String>> KNOWN_ORPHANS = new HashMap<>();
     static
     {
         KNOWN_ORPHANS.put("mcp/bundles/com.ditrix.edt.mcp.server/src" //$NON-NLS-1$
-            + "/com/ditrix/edt/mcp/server/preferences/PreferenceConstants.java", Integer.valueOf(1)); //$NON-NLS-1$
+            + "/com/ditrix/edt/mcp/server/preferences/PreferenceConstants.java", //$NON-NLS-1$
+            Set.of("Default: all tools enabled (empty string = no disabled tools")); //$NON-NLS-1$
         KNOWN_ORPHANS.put("mcp/bundles/com.ditrix.edt.mcp.server/src" //$NON-NLS-1$
-            + "/com/ditrix/edt/mcp/server/preferences/ToolSettingsService.java", Integer.valueOf(1)); //$NON-NLS-1$
+            + "/com/ditrix/edt/mcp/server/preferences/ToolSettingsService.java", //$NON-NLS-1$
+            Set.of("Applies the tool-enablement preference MIGRATIONS once per s")); //$NON-NLS-1$
     }
+
+    /** How much of a block's opening text identifies it. */
+    private static final int FINGERPRINT_LENGTH = 60;
 
     /** The source trees this ratchet covers; the first two must exist. */
     private static final String[] SOURCE_ROOTS = {
@@ -100,38 +111,102 @@ public class OrphanedJavadocTest
             + "  - a structural token spelled as a unicode escape (\\u003b for ';') is not translated,\n" //$NON-NLS-1$
             + "    so a declaration head can stay open past it. This is the ONLY one that can accuse\n" //$NON-NLS-1$
             + "    wrongly; if it bit you, say so on the issue rather than working around it.\n" //$NON-NLS-1$
-            + "  - a head opened by a type-parameter list alone (<T>) or by non-sealed is not seen;\n" //$NON-NLS-1$
-            + "  - 'default' is not a head-opening modifier (a 'default:' switch label is commoner);\n" //$NON-NLS-1$
-            + "  - a ',' at depth 0 closes the head, so 'throws A, B', 'implements A, B', '<A, B>'\n" //$NON-NLS-1$
-            + "    and a multi-declarator field give it up early.\n" //$NON-NLS-1$
-            + "The last three can only MISS a defect, never report one. Details: OrphanedJavadocTest."; //$NON-NLS-1$
-
-    /**
-     * The modifiers that OPEN a declaration head. {@code default} is deliberately absent:
-     * a {@code default:} switch label is far commoner than a {@code default} method
-     * signature split across lines, and treating it as a head would refuse legal code —
-     * leaving it out only costs a miss.
-     */
-    private static final Set<String> MODIFIERS = Set.of("public", "protected", "private", "static", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "final", "abstract", "synchronized", "native", "transient", "volatile", "strictfp", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
-        "sealed"); //$NON-NLS-1$
+            + "  - a ',' or a ':' at depth 0 closes the declaration head, so 'throws A, B',\n" //$NON-NLS-1$
+            + "    'implements A, B', '<A, B>', a multi-declarator field and a ternary in an\n" //$NON-NLS-1$
+            + "    initializer give it up early.\n" //$NON-NLS-1$
+            + "Only the first can report wrongly; the rest can only MISS. Details: OrphanedJavadocTest."; //$NON-NLS-1$
 
     @Test
     public void noOrphanedJavadocOutsideTheAllowList()
     {
-        Map<String, List<Integer>> scanned = scanSources();
+        Map<String, List<Orphan>> scanned = scanSources();
         List<String> problems = new ArrayList<>();
-        for (Map.Entry<String, List<Integer>> entry : scanned.entrySet())
+        for (Map.Entry<String, List<Orphan>> entry : scanned.entrySet())
         {
-            int budget = KNOWN_ORPHANS.containsKey(entry.getKey())
-                ? KNOWN_ORPHANS.get(entry.getKey()).intValue() : 0;
-            if (entry.getValue().size() > budget)
-            {
-                problems.add(entry.getKey() + " -> orphaned javadoc starting at line(s) " //$NON-NLS-1$
-                    + entry.getValue() + (budget > 0 ? " (allow-listed: " + budget + ')' : "")); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            problems.addAll(unpardoned(entry.getKey(), entry.getValue(),
+                KNOWN_ORPHANS.getOrDefault(entry.getKey(), Set.of())));
         }
         assertTrue(refusalText(problems), problems.isEmpty());
+    }
+
+    /**
+     * The pardon decision itself, as a function, so it can be exercised on the case it
+     * exists for instead of only on the repository (where every pardoned file happens to
+     * hold exactly its pardoned block, and a count would look identical).
+     *
+     * @param path the file, for the message
+     * @param orphans what the detector found there
+     * @param pardoned the fingerprints this file is allowed to keep
+     * @return one message per orphan nobody pardoned
+     */
+    static List<String> unpardoned(String path, List<Orphan> orphans, Set<String> pardoned)
+    {
+        List<String> problems = new ArrayList<>();
+        for (Orphan orphan : orphans)
+        {
+            // BY IDENTITY, never by how many: "one orphan is allowed here" would pardon a
+            // brand-new block the moment the pardoned one is fixed.
+            if (!pardoned.contains(orphan.fingerprint))
+            {
+                problems.add(path + ':' + orphan.line + " -> orphaned javadoc \"" //$NON-NLS-1$
+                    + orphan.fingerprint + "...\""); //$NON-NLS-1$
+            }
+        }
+        return problems;
+    }
+
+    /**
+     * The other direction, also as a function: which pardons no longer name a block that
+     * is still orphaned.
+     *
+     * @param path the file, for the message
+     * @param orphans what the detector found there
+     * @param pardoned the fingerprints this file is allowed to keep
+     * @return one message per pardon that has outlived its block
+     */
+    static List<String> stalePardons(String path, List<Orphan> orphans, Set<String> pardoned)
+    {
+        Set<String> present = new HashSet<>();
+        for (Orphan orphan : orphans)
+        {
+            present.add(orphan.fingerprint);
+        }
+        List<String> stale = new ArrayList<>();
+        for (String one : pardoned)
+        {
+            if (!present.contains(one))
+            {
+                stale.add(path + ": pardons a block that is no longer orphaned - \"" //$NON-NLS-1$
+                    + one + "...\""); //$NON-NLS-1$
+            }
+        }
+        return stale;
+    }
+
+    /**
+     * The pardon must name a SITE, not a quantity — asserted on the DECISION, not just on
+     * the fingerprints that feed it. The case it exists for: someone fixes the block a file
+     * is allow-listed for and introduces a different one in the same file. The count is
+     * still one, so a budget waves it through; an identity does not.
+     */
+    @Test
+    public void aPardonDoesNotTransferToADifferentBlock()
+    {
+        Set<String> pardoned = Set.of("The pardoned block."); //$NON-NLS-1$
+        List<Orphan> sameBlock = List.of(new Orphan(3, "The pardoned block.")); //$NON-NLS-1$
+        List<Orphan> differentBlock = List.of(new Orphan(6, "A NEW orphan nobody pardoned.")); //$NON-NLS-1$
+
+        assertTrue("the pardoned block itself must stay pardoned", //$NON-NLS-1$
+            unpardoned("A.java", sameBlock, pardoned).isEmpty()); //$NON-NLS-1$
+        assertEquals("a DIFFERENT block, same count, must be reported", //$NON-NLS-1$
+            1, unpardoned("A.java", differentBlock, pardoned).size()); //$NON-NLS-1$
+        assertTrue("and the message must name it", //$NON-NLS-1$
+            unpardoned("A.java", differentBlock, pardoned).get(0).contains("A NEW orphan")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a pardon whose block is still there is not stale", //$NON-NLS-1$
+            stalePardons("A.java", sameBlock, pardoned).isEmpty()); //$NON-NLS-1$
+        assertEquals("but once that block is fixed the pardon must go", //$NON-NLS-1$
+            1, stalePardons("A.java", differentBlock, pardoned).size()); //$NON-NLS-1$
     }
 
     /**
@@ -150,6 +225,54 @@ public class OrphanedJavadocTest
             + "delete it, it is usually that declaration's only documentation:\n  " //$NON-NLS-1$
             + String.join("\n  ", problems) //$NON-NLS-1$
             + "\n\n" + KNOWN_LIMITS; //$NON-NLS-1$
+    }
+
+    /**
+     * The pardon must name a SITE, not a quantity. The case it exists for: someone fixes
+     * the block this file is allow-listed for and introduces a different one in the same
+     * file — the count is still one, and a budget would wave it through.
+     */
+    @Test
+    public void thePardonIsForOneBLOCK_notForAQUANTITY()
+    {
+        String before = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** The pardoned block. */", //$NON-NLS-1$
+            "    /** Documents f. */", //$NON-NLS-1$
+            "    int f;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Documents g. */", //$NON-NLS-1$
+            "    void g() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        List<Orphan> was = orphanedJavadoc(before);
+        assertEquals("one orphan to start with", 1, was.size()); //$NON-NLS-1$
+        assertEquals("identified by its own opening words", //$NON-NLS-1$
+            "The pardoned block.", was.get(0).fingerprint); //$NON-NLS-1$
+
+        // Same file, same COUNT, different block: the pardon must not transfer.
+        String after = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Documents f. */", //$NON-NLS-1$
+            "    int f;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** A NEW orphan nobody pardoned. */", //$NON-NLS-1$
+            "    /** Documents g. */", //$NON-NLS-1$
+            "    void g() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        List<Orphan> now = orphanedJavadoc(after);
+        assertEquals("still exactly one - a count cannot tell these two apart", //$NON-NLS-1$
+            was.size(), now.size());
+        assertTrue("but the identity differs, which is what the allow-list keys on", //$NON-NLS-1$
+            !was.get(0).fingerprint.equals(now.get(0).fingerprint));
+
+        // The line moves when anything above it is edited; the identity must not.
+        String shifted = "// a new line at the top\n" + before; //$NON-NLS-1$
+        assertEquals("an edit above the block moves its line", //$NON-NLS-1$
+            was.get(0).line + 1, orphanedJavadoc(shifted).get(0).line);
+        assertEquals("but must not change which block it is", //$NON-NLS-1$
+            was.get(0).fingerprint, orphanedJavadoc(shifted).get(0).fingerprint);
     }
 
     /**
@@ -172,31 +295,27 @@ public class OrphanedJavadocTest
     }
 
     /**
-     * Keeps the budget honest in the other direction: a file that is now clean (or
-     * cleaner) must lose its entry, and every entry must name a file that is actually
-     * scanned — so a typo or a renamed file cannot silently disable the check.
+     * Keeps the pardon honest in the other direction: a pardoned block that is gone (fixed,
+     * reworded or deleted) must lose its entry, and every entry must name a file that is
+     * actually scanned — so a typo, a renamed file or a fix cannot leave a pardon lying
+     * around for the NEXT block to inherit.
      */
     @Test
     public void allowListHasNoStaleEntries()
     {
-        Map<String, List<Integer>> scanned = scanSources();
+        Map<String, List<Orphan>> scanned = scanSources();
         List<String> stale = new ArrayList<>();
-        for (Map.Entry<String, Integer> entry : KNOWN_ORPHANS.entrySet())
+        for (Map.Entry<String, Set<String>> entry : KNOWN_ORPHANS.entrySet())
         {
             if (!scanned.containsKey(entry.getKey()))
             {
                 stale.add(entry.getKey() + ": allow-listed but no such source file was scanned"); //$NON-NLS-1$
                 continue;
             }
-            int actual = scanned.get(entry.getKey()).size();
-            if (actual < entry.getValue().intValue())
-            {
-                stale.add(entry.getKey() + ": allow-listed for " + entry.getValue() + " orphan(s) but has " //$NON-NLS-1$ //$NON-NLS-2$
-                    + actual);
-            }
+            stale.addAll(stalePardons(entry.getKey(), scanned.get(entry.getKey()), entry.getValue()));
         }
-        assertTrue("Stale KNOWN_ORPHANS entries - lower the number or drop the entry to tighten the " //$NON-NLS-1$
-            + "ratchet:\n  " + String.join("\n  ", stale), stale.isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("Stale KNOWN_ORPHANS entries - drop them to tighten the ratchet:\n  " //$NON-NLS-1$
+            + String.join("\n  ", stale), stale.isEmpty()); //$NON-NLS-1$
     }
 
     /**
@@ -324,6 +443,40 @@ public class OrphanedJavadocTest
             "}"); //$NON-NLS-1$
         assertEquals("a modifier followed by an annotation is still one open head", //$NON-NLS-1$
             List.of(Integer.valueOf(5)), orphanedJavadocLines(mixed));
+
+        // A declaration with NO modifier and NO annotation opens its head at its first
+        // token all the same — measured on the real tool for all six package-private
+        // forms (field, method, constructor, generic method, nested class, record): the
+        // block before that token is rendered, the one after it is dropped, every time.
+        String packagePrivate = String.join("\n", //$NON-NLS-1$
+            "class G", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached to the field. */", //$NON-NLS-1$
+            "    String", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    f;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Attached to the generic method. */", //$NON-NLS-1$
+            "    <T> T", //$NON-NLS-1$
+            "    /** Dropped too. */", //$NON-NLS-1$
+            "    g(T t) { return t; }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a package-private declaration opens a head at its first token", //$NON-NLS-1$
+            List.of(Integer.valueOf(5), Integer.valueOf(10)), orphanedJavadocLines(packagePrivate));
+
+        // "whatever it is" includes PUNCTUATION. Contrived, but it is the one shape that
+        // tells "the first token" apart from "the first word", and the real tool agrees:
+        // it renders the block before the '<' and drops the one after it.
+        String angle = String.join("\n", //$NON-NLS-1$
+            "class H", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    <", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    T> T g(T t) { return t; }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a punctuation first token opens the head too", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(angle));
 
         // Three blocks, ONE line, two of them dropped: the report counts BLOCKS, so the
         // budget cannot be gamed by writing them on a single line.
@@ -582,19 +735,20 @@ public class OrphanedJavadocTest
      * same list and it cannot drift between them.
      *
      * @param source the contents of one {@code .java} file
-     * @return the 1-based start lines of the javadoc blocks that document nothing, ascending
+     * @return the javadoc blocks that document nothing, in source order
      */
-    static List<Integer> orphanedJavadocLines(String source)
+    static List<Orphan> orphanedJavadoc(String source)
     {
-        // Keyed by the block's OFFSET, valued by its line: two blocks can share a line
+        // Keyed by the block's OFFSET: two blocks can share a line
         // (/** a */ /** b */ /** c */ int f;) and keying by line would report one of two.
-        SortedMap<Integer, Integer> orphans = new TreeMap<>();
+        SortedMap<Integer, Orphan> orphans = new TreeMap<>();
         int i = 0;
         int line = 1;
         int depth = 0;
         boolean headOpen = false;
         int pending = -1;
         int pendingLine = -1;
+        String pendingText = null;
         StringBuilder word = new StringBuilder();
         while (i < source.length())
         {
@@ -607,13 +761,11 @@ public class OrphanedJavadocTest
             }
             if (word.length() > 0)
             {
-                // A word is a code token; a modifier one also OPENS a declaration head.
+                // A word is a code token, and ANY first token of a declaration opens its
+                // head - the type of a package-private member just as much as 'public'.
                 pending = -1;
                 pendingLine = -1;
-                if (depth == 0 && MODIFIERS.contains(word.toString()))
-                {
-                    headOpen = true;
-                }
+                headOpen = true;
                 word.setLength(0);
             }
             char next = i + 1 < source.length() ? source.charAt(i + 1) : 0;
@@ -658,14 +810,16 @@ public class OrphanedJavadocTest
                 {
                     if (pending >= 0)
                     {
-                        orphans.put(Integer.valueOf(pending), Integer.valueOf(pendingLine));
+                        orphans.put(Integer.valueOf(pending), new Orphan(pendingLine, pendingText));
                     }
                     if (headOpen)
                     {
-                        orphans.put(Integer.valueOf(startOffset), Integer.valueOf(startLine));
+                        orphans.put(Integer.valueOf(startOffset),
+                            new Orphan(startLine, fingerprint(source, startOffset, i)));
                     }
                     pending = startOffset;
                     pendingLine = startLine;
+                    pendingText = fingerprint(source, startOffset, i);
                 }
                 continue;
             }
@@ -688,28 +842,108 @@ public class OrphanedJavadocTest
             }
             if (c == '@')
             {
-                if (depth == 0)
-                {
-                    headOpen = true;
-                }
+                headOpen = true;
                 i++;
                 continue;
             }
             if (c == '(')
             {
                 depth++;
+                headOpen = true;
             }
             else if (c == ')')
             {
                 depth = Math.max(0, depth - 1);
+                headOpen = true;
             }
-            else if (depth == 0 && (c == ';' || c == '{' || c == '}' || c == ','))
+            else if (depth == 0 && (c == ';' || c == '{' || c == '}' || c == ',' || c == ':'))
             {
+                // The end of whatever came before. ':' is here for a LABEL - 'default:' and
+                // 'case X:' would otherwise leave the head open over the statements below.
                 headOpen = false;
+            }
+            else
+            {
+                headOpen = true;
             }
             i++;
         }
         return new ArrayList<>(orphans.values());
+    }
+
+    /**
+     * @param source the contents of one {@code .java} file
+     * @return the 1-based start lines of the blocks that document nothing, in source order
+     */
+    static List<Integer> orphanedJavadocLines(String source)
+    {
+        List<Integer> lines = new ArrayList<>();
+        for (Orphan orphan : orphanedJavadoc(source))
+        {
+            lines.add(Integer.valueOf(orphan.line));
+        }
+        return lines;
+    }
+
+    /**
+     * One block that documents nothing: WHERE it is (for the reader) and WHICH one it is
+     * (for the allow-list). The line moves whenever anything above it is edited, so it can
+     * report but must never identify; the {@link #fingerprint} does the identifying.
+     */
+    static final class Orphan
+    {
+        final int line;
+
+        final String fingerprint;
+
+        Orphan(int line, String fingerprint)
+        {
+            this.line = line;
+            this.fingerprint = fingerprint;
+        }
+    }
+
+    /**
+     * The identity of a site: the opening words of the block itself, normalised. Chosen so
+     * that an edit ABOVE the block - which moves its line and nothing else - leaves it
+     * unchanged, while replacing the block with a different one does not. Rewording the
+     * block's opening also changes it, and that is intended: an allow-listed block that was
+     * rewritten deserves a fresh look rather than an inherited pardon.
+     *
+     * @param source the whole file
+     * @param from the offset of the block's {@code /**}
+     * @param to the offset just past its {@code *}{@code /}
+     * @return a short, whitespace-normalised prefix of the block's text
+     */
+    static String fingerprint(String source, int from, int to)
+    {
+        String body = source.substring(from, Math.min(to, source.length()));
+        StringBuilder out = new StringBuilder();
+        boolean space = true;
+        for (int at = 0; at < body.length(); at++)
+        {
+            char c = body.charAt(at);
+            if (c == '/' || c == '*')
+            {
+                continue;
+            }
+            if (Character.isWhitespace(c))
+            {
+                space = true;
+                continue;
+            }
+            if (space && out.length() > 0)
+            {
+                out.append(' ');
+            }
+            space = false;
+            out.append(c);
+            if (out.length() >= FINGERPRINT_LENGTH)
+            {
+                break;
+            }
+        }
+        return out.toString();
     }
 
     /** @return the index just past the text block that opens at {@code i} */
@@ -761,9 +995,9 @@ public class OrphanedJavadocTest
     // === source scan ===
 
     /** @return every scanned {@code .java} file (repository-relative path) mapped to its orphans */
-    private static Map<String, List<Integer>> scanSources()
+    private static Map<String, List<Orphan>> scanSources()
     {
-        Map<String, List<Integer>> result = new LinkedHashMap<>();
+        Map<String, List<Orphan>> result = new LinkedHashMap<>();
         int scannedRoots = 0;
         for (int r = 0; r < SOURCE_ROOTS.length; r++)
         {
@@ -788,7 +1022,7 @@ public class OrphanedJavadocTest
         return result;
     }
 
-    private static void scanRoot(String rootPath, File root, Map<String, List<Integer>> into)
+    private static void scanRoot(String rootPath, File root, Map<String, List<Orphan>> into)
     {
         Path base = root.toPath();
         try (Stream<Path> files = Files.walk(base))
@@ -799,7 +1033,7 @@ public class OrphanedJavadocTest
                 // relative path, and a bare relative key would let one silently replace
                 // the other's result (and with it, its orphans).
                 .forEach(p -> into.put(rootPath + '/' + base.relativize(p).toString().replace('\\', '/'),
-                    orphanedJavadocLines(read(p))));
+                    orphanedJavadoc(read(p))));
         }
         catch (IOException e)
         {
