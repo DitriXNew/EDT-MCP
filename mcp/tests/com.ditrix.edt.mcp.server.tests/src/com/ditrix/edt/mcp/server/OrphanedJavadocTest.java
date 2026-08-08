@@ -21,6 +21,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.stream.Stream;
 
 import org.junit.Test;
@@ -32,9 +35,16 @@ import org.junit.Test;
  * member usually brought its own block — so the documentation silently detaches and the
  * member it belonged to is left undocumented.
  * <p>
- * Detected shape: a javadoc block whose next meaningful line is ANOTHER javadoc block.
- * That is only ever the accident above; two javadoc blocks in a row document nothing
- * legal in Java.
+ * Javadoc binds the comment that immediately precedes a declaration's FIRST token — its
+ * first annotation or modifier. Measured, not assumed: {@code javadoc} was run on each
+ * shape below and asked which text it rendered. Two blocks are therefore dropped:
+ * <ul>
+ *   <li>one whose next meaningful line is ANOTHER javadoc block — the later block is the
+ *       nearer one, so the earlier documents nothing;</li>
+ *   <li>one that sits AFTER that first token, i.e. between {@code @Deprecated} and the
+ *       member. Here it is the block BEFORE the annotation that survives, which is why
+ *       reporting "the first of the pair" would name the wrong one.</li>
+ * </ul>
  * <p>
  * <b>The fix is to MOVE the block back, not to delete it.</b> Across #341/#345/#353,
  * five of six such blocks were the ONLY documentation their method had — a mechanical
@@ -69,8 +79,19 @@ public class OrphanedJavadocTest
     private static final String[] SOURCE_ROOTS = {
         "mcp/bundles/com.ditrix.edt.mcp.server/src", //$NON-NLS-1$
         "mcp/tests/com.ditrix.edt.mcp.server.tests/src", //$NON-NLS-1$
-        "proxy/src/main/java" //$NON-NLS-1$
+        "proxy/src/main/java", //$NON-NLS-1$
+        "proxy/src/test/java" //$NON-NLS-1$
     };
+
+    /**
+     * The modifiers that OPEN a declaration head. {@code default} is deliberately absent:
+     * a {@code default:} switch label is far commoner than a {@code default} method
+     * signature split across lines, and treating it as a head would refuse legal code —
+     * leaving it out only costs a miss.
+     */
+    private static final Set<String> MODIFIERS = Set.of("public", "protected", "private", "static", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "final", "abstract", "synchronized", "native", "transient", "volatile", "strictfp", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
+        "sealed"); //$NON-NLS-1$
 
     @Test
     public void noOrphanedJavadocOutsideTheAllowList()
@@ -176,6 +197,260 @@ public class OrphanedJavadocTest
     }
 
     /**
+     * Positive control for the OTHER shape of the same accident: a block that sits after
+     * the declaration's first token. Which of the two blocks survives is not a matter of
+     * taste — {@code javadoc} was run on exactly these sources, and the one BEFORE the
+     * annotation is the one it renders — so the block reported here is the discarded one.
+     */
+    @Test
+    public void detectorFindsABlockInsideADeclarationPrefix()
+    {
+        String annotated = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached: javadoc renders THIS one. */", //$NON-NLS-1$
+            "    @Deprecated", //$NON-NLS-1$
+            "    /** Dropped: it is inside the declaration. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("the block AFTER the annotation is the discarded one", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(annotated));
+
+        // An annotation with arguments, wrapped: the prefix does not end at the newline.
+        String wrapped = String.join("\n", //$NON-NLS-1$
+            "class B", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    @SuppressWarnings({\"unchecked\",", //$NON-NLS-1$
+            "        \"rawtypes\"})", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a wrapped annotation is still a declaration prefix", //$NON-NLS-1$
+            List.of(Integer.valueOf(6)), orphanedJavadocLines(wrapped));
+
+        // A signature split after its modifiers.
+        String split = String.join("\n", //$NON-NLS-1$
+            "class C", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    public static", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("modifiers open the declaration just as an annotation does", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(split));
+
+        // The head does not close at the annotation's own braces: they are inside its
+        // argument list, not the member's body.
+        String braced = String.join("\n", //$NON-NLS-1$
+            "class D", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    @SuppressWarnings({", //$NON-NLS-1$
+            "        \"unchecked\"", //$NON-NLS-1$
+            "    })", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    public void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("an annotation's own braces must not close the head", //$NON-NLS-1$
+            List.of(Integer.valueOf(7)), orphanedJavadocLines(braced));
+
+        // A modifier can be followed by an annotation on the same line.
+        String mixed = String.join("\n", //$NON-NLS-1$
+            "class E", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    public @Deprecated", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a modifier followed by an annotation is still one open head", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(mixed));
+
+        // Three blocks, ONE line, two of them dropped: the report counts BLOCKS, so the
+        // budget cannot be gamed by writing them on a single line.
+        assertEquals("two blocks sharing a line are two findings, not one", //$NON-NLS-1$
+            List.of(Integer.valueOf(1), Integer.valueOf(1)),
+            orphanedJavadocLines("/** one */ /** two */ /** three */ int f;")); //$NON-NLS-1$
+
+        // The accusation carries a LINE, and a wrong one sends the reader somewhere else
+        // entirely. Both multi-line comment forms must therefore be counted through.
+        String afterLongComments = String.join("\n", //$NON-NLS-1$
+            "class F", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /*", //$NON-NLS-1$
+            "     * an ordinary", //$NON-NLS-1$
+            "     * multi-line comment", //$NON-NLS-1$
+            "     */", //$NON-NLS-1$
+            "    /**", //$NON-NLS-1$
+            "     * a multi-line javadoc that documents m", //$NON-NLS-1$
+            "     */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Orphan. */", //$NON-NLS-1$
+            "    /** Documents f. */", //$NON-NLS-1$
+            "    int f;", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("the line must be counted through every multi-line comment above it", //$NON-NLS-1$
+            List.of(Integer.valueOf(12)), orphanedJavadocLines(afterLongComments));
+    }
+
+    /**
+     * Negative control for the shapes the two new branches could wrongly refuse. A ratchet
+     * that reddens on legal code blocks work that is not even wrong, and is switched off by
+     * the first person it inconveniences — so a false refusal costs more than a miss.
+     */
+    @Test
+    public void detectorAcceptsTextBlocksAndAnnotatedMembers()
+    {
+        // A Java 17 text block holding Java source: its content is DATA. Without the text
+        // block being blanked, these two lines read as consecutive javadoc.
+        String fixture = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    private static final String SOURCE = \"\"\"", //$NON-NLS-1$
+            "        /** first */", //$NON-NLS-1$
+            "        /** second */", //$NON-NLS-1$
+            "        int f;", //$NON-NLS-1$
+            "        \"\"\";", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Documents m. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a text block's contents are data, not javadoc", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(fixture));
+
+        // …and it must END where Java ends it. This block holds an ODD number of quote
+        // characters, so lexing it as ordinary string literals re-pairs every quote after
+        // it and swallows the REAL orphan below — the assertion above cannot tell the two
+        // apart on its own (its quotes happen to pair up either way), this one can.
+        String oddQuotes = String.join("\n", //$NON-NLS-1$
+            "class B", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    private static final String Q = \"\"\"", //$NON-NLS-1$
+            "        a \" b", //$NON-NLS-1$
+            "        \"\"\";", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Orphan. */", //$NON-NLS-1$
+            "    /** Documents m. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a text block ends where Java ends it, so the orphan after it is found", //$NON-NLS-1$
+            List.of(Integer.valueOf(7)), orphanedJavadocLines(oddQuotes));
+
+        // Enum constants end in ',' - an unfinished LIST, not an unfinished declaration.
+        String constants = String.join("\n", //$NON-NLS-1$
+            "enum E", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Documents A. */", //$NON-NLS-1$
+            "    A,", //$NON-NLS-1$
+            "    /** Documents B. */", //$NON-NLS-1$
+            "    B,", //$NON-NLS-1$
+            "    /** Documents C. */", //$NON-NLS-1$
+            "    C;", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("enum constants must not read as an open declaration", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(constants));
+
+        // Two ways a naive backward walk mistakes a FINISHED member for an open
+        // declaration and then trips over the @Override above it:
+        //   - this repository ends almost every line with a trailing NLS marker, which
+        //     hides the '}' that closed the member;
+        //   - the "://" literal contains the two characters that start a line comment, so
+        //     a comment strip that ignores string literals eats the rest of the line.
+        // Both are why the backward walk runs over a comment-blanked, quote-aware view.
+        String suppressed = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    @Override", //$NON-NLS-1$
+            "    public String scheme() { return \"://\"; } //" + "$NON-NLS-1$", //$NON-NLS-1$ //$NON-NLS-2$
+            "", //$NON-NLS-1$
+            "    /** Documents m. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a trailing NLS marker must not hide the previous member's '}'", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(suppressed));
+
+        // An enum whose brace shares the line with its first constant: the head opened by
+        // 'public' is closed by that '{', so the constants' own javadoc is attached.
+        String inlineBrace = String.join("\n", //$NON-NLS-1$
+            "/** Documents E. */", //$NON-NLS-1$
+            "@Deprecated", //$NON-NLS-1$
+            "public enum E { A,", //$NON-NLS-1$
+            "    /** Documents B. */", //$NON-NLS-1$
+            "    B;", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a brace sharing the declaration's line still closes the head", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(inlineBrace));
+
+        // The ';' that ends an annotated text-block field lives on the block's CLOSING
+        // line - the one a line-based scanner is most tempted to throw away whole.
+        String annotatedTextBlock = String.join("\n", //$NON-NLS-1$
+            "public class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    @Deprecated", //$NON-NLS-1$
+            "    public static String s = \"\"\"", //$NON-NLS-1$
+            "        data", //$NON-NLS-1$
+            "        \"\"\";", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Documents m. */", //$NON-NLS-1$
+            "    public void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("the text block's closing line still carries the field's ';'", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(annotatedTextBlock));
+
+        // An escaped triple quote does NOT close a text block, so what follows is data.
+        String escapedQuotes = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    String s = \"\"\"", //$NON-NLS-1$
+            "        \\\"\"\"", //$NON-NLS-1$
+            "        /** data one */", //$NON-NLS-1$
+            "        /** data two */", //$NON-NLS-1$
+            "        \"\"\";", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("an escaped triple quote does not end the text block", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(escapedQuotes));
+
+        // A switch's 'default:' label must not read as a declaration modifier.
+        String switchDefault = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    void m(int x)", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        switch (x)", //$NON-NLS-1$
+            "        {", //$NON-NLS-1$
+            "            default:", //$NON-NLS-1$
+            "                /** legal, if odd, and documents nothing by design */", //$NON-NLS-1$
+            "                break;", //$NON-NLS-1$
+            "        }", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a 'default:' label is not a declaration head", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(switchDefault));
+
+        // An ANNOTATED enum constant: the head it opens is closed by the ',' that ends the
+        // constant, not by a ';' - without that, the next constant's own javadoc is accused.
+        String annotatedConstant = String.join("\n", //$NON-NLS-1$
+            "public enum E", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    @Deprecated A,", //$NON-NLS-1$
+            "    /** Documents B. */ B", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a ',' closes the head an annotated enum constant opened", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(annotatedConstant));
+
+        // Truncated sources must terminate and accuse nobody, not hang or throw.
+        assertEquals("an unterminated string literal", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines("class A { String s = \"oops")); //$NON-NLS-1$
+        assertEquals("an unterminated text block", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines("class A { String s = \"\"\"\n  /** x */\n  /** y */")); //$NON-NLS-1$
+        assertEquals("an unterminated javadoc block", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines("class A {\n/** never closed\n")); //$NON-NLS-1$
+    }
+
+    /**
      * Negative control: well-formed documentation, an annotated member, an empty
      * {@code /**}{@code /} comment and a line comment between two blocks must NOT be
      * reported — a detector that flags legal code gets switched off.
@@ -230,110 +505,212 @@ public class OrphanedJavadocTest
     // === detector ===
 
     /**
+     * One left-to-right lex of the file, yielding two kinds of token: JAVADOC comments
+     * and CODE. A javadoc comment documents nothing when either
+     * <ul>
+     *   <li>the next token is another javadoc comment — no code came between, so the
+     *       later block is the nearer one and this one is discarded; or</li>
+     *   <li>it appears while a declaration HEAD is open — after the declaration's first
+     *       token (an annotation or a modifier) and before the {@code ;}, <code>{</code>
+     *       or <code>}</code> that closes it. There the block BEFORE the head is the one
+     *       javadoc renders, so the one inside is the discarded one.</li>
+     * </ul>
+     * Lexing rather than matching line prefixes is what keeps a text block holding Java
+     * source, a {@code "://"} literal or a {@code /**} inside a string from being read as
+     * documentation — a ratchet that reddens on legal code is worse than one that misses,
+     * because it blocks work that is not even wrong.
+     * <p>
+     * Known limits, every one of them a MISS and never a false refusal — the trade the
+     * whole design makes, because a ratchet that reddens on legal code gets switched off:
+     * <ul>
+     *   <li>a head opened by a type-parameter list alone ({@code <T>}) or by
+     *       {@code non-sealed} is not recognised;</li>
+     *   <li>{@code default} is deliberately not a head-opening modifier — a
+     *       {@code default:} switch label is far commoner than a split signature;</li>
+     *   <li>a {@code ,} at depth 0 closes the head, which is what keeps an annotated enum
+     *       constant from accusing its neighbour; the cost is that a head is also given up
+     *       early at {@code throws A, B}, {@code implements A, B}, {@code <A, B>} and a
+     *       multi-declarator field;</li>
+     *   <li>a structural token spelled as a unicode escape ({@code \\u003b} for {@code ;})
+     *       is not translated. Checked rather than assumed: every {@code \\uXXXX} in this
+     *       repository sits inside a literal or a comment, never in a structural position.</li>
+     * </ul>
+     *
      * @param source the contents of one {@code .java} file
-     * @return the 1-based start lines of every javadoc block whose next meaningful line
-     *         is another javadoc block
+     * @return the 1-based start lines of the javadoc blocks that document nothing, ascending
      */
     static List<Integer> orphanedJavadocLines(String source)
     {
-        String[] lines = source.split("\n", -1); //$NON-NLS-1$
-        List<Integer> orphans = new ArrayList<>();
+        // Keyed by the block's OFFSET, valued by its line: two blocks can share a line
+        // (/** a */ /** b */ /** c */ int f;) and keying by line would report one of two.
+        SortedMap<Integer, Integer> orphans = new TreeMap<>();
         int i = 0;
-        while (i < lines.length)
+        int line = 1;
+        int depth = 0;
+        boolean headOpen = false;
+        int pending = -1;
+        int pendingLine = -1;
+        StringBuilder word = new StringBuilder();
+        while (i < source.length())
         {
-            int end = javadocEnd(lines, i);
-            if (end < 0)
+            char c = source.charAt(i);
+            if (Character.isJavaIdentifierPart(c))
+            {
+                word.append(c);
+                i++;
+                continue;
+            }
+            if (word.length() > 0)
+            {
+                // A word is a code token; a modifier one also OPENS a declaration head.
+                pending = -1;
+                pendingLine = -1;
+                if (depth == 0 && MODIFIERS.contains(word.toString()))
+                {
+                    headOpen = true;
+                }
+                word.setLength(0);
+            }
+            char next = i + 1 < source.length() ? source.charAt(i + 1) : 0;
+            if (c == '\n')
+            {
+                line++;
+                i++;
+                continue;
+            }
+            if (Character.isWhitespace(c))
             {
                 i++;
                 continue;
             }
-            if (tailAfterJavadoc(lines[end]).isEmpty() && isJavadocStart(nextMeaningful(lines, end)))
+            if (c == '/' && next == '/')
             {
-                orphans.add(Integer.valueOf(i + 1));
-            }
-            i = end + 1;
-        }
-        return orphans;
-    }
-
-    /**
-     * What follows the block's own closing {@code *}{@code /} on that same line. A
-     * compact {@code /** f *}{@code /} int f;} documents the declaration sitting right
-     * there, so the NEXT line is somebody else's business and the block is not orphaned.
-     */
-    private static String tailAfterJavadoc(String closingLine)
-    {
-        int close = closingLine.indexOf("*/"); //$NON-NLS-1$
-        return close < 0 ? "" : closingLine.substring(close + 2).trim(); //$NON-NLS-1$
-    }
-
-    /**
-     * The first line after {@code end} that could carry a declaration. Blank lines, line
-     * comments and ordinary {@code /* ... *}{@code /} block comments are skipped: none of
-     * them is a declaration, so a note wedged between the block and the member that
-     * displaced it must not hide the orphan.
-     *
-     * @return that line, or {@code ""} at end of file
-     */
-    private static String nextMeaningful(String[] lines, int end)
-    {
-        int next = end + 1;
-        while (next < lines.length)
-        {
-            String trimmed = lines[next].trim();
-            if (trimmed.isEmpty() || trimmed.startsWith("//")) //$NON-NLS-1$
-            {
-                next++;
+                while (i < source.length() && source.charAt(i) != '\n')
+                {
+                    i++;
+                }
                 continue;
             }
-            if (trimmed.startsWith("/*") && !isJavadocStart(lines[next])) //$NON-NLS-1$
+            if (c == '/' && next == '*')
             {
-                // An ordinary block comment: skip past its end, wherever that is.
-                while (next < lines.length && !lines[next].contains("*/")) //$NON-NLS-1$
+                int startLine = line;
+                int startOffset = i;
+                // "/**" opens javadoc, but "/**/" is merely an EMPTY block comment.
+                boolean javadoc = i + 2 < source.length() && source.charAt(i + 2) == '*'
+                    && (i + 3 >= source.length() || source.charAt(i + 3) != '/');
+                i += 2;
+                while (i + 1 < source.length()
+                    && !(source.charAt(i) == '*' && source.charAt(i + 1) == '/'))
                 {
-                    next++;
+                    if (source.charAt(i) == '\n')
+                    {
+                        line++;
+                    }
+                    i++;
                 }
-                if (next < lines.length && tailAfterJavadoc(lines[next]).isEmpty())
+                i = Math.min(i + 2, source.length());
+                if (javadoc)
                 {
-                    next++;
-                    continue;
+                    if (pending >= 0)
+                    {
+                        orphans.put(Integer.valueOf(pending), Integer.valueOf(pendingLine));
+                    }
+                    if (headOpen)
+                    {
+                        orphans.put(Integer.valueOf(startOffset), Integer.valueOf(startLine));
+                    }
+                    pending = startOffset;
+                    pendingLine = startLine;
                 }
-                return next < lines.length ? tailAfterJavadoc(lines[next]) : ""; //$NON-NLS-1$
+                continue;
             }
-            return lines[next];
+            // Everything below is a code token, so a javadoc block before it is attached.
+            pending = -1;
+            pendingLine = -1;
+            if (c == '"' && source.startsWith("\"\"\"", i)) //$NON-NLS-1$
+            {
+                int after = skipTextBlock(source, i);
+                line += countNewlines(source, i, after);
+                i = after;
+                continue;
+            }
+            if (c == '"' || c == '\'')
+            {
+                int after = skipLiteral(source, i, c);
+                line += countNewlines(source, i, after);
+                i = after;
+                continue;
+            }
+            if (c == '@')
+            {
+                if (depth == 0)
+                {
+                    headOpen = true;
+                }
+                i++;
+                continue;
+            }
+            if (c == '(')
+            {
+                depth++;
+            }
+            else if (c == ')')
+            {
+                depth = Math.max(0, depth - 1);
+            }
+            else if (depth == 0 && (c == ';' || c == '{' || c == '}' || c == ','))
+            {
+                headOpen = false;
+            }
+            i++;
         }
-        return ""; //$NON-NLS-1$
+        return new ArrayList<>(orphans.values());
     }
 
-    /** {@code /**}{@code /} is an EMPTY block comment, not javadoc - it documents nothing by design. */
-    private static boolean isJavadocStart(String line)
+    /** @return the index just past the text block that opens at {@code i} */
+    private static int skipTextBlock(String source, int i)
     {
-        String trimmed = line.trim();
-        return trimmed.startsWith("/**") && !trimmed.startsWith("/**/"); //$NON-NLS-1$ //$NON-NLS-2$
+        int at = i + 3;
+        while (at < source.length())
+        {
+            if (source.charAt(at) == '\\')
+            {
+                // An escaped quote cannot close the block: \""" is three literal quotes.
+                at += 2;
+                continue;
+            }
+            if (source.startsWith("\"\"\"", at)) //$NON-NLS-1$
+            {
+                return at + 3;
+            }
+            at++;
+        }
+        return source.length();
     }
 
-    /**
-     * @return the index of the line closing the javadoc block that starts at
-     *         {@code from}, or {@code -1} when no block starts there (or it is unterminated)
-     */
-    private static int javadocEnd(String[] lines, int from)
+    /** @return the index just past the string/char literal that opens at {@code i} */
+    private static int skipLiteral(String source, int i, char quote)
     {
-        if (!isJavadocStart(lines[from]))
+        int at = i + 1;
+        while (at < source.length() && source.charAt(at) != quote)
         {
-            return -1;
+            at += source.charAt(at) == '\\' ? 2 : 1;
         }
-        if (lines[from].trim().indexOf("*/", 2) >= 0) //$NON-NLS-1$
+        return Math.min(at + 1, source.length());
+    }
+
+    /** Newlines a literal swallowed, so the line counter keeps up with it. */
+    private static int countNewlines(String source, int from, int to)
+    {
+        int count = 0;
+        for (int at = from; at < to && at < source.length(); at++)
         {
-            return from;
-        }
-        for (int j = from + 1; j < lines.length; j++)
-        {
-            if (lines[j].contains("*/")) //$NON-NLS-1$
+            if (source.charAt(at) == '\n')
             {
-                return j;
+                count++;
             }
         }
-        return -1;
+        return count;
     }
 
     // === source scan ===
