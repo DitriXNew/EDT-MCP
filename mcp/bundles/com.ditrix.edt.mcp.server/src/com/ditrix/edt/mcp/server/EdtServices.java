@@ -39,6 +39,8 @@ import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.wiring.ServiceProperties;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
+import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.google.inject.Injector;
 
@@ -59,6 +61,8 @@ public class EdtServices
     private ServiceTracker<IMarkerManager, IMarkerManager> markerManagerTracker;
     private ServiceTracker<ICheckScheduler, ICheckScheduler> checkSchedulerTracker;
     private ServiceTracker<ICheckRepository, ICheckRepository> checkRepositoryTracker;
+    private ServiceTracker<IFixManager, IFixManager> fixManagerTracker;
+    private ServiceTracker<IFixRepository, IFixRepository> fixRepositoryTracker;
     private ServiceTracker<IBmModelManager, IBmModelManager> bmModelManagerTracker;
     private ServiceTracker<IDerivedDataManagerProvider, IDerivedDataManagerProvider> derivedDataManagerProviderTracker;
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
@@ -144,6 +148,12 @@ public class EdtServices
 
         checkRepositoryTracker = new ServiceTracker<>(context, ICheckRepository.class, null);
         checkRepositoryTracker.open();
+
+        fixManagerTracker = new ServiceTracker<>(context, IFixManager.class, null);
+        fixManagerTracker.open();
+
+        fixRepositoryTracker = new ServiceTracker<>(context, IFixRepository.class, null);
+        fixRepositoryTracker.open();
 
         bmModelManagerTracker = new ServiceTracker<>(context, IBmModelManager.class, null);
         bmModelManagerTracker.open();
@@ -251,6 +261,8 @@ public class EdtServices
         markerManagerTracker = closeTracker(markerManagerTracker);
         checkSchedulerTracker = closeTracker(checkSchedulerTracker);
         checkRepositoryTracker = closeTracker(checkRepositoryTracker);
+        fixManagerTracker = closeTracker(fixManagerTracker);
+        fixRepositoryTracker = closeTracker(fixRepositoryTracker);
         bmModelManagerTracker = closeTracker(bmModelManagerTracker);
         derivedDataManagerProviderTracker = closeTracker(derivedDataManagerProviderTracker);
         servicesOrchestratorTracker = closeTracker(servicesOrchestratorTracker);
@@ -379,6 +391,38 @@ public class EdtServices
             return null;
         }
         return checkRepositoryTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IFixManager} service that drives EDT's official quick-fixes for a
+     * validation marker (prepare -&gt; list variants -&gt; select -&gt; execute -&gt; finish).
+     * Used by apply_quick_fix.
+     *
+     * @return fix manager or null if not available
+     */
+    public IFixManager getFixManager()
+    {
+        if (fixManagerTracker == null)
+        {
+            return null;
+        }
+        return fixManagerTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IFixRepository} service used to test whether a check has any
+     * registered quick-fix ({@code hasFixes(CheckUid)}). Used by get_project_errors to flag
+     * fixable markers and by apply_quick_fix.
+     *
+     * @return fix repository or null if not available
+     */
+    public IFixRepository getFixRepository()
+    {
+        if (fixRepositoryTracker == null)
+        {
+            return null;
+        }
+        return fixRepositoryTracker.getService();
     }
 
     /**

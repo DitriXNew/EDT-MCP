@@ -60,17 +60,6 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Applies the tool-enablement preference MIGRATIONS once per store, lazily on the first read.
-     * <p>
-     * A tool that ships DISABLED by default gets that from {@code DEFAULT_DISABLED_TOOLS} - but only on
-     * a store that never persisted its own value. An installation that had already saved the Tools tab
-     * (or an "all tools" preset) holds an explicit list that predates the new tool, so without this the
-     * powerful {@code git} tool would silently arrive ENABLED on upgrade. Version 1 therefore adds it to
-     * such a stored list; the user can still enable it deliberately afterwards.
-     *
-     * @param store the preference store to migrate (never {@code null} here)
-     */
-    /**
      * Test seam: runs the migration against a supplied store, so the one mechanism that keeps a
      * default-off tool disabled on upgrade can be verified without an Eclipse runtime.
      *
@@ -81,10 +70,28 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         INSTANCE.ensureMigrated(store);
     }
 
+    /**
+     * Applies the tool-enablement preference MIGRATIONS once per store, lazily on the first read.
+     * <p>
+     * A tool that ships DISABLED by default gets that from {@code DEFAULT_DISABLED_TOOLS} - but only on
+     * a store that never persisted its own value. An installation that had already saved the Tools tab
+     * (or an "all tools" preset) holds an explicit list that predates the new tool, so without this the
+     * powerful {@code git} tool would silently arrive ENABLED on upgrade. Version 1 therefore adds it to
+     * such a stored list; the user can still enable it deliberately afterwards.
+     * <p>
+     * Version 2 covers a narrower case: {@code apply_quick_fix} is a normal (default-ON) tool, so it is
+     * NOT added to every stored list the way {@code git} is - only to a list that, once it gains
+     * {@code apply_quick_fix}, becomes EXACTLY {@link ToolPreset#CODE_REVIEW}'s or
+     * {@link ToolPreset#ANALYSIS_ONLY}'s current disabled set. That is the signature of a store saved
+     * by an older build under one of those two read-only presets, before this write-capable tool
+     * existed to be excluded from them; a CUSTOM selection that merely overlaps is left untouched.
+     *
+     * @param store the preference store to migrate (never {@code null} here)
+     */
     private void ensureMigrated(IPreferenceStore store)
     {
-        if (store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION)
-            >= PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION)
+        int storedVersion = store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION);
+        if (storedVersion >= PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION)
         {
             return;
         }
@@ -95,15 +102,55 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         {
             Set<String> disabled =
                 new LinkedHashSet<>(parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS)));
-            // The tool name is used as a literal here on purpose: the preferences layer must not depend
-            // on tools/impl (see the architecture rules).
-            if (disabled.add("git")) //$NON-NLS-1$
+            boolean changed = false;
+            // Each step is gated by its OWN version threshold, NOT merely "storedVersion is below
+            // the CURRENT version" - an installation already at version 1 (git migrated in) that has
+            // since deliberately RE-ENABLED git must not have version 2's migration run re-silently
+            // re-disable it: bumping TOOL_PREFS_MIGRATION_VERSION for a NEW migration must never
+            // re-run an EARLIER one an installation already passed through.
+            // The tool names are used as literals here on purpose: the preferences layer must not
+            // depend on tools/impl (see the architecture rules).
+            if (storedVersion < 1)
+            {
+                changed |= disabled.add("git"); //$NON-NLS-1$
+            }
+            if (storedVersion < 2)
+            {
+                changed |= migrateApplyQuickFixIntoReadOnlyPreset(disabled);
+            }
+            if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
             }
         }
         store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION,
             PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+    }
+
+    /**
+     * Adds {@code apply_quick_fix} to {@code disabled} when doing so would turn it into EXACTLY the
+     * current {@link ToolPreset#CODE_REVIEW} or {@link ToolPreset#ANALYSIS_ONLY} shape - i.e. the
+     * stored list already IS one of those two read-only presets, just saved before this tool existed
+     * to be excluded from them. Reuses {@link ToolPreset#matchPreset}, which already ignores unknown
+     * / stale tool names, so a leftover obsolete entry in the stored list does not defeat the match.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when {@code apply_quick_fix} was added
+     */
+    private static boolean migrateApplyQuickFixIntoReadOnlyPreset(Set<String> disabled)
+    {
+        if (disabled.contains("apply_quick_fix")) //$NON-NLS-1$
+        {
+            return false;
+        }
+        Set<String> withQuickFix = new LinkedHashSet<>(disabled);
+        withQuickFix.add("apply_quick_fix"); //$NON-NLS-1$
+        ToolPreset matched = ToolPreset.matchPreset(withQuickFix);
+        if (matched == ToolPreset.CODE_REVIEW || matched == ToolPreset.ANALYSIS_ONLY)
+        {
+            return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+        }
+        return false;
     }
 
     /**

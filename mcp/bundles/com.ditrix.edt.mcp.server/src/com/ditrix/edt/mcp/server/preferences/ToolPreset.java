@@ -131,8 +131,8 @@ public enum ToolPreset
 
     /**
      * Builds the Code Review preset: disable apps, debug, refactoring,
-     * write_module_source, and the state-mutating workspace export/import tools
-     * (which sit in CORE alongside read-only project tools).
+     * write_module_source, apply_quick_fix, and the state-mutating workspace
+     * export/import tools (which sit in CORE alongside read-only project tools).
      */
     private static Set<String> buildCodeReviewDisabled()
     {
@@ -144,13 +144,15 @@ public enum ToolPreset
         disabled.add("write_module_source"); //$NON-NLS-1$
         disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
         disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
+        disabled.add("apply_quick_fix"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 
     /**
      * Builds the Analysis Only preset: disable apps, debug, the entire BSL
      * Code group (both read and write tools — analysis is metadata- and
-     * error-level only), refactoring, the state-mutating workspace
+     * error-level only), refactoring, apply_quick_fix (a mutating write, though
+     * grouped with the read-only PROBLEMS tools), the state-mutating workspace
      * export/import tools, and the LanguageTool translation tools.
      */
     private static Set<String> buildAnalysisOnlyDisabled()
@@ -163,6 +165,7 @@ public enum ToolPreset
         disabled.addAll(ToolGroup.TRANSLATION.getToolNames());
         disabled.add("export_configuration_to_xml"); //$NON-NLS-1$
         disabled.add("import_configuration_from_xml"); //$NON-NLS-1$
+        disabled.add("apply_quick_fix"); //$NON-NLS-1$
         return Collections.unmodifiableSet(disabled);
     }
 }

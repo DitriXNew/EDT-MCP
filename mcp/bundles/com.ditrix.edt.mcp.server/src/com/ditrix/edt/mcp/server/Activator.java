@@ -34,6 +34,8 @@ import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
+import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
 /**
@@ -197,7 +199,29 @@ public class Activator extends AbstractUIPlugin
     {
         return services.getCheckRepository();
     }
-    
+
+    /**
+     * Returns the IFixManager service that applies EDT's official quick-fixes for a
+     * validation marker. Used by apply_quick_fix.
+     *
+     * @return fix manager or null if not available
+     */
+    public IFixManager getFixManager()
+    {
+        return services.getFixManager();
+    }
+
+    /**
+     * Returns the IFixRepository service used to test whether a check has a registered
+     * quick-fix. Used by get_project_errors and apply_quick_fix.
+     *
+     * @return fix repository or null if not available
+     */
+    public IFixRepository getFixRepository()
+    {
+        return services.getFixRepository();
+    }
+
     /**
      * Returns the IBmModelManager service for BM model operations.
      * 

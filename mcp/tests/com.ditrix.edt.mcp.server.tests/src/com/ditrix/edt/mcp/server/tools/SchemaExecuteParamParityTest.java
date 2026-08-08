@@ -52,10 +52,16 @@ import com.google.gson.JsonParser;
  */
 public class SchemaExecuteParamParityTest
 {
-    /** Single-key accessors: extract*Argument(params, "key" ...) and requireArgument(params, "key" ...). */
+    /**
+     * Single-key accessors: extract*Argument(params, "key" ...) and requireArgument(params, "key" ...).
+     * {@code extractSelectorArgument} is {@code ApplyQuickFixTool}'s local wrapper around
+     * {@code JsonUtils.extractIntArgument} that additionally rejects an explicitly-supplied
+     * out-of-range 1-based selector (index/variant/line) instead of silently defaulting it - modeled
+     * here (per this class's own doc comment) rather than left "unmodelled".
+     */
     private static final Pattern SINGLE_KEY = Pattern.compile(
         "(?:extractStringArgument|extractArrayArgument|extractObjectArray|extractBooleanArgument|extractLongArgument|" //$NON-NLS-1$
-            + "extractIntArgument|extractDoubleArgument|requireArgument)\\s*\\(\\s*params\\s*,\\s*\"([a-zA-Z][a-zA-Z0-9]*)\""); //$NON-NLS-1$
+            + "extractIntArgument|extractDoubleArgument|extractSelectorArgument|requireArgument)\\s*\\(\\s*params\\s*,\\s*\"([a-zA-Z][a-zA-Z0-9]*)\""); //$NON-NLS-1$
 
     /** Varargs: requireArguments(params, "a", "b", ...). Captures the whole quoted-list tail. */
     private static final Pattern MULTI_KEY = Pattern.compile(
