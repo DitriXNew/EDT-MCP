@@ -63,6 +63,7 @@ import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
@@ -2414,37 +2415,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Pushes {@code parent}'s PERSISTED contained objects so they pop in metamodel order (so the walk
-     * above stays depth-first, left to right).
+     * above stays depth-first, left to right). Which children count as persisted - and why the
+     * derived / transient question is asked before the value is read - is
+     * {@link PersistedContents}.
      *
      * @param parent the object whose containments to follow
      * @param pending the traversal stack
      */
     private static void pushPersistedChildren(EObject parent, Deque<EObject> pending)
     {
-        List<EObject> children = new ArrayList<>();
-        for (EReference reference : parent.eClass().getEAllReferences())
-        {
-            // Derived / transient BEFORE eGet: a derived feature can compute a whole model on read.
-            if (!reference.isContainment() || reference.isDerived() || reference.isTransient())
-            {
-                continue;
-            }
-            Object value = parent.eGet(reference);
-            if (value instanceof List<?>)
-            {
-                for (Object child : (List<?>)value)
-                {
-                    if (child instanceof EObject)
-                    {
-                        children.add((EObject)child);
-                    }
-                }
-            }
-            else if (value instanceof EObject)
-            {
-                children.add((EObject)value);
-            }
-        }
+        List<EObject> children = PersistedContents.of(parent);
         for (int i = children.size() - 1; i >= 0; i--)
         {
             pending.push(children.get(i));
