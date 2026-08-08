@@ -907,34 +907,51 @@ def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
     _fail("expected %s to no longer contain %r [%s]" % (rel_path, substr, ctx))
 
 
-def poll_disk_count(rel_path, substr, expected, timeout=10, ctx=""):
-    """Poll until ONE named fixture file contains substr EXACTLY `expected` times.
+def poll_disk_count(rel_path, substr, expected, timeout=10, stable_for=1.0, ctx=""):
+    """Poll until ONE named fixture file has held substr EXACTLY `expected` times for `stable_for`.
 
-    The COUNT sibling of poll_disk_contains, for the "written exactly once" class of assertion
-    (an idempotent re-add must not duplicate a row). Presence is not enough there: a write that
-    is a no-op IN THE MODEL still force-exports, so the file is rewritten, and a bare
-    `read_disk(f).count(x) == n` can land mid-rewrite and read 0 - failing with "must NOT
-    duplicate", which describes the exact opposite of what happened. Waiting for the count makes
-    the assertion say what it means, and a real duplicate still fails (the count settles at 2 and
-    never reaches `expected`).
+    The COUNT sibling of poll_disk_contains, for the "written exactly once" class of assertion (an
+    idempotent re-add must not duplicate a row), where presence is not enough: the count itself is
+    the claim, so the failure message has to carry the count - a bare
+    `read_disk(f).count(x) == n` reports neither the number it saw nor the file, and "must NOT
+    duplicate" then describes a count of 0 just as readily as a count of 2.
 
-    A missing file keeps polling: the export may not have created it yet."""
+    WHY THE DWELL, and not "return on the first matching read": in the case this exists for, the
+    expected count is ALREADY true before the call under test - the row was written by the previous
+    step. A first-sample poll is therefore satisfied by the PRE-call contents and never observes
+    what the call did, so a regression that eventually writes a second row would pass. Requiring the
+    count to HOLD for `stable_for` closes that: a late duplicate resets the dwell, the count settles
+    at 2, `expected` is never reached again and the call fails with the count it actually saw.
+
+    This is a dwell, not a proof that an export happened - the write under test may legitimately be
+    a no-op that rewrites nothing, so demanding evidence of a rewrite would fail those cases
+    spuriously. Pick `stable_for` longer than the export lag you care about.
+
+    A missing file keeps polling (and resets the dwell): the export may not have created it yet."""
     full = os.path.join(PROJECT_DIR, rel_path)
     deadline = time.time() + timeout
     last = ""
     actual = None
+    stable_since = None
     while time.time() < deadline:
         try:
             with open(full, encoding="utf-8", errors="replace") as f:
                 last = f.read()
             actual = last.count(substr)
-            if actual == expected:
-                return
         except FileNotFoundError:
             last = "(file does not exist yet)"
-        time.sleep(0.5)
-    _fail("expected %s to contain %r exactly %d time(s), last saw %s [%s]; it holds:\n%s"
-          % (rel_path, substr, expected,
+            actual = None
+        if actual == expected:
+            if stable_since is None:
+                stable_since = time.time()
+            if time.time() - stable_since >= stable_for:
+                return
+        else:
+            stable_since = None
+        time.sleep(0.1)
+    _fail("expected %s to contain %r exactly %d time(s) held for %.1fs, last saw %s [%s]; "
+          "it holds:\n%s"
+          % (rel_path, substr, expected, stable_for,
              "no file" if actual is None else "%d" % actual, ctx, last[:700]))
 
 
