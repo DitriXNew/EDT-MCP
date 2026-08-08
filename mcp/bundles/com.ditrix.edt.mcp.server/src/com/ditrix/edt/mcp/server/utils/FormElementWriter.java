@@ -667,6 +667,15 @@ public final class FormElementWriter
      * for a name that is not a column; an item that predates the retype must not be left in the exact
      * shape the creator forbids (issue #295 review).</p>
      *
+     * <p>Scans the PERSISTED descendants only. What this guard exists to prevent is a dangling
+     * binding in the SAVED form, and a path that only a computed containment leads to cannot become
+     * one: in this metamodel those containments are {@code transient}, so the element is never
+     * written to {@code Form.form} and is recomputed after any edit. Refusing on such a match would
+     * be worse than useless - the caller is told to delete or re-point an element that
+     * {@code findFormItem} no longer addresses at all, an error they cannot act on. (The exact rule,
+     * and why {@code derived} alone would not have justified this, is on
+     * {@link PersistedContents#of}.) Issue #350.</p>
+     *
      * @param attribute the form attribute about to be retyped
      * @return the offending item names, empty when nothing binds below it
      */
@@ -690,12 +699,14 @@ public final class FormElementWriter
             return broken;
         }
         List<String> columns = attributeColumnNames(attribute);
-        // eAllContents, not a hand-rolled recursion: it visits the WHOLE form without a depth budget
-        // that could silently stop before the item that would have blocked the retype, and without a
-        // StackOverflowError on a pathological tree.
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        // PersistedContents.descendants, not eAllContents and not a hand-rolled recursion: it keeps
+        // everything the old walk gave here - EVERY descendant regardless of EClass (a dataPath can
+        // sit on an unnamed property holder, so a form-item filter would lose real matches),
+        // depth-first in metamodel order, no depth budget that could silently stop before the item
+        // that would have blocked the retype, and no StackOverflowError on a pathological tree - and
+        // drops only the computed branches, which cannot hold an authored binding.
+        for (EObject item : PersistedContents.descendants(formModel))
         {
-            EObject item = it.next();
             String[] segments = dataPathSegments(item);
             if (segments.length > prefix.size() && startsWithIgnoreCase(segments, prefix)
                 && !containsIgnoreCase(columns, segments[prefix.size()]))
@@ -713,6 +724,10 @@ public final class FormElementWriter
      * {@link #createTable} refuses to build: without this the tool was stricter about CREATING a form
      * than about editing one into the same state (issue #295 review).
      *
+     * <p>Scans the PERSISTED descendants only, for the reason spelled out on
+     * {@link #itemsBoundBelowAttribute}: a computed table is not an authored binding, so skipping it
+     * cannot leave a stranded one in the saved form (issue #350).</p>
+     *
      * @param attribute the form attribute about to be retyped
      * @return the offending item names, empty when nothing needs its rows
      */
@@ -729,9 +744,10 @@ public final class FormElementWriter
         {
             return consumers;
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        // The EClass test below picks the MATCHES; the walk itself must still descend through
+        // everything (a table lives inside groups), so it filters by persistence, never by type.
+        for (EObject item : PersistedContents.descendants(formModel))
         {
-            EObject item = it.next();
             String[] segments = dataPathSegments(item);
             // EQUAL to the address, not merely starting with it: a table bound BELOW the member does
             // not consume the member's own rows.

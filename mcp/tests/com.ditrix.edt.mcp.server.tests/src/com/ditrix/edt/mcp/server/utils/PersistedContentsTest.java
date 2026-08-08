@@ -12,7 +12,9 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -108,6 +110,84 @@ public class PersistedContentsTest
         assertEquals(1, children.size());
     }
 
+    @Test
+    public void testDescendantsWalkDepthFirstInMetamodelOrder()
+    {
+        // The sequence the callers depend on: the same depth-first pre-order eAllContents() gives,
+        // over the persisted containments only. 'grand' sits under 'first', so it must come between
+        // 'first' and 'second' - a breadth-first or reversed walk would put it last.
+        Model model = new Model();
+
+        assertEquals(Arrays.asList(model.single, model.first, model.grand, model.second),
+            collect(PersistedContents.descendants(model.parent)));
+    }
+
+    @Test
+    public void testDescendantsSkipComputedBranchesWithoutReadingThem()
+    {
+        Model model = new Model();
+        List<EObject> all = collect(PersistedContents.descendants(model.parent));
+
+        assertFalse(all.contains(model.derivedChild));
+        assertFalse(all.contains(model.transientChild));
+        assertEquals(0, model.parent.readsOf(model.derivedRef));
+        assertEquals(0, model.parent.readsOf(model.transientRef));
+    }
+
+    @Test
+    public void testDescendantsExpandANodeOnlyWhenTheWalkReachesIt()
+    {
+        // Laziness has to be observed, not asserted: an eager implementation that collected all four
+        // descendants into a list would satisfy every "is it in the result" check just as well. So
+        // the probe is a READ counter on a node the walk has not got to yet - 'second' is the last
+        // sibling, and its own children may not be looked up while the caller is still on the first.
+        Model model = new Model();
+
+        Iterator<EObject> iterator = PersistedContents.descendants(model.parent).iterator();
+        assertTrue(iterator.hasNext());
+        assertSame(model.single, iterator.next());
+        assertEquals("a later sibling must not be expanded before the walk reaches it", //$NON-NLS-1$
+            0, model.second.readsOf(model.subReference));
+
+        // ...and once the walk does reach it, it is expanded - otherwise the counter above would
+        // read 0 for a walk that never descends at all, and prove nothing.
+        while (iterator.hasNext())
+        {
+            iterator.next();
+        }
+        assertTrue("the walk must expand the node once it reaches it", //$NON-NLS-1$
+            model.second.readsOf(model.subReference) > 0);
+    }
+
+    @Test
+    public void testDescendantsAreRestartable()
+    {
+        // The Iterable is asked for a FRESH iterator each time, so a second traversal is not empty:
+        // the two retype guards walk the same form one after the other, and a one-shot Iterable
+        // would make the second of them silently answer "nothing blocks it".
+        Model model = new Model();
+        Iterable<EObject> descendants = PersistedContents.descendants(model.parent);
+
+        assertEquals(4, collect(descendants).size());
+        assertEquals(4, collect(descendants).size());
+    }
+
+    @Test
+    public void testDescendantsOfNullIsAnEmptySequence()
+    {
+        assertTrue(collect(PersistedContents.descendants(null)).isEmpty());
+    }
+
+    private static List<EObject> collect(Iterable<EObject> objects)
+    {
+        List<EObject> all = new ArrayList<>();
+        for (EObject object : objects)
+        {
+            all.add(object);
+        }
+        return all;
+    }
+
     /**
      * A dynamic object whose computed containments are materialized on read, counting every read
      * (through {@code eGet} and through {@code eIsSet} alike - a derived feature computes to answer
@@ -168,14 +248,18 @@ public class PersistedContentsTest
     /**
      * A parent carrying one single-valued and one many-valued persisted containment, a
      * derived-ONLY and a transient-ONLY computed containment, and one plain (non-containment)
-     * reference.
+     * reference. {@code first} owns a child of its own, so the descendant walk has a depth to get
+     * wrong.
      */
     private static final class Model
     {
         final ComputingEObject parent;
         final EObject single;
         final EObject first;
-        final EObject second;
+        final EObject grand;
+        /** Counting, so a test can watch WHEN the walk expands it. */
+        final ComputingEObject second;
+        final EReference subReference;
         final EReference derivedRef;
         final EObject derivedChild;
         final EReference transientRef;
@@ -198,6 +282,8 @@ public class PersistedContentsTest
             name.setName("name"); //$NON-NLS-1$
             name.setEType(EcorePackage.Literals.ESTRING);
             child.getEStructuralFeatures().add(name);
+            subReference = containment(f, "sub", child, true); //$NON-NLS-1$
+            child.getEStructuralFeatures().add(subReference);
 
             EClass parentClass = f.createEClass();
             parentClass.setName("Parent"); //$NON-NLS-1$
@@ -222,11 +308,16 @@ public class PersistedContentsTest
             single = new DynamicEObjectImpl(child);
             parent.eSet(parentClass.getEStructuralFeature("single"), single); //$NON-NLS-1$
             first = new DynamicEObjectImpl(child);
-            second = new DynamicEObjectImpl(child);
+            second = new ComputingEObject(child);
             List<EObject> many =
                 (List<EObject>)parent.eGet(parentClass.getEStructuralFeature("many")); //$NON-NLS-1$
             many.add(first);
             many.add(second);
+            grand = new DynamicEObjectImpl(child);
+            ((List<EObject>)first.eGet(subReference)).add(grand);
+            // 'second' is left childless on purpose: the laziness probe watches whether its 'sub'
+            // feature is READ, and an empty answer is still a read. The counter is deliberately NOT
+            // reset here - a read during construction should fail the probe, not be hidden from it.
             derivedChild = new DynamicEObjectImpl(child);
             parent.compute(derivedRef, derivedChild);
             transientChild = new DynamicEObjectImpl(child);

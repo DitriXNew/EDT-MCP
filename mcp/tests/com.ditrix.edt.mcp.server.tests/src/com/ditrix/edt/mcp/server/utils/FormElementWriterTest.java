@@ -4495,4 +4495,214 @@ public class FormElementWriterTest
             return reference;
         }
     }
+
+    // ============ the retype guards scan PERSISTED descendants only (issue #350) ============
+
+    @Test
+    public void testRetypeGuardStillSeesEveryAuthoredBinding()
+    {
+        // The side that must not move. This guard scans for a FEATURE (a bound dataPath), not for a
+        // kind, so it may not be narrowed to the form-item tree: a data path also sits on unnamed
+        // property holders, and a FormItem-filtered walk would drop them silently. The column
+        // exemption (a path whose next segment IS a column is legitimate) must survive too.
+        RetypeGuardModel model = new RetypeGuardModel();
+
+        assertEquals("both authored bindings, in metamodel order, and nothing else", //$NON-NLS-1$
+            Arrays.asList("QtyField", "PropertyHolder"), //$NON-NLS-1$ //$NON-NLS-2$
+            FormElementWriter.itemsBoundBelowAttribute(model.rows));
+    }
+
+    @Test
+    public void testRetypeGuardIgnoresBindingsUnderAComputedContainment()
+    {
+        // A path only a computed containment leads to is not authored: it never reaches Form.form
+        // and is recomputed after any edit, so passing it over cannot leave a dangling binding in
+        // the saved file - which is the only thing this guard exists to prevent. Refusing on it
+        // would hand the caller an error they cannot act on, since the by-name resolver no longer
+        // addresses that element at all.
+        RetypeGuardModel model = new RetypeGuardModel();
+
+        assertFalse("a binding under a computed containment must not block the retype", //$NON-NLS-1$
+            FormElementWriter.itemsBoundBelowAttribute(model.rows).contains("GhostField")); //$NON-NLS-1$
+        assertEquals("and the computed containment must not even be read", //$NON-NLS-1$
+            0, model.form.reads);
+    }
+
+    @Test
+    public void testRowConsumerGuardStillSeesTheAuthoredTable()
+    {
+        RetypeGuardModel model = new RetypeGuardModel();
+
+        assertEquals(Collections.singletonList("RowsTable"), //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(model.rows));
+    }
+
+    @Test
+    public void testRowConsumerGuardIgnoresAComputedTable()
+    {
+        RetypeGuardModel model = new RetypeGuardModel();
+
+        assertFalse("a computed table does not consume the attribute's authored rows", //$NON-NLS-1$
+            FormElementWriter.rowConsumersBoundToAttribute(model.rows).contains("GhostTable")); //$NON-NLS-1$
+        assertEquals(0, model.form.reads);
+    }
+
+    /**
+     * A form-shaped dynamic model for the two retype guards: a {@code Rows} attribute with one
+     * {@code Price} column, and bindings of every shape the scan has to judge - one below the
+     * attribute at a NON-column segment (blocks), one at the column itself (legitimate), one on a
+     * plain object that is not a {@code FormItem} at all (blocks, and pins that the walk is not
+     * type-filtered), a {@code Table} bound to the attribute itself (a row consumer), and the same
+     * two offenders hanging off a TRANSIENT containment, reachable no other way.
+     */
+    private static final class RetypeGuardModel
+    {
+        final ComputingEObject form;
+        final EObject rows;
+
+        RetypeGuardModel()
+        {
+            EcoreFactory f = EcoreFactory.eINSTANCE;
+            EPackage pkg = f.createEPackage();
+            pkg.setName("formretype"); //$NON-NLS-1$
+            pkg.setNsPrefix("formretype"); //$NON-NLS-1$
+            pkg.setNsURI("http://ditrix.com/test/formlike-retype"); //$NON-NLS-1$
+
+            EClass dataPath = f.createEClass();
+            dataPath.setName("DataPath"); //$NON-NLS-1$
+            EAttribute segments = f.createEAttribute();
+            segments.setName("segments"); //$NON-NLS-1$
+            segments.setEType(EcorePackage.Literals.ESTRING);
+            segments.setUpperBound(-1);
+            dataPath.getEStructuralFeatures().add(segments);
+
+            EClass formItem = f.createEClass();
+            formItem.setName("FormItem"); //$NON-NLS-1$
+            formItem.setAbstract(true);
+            addName(f, formItem);
+            formItem.getEStructuralFeatures().add(containment(f, "dataPath", dataPath, false)); //$NON-NLS-1$
+
+            EClass formField = f.createEClass();
+            formField.setName("FormField"); //$NON-NLS-1$
+            formField.getESuperTypes().add(formItem);
+
+            EClass table = f.createEClass();
+            table.setName("Table"); //$NON-NLS-1$
+            table.getESuperTypes().add(formItem);
+
+            EClass formGroup = f.createEClass();
+            formGroup.setName("FormGroup"); //$NON-NLS-1$
+            formGroup.getESuperTypes().add(formItem);
+            formGroup.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
+
+            // NOT a FormItem, yet it carries a bound data path - the shape a form-item-filtered walk
+            // would lose.
+            EClass propertyHolder = f.createEClass();
+            propertyHolder.setName("PropertyHolder"); //$NON-NLS-1$
+            addName(f, propertyHolder);
+            propertyHolder.getEStructuralFeatures().add(containment(f, "dataPath", dataPath, false)); //$NON-NLS-1$
+
+            EClass column = f.createEClass();
+            column.setName("FormAttributeColumn"); //$NON-NLS-1$
+            addName(f, column);
+
+            EClass attribute = f.createEClass();
+            attribute.setName("FormAttribute"); //$NON-NLS-1$
+            addName(f, attribute);
+            attribute.getEStructuralFeatures().add(containment(f, "columns", column, true)); //$NON-NLS-1$
+
+            // Declaration order IS traversal order, so the expected result lists are deterministic.
+            EClass formClass = f.createEClass();
+            formClass.setName("Form"); //$NON-NLS-1$
+            formClass.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
+            formClass.getEStructuralFeatures().add(containment(f, "attributes", attribute, true)); //$NON-NLS-1$
+            formClass.getEStructuralFeatures().add(
+                containment(f, "holders", propertyHolder, true)); //$NON-NLS-1$
+            EReference ghost = computedContainment(f, "ghostItems", formItem, false, true); //$NON-NLS-1$
+            formClass.getEStructuralFeatures().add(ghost);
+
+            pkg.getEClassifiers().add(dataPath);
+            pkg.getEClassifiers().add(formItem);
+            pkg.getEClassifiers().add(formField);
+            pkg.getEClassifiers().add(table);
+            pkg.getEClassifiers().add(formGroup);
+            pkg.getEClassifiers().add(propertyHolder);
+            pkg.getEClassifiers().add(column);
+            pkg.getEClassifiers().add(attribute);
+            pkg.getEClassifiers().add(formClass);
+
+            form = new ComputingEObject(formClass, ghost);
+
+            EObject group = new DynamicEObjectImpl(formGroup);
+            setNameOf(group, "Grp"); //$NON-NLS-1$
+            addTo(form, "items", group); //$NON-NLS-1$
+            addTo(group, "items", bound(formField, "QtyField", dataPath, "Rows", "Qty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            // Bound AT the column - a legitimate path that must stay unreported.
+            addTo(group, "items", bound(formField, "PriceField", dataPath, "Rows", "Price")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            addTo(form, "items", bound(table, "RowsTable", dataPath, "Rows")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+            rows = new DynamicEObjectImpl(attribute);
+            setNameOf(rows, "Rows"); //$NON-NLS-1$
+            EObject price = new DynamicEObjectImpl(column);
+            setNameOf(price, "Price"); //$NON-NLS-1$
+            addTo(rows, "columns", price); //$NON-NLS-1$
+            addTo(form, "attributes", rows); //$NON-NLS-1$
+
+            addTo(form, "holders", //$NON-NLS-1$
+                bound(propertyHolder, "PropertyHolder", dataPath, "Rows", "HolderPath")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+            // Reachable ONLY through the transient containment.
+            form.materialized.add(bound(formField, "GhostField", dataPath, "Rows", "GhostQty")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            form.materialized.add(bound(table, "GhostTable", dataPath, "Rows")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        /** An object of {@code eClass} named {@code name} and bound to the given path segments. */
+        private static EObject bound(EClass eClass, String name, EClass dataPathClass,
+            String... pathSegments)
+        {
+            EObject object = new DynamicEObjectImpl(eClass);
+            setNameOf(object, name);
+            EObject path = new DynamicEObjectImpl(dataPathClass);
+            @SuppressWarnings("unchecked")
+            List<String> values =
+                (List<String>)path.eGet(dataPathClass.getEStructuralFeature("segments")); //$NON-NLS-1$
+            values.addAll(Arrays.asList(pathSegments));
+            object.eSet(object.eClass().getEStructuralFeature("dataPath"), path); //$NON-NLS-1$
+            return object;
+        }
+
+        private static void setNameOf(EObject object, String name)
+        {
+            object.eSet(object.eClass().getEStructuralFeature("name"), name); //$NON-NLS-1$
+        }
+
+        private static void addName(EcoreFactory f, EClass owner)
+        {
+            EAttribute name = f.createEAttribute();
+            name.setName("name"); //$NON-NLS-1$
+            name.setEType(EcorePackage.Literals.ESTRING);
+            owner.getEStructuralFeatures().add(name);
+        }
+
+        private static EReference containment(EcoreFactory f, String featureName, EClass type,
+            boolean many)
+        {
+            EReference reference = f.createEReference();
+            reference.setName(featureName);
+            reference.setEType(type);
+            reference.setContainment(true);
+            reference.setUpperBound(many ? -1 : 1);
+            return reference;
+        }
+
+        private static EReference computedContainment(EcoreFactory f, String featureName, EClass type,
+            boolean derived, boolean isTransient)
+        {
+            EReference reference = containment(f, featureName, type, true);
+            reference.setDerived(derived);
+            reference.setTransient(isTransient);
+            reference.setVolatile(true);
+            return reference;
+        }
+    }
 }
