@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -58,6 +59,11 @@ import com.ditrix.edt.mcp.server.Activator;
  *       taken before the recompute starts.</li>
  * </ol>
  *
+ * <p>Because the fingerprint is read from the workspace's own tree, that tree is
+ * synced with the file system once per project per session before any stored
+ * fingerprint is believed - see {@link #ensureTreeReflectsDisk}. Without it, sources
+ * changed while EDT was not running would be certified by stale timestamps.
+ *
  * <p>The listener is installed lazily on the first {@link #snapshot} call and lives
  * for the rest of the plugin lifetime (never removed — Eclipse will tear it down on
  * shutdown). Installation is idempotent and thread-safe.
@@ -102,6 +108,31 @@ public final class PreLaunchChangeTracker
     private static final AtomicBoolean LISTENER_INSTALLED = new AtomicBoolean(false);
 
     /**
+     * Projects whose resource tree THIS plugin instance has already synced with the
+     * file system. Losing this set on restart is intended: it is exactly the moment
+     * the tree may be describing a disk that changed while EDT was not running.
+     */
+    private static final Set<String> DISK_SYNCED = ConcurrentHashMap.newKeySet();
+
+    /** Per-project monitors serialising the disk sync (two applications, one project). */
+    private static final ConcurrentMap<String, Object> DISK_SYNC_LOCKS = new ConcurrentHashMap<>();
+
+    /**
+     * Bound (ms) for the once-per-session disk sync of one project. A refresh that
+     * cannot finish inside it leaves the project dirty rather than holding the MCP
+     * call open — cancellation is cooperative, so the bound on the CALLER is what
+     * guarantees an answer (see {@link BoundedJob}).
+     */
+    private static final long DEFAULT_DISK_SYNC_TIMEOUT_MS = 120_000L;
+
+    /**
+     * Live bound for {@link #refreshFromDisk}. Mutable ONLY so a unit test can shrink
+     * it and prove that a refresh still running at its deadline is not accepted as
+     * proof; production never reassigns it.
+     */
+    private static volatile long diskSyncTimeoutMs = DEFAULT_DISK_SYNC_TIMEOUT_MS;
+
+    /**
      * Key of the persistent property holding the content fingerprint of the last
      * successful pre-launch preparation of a project. Persistent properties live in
      * the workspace metadata, so the value survives an EDT restart and a project
@@ -127,6 +158,22 @@ public final class PreLaunchChangeTracker
 
     /** FNV-1a 64-bit prime. */
     private static final long FNV_PRIME = 0x100000001b3L;
+
+    /**
+     * Brings a project's resource tree in line with the file system. Replaced in unit
+     * tests so the gate can be exercised without a real workspace.
+     */
+    @FunctionalInterface
+    interface DiskSync
+    {
+        /**
+         * @param project the project to sync
+         * @return {@code true} when the tree is known to describe the current disk;
+         *         {@code false} when the sync did not complete (the caller then treats
+         *         the project as changed)
+         */
+        boolean sync(IProject project);
+    }
 
     /**
      * Computes the content fingerprint of a project. Replaced in unit tests so the
@@ -162,11 +209,36 @@ public final class PreLaunchChangeTracker
     }
 
     /** Live fingerprinter (production: the workspace walk below). */
-    private static volatile ProjectFingerprinter fingerprinter =
-        PreLaunchChangeTracker::computeContentFingerprint;
+    private static volatile ProjectFingerprinter fingerprinter = defaultFingerprinter();
 
     /** Live store (production: the project persistent property). */
-    private static volatile FingerprintStore store = new PersistentPropertyStore();
+    private static volatile FingerprintStore store = defaultStore();
+
+    /** Live disk sync (production: a bounded {@code refreshLocal}). */
+    private static volatile DiskSync diskSync = defaultDiskSync();
+
+    /**
+     * The production bindings live in ONE place each, used both to initialise the
+     * field and to restore it in tests. Two copies would let a test keep passing
+     * against a binding production no longer uses — the reason a mutation of the
+     * shipped default has to be able to redden the wiring test.
+     */
+    private static ProjectFingerprinter defaultFingerprinter()
+    {
+        return PreLaunchChangeTracker::computeContentFingerprint;
+    }
+
+    /** @return the shipped prepared-content store */
+    private static FingerprintStore defaultStore()
+    {
+        return new PersistentPropertyStore();
+    }
+
+    /** @return the shipped disk sync */
+    private static DiskSync defaultDiskSync()
+    {
+        return PreLaunchChangeTracker::refreshFromDisk;
+    }
 
     private PreLaunchChangeTracker()
     {
@@ -225,6 +297,7 @@ public final class PreLaunchChangeTracker
                 continue;
             }
             String name = project.getName();
+            ensureTreeReflectsDisk(project);
             Evaluation evaluation = evaluate(project);
             fingerprints.put(name, evaluation.fingerprint);
             if (evaluation.dirty)
@@ -386,6 +459,104 @@ public final class PreLaunchChangeTracker
         boolean contentMatchesPrepared = fingerprint != null && fingerprint.equals(prepared);
         boolean dirty = !contentMatchesPrepared || DIRTY.containsKey(project.getName());
         return new Evaluation(fingerprint, dirty);
+    }
+
+    // =========================================================================
+    // Disk visibility
+    // =========================================================================
+
+    /**
+     * Makes sure the project's resource tree describes the CURRENT disk before its
+     * fingerprint is believed - once per project per plugin session.
+     *
+     * <p>Why this is not optional. The fingerprint reads
+     * {@link IResource#getModificationStamp()}, i.e. the workspace's own saved tree.
+     * EDT enables the platform auto-refresh
+     * ({@code org.eclipse.core.resources/refresh.enabled=true} in the product
+     * customisation), but that installs OS change monitors, and an operating system
+     * reports no events for changes made while EDT was NOT RUNNING; nothing forces a
+     * full refresh at startup either. So after an ordinary {@code git checkout} on a
+     * closed workspace the tree still carries the OLD stamps, the fingerprint would
+     * match the stored one, and the run would be certified against sources nobody has
+     * looked at - executing stale generated data. The lightweight "refresh on access"
+     * does not save us either: this walk reads stamps from memory and never touches a
+     * file, so it triggers nothing.
+     *
+     * <p>Once per session is the right scope, and the scope the previous in-memory
+     * gate effectively had: while the plugin runs, the OS monitors plus our own
+     * resource listener report changes as they happen. The set recording "already
+     * synced" is deliberately session-scoped - losing it on restart is precisely when
+     * the sync is needed.
+     *
+     * <p>A sync that does not complete inside {@link #diskSyncTimeoutMs} (or fails)
+     * marks the project dirty: an unproven tree must cost a recompute, never a
+     * certificate. The project is not recorded as synced either, so the next launch
+     * tries again.
+     *
+     * @param project an accessible project
+     */
+    static void ensureTreeReflectsDisk(IProject project)
+    {
+        String name = project.getName();
+        if (DISK_SYNCED.contains(name))
+        {
+            return;
+        }
+        // Serialise per project: two applications of the same project can prepare
+        // concurrently (the per-(project, applicationId) lock does not cover that),
+        // and the second must WAIT for the tree instead of reading it mid-refresh.
+        synchronized (DISK_SYNC_LOCKS.computeIfAbsent(name, key -> new Object()))
+        {
+            if (DISK_SYNCED.contains(name))
+            {
+                return;
+            }
+            long startedAt = System.currentTimeMillis();
+            if (diskSync.sync(project))
+            {
+                DISK_SYNCED.add(name);
+                Activator.logInfo("Pre-launch: synced " + name //$NON-NLS-1$
+                    + " with disk before trusting its prepared-content marker (" //$NON-NLS-1$
+                    + (System.currentTimeMillis() - startedAt) + " ms)"); //$NON-NLS-1$
+            }
+            else
+            {
+                // Cannot prove the tree describes the disk -> cannot trust a match.
+                markDirty(name);
+                Activator.logInfo("Pre-launch: could not sync " + name //$NON-NLS-1$
+                    + " with disk - treating it as changed"); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /**
+     * Production {@link DiskSync}: {@code refreshLocal(DEPTH_INFINITE)} under a hard
+     * deadline in a background job, so a wedged file system can never hold the MCP
+     * call open (unattended-safety - the same defect that was fixed in the clean-build
+     * path, where an unbounded refresh made the call unbounded).
+     *
+     * @param project the project to refresh
+     * @return {@code true} only when the refresh actually completed without failure
+     */
+    static boolean refreshFromDisk(IProject project)
+    {
+        BoundedJob.Result result = BoundedJob.run(
+            "Pre-launch: refresh " + project.getName(), diskSyncTimeoutMs, //$NON-NLS-1$
+            monitor -> project.refreshLocal(IResource.DEPTH_INFINITE, monitor));
+        if (result.getOutcome() != BoundedJob.Outcome.COMPLETED)
+        {
+            Activator.logError("Pre-launch: refresh of " + project.getName() //$NON-NLS-1$
+                + " did not complete (" + result.getOutcome() + ")", null); //$NON-NLS-1$ //$NON-NLS-2$
+            return false;
+        }
+        Throwable failure = result.getFailure();
+        if (failure != null)
+        {
+            Activator.logError("Pre-launch: refresh of " + project.getName() + " failed", //$NON-NLS-1$ //$NON-NLS-2$
+                failure instanceof Exception ? (Exception)failure : new Exception(failure));
+            return false;
+        }
+        return true;
     }
 
     // =========================================================================
@@ -640,6 +811,65 @@ public final class PreLaunchChangeTracker
     }
 
     /**
+     * Body of the workspace listener's delta walk, extracted so the rules it applies
+     * are unit-testable (only the listener REGISTRATION needs a live workspace).
+     *
+     * @param delta one node of the delta tree
+     * @return {@code true} to keep walking the node's children
+     */
+    static boolean visitDelta(IResourceDelta delta)
+    {
+        IResource resource = delta.getResource();
+        if (resource == null)
+        {
+            return true; // keep walking
+        }
+        if (resource.getType() == IResource.PROJECT)
+        {
+            IProject project = (IProject)resource;
+            if (projectDeltaInvalidatesDiskSync(delta))
+            {
+                // The project was opened, closed, added or removed. Its resource tree
+                // was rebuilt from the saved state, and an open MAY be answered by a
+                // merely SCHEDULED refresh (IResource.BACKGROUND_REFRESH), so what we
+                // synced earlier in this session says nothing about the tree we are
+                // looking at now — sync it again before believing its fingerprint.
+                DISK_SYNCED.remove(project.getName());
+            }
+            // Skip closed or non-existent projects entirely.
+            return project.exists() && project.isOpen();
+        }
+        if (deltaMakesProjectDirty(delta))
+        {
+            IProject project = resource.getProject();
+            if (project != null)
+            {
+                // Unconditional put-with-new-generation: a concurrent markPrepared
+                // conditional-remove on the old generation will fail and the project
+                // will remain dirty, which is exactly correct.
+                DIRTY.put(project.getName(), GENERATION.incrementAndGet());
+            }
+        }
+        return true; // keep walking children
+    }
+
+    /**
+     * @param delta a PROJECT-level delta
+     * @return {@code true} when the project's tree may have been replaced under us
+     *     (opened, closed, added or removed), so a recorded disk sync no longer
+     *     describes it. Deliberately liberal: a needless re-sync costs one refresh,
+     *     a missed one costs a launch certified against sources nobody looked at.
+     */
+    static boolean projectDeltaInvalidatesDiskSync(IResourceDelta delta)
+    {
+        if (delta.getKind() != IResourceDelta.CHANGED)
+        {
+            return true; // ADDED / REMOVED
+        }
+        return (delta.getFlags() & IResourceDelta.OPEN) != 0;
+    }
+
+    /**
      * @param path a workspace path (may be {@code null})
      * @return {@code true} when {@code path} is the Git store or lives inside it —
      *         see {@link #GIT_STORE_NAME}. The fingerprint walk prunes the same
@@ -701,8 +931,10 @@ public final class PreLaunchChangeTracker
     static void resetForTest()
     {
         simulatePluginRestartForTest();
-        fingerprinter = PreLaunchChangeTracker::computeContentFingerprint;
-        store = new PersistentPropertyStore();
+        fingerprinter = defaultFingerprinter();
+        store = defaultStore();
+        diskSync = defaultDiskSync();
+        diskSyncTimeoutMs = DEFAULT_DISK_SYNC_TIMEOUT_MS;
     }
 
     /**
@@ -714,6 +946,7 @@ public final class PreLaunchChangeTracker
     static void simulatePluginRestartForTest()
     {
         DIRTY.clear();
+        DISK_SYNCED.clear();
         // Reset the generation counter so each test starts from a predictable
         // baseline.  Values are always positive after the first real change
         // (incrementAndGet starts at 1), so tests that compare generation values
@@ -731,6 +964,18 @@ public final class PreLaunchChangeTracker
     static void setStoreForTest(FingerprintStore testStore)
     {
         store = testStore;
+    }
+
+    /** Test hook: replaces the disk sync. */
+    static void setDiskSyncForTest(DiskSync testDiskSync)
+    {
+        diskSync = testDiskSync;
+    }
+
+    /** Test hook: shrinks the disk-sync deadline so the timeout path is testable. */
+    static void setDiskSyncTimeoutForTest(long timeoutMs)
+    {
+        diskSyncTimeoutMs = timeoutMs;
     }
 
     /**
@@ -758,32 +1003,7 @@ public final class PreLaunchChangeTracker
             }
             try
             {
-                event.getDelta().accept(delta -> {
-                    IResource resource = delta.getResource();
-                    if (resource == null)
-                    {
-                        return true; // keep walking
-                    }
-                    // Skip closed or non-existent projects entirely.
-                    if (resource.getType() == IResource.PROJECT)
-                    {
-                        IProject project = (IProject) resource;
-                        return project.exists() && project.isOpen();
-                    }
-                    if (deltaMakesProjectDirty(delta))
-                    {
-                        IProject project = resource.getProject();
-                        if (project != null)
-                        {
-                            // Unconditional put-with-new-generation: a concurrent
-                            // markPrepared conditional-remove on the old generation
-                            // will fail and the project will remain dirty, which is
-                            // exactly correct.
-                            DIRTY.put(project.getName(), GENERATION.incrementAndGet());
-                        }
-                    }
-                    return true; // keep walking children
-                });
+                event.getDelta().accept(PreLaunchChangeTracker::visitDelta);
             }
             catch (CoreException e)
             {
