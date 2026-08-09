@@ -10,6 +10,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
@@ -458,7 +459,7 @@ public class RunYaxunitTestsToolTest
             RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
                 "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
                 null, null, ExternalInfobaseChangesPolicy.DEFAULT, "ratchet"); //$NON-NLS-1$
-            RunYaxunitTestsTool.CallPhase phase = new RunYaxunitTestsTool.CallPhase();
+            RunYaxunitTestsTool.CallState phase = new RunYaxunitTestsTool.CallState();
             long budgetMs = 2_000L;
 
             long startedAt = System.currentTimeMillis();
@@ -522,6 +523,171 @@ public class RunYaxunitTestsToolTest
         // e2e/description contract, and the distinction itself is what this asserts.
         assertFalse("the still-running message must not claim the work never started",
             message.contains("did not start")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResultFinishedAfterThePendingStaysFetchable()
+    {
+        // The backstop stops WAITING for the worker, it does not stop the worker. A worker that
+        // finishes afterwards runs the normal success path, which consumes the pending-fetch
+        // marker and hands the report to a holder nobody reads. Without the re-arm the finished
+        // report is unreachable: the next identical call sees no active launch and no pending
+        // fetch, starts a fresh run, and wipes the report directory on the way — the opposite of
+        // "call again to pick up where you left off".
+        String runKey = "ratchet-357-late-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            // The run armed its marker before polling, then the success path consumed it.
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            state.consumeResultFor(runKey);
+            assertFalse("the success path consumes the marker",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+
+            // The backstop answered first: the caller already holds a Pending.
+            assertTrue("the backstop must win the answer when the worker has not published yet",
+                state.claimAnswer());
+
+            // ...and only now does the worker come back with a real report.
+            assertFalse("a worker that lost the race must not claim the answer",
+                state.publishResult());
+            assertTrue("a result finished after the Pending must stay fetchable by the next call",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testADeliveredResultDoesNotLeaveAMarkerBehind()
+    {
+        // The ordinary case must be untouched: when the caller IS listening, the worker owns the
+        // answer and the consumed marker stays consumed. Re-arming here would make the next
+        // identical call serve the same report again instead of re-running the tests.
+        String runKey = "ratchet-357-ontime-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            state.consumeResultFor(runKey);
+
+            assertTrue("the worker must own the answer when it finishes in time",
+                state.publishResult());
+            assertFalse("a delivered result must not be left marked as undelivered",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            assertFalse("the backstop must not answer after the worker already did",
+                state.claimAnswer());
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testNoMarkerIsInventedForACallThatNeverReachedARun()
+    {
+        // A backstop that fires during resolve or preparation consumed no marker, because there
+        // was no run behind the key yet. Re-arming there would let the next call serve a report
+        // left over from an EARLIER run as if it were this one's — a false success, worse than
+        // the lost report the re-arm exists to prevent.
+        String runKey = "ratchet-357-norun-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            assertTrue(state.claimAnswer());
+            assertFalse(state.publishResult());
+            assertFalse("a call that never consumed a marker must not arm one",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testAPendingFetchThatFoundNoReportReleasesOwnership() throws Exception
+    {
+        // Drives the REAL fall-through in tryDeliverPendingResult (empty report directory, so
+        // findJunitXml returns nothing) rather than the helper it calls — a test that only
+        // exercised releaseConsumed() directly would still pass if the call site were deleted.
+        //
+        // The marker this call consumed referred to no report. If ownership survived that, the
+        // call would go on to start a FRESH run and could later re-arm the key on the strength of
+        // a report that never existed — by which time the key belongs to that fresh run, whose
+        // result another caller may already have delivered.
+        String runKey = "ratchet-357-noreport-" + System.nanoTime(); //$NON-NLS-1$
+        java.nio.file.Path emptyDir = java.nio.file.Files.createTempDirectory("yaxunit-ratchet"); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+
+            String delivered = new RunYaxunitTestsTool().tryDeliverPendingResult(runKey, emptyDir,
+                "TestConfiguration", "TestConfiguration.SomeApp", state); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertNull("an empty report directory must fall through to a fresh run", delivered);
+            assertFalse("the consumed marker referred to nothing, so ownership must be released",
+                state.consumed(runKey));
+
+            // ...and the proof that it matters: a later loss must NOT resurrect the key.
+            assertTrue(state.claimAnswer());
+            assertFalse(state.publishResult());
+            assertFalse("a call holding no result must not re-arm the key",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+            java.nio.file.Files.deleteIfExists(emptyDir);
+        }
+    }
+
+    @Test
+    public void testACallThatLostTheRaceForTheMarkerDoesNotResurrectIt()
+    {
+        // Two calls poll the SAME launch: A timed out and is still inside its read, B is
+        // listening and delivers the report, consuming the shared marker. When A finally
+        // finishes it must NOT put the marker back — its remove was a no-op, the result was
+        // already handed over, and resurrecting it would serve the same report twice and
+        // suppress a genuine re-run.
+        String runKey = "ratchet-357-loser-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            RunYaxunitTestsTool.CallState a = new RunYaxunitTestsTool.CallState();
+            RunYaxunitTestsTool.CallState b = new RunYaxunitTestsTool.CallState();
+
+            b.consumeResultFor(runKey);                 // B took it and delivered
+            assertTrue("B owns the consumed result", b.consumed(runKey));
+            assertTrue(b.publishResult());
+
+            a.consumeResultFor(runKey);                 // A's remove finds nothing left
+            assertFalse("A must not claim a result it never took", a.consumed(runKey));
+            assertTrue("A's caller gave up", a.claimAnswer());
+            assertFalse(a.publishResult());
+
+            assertFalse("a delivered result must not be resurrected by the loser",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testTheAnswerIsOwnedByExactlyOneSide()
+    {
+        // Both sides settle through the same compare-and-set, so the result can never be both
+        // returned and reported as still pending.
+        RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+        assertTrue("first claim wins", state.publishResult());
+        assertFalse("second claim loses", state.claimAnswer());
+        assertFalse("and stays lost", state.publishResult());
     }
 
     @Test
