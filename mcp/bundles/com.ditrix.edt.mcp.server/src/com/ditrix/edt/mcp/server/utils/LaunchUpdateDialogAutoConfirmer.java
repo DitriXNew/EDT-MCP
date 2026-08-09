@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTException;
@@ -87,6 +88,12 @@ import com.ditrix.edt.mcp.server.Activator;
  *   <li>The filter is installed only between an {@code arm} and its paired
  *       {@code disarm} (use try/finally around the single {@code launch()} call),
  *       so manual EDT launches outside an MCP tool still prompt normally.</li>
+ *   <li>An {@code arm} additionally sweeps the shells that are ALREADY open and presses the
+ *       ones its matchers claim. The filter only sees {@code Activate}/{@code Show} EVENTS, so
+ *       a modal raised before the arm produces nothing for it to react to — and an
+ *       application-modal shell left unanswered blocks every later launch, with no way for an
+ *       unattended caller to clear it. The sweep uses the same predicate as the filter, so it
+ *       widens nothing: a dialog no armed matcher claims is left for a human.</li>
  *   <li>The two matchers — the "Application update" TITLE matcher and the
  *       code-1003 "Debug session already exists" BODY matcher — are armed
  *       <em>independently</em> via {@link #arm(boolean, boolean)}: the debug path
@@ -121,6 +128,14 @@ import com.ditrix.edt.mcp.server.Activator;
  * owning plug-in) would auto-press unrelated dialogs. The pressed buttons are the
  * conservative choices ("Update then run" / "Keep existing and start new"), so a
  * mis-attributed press performs a safe action, never a destructive one.
+ * <p>
+ * The already-open sweep widens that same window in TIME: a dialog raised before the arm is
+ * pressed too, so one a human happens to be reading can be answered under them. The trade is
+ * taken deliberately, because an application-modal shell left unanswered blocks every launch
+ * anyway — nobody can proceed while it is up, and unattended there is no one to press it. The
+ * predicate is unchanged (only the same conservative buttons on the same matched titles), and
+ * a shell that is not yet visible is skipped so the sweep matches exactly what the filter
+ * would have seen.
  *
  * <h2>Locale</h2>
  * The modal title is the localized {@code ApplicationUiSupport_Application_update}
@@ -1091,6 +1106,189 @@ public final class LaunchUpdateDialogAutoConfirmer
             display.removeFilter(SWT.Activate, toRemove);
             display.removeFilter(SWT.Show, toRemove);
         }
+        sweepAlreadyOpenShells(display);
+    }
+
+    /**
+     * Presses the dialogs an armed matcher claims that are ALREADY on screen.
+     *
+     * <p>The filter this class installs reacts to {@link SWT#Activate} / {@link SWT#Show} —
+     * both are EVENTS, so a modal that was raised and activated BEFORE the arm produces no
+     * event for it to see and is never pressed. That gap is not theoretical: a launch's own
+     * dialog can outlive the window armed around it, and once an application-modal shell is up
+     * unattended, nothing on the wire can clear it — every later call blocks behind it and the
+     * run never recovers, which is exactly the hang reported in #357.
+     *
+     * <p>Deliberately NOT a wider match: it applies the SAME predicate the filter applies
+     * ({@link #claimsDialog}), so it can only press a dialog the filter would have pressed had
+     * it seen the event. A dialog no armed matcher claims — one that genuinely needs a human —
+     * is left exactly as it was.
+     *
+     * <p>Runs on the UI thread ({@link #reconcileFilter} is called through
+     * {@link #reconcileOnUiThread}); the press itself is deferred like the filter's, so it
+     * executes inside the modal's own event loop.
+     *
+     * @param display the workbench display (never {@code null} here)
+     */
+    private static void sweepAlreadyOpenShells(Display display)
+    {
+        Shell[] shells;
+        try
+        {
+            shells = display.getShells();
+        }
+        catch (SWTException e)
+        {
+            return; // display died in the shutdown race — nothing to press
+        }
+        List<IOpenDialog> open = new ArrayList<>();
+        for (Shell shell : shells)
+        {
+            if (shell == null || shell.isDisposed() || !shell.isVisible())
+            {
+                // Visibility keeps the sweep no wider than the filter it stands in for: the
+                // filter reacts to Show/Activate, so a shell that JFace has constructed but not
+                // yet opened is one the filter would not have touched either.
+                continue;
+            }
+            open.add(new IOpenDialog()
+            {
+                @Override
+                public String title()
+                {
+                    return safeShellText(shell);
+                }
+
+                @Override
+                public String body()
+                {
+                    return readDialogBody(shell);
+                }
+
+                @Override
+                public void press()
+                {
+                    Activator.logInfo("Auto-confirmer sweep found an already-open dialog '" //$NON-NLS-1$
+                        + safeShellText(shell) + "' claimed by an armed matcher"); //$NON-NLS-1$
+                    // Deferred like the filter's press, so it runs inside the modal's own loop.
+                    display.asyncExec(() -> pressConfirmButton(shell));
+                }
+            });
+        }
+        sweepOpenDialogs(currentArms(), open);
+    }
+
+    /**
+     * A dialog that is already on screen, reduced to what the sweep decision needs.
+     *
+     * <p>Exists so the sweep is provable without an SWT {@link Shell}: the decision it encodes —
+     * which already-open dialogs get pressed and which are left for a human — is the whole point
+     * of the sweep, and it must not be verifiable only by watching a live workbench.
+     */
+    interface IOpenDialog
+    {
+        /** The dialog's shell title. */
+        String title();
+
+        /** The dialog's message body; consulted only when a body matcher is armed. */
+        String body();
+
+        /** Presses the button an armed matcher selects for this dialog. */
+        void press();
+    }
+
+    /**
+     * Presses every already-open dialog {@code armed} claims, and only those.
+     *
+     * <p>Package-private and pure over {@link IOpenDialog} (test seam). The claim predicate is
+     * literally the one the {@link Display} filter uses, so the sweep can never press something
+     * the filter would have left alone — a widening here would auto-answer a dialog that
+     * genuinely needs a human, which is worse than the hang it is meant to clear.
+     *
+     * @param armed which matchers are armed
+     * @param open the dialogs currently on screen
+     * @return how many were pressed
+     */
+    static int sweepOpenDialogs(ArmState armed, List<IOpenDialog> open)
+    {
+        int pressed = 0;
+        for (IOpenDialog dialog : open)
+        {
+            if (!claims(armed, dialog.title(), dialog::body))
+            {
+                continue;
+            }
+            dialog.press();
+            pressed++;
+        }
+        return pressed;
+    }
+
+    /**
+     * Which matchers are armed at one instant.
+     *
+     * <p>A snapshot, not a live read: the counts change between events, and a decision that
+     * re-read them mid-way could claim a dialog under one matcher and press it under another.
+     */
+    static final class ArmState
+    {
+        final boolean update;
+        final boolean session;
+        final boolean restructure;
+        final boolean conflict;
+
+        ArmState(boolean update, boolean session, boolean restructure, boolean conflict)
+        {
+            this.update = update;
+            this.session = session;
+            this.restructure = restructure;
+            this.conflict = conflict;
+        }
+    }
+
+    /**
+     * Snapshots the live arm counters.
+     *
+     * <p>All four are read under ONE hold of {@code LOCK} (it is reentrant, so the nested
+     * {@link #conflictMatcherArmed()} is free). Reading the conflict arm after releasing the
+     * monitor could return a combination that never existed — the update matcher armed and the
+     * conflict matcher not, after a disarm that dropped both — and the decision would then judge
+     * a dialog against a state no caller ever asked for.
+     */
+    private static ArmState currentArms()
+    {
+        synchronized (LOCK)
+        {
+            // The conflict matcher is armed per policy; an empty arm list means "not armed".
+            return new ArmState(updateArmCount > 0, sessionArmCount > 0, restructureArmCount > 0,
+                conflictMatcherArmed());
+        }
+    }
+
+    /**
+     * Whether an armed matcher claims a dialog with this title/body.
+     *
+     * <p>The single decision shared by the {@link Display} filter and the already-open sweep, so
+     * the two can never diverge — a sweep that claimed more than the filter would widen the
+     * auto-press, and one that claimed less would leave on screen the very dialog it exists for.
+     *
+     * @param armed the arm snapshot to judge against
+     * @param title the dialog shell title (may be {@code null})
+     * @param body supplies the message body; invoked ONLY when a body matcher is armed and no
+     *            armed TITLE matcher already claimed the dialog (the walk is not free)
+     * @return {@code true} when its default (or policy-selected) button should be pressed
+     */
+    private static boolean claims(ArmState armed, String title, Supplier<String> body)
+    {
+        // The body is only read (a widget-tree walk) when the title did not already
+        // match an armed TITLE matcher (update, restructure or conflict) AND the
+        // session matcher is armed — otherwise it is needless work.
+        boolean titleMatched = (armed.update && isTargetTitle(title))
+            || (armed.restructure && isRestructureTitle(title))
+            || (armed.conflict && isConflictTitle(title));
+        boolean needBody = armed.session && !titleMatched;
+        return shouldAutoConfirm(armed.update, armed.session, armed.restructure, armed.conflict,
+            title, needBody ? body.get() : null);
     }
 
     /**
@@ -1133,29 +1331,8 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 return;
             }
-            // Snapshot which matchers are armed RIGHT NOW (the counts can change
-            // between events) so each branch fires only for an armed matcher.
-            boolean updateArmed;
-            boolean sessionArmed;
-            boolean restructureArmed;
-            synchronized (LOCK)
-            {
-                updateArmed = updateArmCount > 0;
-                sessionArmed = sessionArmCount > 0;
-                restructureArmed = restructureArmCount > 0;
-            }
-            // The conflict matcher is armed per policy; a null choice means "not armed".
-            boolean conflictArmed = conflictMatcherArmed();
-            // The body is only read (a widget-tree walk) when the title did not already
-            // match an armed TITLE matcher (update, restructure or conflict) AND the
-            // session matcher is armed — otherwise it is needless work.
-            boolean titleMatched = (updateArmed && isTargetTitle(title))
-                || (restructureArmed && isRestructureTitle(title))
-                || (conflictArmed && isConflictTitle(title));
-            boolean needBody = sessionArmed && !titleMatched;
-            String body = needBody ? readDialogBody(shell) : null;
-            if (!shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, conflictArmed, title,
-                body))
+            // The SAME decision the already-open sweep applies — see claims / sweepOpenDialogs.
+            if (!claims(currentArms(), title, () -> readDialogBody(shell)))
             {
                 return;
             }

@@ -21,8 +21,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.debug.core.ILaunch;
@@ -369,5 +373,61 @@ public class LaunchLifecycleUtilsPrepareTest
         assertEquals("the stale launch must still be swept", 1, result.getTerminatedCount());
         verify(runtimeLaunch, atLeastOnce()).terminate();
         verify(mgr, never()).update(any(), any(), any(), any());
+    }
+
+    // ============ #357 — the published phase must describe what is running NOW ============
+
+    @Test
+    public void testEachStageIsPublishedOnEntryNotAfterItFinished() throws Exception
+    {
+        // #357: the phase a Pending reports is the only thing a polling caller can act on, and it
+        // was fiction — stamped "recompute" before the whole chain and "db-update" only AFTER the
+        // chain had already returned. So every Pending said "recompute" whatever the server was
+        // doing, and "db-update" was reachable only when there was nothing left to wait for.
+        //
+        // Order alone would not catch a label written on EXIT (the sequence is the same), so the
+        // update mock records what the phase said WHILE the update was running.
+        List<String> stages = new ArrayList<>();
+        AtomicReference<String> phaseDuringUpdate = new AtomicReference<>();
+
+        IApplication app = mock(IApplication.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplication(any(IProject.class), eq(RUNTIME_APP_ID)))
+            .thenReturn(Optional.of(app));
+        when(mgr.getUpdateState(app)).thenAnswer(inv -> {
+            phaseDuringUpdate.set(stages.isEmpty() ? null : stages.get(stages.size() - 1));
+            return ApplicationUpdateState.UPDATED;
+        });
+
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        when(launchManager.getLaunches()).thenReturn(new ILaunch[0]);
+
+        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mgr, 2, null,
+            ExternalInfobaseChangesPolicy.DEFAULT, stages::add);
+
+        assertTrue("auto-chain must succeed: " + result.getError(), result.isOk());
+        assertEquals("every stage must be published, in the order it runs",
+            Arrays.asList(LaunchLifecycleUtils.PHASE_TERMINATE,
+                LaunchLifecycleUtils.PHASE_RECOMPUTE, LaunchLifecycleUtils.PHASE_DB_UPDATE),
+            stages);
+        assertEquals("the db-update label must be published BEFORE the update runs, not after it "
+            + "finished — a caller told 'recompute' while the infobase is being written is being "
+            + "pointed at the wrong stage",
+            LaunchLifecycleUtils.PHASE_DB_UPDATE, phaseDuringUpdate.get());
+    }
+
+    @Test
+    public void testPhaseSinkIsOptionalForCallersThatDoNotReportProgress() throws Exception
+    {
+        // The 7-argument overload (debug_launch and friends) must keep working unchanged.
+        ILaunchManager launchManager = mock(ILaunchManager.class);
+        when(launchManager.getLaunches()).thenReturn(new ILaunch[0]);
+
+        PreLaunchResult result = LaunchLifecycleUtils.prepareForFreshLaunch(
+            launchManager, mockOpenProject(), RUNTIME_APP_ID, mockUpToDateAppManager(), 2, null);
+
+        assertTrue("a caller without a phase sink must still succeed: " + result.getError(),
+            result.isOk());
     }
 }

@@ -566,6 +566,126 @@ public class LaunchUpdateDialogAutoConfirmerTest
             LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(true, true, false, "Restructure data", null));
     }
 
+    // ============ #357 — dialogs already on screen when the arm happens ============
+
+    /** A recorded {@link LaunchUpdateDialogAutoConfirmer.IOpenDialog} with no SWT behind it. */
+    private static final class FakeDialog implements LaunchUpdateDialogAutoConfirmer.IOpenDialog
+    {
+        private final String title;
+        private final String body;
+        boolean pressed;
+        int bodyReads;
+
+        FakeDialog(String title, String body)
+        {
+            this.title = title;
+            this.body = body;
+        }
+
+        @Override
+        public String title()
+        {
+            return title;
+        }
+
+        @Override
+        public String body()
+        {
+            bodyReads++;
+            return body;
+        }
+
+        @Override
+        public void press()
+        {
+            pressed = true;
+        }
+    }
+
+    @Test
+    public void testSweepPressesADialogThatWasAlreadyOpenWhenTheArmHappened()
+    {
+        // #357: the Display filter reacts to Activate/Show EVENTS only, so a modal raised
+        // BEFORE the arm produces nothing for it to see. Once such an application-modal shell is
+        // up unattended nothing on the wire can clear it — every later launch blocks behind it.
+        // The sweep is what makes that state recoverable.
+        FakeDialog update = new FakeDialog("Application update", null); //$NON-NLS-1$
+        int pressed = LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+            new LaunchUpdateDialogAutoConfirmer.ArmState(true, false, true, false),
+            java.util.Arrays.asList(update));
+
+        assertEquals("the already-open update modal must be pressed", 1, pressed);
+        assertTrue("the already-open update modal must be pressed", update.pressed);
+    }
+
+    @Test
+    public void testSweepLeavesADialogNoArmedMatcherClaims()
+    {
+        // The sweep must not be wider than the filter: pressing a dialog that genuinely needs a
+        // human is worse than the hang it clears. Same arm state as above, unrelated dialog.
+        FakeDialog unrelated = new FakeDialog("Delete configuration?", "This cannot be undone"); //$NON-NLS-1$ //$NON-NLS-2$
+        FakeDialog restructure = new FakeDialog("Restructure data", null); //$NON-NLS-1$
+        int pressed = LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+            new LaunchUpdateDialogAutoConfirmer.ArmState(true, false, true, false),
+            java.util.Arrays.asList(unrelated, restructure));
+
+        assertEquals("only the claimed dialog may be pressed", 1, pressed);
+        assertFalse("a dialog no armed matcher claims must be left for a human",
+            unrelated.pressed);
+        assertTrue("the armed restructure modal must be pressed", restructure.pressed);
+    }
+
+    @Test
+    public void testSweepPressesNothingWhenNothingIsArmed()
+    {
+        FakeDialog update = new FakeDialog("Application update", null); //$NON-NLS-1$
+        int pressed = LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+            new LaunchUpdateDialogAutoConfirmer.ArmState(false, false, false, false),
+            java.util.Arrays.asList(update));
+
+        assertEquals("an un-armed confirmer must press nothing", 0, pressed);
+        assertFalse("an un-armed confirmer must press nothing", update.pressed);
+    }
+
+    @Test
+    public void testGuideForTheSweepIsTheSamePredicateTheFilterUses()
+    {
+        // The sweep and the filter must claim EXACTLY the same dialogs. Anything the sweep
+        // claimed and the filter did not would be a widening of the auto-press.
+        String[] titles = {"Application update", "Restructure data", //$NON-NLS-1$ //$NON-NLS-2$
+            "Infobase configuration changes", "Question", "Something else"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String title : titles)
+        {
+            FakeDialog dialog = new FakeDialog(title, null);
+            boolean sweepClaims = LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+                new LaunchUpdateDialogAutoConfirmer.ArmState(true, false, true, false),
+                java.util.Arrays.asList(dialog)) == 1;
+            boolean filterClaims = LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(
+                true, false, true, false, title, null);
+            assertEquals("sweep and filter must agree on '" + title + "'", filterClaims,
+                sweepClaims);
+        }
+    }
+
+    @Test
+    public void testSweepReadsTheBodyOnlyWhenABodyMatcherNeedsIt()
+    {
+        // The body walk is a widget-tree traversal per shell; the sweep runs on the UI thread on
+        // every arm, so it must keep the filter's laziness rather than reading every dialog.
+        FakeDialog claimedByTitle = new FakeDialog("Application update", "irrelevant"); //$NON-NLS-1$ //$NON-NLS-2$
+        LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+            new LaunchUpdateDialogAutoConfirmer.ArmState(true, true, true, false),
+            java.util.Arrays.asList(claimedByTitle));
+        assertEquals("a title match must not pay for a body walk", 0, claimedByTitle.bodyReads);
+
+        FakeDialog needsBody = new FakeDialog("Question", "irrelevant"); //$NON-NLS-1$ //$NON-NLS-2$
+        LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+            new LaunchUpdateDialogAutoConfirmer.ArmState(true, true, true, false),
+            java.util.Arrays.asList(needsBody));
+        assertEquals("an armed body matcher with no title match must read the body", 1,
+            needsBody.bodyReads);
+    }
+
     @Test
     public void testTwoArgArmAlsoArmsRestructureWhenUpdateArmed()
     {

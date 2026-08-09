@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -100,6 +101,23 @@ public final class LaunchLifecycleUtils
     private static final long INFLIGHT_EXPIRY_MS = 10 * 60 * 1000L; // 10 min
 
     /**
+     * Phase label published while the prep is sweeping live / stale launches of the target
+     * application.
+     *
+     * <p>The three labels are the ONLY values {@link #prepareForFreshLaunch} publishes, and it
+     * publishes each one as it ENTERS that stage. That direction matters: a label written after
+     * a stage finished names work that is already over, which is exactly what a caller reading
+     * "what is it doing right now?" must not be told.
+     */
+    public static final String PHASE_TERMINATE = "terminate"; //$NON-NLS-1$
+
+    /** Phase label published while the prep is force-recomputing the scoped projects. */
+    public static final String PHASE_RECOMPUTE = "recompute"; //$NON-NLS-1$
+
+    /** Phase label published while the prep is updating the infobase. */
+    public static final String PHASE_DB_UPDATE = "db-update"; //$NON-NLS-1$
+
+    /**
      * Live state of a background pre-launch preparation job keyed by the same
      * {@code project\u0000applicationId} string as {@link #KEY_LOCKS}.
      *
@@ -116,8 +134,16 @@ public final class LaunchLifecycleUtils
      */
     public static final class PrepInFlight
     {
-        /** Human-readable phase label set by the background job. */
-        public volatile String phase = "recompute"; //$NON-NLS-1$
+        /**
+         * Human-readable phase label, published by {@link #prepareForFreshLaunch} as it
+         * ENTERS each stage (see {@link #PHASE_TERMINATE} / {@link #PHASE_RECOMPUTE} /
+         * {@link #PHASE_DB_UPDATE}).
+         *
+         * <p>The initial value is the first stage the prep enters, so a reader that wins
+         * the race with the job's own first publish still names a phase the prep is
+         * genuinely in — never one it has not reached.
+         */
+        public volatile String phase = PHASE_TERMINATE;
         /** Wall-clock time the job started (used to compute elapsed seconds). */
         public final long startedAtMs;
         /** Set to {@code true} by the background job when preparation completed. */
@@ -148,10 +174,22 @@ public final class LaunchLifecycleUtils
             return (System.currentTimeMillis() - startedAtMs) / 1000L;
         }
 
-        /** {@code true} when the entry is older than {@link #INFLIGHT_EXPIRY_MS}. */
+        /**
+         * {@code true} when this entry may be discarded and replaced by a fresh preparation:
+         * it has FINISHED and is older than {@link #INFLIGHT_EXPIRY_MS}.
+         *
+         * <p>Age alone is not the question. The body that owns an entry completes it in a
+         * {@code finally} — even an {@link Error} escaping the preparation counts the latch
+         * down — so an entry that is not {@code done} means the work is genuinely still
+         * running. Replacing it would schedule a SECOND preparation that can only queue behind
+         * the per-infobase monitor the first one holds, and a caller polling a legitimately
+         * long recompute (minutes to an hour on a large configuration) would keep stacking
+         * them up. Waiting is the correct answer there, and the caller's own deadline — not
+         * this expiry — is what keeps the CALL bounded (#357).
+         */
         public boolean isExpired()
         {
-            return System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
+            return done && System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
         }
     }
 
@@ -1904,6 +1942,39 @@ public final class LaunchLifecycleUtils
             IProject project, String applicationId, IApplicationManager appManager,
             int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy)
     {
+        return prepareForFreshLaunch(launchManager, project, applicationId, appManager,
+            terminateTimeoutSeconds, updateScope, policy, phase -> {
+                // No sink: the caller does not report progress.
+            });
+    }
+
+    /**
+     * Same contract as
+     * {@link #prepareForFreshLaunch(ILaunchManager, IProject, String, IApplicationManager, int, String, ExternalInfobaseChangesPolicy)},
+     * additionally publishing the stage it is entering to {@code phaseSink}.
+     *
+     * <p>The prep runs for minutes on a real configuration while the caller can only hold the
+     * MCP transport open for seconds, so "what is it doing right now?" is the one piece of
+     * information a polling caller can act on. The sink is therefore called on ENTRY to each
+     * stage ({@link #PHASE_TERMINATE} → {@link #PHASE_RECOMPUTE} → {@link #PHASE_DB_UPDATE}),
+     * never after one completes: a label published on exit describes work that is already
+     * finished and would have the reader waiting on the wrong thing.
+     *
+     * @param launchManager the debug-platform launch manager
+     * @param project the launch (configuration) project
+     * @param applicationId the application the launch targets
+     * @param appManager the EDT application manager
+     * @param terminateTimeoutSeconds how long to wait for each swept launch to die
+     * @param updateScope the caller's update scope (see {@link #resolveUpdateScope})
+     * @param policy how to answer the external-changes conflict modal (may be {@code null})
+     * @param phaseSink receives the label of each stage as it is entered; never {@code null}
+     * @return the prep result
+     */
+    public static PreLaunchResult prepareForFreshLaunch(ILaunchManager launchManager, // NOSONAR pass-through signature; the sink is the 8th value, not a new concern
+            IProject project, String applicationId, IApplicationManager appManager,
+            int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
+            Consumer<String> phaseSink)
+    {
         if (launchManager == null)
         {
             return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
@@ -1935,6 +2006,7 @@ public final class LaunchLifecycleUtils
             // permanently block future auto-chains.
             OWNED_LAUNCHES.removeIf(ILaunch::isTerminated);
 
+            phaseSink.accept(PHASE_TERMINATE);
             TerminationOutcome outcome = new TerminationOutcome();
             terminateMatchingLiveLaunches(launchManager, project, applicationId,
                 terminateTimeoutSeconds, outcome);
@@ -1950,7 +2022,7 @@ public final class LaunchLifecycleUtils
             }
 
             return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope, policy,
-                outcome.terminated);
+                outcome.terminated, phaseSink);
         }
     }
 
@@ -2081,10 +2153,11 @@ public final class LaunchLifecycleUtils
      * the inline tail produced.
      *
      * @param terminated the swept-launch count accumulated by the terminate passes
+     * @param phaseSink receives the label of each stage as it is entered
      */
-    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId,
+    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId, // NOSONAR pass-through signature; the sink is the 7th value, not a new concern
             IApplicationManager appManager, String updateScope, ExternalInfobaseChangesPolicy policy,
-            int terminated)
+            int terminated, Consumer<String> phaseSink)
     {
         // Selectively force a derived-data recompute of projects that have
         // had file changes since the last successful prepare (dirty projects).
@@ -2101,6 +2174,7 @@ public final class LaunchLifecycleUtils
         // markPrepared on the success paths — a change arriving DURING the
         // recompute bumps the generation counter; the conditional remove in
         // markPrepared then fails and the project stays dirty (stale-.cfe fix).
+        phaseSink.accept(PHASE_RECOMPUTE);
         List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
         PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects);
 
@@ -2150,6 +2224,7 @@ public final class LaunchLifecycleUtils
         // The blocking-modal arming lives in performUpdateAndAwaitApplied - the single point
         // where the update is actually issued - so every caller of the pre-launch update is
         // covered, not just this one; see the comment there.
+        phaseSink.accept(PHASE_DB_UPDATE);
         Optional<String> updateErr =
             updateApplicationIfNeeded(project, applicationId, appManager, true, policy);
         if (updateErr.isPresent())

@@ -782,12 +782,22 @@ public class PreLaunchChangeTrackerTest
     }
 
     @Test
-    public void testPrepInFlightExpiredAfterExpiryTime()
+    public void testPrepInFlightExpiredAfterExpiryTimeOnceItHasFinished()
     {
         // Seed with a start time well in the past (> INFLIGHT_EXPIRY_MS = 10 min).
         long veryOld = System.currentTimeMillis() - (11 * 60 * 1000L);
         LaunchLifecycleUtils.PrepInFlight entry = new LaunchLifecycleUtils.PrepInFlight(veryOld);
-        assertTrue("an entry older than 10 min must be expired", entry.isExpired());
+
+        // #357: age alone no longer expires an entry. A preparation that is STILL RUNNING must
+        // survive — its owner completes it in a finally, so "not done" means the work is really
+        // in flight, and replacing it would only queue a second job behind the per-infobase
+        // monitor the first one holds (a caller polling a legitimately long recompute would
+        // stack up one more on every retry).
+        assertFalse("an old but still-running preparation must NOT be replaced", entry.isExpired());
+
+        entry.done = true;
+        assertTrue("an entry older than 10 min that has FINISHED must be expired",
+            entry.isExpired());
     }
 
     @Test

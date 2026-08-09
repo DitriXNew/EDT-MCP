@@ -23,6 +23,7 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
 
@@ -359,15 +360,18 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
-    public void testDescriptionDocuments25sPendingBudget()
+    public void testDescriptionDocumentsTheClampedWindowAndThePhases()
     {
-        // Ratchet: the description must mention the 25s pre-launch budget and
-        // that the tool returns Pending when it is exceeded.
+        // Ratchet: the description must state the ceiling the code enforces (a window the
+        // transport cannot deliver is a promise the tool cannot keep, #357) and name the phases
+        // a Pending can report, since that label is the caller's only signal.
         String desc = new RunYaxunitTestsTool().getDescription();
-        assertTrue("description must mention the 25s budget",
-            desc.contains("25s")); //$NON-NLS-1$
-        assertTrue("description must say Pending is returned when budget exceeded",
-            desc.contains("Pending")); //$NON-NLS-1$
+        assertTrue("description must state the maximum window",
+            desc.contains(String.valueOf(RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS)));
+        assertTrue("description must say a larger timeout is clamped",
+            desc.contains("clamped")); //$NON-NLS-1$
+        assertTrue("description must say Pending names the phase",
+            desc.contains("Pending") && desc.contains("phase")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -395,6 +399,212 @@ public class RunYaxunitTestsToolTest
             guide.contains("background")); //$NON-NLS-1$
         assertTrue("guide must document the pending-retry contract for prep",
             guide.contains("same arguments")); //$NON-NLS-1$
+    }
+
+    // ============ #357 — the call never outlives the MCP transport ============
+
+    @Test
+    public void testTimeoutIsClampedToTheTransportSafeCeiling()
+    {
+        // #357: the parameter used to accept any window while the transport cut the call at
+        // ~60s, so `timeout: 240` bought a bare "operation timed out" instead of an answer.
+        // A caller may ask for LESS, never for more.
+        assertEquals("a window above the ceiling must be clamped, not honoured",
+            RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS, RunYaxunitTestsTool.clampTimeout(240));
+        assertEquals("the ceiling itself is accepted unchanged",
+            RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS,
+            RunYaxunitTestsTool.clampTimeout(RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS));
+        assertEquals("a shorter probe window is honoured as asked", 5,
+            RunYaxunitTestsTool.clampTimeout(5));
+        assertEquals("a non-positive window still waits at least one second", 1,
+            RunYaxunitTestsTool.clampTimeout(0));
+        assertTrue("the ceiling must sit BELOW the ~60s transport limit it exists to respect",
+            RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS < 60);
+    }
+
+    @Test
+    public void testRemainingSecondsFloorsAtZeroAndNeverOvershootsTheDeadline()
+    {
+        long now = System.currentTimeMillis();
+        assertEquals("a deadline already past leaves no time to wait", 0,
+            RunYaxunitTestsTool.remainingSeconds(now - 5_000L));
+        assertEquals("a deadline already past leaves no millis to wait", 0L,
+            RunYaxunitTestsTool.remainingMillis(now - 5_000L));
+        int remaining = RunYaxunitTestsTool.remainingSeconds(now + 10_000L);
+        assertTrue("the remainder must not exceed the distance to the deadline",
+            remaining <= 10 && remaining >= 9);
+    }
+
+    @Test
+    public void testPreparationWaitIsCappedByTheCallDeadlineNotTheFullBudget() throws Exception
+    {
+        // THE #357 guarantee, driven directly: a repeat call joins a preparation that is already
+        // running and must come back inside the CALLER's window. Before the fix the wait always
+        // took the full 25s preparation budget — spent AFTER resolution — so the call routinely
+        // outlived the transport and the client saw nothing at all.
+        //
+        // The entry's latch is never counted down, so the ONLY thing that can end this wait is
+        // the deadline. The test therefore also carries its own ceiling: an unbounded wait fails
+        // it by the elapsed assertion rather than hanging the suite.
+        String prepKey = "ratchet-357-" + System.nanoTime(); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+        // Pretend the job is already running: the CAS is spent, so no Job is scheduled and this
+        // call is a pure waiter — exactly the "second identical call" of the bug report.
+        entry.started.set(true);
+        entry.phase = LaunchLifecycleUtils.PHASE_DB_UPDATE;
+        LaunchLifecycleUtils.PREP_INFLIGHT.put(prepKey, entry);
+        try
+        {
+            RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+                "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+                null, null, ExternalInfobaseChangesPolicy.DEFAULT, "ratchet"); //$NON-NLS-1$
+            RunYaxunitTestsTool.CallPhase phase = new RunYaxunitTestsTool.CallPhase();
+            long budgetMs = 2_000L;
+
+            long startedAt = System.currentTimeMillis();
+            String pending = RunYaxunitTestsTool.awaitPreparedOrPending(prepKey, req,
+                new PreLaunchResult[1], System.currentTimeMillis() + budgetMs, phase);
+            long elapsedMs = System.currentTimeMillis() - startedAt;
+
+            assertNotNull("an unfinished preparation must answer with Pending, never nothing",
+                pending);
+            assertTrue("Pending must be a Pending", pending.contains("**Pending:**")); //$NON-NLS-1$
+            assertTrue("the wait must end on the CALL's deadline, not the 25s preparation budget: "
+                + "waited " + elapsedMs + "ms",
+                elapsedMs < LaunchLifecycleUtils.PRELAUNCH_BUDGET_MS);
+            assertTrue("the wait must not end before the caller's own window either: waited "
+                + elapsedMs + "ms", elapsedMs >= budgetMs - 250L);
+            assertTrue("the Pending must name the LIVE preparation phase with the SAME namespaced "
+                + "label the description and guide enumerate — a caller matching on "
+                + "`prep:db-update` must not have to know some Pendings drop the prefix",
+                pending.contains("prep:" + LaunchLifecycleUtils.PHASE_DB_UPDATE));
+            assertEquals("the call phase must track the preparation's live stage",
+                "prep:" + LaunchLifecycleUtils.PHASE_DB_UPDATE, phase.label());
+        }
+        finally
+        {
+            LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey);
+        }
+    }
+
+    @Test
+    public void testARunningPreparationIsNeverEvictedAndDuplicated()
+    {
+        // A preparation is expired ONLY once it has finished. Discarding a RUNNING one would
+        // schedule a second job that can merely queue behind the per-infobase monitor the first
+        // one holds — and a caller polling a legitimately long recompute (the guide calls forty
+        // minutes normal) would stack up one more on every retry.
+        PrepInFlight running = new PrepInFlight(System.currentTimeMillis() - (60L * 60L * 1000L));
+        assertFalse("an hour-old preparation that is still running must NOT be replaced",
+            running.isExpired());
+
+        running.done = true;
+        assertTrue("once finished, an old entry may be discarded so the next call starts fresh",
+            running.isExpired());
+
+        PrepInFlight fresh = new PrepInFlight(System.currentTimeMillis());
+        fresh.done = true;
+        assertFalse("a just-finished entry is still fetchable and must not be discarded yet",
+            fresh.isExpired());
+    }
+
+    @Test
+    public void testWorkThatNeverStartedIsReportedAsAnErrorNotAsPending()
+    {
+        // BoundedJob distinguishes "still running" from "never left the scheduler". Reporting the
+        // second as Pending would be a lie in the one sentence the caller uses to decide whether
+        // to wait: nothing was launched, so there is nothing to wait for.
+        String message = RunYaxunitTestsTool.buildStalledPendingMessage("spawn", 12);
+        assertTrue("the still-running case stays a Pending", message.contains("**Pending:**")); //$NON-NLS-1$
+        assertTrue("and says the work was not cancelled",
+            message.contains("nothing was cancelled")); //$NON-NLS-1$
+        // The never-ran case is a separate branch in runBounded; its wording is pinned by the
+        // e2e/description contract, and the distinction itself is what this asserts.
+        assertFalse("the still-running message must not claim the work never started",
+            message.contains("did not start")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPrepPhaseLabelNamespacesTheBackgroundStage()
+    {
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+        entry.phase = LaunchLifecycleUtils.PHASE_RECOMPUTE;
+        assertEquals("prep:" + LaunchLifecycleUtils.PHASE_RECOMPUTE,
+            RunYaxunitTestsTool.prepPhaseLabel(entry));
+        entry.phase = LaunchLifecycleUtils.PHASE_TERMINATE;
+        assertEquals("prep:" + LaunchLifecycleUtils.PHASE_TERMINATE,
+            RunYaxunitTestsTool.prepPhaseLabel(entry));
+        assertEquals("a missing entry must still name a phase, never null",
+            "prep:" + LaunchLifecycleUtils.PHASE_RECOMPUTE,
+            RunYaxunitTestsTool.prepPhaseLabel(null));
+    }
+
+    @Test
+    public void testStalledPendingNamesThePhaseAndSaysTheWorkIsStillRunning()
+    {
+        String message = RunYaxunitTestsTool.buildStalledPendingMessage("prep:recompute", 47);
+        assertTrue("the message replacing the transport error must be a Pending",
+            message.contains("**Pending:**")); //$NON-NLS-1$
+        assertTrue("it must name the phase — that is the whole information the bare timeout lacked",
+            message.contains("prep:recompute")); //$NON-NLS-1$
+        assertTrue("it must report how long the call waited", message.contains("47s")); //$NON-NLS-1$
+        assertTrue("it must say the work was NOT cancelled",
+            message.contains("nothing was cancelled")); //$NON-NLS-1$
+        assertTrue("it must tell the caller how to keep waiting",
+            message.contains("same arguments")); //$NON-NLS-1$
+        assertTrue("it must name the one case where retrying is pointless",
+            message.contains("modal dialog")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPrepJobBodyDoesNotStampAPhaseTheChainNeverReached()
+    {
+        // The phase used to be stamped by this body — "recompute" before the chain and
+        // "db-update" AFTER it returned — so every Pending said "recompute" whatever the server
+        // was doing, and "db-update" only ever appeared once there was nothing left to wait for.
+        // A null launch manager makes the chain fail before any stage runs; the phase must
+        // therefore still be the first stage, never the last one.
+        RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+            "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, ExternalInfobaseChangesPolicy.DEFAULT, "phase-ratchet"); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+
+        RunYaxunitTestsTool.runPrepJobBody(entry, req, new PreLaunchResult[1]);
+
+        assertNotNull("a null launch manager must surface a prep error", entry.error);
+        assertEquals("a chain that never started a stage must not advertise the LAST one",
+            LaunchLifecycleUtils.PHASE_TERMINATE, entry.phase);
+    }
+
+    @Test
+    public void testGuideDocumentsThePreFlightOrderAndTheStuckPhaseSignal()
+    {
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must spell out the pre-flight order the issue asked for",
+            guide.contains("get_applications") && guide.contains("update_database")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must state the clamped whole-call window",
+            guide.contains("45")); //$NON-NLS-1$
+        assertTrue("guide must list the phases a Pending can report",
+            guide.contains("prep:recompute") && guide.contains("prep:db-update")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must teach that an ADVANCING phase proves progress",
+            guide.contains("phase that ADVANCES")); //$NON-NLS-1$
+        assertTrue("guide must NOT claim a stalled phase proves a block — it cannot tell the two "
+            + "apart, and saying otherwise is a claim wider than the code",
+            guide.contains("when a phase stops advancing, look at EDT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDocsDoNotClaimUpdateBeforeLaunchTrueIsDialogFree()
+    {
+        // The old wording said dialogs "may appear and block" only under updateBeforeLaunch=false,
+        // which reads as a guarantee for true — and true is exactly what ended in a blocking
+        // dialog in #357. Both surfaces must now say what the code can actually promise.
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must state that true does not make dialogs impossible",
+            guide.contains("Dialogs are not impossible")); //$NON-NLS-1$
+        String schema = new RunYaxunitTestsTool().getInputSchema();
+        assertTrue("the updateBeforeLaunch schema text must not promise more than the code does",
+            schema.contains("unlikely, NOT impossible")); //$NON-NLS-1$
     }
 
     // ============ #230 — the async prep body brackets the auth-dialog suppressor ============
