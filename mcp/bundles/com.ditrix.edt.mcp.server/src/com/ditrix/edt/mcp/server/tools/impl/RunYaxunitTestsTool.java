@@ -128,8 +128,9 @@ public class RunYaxunitTestsTool implements IMcpTool
                + "Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once " //$NON-NLS-1$
                + "so you can call wait_for_break. " //$NON-NLS-1$
                + "The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects " //$NON-NLS-1$
-               + "that changed since the last prepared run; the first call after EDT starts always " //$NON-NLS-1$
-               + "recomputes fully. If recompute+update exceeds 25s the tool returns **Pending** " //$NON-NLS-1$
+               + "whose sources changed since their last prepared run; that mark survives an EDT " //$NON-NLS-1$
+               + "restart, so an unchanged project is not recomputed at all. " //$NON-NLS-1$
+               + "If recompute+update exceeds 25s the tool returns **Pending** " //$NON-NLS-1$
                + "immediately — call again with the same arguments; preparation continues in the background. " //$NON-NLS-1$
                + "Requires an existing runtime-client launch configuration " //$NON-NLS-1$
                + "and the YAXUnit extension installed in the infobase. " //$NON-NLS-1$

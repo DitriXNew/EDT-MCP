@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,6 +42,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
+import com.ditrix.edt.mcp.server.utils.PreLaunchChangeTracker.PrepareSnapshot;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -592,7 +592,16 @@ public final class LaunchLifecycleUtils
             {
                 continue;
             }
-            forceRecompute(project);
+            if (!forceRecompute(project))
+            {
+                // The recompute did not run (no EDT service, or it threw and was
+                // swallowed above). Keep the project dirty so the preparation
+                // cannot certify content that was never regenerated: markPrepared's
+                // conditional remove then fails and the marker is erased.
+                PreLaunchChangeTracker.markDirty(project.getName());
+                Activator.logInfo("Pre-launch: recompute did not run for " //$NON-NLS-1$
+                    + project.getName() + " - it stays dirty for the next launch"); //$NON-NLS-1$
+            }
         }
 
         // Phase 2: drain the workspace-wide build job families once. This is not
@@ -619,46 +628,57 @@ public final class LaunchLifecycleUtils
      * {@link RuntimeException} is logged and swallowed — a recompute failure must
      * never abort the launch hot path.
      *
+     * <p>It must, however, never be MISTAKEN FOR A DONE recompute: the caller marks
+     * a project whose recompute did not run as dirty again, so the preparation
+     * cannot record this content state as prepared and the next launch retries.
+     * Without that, a swallowed failure plus a lagging {@code UPDATED} would store a
+     * "prepared" marker for sources that were never regenerated, and every later
+     * launch — in this session and in every future one — would ship the stale
+     * {@code .cfe}.
+     *
      * @param project an open project (callers guard {@code null}/closed projects)
+     * @return {@code true} when {@code recomputeAll()} was actually issued
      */
-    private static void forceRecompute(IProject project)
+    private static boolean forceRecompute(IProject project)
     {
         try
         {
             if (Activator.getDefault() == null)
             {
-                return;
+                return false;
             }
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
             if (dtProjectManager == null)
             {
-                return;
+                return false;
             }
             IDtProject dtProject = dtProjectManager.getDtProject(project);
             if (dtProject == null)
             {
-                return;
+                return false;
             }
             IDerivedDataManagerProvider ddProvider =
                 Activator.getDefault().getDerivedDataManagerProvider();
             if (ddProvider == null)
             {
-                return;
+                return false;
             }
             IDerivedDataManager ddManager = ddProvider.get(dtProject);
             if (ddManager == null)
             {
-                return;
+                return false;
             }
             Activator.logInfo("Pre-launch: forcing derived-data recompute for project: " //$NON-NLS-1$
                 + project.getName());
             ddManager.recomputeAll();
+            return true;
         }
         catch (RuntimeException e)
         {
             // A recompute failure must never abort the launch — log and move on.
             Activator.logError("Error forcing derived-data recompute for " //$NON-NLS-1$
                 + project.getName(), e);
+            return false;
         }
     }
 
@@ -672,19 +692,22 @@ public final class LaunchLifecycleUtils
      * <p>This is the fix for the performance regression: on a large configuration,
      * unconditional {@code recomputeAll()} for every project on every
      * {@code run_yaxunit_tests} call costs 2–8 minutes. After a successful prepare,
-     * projects are marked clean — no recompute until a file change is detected.
-     * The stale-{@code .cfe} safety guarantee is preserved: a project is dirty on
-     * the first call after plugin start, and again whenever the workspace listener
-     * observes a non-derived file change in that project.
+     * the content state that was prepared is recorded ON THE PROJECT — so no
+     * recompute happens until the sources actually differ from it, not merely until
+     * the plugin is restarted. The stale-{@code .cfe} safety guarantee is preserved:
+     * a project is dirty whenever its content differs from the prepared state (or
+     * none was ever recorded), and whenever the workspace listener observes a
+     * non-derived file change in it.
      *
      * <h3>Ordering-race fix</h3>
-     * <p>The dirty snapshot ({@link PreLaunchChangeTracker#snapshotDirty}) is taken
-     * BEFORE the recompute begins and returned to the caller. The caller passes it to
-     * {@link PreLaunchChangeTracker#markPrepared(Collection, Map)} only on success
-     * paths, so a file change that arrives DURING the recompute increments the
-     * generation counter in {@link PreLaunchChangeTracker#DIRTY} to a value higher
+     * <p>The snapshot ({@link PreLaunchChangeTracker#snapshot}) is taken BEFORE the
+     * recompute begins and returned to the caller. The caller passes it to
+     * {@link PreLaunchChangeTracker#markPrepared(Collection, PrepareSnapshot)} only
+     * on success paths, so a file change that arrives DURING the recompute increments
+     * the generation counter in {@code PreLaunchChangeTracker} to a value higher
      * than the snapshot; the subsequent conditional remove in {@code markPrepared}
-     * fails and the project remains dirty for the next launch.
+     * fails, the project remains dirty for the next launch, and the unfinished
+     * content state is not recorded as prepared.
      *
      * <p>This method does NOT call {@code markPrepared} itself — that is the
      * caller's ({@link #prepareForFreshLaunch}) responsibility, and only on the
@@ -692,9 +715,9 @@ public final class LaunchLifecycleUtils
      *
      * <p>Sequence:
      * <ol>
-     *   <li>Take the dirty snapshot (generation-keyed) BEFORE scheduling any
-     *       recompute.</li>
-     *   <li>Partition scope: dirty (per {@link PreLaunchChangeTracker#isDirty}) vs.
+     *   <li>Take the snapshot (dirty verdict + content fingerprint + generation)
+     *       BEFORE scheduling any recompute.</li>
+     *   <li>Partition scope: dirty (per {@link PrepareSnapshot#isDirty}) vs.
      *       clean.</li>
      *   <li>Dirty projects: {@link #recomputeAndSettle(Collection)} — full
      *       forced recompute + workspace build drain + per-project derived-data
@@ -714,17 +737,17 @@ public final class LaunchLifecycleUtils
      *
      * @param projects scope after {@link #resolveUpdateScope} has been applied
      *            (may be {@code null} or empty — returns empty snapshot)
-     * @return the dirty snapshot taken before the recompute; pass it to
-     *         {@link PreLaunchChangeTracker#markPrepared(Collection, Map)} on the
-     *         success path (the caller, not this method, is responsible for that
-     *         call so {@code markPrepared} is only invoked on genuine successes)
+     * @return the snapshot taken before the recompute; pass it to
+     *         {@link PreLaunchChangeTracker#markPrepared(Collection, PrepareSnapshot)}
+     *         on the success path (the caller, not this method, is responsible for
+     *         that call so {@code markPrepared} is only invoked on genuine successes)
      */
-    public static Map<String, Long> recomputeAndSettleIfDirty(Collection<IProject> projects)
+    public static PrepareSnapshot recomputeAndSettleIfDirty(Collection<IProject> projects)
     {
         // Take the snapshot BEFORE the recompute so any change arriving during
         // the recompute stores a HIGHER generation in DIRTY; markPrepared's
         // conditional remove will then leave that entry in place.
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(projects);
+        PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(projects);
 
         if (projects == null || projects.isEmpty())
         {
@@ -739,7 +762,7 @@ public final class LaunchLifecycleUtils
             {
                 continue;
             }
-            if (PreLaunchChangeTracker.isDirty(project))
+            if (snapshot.isDirty(project))
             {
                 dirty.add(project);
             }
@@ -775,7 +798,7 @@ public final class LaunchLifecycleUtils
         // NOTE: markPrepared is intentionally NOT called here. The caller
         // (prepareForFreshLaunch) calls PreLaunchChangeTracker.markPrepared(all, snapshot)
         // only on the success paths so that a failed or aborted prepare never
-        // marks projects as clean.
+        // records its content state as prepared.
         return snapshot;
     }
 
@@ -2079,7 +2102,7 @@ public final class LaunchLifecycleUtils
         // recompute bumps the generation counter; the conditional remove in
         // markPrepared then fails and the project stays dirty (stale-.cfe fix).
         List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
-        Map<String, Long> dirtySnapshot = recomputeAndSettleIfDirty(scopeProjects);
+        PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects);
 
         // A STANDALONE-SERVER application (literal
         // "ServerApplication." id prefix) must NOT be DB-updated out-of-band
@@ -2102,22 +2125,28 @@ public final class LaunchLifecycleUtils
             Activator.logInfo("Pre-launch auto-chain: server application: deferring DB update " //$NON-NLS-1$
                 + "to the launch delegate's coordinated path (auto-confirmed): applicationId=" //$NON-NLS-1$
                 + applicationId);
-            // Success path: mark all scope projects as prepared with the
-            // generation-keyed snapshot so the next call skips the recompute
-            // when nothing changed (and keeps dirty flag on a change-during-recompute).
-            PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
+            // Success path: record the prepared content state of all scope projects
+            // so the next call skips the recompute when nothing changed (and keeps
+            // the dirty flag on a change-during-recompute).
+            PreLaunchChangeTracker.markPrepared(scopeProjects, prepareSnapshot);
             return new PreLaunchResult(true, terminated, null);
         }
 
-        // settleAfterPossibleRecompute=true: we JUST forced a recompute, so a cached
-        // UPDATED may lag the freshly regenerated .cfe — wait out the settle window
-        // before trusting "no update needed". The settle is kept
+        // settleAfterPossibleRecompute=true: we may JUST have forced a recompute, so a
+        // cached UPDATED may lag the freshly regenerated .cfe — wait out the settle
+        // window before trusting "no update needed". The settle is kept
         // UNCONDITIONALLY: the lagging UPDATE_STATE_CHANGED push this window
         // exists for arrives AFTER the recompute drain (it is emitted by the
         // applications-layer infobase-sync checker, which the drained build /
         // derived-data job families do NOT cover), so no during-drain probe can
-        // prove it will not come. The plain debug_launch path passes false
-        // (immediate return on UPDATED) to avoid that ~5s cost.
+        // prove it will not come. Note that "this call recomputed nothing" does NOT
+        // make the cached flag trustworthy either: the recompute may have been done
+        // seconds ago by the preparation of ANOTHER application of the same project
+        // (the per-(project, applicationId) lock does not serialise those), and this
+        // application's cached UPDATED can still be lagging that regeneration. The
+        // window costs ~5s; skipping it can cost a silently green run against a
+        // stale infobase. The plain debug_launch path passes false because it never
+        // recomputes at all.
         // The blocking-modal arming lives in performUpdateAndAwaitApplied - the single point
         // where the update is actually issued - so every caller of the pre-launch update is
         // covered, not just this one; see the comment there.
@@ -2128,8 +2157,8 @@ public final class LaunchLifecycleUtils
             // Error path: do NOT mark prepared — the next call must recompute.
             return new PreLaunchResult(false, terminated, updateErr.get());
         }
-        // Success path: mark prepared with the generation-keyed snapshot.
-        PreLaunchChangeTracker.markPrepared(scopeProjects, dirtySnapshot);
+        // Success path: record the prepared content state of the scope.
+        PreLaunchChangeTracker.markPrepared(scopeProjects, prepareSnapshot);
         return new PreLaunchResult(true, terminated, null);
     }
 

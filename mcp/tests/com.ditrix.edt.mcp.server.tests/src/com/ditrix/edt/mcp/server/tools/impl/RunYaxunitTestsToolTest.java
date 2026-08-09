@@ -349,13 +349,13 @@ public class RunYaxunitTestsToolTest
     public void testDescriptionDocumentsSelectiveRecompute()
     {
         // Ratchet: the description must mention that only changed projects are
-        // recomputed (not all projects on every call) and that the first call
-        // after EDT start always recomputes fully.
+        // recomputed (not all projects on every call) and that the "prepared"
+        // mark outlives an EDT restart — restarting EDT is not a source change.
         String desc = new RunYaxunitTestsTool().getDescription();
         assertTrue("description must mention that only changed projects are recomputed",
             desc.contains("recomputes only projects")); //$NON-NLS-1$
-        assertTrue("description must note the full recompute on first call after EDT start",
-            desc.contains("first call after EDT starts")); //$NON-NLS-1$
+        assertTrue("description must say the prepared mark survives an EDT restart",
+            desc.contains("survives an EDT restart")); //$NON-NLS-1$
     }
 
     @Test
@@ -374,13 +374,13 @@ public class RunYaxunitTestsToolTest
     public void testGuideDocumentsSelectiveRecompute()
     {
         // Ratchet: the guide must explain the dirty-tracking mechanism —
-        // only file-changed projects are force-recomputed; others get the cheap
-        // derived-data drain; first launch is always full.
+        // only changed projects are force-recomputed; others get the cheap
+        // derived-data drain; the mark is content-based and outlives a restart.
         String guide = new RunYaxunitTestsTool().getGuide();
         assertTrue("guide must document that only changed projects are recomputed",
             guide.contains("selective")); //$NON-NLS-1$
-        assertTrue("guide must document the conservative first-launch recompute",
-            guide.contains("first call after EDT starts")); //$NON-NLS-1$
+        assertTrue("guide must document that the prepared mark survives an EDT restart",
+            guide.contains("survives an EDT restart")); //$NON-NLS-1$
     }
 
     @Test

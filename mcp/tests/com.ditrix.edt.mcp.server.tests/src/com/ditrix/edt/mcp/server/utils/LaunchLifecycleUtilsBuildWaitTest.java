@@ -285,4 +285,32 @@ public class LaunchLifecycleUtilsBuildWaitTest
         LaunchLifecycleUtils.recomputeAndSettle(java.util.Arrays.asList(launch));
         assertTrue(true);
     }
+
+    /**
+     * A recompute that did NOT run (missing EDT service here; a swallowed
+     * {@code recomputeAll()} failure in production) must leave the project dirty.
+     * Otherwise the preparation would go on to store a "prepared at this content"
+     * marker for sources that were never regenerated — and because that marker
+     * outlives the session, EVERY later launch would skip the recompute and ship
+     * the stale {@code .cfe}.
+     */
+    @Test
+    public void testRecomputeThatDidNotRunLeavesTheProjectDirty()
+    {
+        IProject launch = mockOpenProject("RecomputeFailureProject");
+        try
+        {
+            assertNull("precondition: no dirty entry yet",
+                PreLaunchChangeTracker.getDirtyGenerationForTest("RecomputeFailureProject"));
+
+            LaunchLifecycleUtils.recomputeAndSettle(java.util.Arrays.asList(launch));
+
+            assertNotNull("a recompute that never ran must keep the project dirty",
+                PreLaunchChangeTracker.getDirtyGenerationForTest("RecomputeFailureProject"));
+        }
+        finally
+        {
+            PreLaunchChangeTracker.resetForTest();
+        }
+    }
 }
