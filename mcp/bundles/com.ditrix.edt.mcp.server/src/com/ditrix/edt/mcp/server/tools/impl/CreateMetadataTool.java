@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
@@ -57,6 +59,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver.CreateTarget;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.google.gson.JsonElement;
@@ -167,7 +170,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates " //$NON-NLS-1$
             + "a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, " //$NON-NLS-1$
             + "ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with " //$NON-NLS-1$
-            + "owner-specific 'properties'). " //$NON-NLS-1$
+            + "owner-specific 'properties'). Also creates a NESTED SUBSYSTEM at any depth " //$NON-NLS-1$
+            + "('Subsystem.Sales.Subsystem.Orders'); the parent subsystem must already exist. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
@@ -180,7 +184,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to create (required). Top object: 'Type.Name' " //$NON-NLS-1$
                 + "(e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' " //$NON-NLS-1$
-                + "(e.g. 'Catalog.Products.Attribute.Weight'). The trailing Name is the new node's " //$NON-NLS-1$
+                + "(e.g. 'Catalog.Products.Attribute.Weight'). Nested subsystem: " //$NON-NLS-1$
+                + "'Subsystem.<Parent>.Subsystem.<Child>', repeatable to any depth - the parent " //$NON-NLS-1$
+                + "chain must already exist. The trailing Name is the new node's " //$NON-NLS-1$
                 + "programmatic Name; type / kind tokens may be English or Russian.", true) //$NON-NLS-1$
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
@@ -404,6 +410,22 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IProject project = ctx.project;
         Configuration config = ctx.config;
 
+        // A NESTED subsystem ('Subsystem.Sales.Subsystem.Orders', any depth, either language) takes
+        // a dedicated branch, and deliberately NOT the generic member path: 'Subsystem.subsystems'
+        // is a plain REFERENCE list, not a containment. A nested subsystem is a BM TOP object with
+        // its own .mdo and a 'parentSubsystem' back-reference, so it must be created and ATTACHED
+        // like one and only then referenced by its parent. Teaching MetadataNodeResolver the token
+        // instead would make it look like an ordinary child everywhere at once - and delete_metadata
+        // would then unhook a top object from a reference list without ever detaching it. The
+        // recognition still runs through the ONE bilingual token catalogue (SubsystemUtils ->
+        // MetadataTypeUtils), so no second list of spellings is introduced here (issue #351).
+        String[] subsystemChain = SubsystemUtils.nestedChain(normFqn);
+        if (subsystemChain != null)
+        {
+            return createNestedSubsystem(new NestedSubsystemRequest(project, projectName, config,
+                normFqn, subsystemChain, props, expectedNotExists, normReport));
+        }
+
         CreateTarget target = MetadataNodeResolver.resolveForCreate(config, normFqn);
         if (target == null)
         {
@@ -416,8 +438,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         if (!isValidIdentifier(target.childName))
         {
-            return ToolResult.error("Invalid name '" + target.childName + "'. A name must start with " //$NON-NLS-1$ //$NON-NLS-2$
-                + "a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+            return invalidNameError(target.childName);
         }
 
         // Resolve the create-time-only, type-specific options (CommonModule flag combination and
@@ -448,13 +469,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // Uniform duplicate / stale-intent check for both top-level and members.
         if (MetadataNodeResolver.resolveExisting(config, normFqn) != null)
         {
-            if (expectedNotExists)
-            {
-                return ToolResult.error("Precondition failed: you set expectedNotExists, but " + normFqn //$NON-NLS-1$
-                    + " already exists. Your snapshot is stale - re-read with get_metadata_objects, " //$NON-NLS-1$
-                    + "then update the existing node instead of creating a duplicate.").toJson(); //$NON-NLS-1$
-            }
-            return ToolResult.error("Node already exists: " + normFqn).toJson(); //$NON-NLS-1$
+            return duplicateError(normFqn, expectedNotExists);
         }
 
         // Which declared locales this node still owes a translation for. The node is NEW here (a
@@ -473,6 +488,39 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         return createMember(project, projectName, target, normFqn, props, synonymLanguage,
             localesMissing, localeUnused, normReport);
+    }
+
+    /**
+     * The "name is not a 1C identifier" refusal. One text, one place: it is the same verdict
+     * whichever create branch reaches it.
+     *
+     * @param name the rejected name
+     * @return the ready-to-return JSON error
+     */
+    private static String invalidNameError(String name)
+    {
+        return ToolResult.error("Invalid name '" + name + "'. A name must start with " //$NON-NLS-1$ //$NON-NLS-2$
+            + "a letter or underscore and contain only letters, digits and underscores.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The duplicate / stale-intent refusal. One text, one place: a caller that hits a duplicate must
+     * read the same sentence no matter which create branch found it, and {@code expectedNotExists}
+     * must sharpen it identically everywhere.
+     *
+     * @param normFqn the address that already resolves
+     * @param expectedNotExists whether the caller asserted the node does not exist yet
+     * @return the ready-to-return JSON error
+     */
+    private static String duplicateError(String normFqn, boolean expectedNotExists)
+    {
+        if (expectedNotExists)
+        {
+            return ToolResult.error("Precondition failed: you set expectedNotExists, but " + normFqn //$NON-NLS-1$
+                + " already exists. Your snapshot is stale - re-read with get_metadata_objects, " //$NON-NLS-1$
+                + "then update the existing node instead of creating a duplicate.").toJson(); //$NON-NLS-1$
+        }
+        return ToolResult.error("Node already exists: " + normFqn).toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1060,6 +1108,175 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
             req.synonymLanguage, req.localesMissing, req.localeUnused, req.typeSpecific,
             req.normReport));
+    }
+
+    /**
+     * The inputs of a NESTED-subsystem create, grouped so {@link #createNestedSubsystem} takes one
+     * holder instead of a long argument list (the same shape {@link TopLevelRequest} has).
+     */
+    private static final class NestedSubsystemRequest
+    {
+        final IProject project;
+        final String projectName;
+        final Configuration config;
+        /** The address EXACTLY as requested (type-normalized); the well-formedness check needs the
+         * raw text, which the trimmed {@link #chain} no longer carries. */
+        final String normFqn;
+        /** The parsed subsystem chain; the last entry is the node to create. */
+        final String[] chain;
+        final Props props;
+        final boolean expectedNotExists;
+        final MdNameNormalizer.Report normReport;
+
+        NestedSubsystemRequest(IProject project, String projectName, Configuration config, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+            String normFqn, String[] chain, Props props, boolean expectedNotExists,
+            MdNameNormalizer.Report normReport)
+        {
+            this.project = project;
+            this.projectName = projectName;
+            this.config = config;
+            this.normFqn = normFqn;
+            this.chain = chain;
+            this.props = props;
+            this.expectedNotExists = expectedNotExists;
+            this.normReport = normReport;
+        }
+    }
+
+    /**
+     * Creates a subsystem NESTED under another subsystem ({@code Subsystem.Sales.Subsystem.Orders},
+     * at any depth).
+     *
+     * <p>Structurally this is a TOP-object create, not a member create, even though the address has
+     * a member's shape: {@code Subsystem.subsystems} is a reference list rather than a containment,
+     * and EDT stores every nested subsystem in its own {@code .mdo} under
+     * {@code Subsystems/<Parent>/Subsystems/<Child>/} with a {@code parentSubsystem} back-reference.
+     * So the new object is created by the EDT factory, {@code attachTopObject}-ed under the chain
+     * FQN and only THEN referenced by its parent - the same order {@link #createTopLevel} uses for a
+     * configuration-level object.</p>
+     *
+     * <p>The attach FQN is derived from the PARENT's own {@code bmGetFqn()} inside the transaction,
+     * never from the requested address: only the parent knows the stored spelling and casing of
+     * every ancestor, and the requested address may carry Russian type tokens at any position
+     * ({@code normalizeFqn} canonicalizes the leading token only).</p>
+     *
+     * @param req the grouped create inputs
+     * @return the create-result JSON (success or a ready-to-return error)
+     */
+    private String createNestedSubsystem(NestedSubsystemRequest req)
+    {
+        // FIRST, before anything reads the parsed chain: the chain is built from TRIMMED segments and
+        // survives a stray trailing separator, so an address that reads differently from a well-formed
+        // one would otherwise be acted on AS the well-formed one - ' Child ' stored as 'Child',
+        // '...Child.' created as '...Child'. The identifier check below cannot see either, because by
+        // then the name is already the trimmed one.
+        String malformed = SubsystemUtils.malformedSegmentError(req.normFqn);
+        if (malformed != null)
+        {
+            return ToolResult.error(malformed).toJson();
+        }
+        final String name = req.chain[req.chain.length - 1];
+        if (!isValidIdentifier(name))
+        {
+            return invalidNameError(name);
+        }
+
+        int parentDepth = req.chain.length - 1;
+        Subsystem parent = SubsystemUtils.resolveByPath(req.config, req.chain, parentDepth);
+        if (parent == null)
+        {
+            String parentFqn = SubsystemUtils.chainFqn(req.chain, parentDepth);
+            return ToolResult.error("Parent subsystem not found: " + parentFqn //$NON-NLS-1$
+                + ". A nested subsystem is created under an EXISTING parent, so create '" //$NON-NLS-1$
+                + parentFqn + "' first (or fix the spelling). Use list_subsystems to see the " //$NON-NLS-1$
+                + "subsystem tree." + MetadataNodeResolver.yoNotFoundHint(parentFqn)).toJson(); //$NON-NLS-1$
+        }
+        String requestedFqn = SubsystemUtils.chainFqn(req.chain, req.chain.length);
+        if (SubsystemUtils.resolveByPath(req.config, req.chain, req.chain.length) != null)
+        {
+            return duplicateError(requestedFqn, req.expectedNotExists);
+        }
+
+        final String synonymLanguage;
+        try
+        {
+            synonymLanguage = MetadataLanguageUtils.resolveSynonymLanguage(req.config, req.props.synonym,
+                req.props.language, "the synonym"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+
+        BmContext bm = resolveBmContext(req.project, req.projectName);
+        if (bm.hasError())
+        {
+            return bm.error;
+        }
+        if (!(parent instanceof IBmObject))
+        {
+            return ToolResult.error("Parent subsystem is not a BM object").toJson(); //$NON-NLS-1$
+        }
+
+        final long parentBmId = ((IBmObject)parent).bmGetId();
+        final IModelObjectFactory factory = bm.factory;
+        final Version version = bm.version;
+        final Props props = req.props;
+        // The chain FQN's type token is the metamodel's own name for the class - the spelling EDT
+        // serializes into 'parentSubsystem' - so the canonical address is read off the metamodel
+        // rather than spelled out again here.
+        final EClass eClass = MdClassPackage.Literals.SUBSYSTEM;
+        final String[] createdFqnHolder = { null };
+        final String[] parentFqnHolder = { null };
+        try
+        {
+            BmTransactions.<Void>write(bm.bmModel, "CreateNestedSubsystem", (tx, pm) -> //$NON-NLS-1$
+            {
+                EObject txParent = (EObject)tx.getObjectById(parentBmId);
+                if (!(txParent instanceof Subsystem))
+                {
+                    throw new RuntimeException("Parent subsystem not found in transaction"); //$NON-NLS-1$
+                }
+                Subsystem owner = (Subsystem)txParent;
+                String ownerFqn = ((IBmObject)owner).bmGetFqn();
+                Object created = factory.create(eClass, version);
+                if (!(created instanceof Subsystem))
+                {
+                    throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
+                        + "' object"); //$NON-NLS-1$
+                }
+                Subsystem newObject = (Subsystem)created;
+                newObject.setName(name);
+                applyScalarProps(newObject, props, synonymLanguage);
+                String childFqn = ownerFqn + "." + eClass.getName() + "." + name; //$NON-NLS-1$ //$NON-NLS-2$
+                tx.attachTopObject((IBmObject)newObject, childFqn);
+                // BOTH directions are written: the parent's 'subsystems' list and the child's
+                // 'parentSubsystem'. They are two independent references (not an EMF eOpposite
+                // pair), and EDT serializes BOTH - the parent lists the child by name, the child
+                // names its parent by FQN - so setting only one leaves a half-linked pair on disk.
+                owner.getSubsystems().add(newObject);
+                newObject.setParentSubsystem(owner);
+                factory.fillDefaultReferences(newObject);
+                parentFqnHolder[0] = ownerFqn;
+                createdFqnHolder[0] = childFqn;
+                return null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error creating nested subsystem", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        // The PARENT .mdo has to be written too: it is what registers the child in its <subsystems>.
+        // No Configuration.mdo here - a nested subsystem is not listed at configuration level.
+        boolean persisted = BmTransactions.forceExportToDisk(req.project,
+            Arrays.asList(createdFqnHolder[0], parentFqnHolder[0]));
+        List<String> localesMissing = synonymLanguage == null ? null
+            : MetadataLanguageUtils.localesMissing(req.config, Collections.singletonList(synonymLanguage));
+        return success(new SuccessInfo(createdFqnHolder[0], eClass, name, persisted, props,
+            synonymLanguage, localesMissing,
+            MetadataLanguageUtils.isDeclaredButUnused(req.config, synonymLanguage), null, req.normReport));
     }
 
     /**

@@ -13,14 +13,25 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.Repository;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
+import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver.Discovery;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver.Resolution;
 
 /**
@@ -33,6 +44,19 @@ import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver.Resolution;
  */
 public class GitRepositoryResolverTest
 {
+    /** The fake credential the malformed-configuration fixture carries; a log line naming it leaked. */
+    private static final String SECRET = "s3cr3t-token"; //$NON-NLS-1$
+
+    /** The section header that makes that fixture unparseable. */
+    private static final String UNPARSEABLE_MARKER = "unparseable-marker-xyz123"; //$NON-NLS-1$
+
+    /**
+     * The project name the failure branch is asked to report. Deliberately unlike the temporary
+     * directory's name, so "the log line names the project" and "the log line does not name the
+     * configuration file" are two different assertions.
+     */
+    private static final String PROJECT_NAME = "SomeProject"; //$NON-NLS-1$
+
     // ==================== Resolution: pure accessors ====================
 
     @Test
@@ -170,7 +194,252 @@ public class GitRepositoryResolverTest
         }
     }
 
+    // ==================== discoverFromLocation: the failure branch that LOGS ====================
+
+    @Test
+    public void testAMalformedConfigurationIsLoggedWithoutTheExceptionText() throws Exception
+    {
+        // The fallback path opens the repository through FileRepositoryBuilder.build(), which loads
+        // the repository, user and system configuration. A configuration that is already malformed
+        // when the first call arrives therefore fails HERE - before any check the caller would run on
+        // the opened repository - and what it throws quotes the configuration (its own file for this
+        // shape; the offending line, credential included, when the failing file is the user config).
+        // Handing that throwable to the EDT error log would write it into a permanent file, so the
+        // branch logs types only. What this pins is what THIS branch hands over; JGit logs a
+        // malformed user config through its own logger before it throws, which is the platform's.
+        File repoRoot = Files.createTempDirectory("resolver-log-leak").toFile(); //$NON-NLS-1$
+        try
+        {
+            Git.init().setDirectory(repoRoot).call().close();
+            Files.write(new File(new File(repoRoot, ".git"), "config").toPath(), //$NON-NLS-1$ //$NON-NLS-2$
+                ("[remote \"origin\"]\n\turl = https://user:" + SECRET + "@example.com/r.git\n[" //$NON-NLS-1$ //$NON-NLS-2$
+                    + UNPARSEABLE_MARKER + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+            // Positive control: the very call the production branch makes really does throw, and its
+            // message really does carry configuration - here the path of the file at fault. Without
+            // this, "the log line does not contain it" would pass on an exception that said nothing.
+            String thrownText = failureTextOf(repoRoot);
+            assertTrue("fixture: the exception must quote the configuration file: " + thrownText, //$NON-NLS-1$
+                thrownText.contains(repoRoot.getName()));
+
+            Bundle bundle = FrameworkUtil.getBundle(GitRepositoryResolver.class);
+            assertNotNull("this case can only observe the log from inside OSGi; without the bundle " //$NON-NLS-1$
+                + "it would 'pass' by seeing nothing at all", bundle); //$NON-NLS-1$
+            ILog log = Platform.getLog(bundle);
+            List<IStatus> recorded = new ArrayList<>();
+            ILogListener listener = (status, plugin) -> recorded.add(status);
+            Discovery discovered;
+            log.addLogListener(listener);
+            try
+            {
+                discovered = GitRepositoryResolver.discoverFromLocation(repoRoot, PROJECT_NAME);
+            }
+            finally
+            {
+                log.removeLogListener(listener);
+            }
+
+            assertNull("a repository that cannot be opened hands back no repository, it does not throw", //$NON-NLS-1$
+                discovered.repository());
+            // ...and it says WHY it handed back none. Reported as "there is no repository here", the
+            // caller would be told to share a project that is already shared, and the broken
+            // configuration - the actual fault - would go unmentioned (see resolutionOf).
+            assertTrue("a .git directory that could not be OPENED is not 'no repository here'", //$NON-NLS-1$
+                discovered.configUnreadable());
+            // Only OUR entry is judged: another thread may log during the window, and this case is
+            // about what THIS branch hands over.
+            List<IStatus> ours = new ArrayList<>();
+            for (IStatus status : recorded)
+            {
+                if (status.getMessage() != null && status.getMessage().contains(PROJECT_NAME))
+                {
+                    ours.add(status);
+                }
+            }
+            // Positive control: a listener that recorded nothing would make everything below vacuous.
+            assertFalse("the failure branch must really log, or nothing here was observed", //$NON-NLS-1$
+                ours.isEmpty());
+            for (IStatus status : ours)
+            {
+                assertNull("no throwable may be attached - Eclipse writes its whole cause chain, " //$NON-NLS-1$
+                    + "and JGit puts configuration text in it: " + status.getMessage(), //$NON-NLS-1$
+                    status.getException());
+                assertFalse("nor may the configuration reach the message: " + status.getMessage(), //$NON-NLS-1$
+                    status.getMessage().contains(repoRoot.getName()));
+                assertFalse("nor the credential the file holds: " + status.getMessage(), //$NON-NLS-1$
+                    status.getMessage().contains(SECRET));
+                // ...and it must still be a usable report: what failed, for which project, and the
+                // exception type - a type name can carry no configuration.
+                assertTrue("the log line must name the project: " + status.getMessage(), //$NON-NLS-1$
+                    status.getMessage().contains(PROJECT_NAME));
+                assertTrue("...and the exception type behind the failure: " + status.getMessage(), //$NON-NLS-1$
+                    status.getMessage().contains("Exception")); //$NON-NLS-1$
+            }
+        }
+        finally
+        {
+            deleteRecursively(repoRoot);
+        }
+    }
+
+    @Test
+    public void testALocationOutsideAnyGitTreeIsNotReportedAsAnUnreadableConfiguration() throws Exception
+    {
+        // The other side of the branch above: "there is no .git anywhere up the tree" must stay
+        // distinguishable from "there is one and it would not open". Collapse the two and the
+        // configuration-repair error would be handed to every non-git project on the machine.
+        File notARepo = Files.createTempDirectory("resolver-none-vs-unreadable").toFile(); //$NON-NLS-1$
+        try
+        {
+            // NOTE: same assumption as the discovery case above - no ancestor of the system temp
+            // directory is itself a git working tree.
+            Discovery discovery = GitRepositoryResolver.discoverFromLocation(notARepo, PROJECT_NAME);
+
+            assertNull("nothing to open means no repository", discovery.repository()); //$NON-NLS-1$
+            assertFalse("...and no configuration failure either", discovery.configUnreadable()); //$NON-NLS-1$
+        }
+        finally
+        {
+            deleteRecursively(notARepo);
+        }
+    }
+
+    @Test
+    public void testASuccessfulDiscoveryIsCarriedThroughTheOutcome() throws Exception
+    {
+        // The third outcome, and the one the other two cases cannot see: discoverFromLocation must
+        // hand the OPENED repository on. Return "nothing here" for every success instead and the
+        // malformed-config and non-git cases both stay green - they only ever assert a null
+        // repository - while every git tool lost its discovery fallback.
+        File repoRoot = Files.createTempDirectory("resolver-carried-through").toFile(); //$NON-NLS-1$
+        try
+        {
+            Git.init().setDirectory(repoRoot).call().close();
+
+            Discovery discovery = GitRepositoryResolver.discoverFromLocation(repoRoot, PROJECT_NAME);
+
+            // Every assertion sits INSIDE the close guard: a failing one must not also leak the
+            // handle, or the temp tree stays locked on Windows and the next case fails for a second,
+            // unrelated reason.
+            Repository discovered = discovery.repository();
+            try
+            {
+                assertNotNull("a repository that opens must be carried through", discovered); //$NON-NLS-1$
+                assertFalse("...and it is not a configuration failure", discovery.configUnreadable()); //$NON-NLS-1$
+                assertEquals(new File(repoRoot, ".git").getCanonicalFile(), //$NON-NLS-1$
+                    discovered.getDirectory().getCanonicalFile());
+            }
+            finally
+            {
+                if (discovered != null)
+                {
+                    discovered.close();
+                }
+            }
+        }
+        finally
+        {
+            deleteRecursively(repoRoot);
+        }
+    }
+
+    // ==================== resolutionOf: which error each outcome earns ====================
+
+    @Test
+    public void testAnUnreadableConfigurationEarnsItsOwnErrorNotTheNoRepositoryOne()
+    {
+        // What the caller is told decides where they look. Before this branch existed, a repository
+        // that failed to OPEN produced the same "No git repository found ... Share the project with
+        // Git" message as a project outside git entirely - sending the operator to share a project
+        // that is already shared, while the malformed configuration went unnamed.
+        Resolution resolution =
+            GitRepositoryResolver.resolutionOf(null, PROJECT_NAME, Discovery.unreadable());
+
+        assertFalse("an unreadable configuration is a failure", resolution.ok()); //$NON-NLS-1$
+        String error = resolution.errorJson();
+        assertTrue("the error must name the project: " + error, error.contains(PROJECT_NAME)); //$NON-NLS-1$
+        assertTrue("...and send the caller to the configuration: " + error, //$NON-NLS-1$
+            error.contains("configuration")); //$NON-NLS-1$
+        assertFalse("...and NOT claim the project has no repository: " + error, //$NON-NLS-1$
+            error.contains("No git repository found")); //$NON-NLS-1$
+        assertFalse("...nor send them to share it: " + error, error.contains("Share the project")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAProjectOutsideAnyGitTreeStillEarnsTheNoRepositoryError()
+    {
+        // Positive control for the case above: the "share it" message is still what a project outside
+        // git gets, so "the unreadable error is not that one" is a real distinction and not the
+        // by-product of a message nobody produces any more.
+        Resolution resolution =
+            GitRepositoryResolver.resolutionOf(null, PROJECT_NAME, Discovery.none());
+
+        assertFalse(resolution.ok());
+        String error = resolution.errorJson();
+        assertTrue("a project outside git must still be told so: " + error, //$NON-NLS-1$
+            error.contains("No git repository found")); //$NON-NLS-1$
+        assertTrue("...and told to share it: " + error, error.contains("Share the project")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testADiscoveredRepositoryResolvesAsOwned() throws Exception
+    {
+        // The third branch, and the one the other two must not swallow: a repository that opened is
+        // handed on, marked owned so closeIfOwned() closes it.
+        File repoRoot = Files.createTempDirectory("resolver-discovered-owned").toFile(); //$NON-NLS-1$
+        try
+        {
+            Repository repo = Git.init().setDirectory(repoRoot).call().getRepository();
+            Resolution resolution =
+                GitRepositoryResolver.resolutionOf(null, PROJECT_NAME, Discovery.of(repo));
+
+            // closeIfOwned() runs whatever the assertions do, so a failure here cannot also leave the
+            // handle open on the temp tree.
+            try
+            {
+                assertTrue("a discovered repository is not an error", resolution.ok()); //$NON-NLS-1$
+                assertEquals(repo, resolution.repository());
+            }
+            finally
+            {
+                resolution.closeIfOwned();
+            }
+            assertEquals("the discovery fallback OWNS what it opened - closeIfOwned must close it", //$NON-NLS-1$
+                0, useCount(repo));
+        }
+        finally
+        {
+            deleteRecursively(repoRoot);
+        }
+    }
+
     // ==================== test helpers ====================
+
+    /**
+     * Runs the same call the failure branch wraps and returns the text of what it threw (message plus
+     * cause messages), so a case can assert what the branch had to withhold.
+     *
+     * @param dir the directory to discover from
+     * @return the thrown exception's message chain
+     */
+    private static String failureTextOf(File dir)
+    {
+        try (Repository repo = GitRepositoryResolver.discoverFromDirectory(dir))
+        {
+            throw new AssertionError("fixture: this repository opened fine, so the failure branch " //$NON-NLS-1$
+                + "is never reached"); //$NON-NLS-1$
+        }
+        catch (IOException | IllegalArgumentException expected)
+        {
+            StringBuilder text = new StringBuilder();
+            for (Throwable link = expected; link != null; link = link.getCause())
+            {
+                text.append(link.getMessage()).append('\n');
+            }
+            return text.toString();
+        }
+    }
+
 
     /**
      * Reads {@link Repository}'s private {@code useCnt} reference-count field via reflection - the only

@@ -792,6 +792,38 @@ public final class MetadataTypeUtils
     }
 
     /**
+     * EVERY spelling this TOP-LEVEL type catalogue accepts for the same type as {@code typeName} -
+     * English singular/plural plus every registered Russian name, all lowercase.
+     *
+     * <p>Read from {@code LOOKUP} itself, i.e. from the very map {@link #resolve} and
+     * {@link #toEnglishSingular} answer from, so a consumer that publishes its accepted tokens
+     * through this method publishes what it really accepts. Deriving such a set from the NESTED
+     * kind catalogue instead would make it a mirror of the thing it is compared against, and a pin
+     * taken from a mirror cannot see the two catalogues drift apart.</p>
+     *
+     * @param typeName any accepted spelling of a top-level type (may be {@code null})
+     * @return its sibling spellings, lowercase (including itself), or an empty set when the token
+     *     is not a known top-level type
+     */
+    public static Set<String> typeAliases(String typeName)
+    {
+        MetadataTypeInfo info = resolve(typeName);
+        if (info == null)
+        {
+            return Collections.emptySet();
+        }
+        Set<String> aliases = new LinkedHashSet<>();
+        for (Map.Entry<String, MetadataTypeInfo> entry : LOOKUP.entrySet())
+        {
+            if (entry.getValue() == info)
+            {
+                aliases.add(entry.getKey());
+            }
+        }
+        return aliases;
+    }
+
+    /**
      * Resolves a NESTED structural FQN segment token (English or Russian, singular or plural,
      * any case) to its canonical English/Russian spellings - e.g. {@code "Forms"} and the Russian
      * plural both resolve to the {@code Form} pair.

@@ -7,9 +7,11 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -665,6 +667,15 @@ public final class FormElementWriter
      * for a name that is not a column; an item that predates the retype must not be left in the exact
      * shape the creator forbids (issue #295 review).</p>
      *
+     * <p>Scans the PERSISTED descendants only. What this guard exists to prevent is a dangling
+     * binding in the SAVED form, and a path that only a computed containment leads to cannot become
+     * one: in this metamodel those containments are {@code transient}, so the element is never
+     * written to {@code Form.form} and is recomputed after any edit. Refusing on such a match would
+     * be worse than useless - the caller is told to delete or re-point an element that
+     * {@code findFormItem} no longer addresses at all, an error they cannot act on. (The exact rule,
+     * and why {@code derived} alone would not have justified this, is on
+     * {@link PersistedContents#of}.) Issue #350.</p>
+     *
      * @param attribute the form attribute about to be retyped
      * @return the offending item names, empty when nothing binds below it
      */
@@ -688,12 +699,14 @@ public final class FormElementWriter
             return broken;
         }
         List<String> columns = attributeColumnNames(attribute);
-        // eAllContents, not a hand-rolled recursion: it visits the WHOLE form without a depth budget
-        // that could silently stop before the item that would have blocked the retype, and without a
-        // StackOverflowError on a pathological tree.
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        // PersistedContents.descendants, not eAllContents and not a hand-rolled recursion: it keeps
+        // everything the old walk gave here - EVERY descendant regardless of EClass (a dataPath can
+        // sit on an unnamed property holder, so a form-item filter would lose real matches),
+        // depth-first in metamodel order, no depth budget that could silently stop before the item
+        // that would have blocked the retype, and no StackOverflowError on a pathological tree - and
+        // drops only the computed branches, which cannot hold an authored binding.
+        for (EObject item : PersistedContents.descendants(formModel))
         {
-            EObject item = it.next();
             String[] segments = dataPathSegments(item);
             if (segments.length > prefix.size() && startsWithIgnoreCase(segments, prefix)
                 && !containsIgnoreCase(columns, segments[prefix.size()]))
@@ -711,6 +724,10 @@ public final class FormElementWriter
      * {@link #createTable} refuses to build: without this the tool was stricter about CREATING a form
      * than about editing one into the same state (issue #295 review).
      *
+     * <p>Scans the PERSISTED descendants only, for the reason spelled out on
+     * {@link #itemsBoundBelowAttribute}: a computed table is not an authored binding, so skipping it
+     * cannot leave a stranded one in the saved form (issue #350).</p>
+     *
      * @param attribute the form attribute about to be retyped
      * @return the offending item names, empty when nothing needs its rows
      */
@@ -727,9 +744,10 @@ public final class FormElementWriter
         {
             return consumers;
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        // The EClass test below picks the MATCHES; the walk itself must still descend through
+        // everything (a table lives inside groups), so it filters by persistence, never by type.
+        for (EObject item : PersistedContents.descendants(formModel))
         {
-            EObject item = it.next();
             String[] segments = dataPathSegments(item);
             // EQUAL to the address, not merely starting with it: a table bound BELOW the member does
             // not consume the member's own rows.
@@ -3317,7 +3335,7 @@ public final class FormElementWriter
     }
 
     /**
-     * Finds a form item by name anywhere in the form-item tree (the same all-containment walk
+     * Finds a form item by name anywhere in the form-item tree (the same persisted-containment walk
      * {@code findItem} uses: items, command bars, context menus, tooltips), REJECTING an ambiguous
      * name (more than one match) with a clear error rather than silently picking the first match.
      * Returns the unique match, or {@code null} when none exists.
@@ -3339,21 +3357,24 @@ public final class FormElementWriter
         return matches.isEmpty() ? null : matches.get(0);
     }
 
-    /** Collects every {@code FormItem} in the tree whose name matches (case-insensitive). */
+    /**
+     * Collects every {@code FormItem} in the AUTHORED tree whose name matches (case-insensitive),
+     * over the same persisted-containment walk (and for the same reasons) as {@link #findItemIn} -
+     * so the ambiguity verdict is passed on exactly the items the by-name search can return.
+     */
     private static void collectItemsByName(EObject container, String name, EClass formItem,
         List<EObject> out)
     {
-        for (EObject child : container.eContents())
+        Deque<EObject> pending = new ArrayDeque<>();
+        pushFormItems(container, formItem, pending);
+        while (!pending.isEmpty())
         {
-            if (!formItem.isInstance(child))
+            EObject item = pending.pop();
+            if (name.equalsIgnoreCase(stringFeature(item, FEATURE_NAME)))
             {
-                continue;
+                out.add(item);
             }
-            if (name.equalsIgnoreCase(stringFeature(child, FEATURE_NAME)))
-            {
-                out.add(child);
-            }
-            collectItemsByName(child, name, formItem, out);
+            pushFormItems(item, formItem, pending);
         }
     }
 
@@ -5994,11 +6015,28 @@ public final class FormElementWriter
     }
 
     /**
-     * Depth-first search of ALL contained {@code FormItem}s for an item by its (form-wide unique)
-     * programmatic name. Walks every containment that holds form items - the {@code items} tree, the
-     * auto command bars (form- and table-level), context menus, extended tooltips - not just
-     * {@code items}, by filtering {@code eContents()} to {@code FormItem} instances (the same filter
-     * {@code nextItemId} uses).
+     * Depth-first search of the AUTHORED {@code FormItem} tree for an item by its (form-wide unique)
+     * programmatic name. Walks every PERSISTED containment that holds form items - the {@code items}
+     * tree, the {@code autoCommandBar} (form- and table-level), context menus, extended tooltips, the
+     * table additions - by filtering {@link PersistedContents} to {@code FormItem} instances.
+     *
+     * <p>Deliberately NOT {@code eContents()}: that list evaluates the derived and transient
+     * containments too, and in this metamodel they are computations, not empty slots. Measured on an
+     * EDT 2026.2 catalog item form, the computed containments across the whole item tree handed back
+     * 24 objects - the BSL {@code ContextDef}, the 22 inferred standard commands, the global
+     * command-source marker - and not one of them was a {@code FormItem}.</p>
+     *
+     * <p>That is one form, not a proof. What makes the narrowing safe in general is PERSISTENCE: a
+     * form write lands in {@code Form.form}, so an element the model does not persist - the
+     * layouter-only {@code topCommandBar} / {@code bottomCommandBar} / {@code fABCommandBar} and the
+     * {@code SelectedItemsActionsPanel} / {@code RowActionsPanel} pair, should EDT ever fill them -
+     * is one no caller could have created and no edit could keep. Resolving such an element would
+     * only make a vanishing write look successful (issue #350).</p>
+     *
+     * <p>Traversal is an explicit stack, not recursion - a {@code StackOverflowError} is an
+     * {@link Error} no {@code catch (Exception)} above would stop. It carries NO node budget on
+     * purpose: a truncated search would answer "not found" for an item that exists, and the callers
+     * turn that into a duplicate name or a wrong-target edit.</p>
      */
     private static EObject findItem(EObject root, String name)
     {
@@ -6012,23 +6050,40 @@ public final class FormElementWriter
 
     private static EObject findItemIn(EObject container, String name, EClass formItem)
     {
-        for (EObject child : container.eContents())
+        Deque<EObject> pending = new ArrayDeque<>();
+        pushFormItems(container, formItem, pending);
+        while (!pending.isEmpty())
         {
-            if (!formItem.isInstance(child))
+            EObject item = pending.pop();
+            if (name.equalsIgnoreCase(stringFeature(item, FEATURE_NAME)))
             {
-                continue;
+                return item;
             }
-            if (name.equalsIgnoreCase(stringFeature(child, FEATURE_NAME)))
-            {
-                return child;
-            }
-            EObject nested = findItemIn(child, name, formItem);
-            if (nested != null)
-            {
-                return nested;
-            }
+            pushFormItems(item, formItem, pending);
         }
         return null;
+    }
+
+    /**
+     * Pushes the {@code FormItem}s among {@code parent}'s PERSISTED children so they pop in metamodel
+     * order, keeping the walks above depth-first, left to right. The single place both form-item
+     * searches learn what a child is, so they cannot drift apart.
+     *
+     * @param parent the object whose containments to follow
+     * @param formItem the {@code FormItem} EClass of the form instance's own EPackage
+     * @param pending the traversal stack
+     */
+    private static void pushFormItems(EObject parent, EClass formItem, Deque<EObject> pending)
+    {
+        List<EObject> children = PersistedContents.of(parent);
+        for (int i = children.size() - 1; i >= 0; i--)
+        {
+            EObject child = children.get(i);
+            if (formItem.isInstance(child))
+            {
+                pending.push(child);
+            }
+        }
     }
 
     private static EObject findByName(EList<EObject> list, String name)

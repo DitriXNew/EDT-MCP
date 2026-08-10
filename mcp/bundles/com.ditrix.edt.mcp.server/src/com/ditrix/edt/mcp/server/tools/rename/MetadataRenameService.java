@@ -85,9 +85,26 @@ public class MetadataRenameService
     /** EDT search-core SearchIn enum class name. */
     private static final String SEARCH_IN_CLASS = "com._1c.g5.v8.dt.search.core.SearchIn"; //$NON-NLS-1$
 
+    /**
+     * Runs the rename (preview or execute), reporting how far it got to {@code progress}.
+     *
+     * @param projectName the EDT project holding the object
+     * @param objectFqn the FQN of the object or member to rename
+     * @param newName the new programmatic Name
+     * @param confirm {@code false} previews, {@code true} applies
+     * @param disableIndices preview '#' indices of optional change points to skip
+     * @param maxResults cap on the change points listed in the preview (0 = no limit)
+     * @param progress the sink this method publishes its {@link RenameProgress.Phase} to, so a
+     *     caller whose deadline elapsed can say what the model was left in (issue #365)
+     * @return the Markdown report, or a {@link ToolResult#error} JSON payload
+     */
     public String rename(String projectName, String objectFqn, String newName,
-        boolean confirm, java.util.Set<Integer> disableIndices, int maxResults)
+        boolean confirm, java.util.Set<Integer> disableIndices, int maxResults, RenameProgress progress)
     {
+        // Reported as the FIRST thing the UI thread does: it is what separates "the UI thread never
+        // picked the work up" from "the work started" for a caller that gave up on its deadline.
+        progress.enter(RenameProgress.Phase.PREPARING);
+
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
         if (!resolved.ok())
@@ -135,7 +152,7 @@ public class MetadataRenameService
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableIndices);
+            return performRename(objectFqn, newName, refactorings, disableIndices, progress);
         }
     }
 
@@ -1677,7 +1694,8 @@ public class MetadataRenameService
 
 
     private String performRename(String objectFqn, String newName,
-        Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices)
+        Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices,
+        RenameProgress progress)
     {
         // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
         // model (rewriting every reference across BSL, forms and metadata). Built from the refactorings
@@ -1692,6 +1710,10 @@ public class MetadataRenameService
         // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than
         // read from RenameMetadataObjectTool.NAME, so this domain service in tools.rename does not
         // take a reverse dependency on the tool adapter in tools.impl.
+        // Entered immediately around the gate and nowhere wider: the gate can block for as long as
+        // the consent policy allows (an ASK dialog, bounded at 120s by #277), and a timed-out caller
+        // told "it was waiting for consent" must not in fact have been counting items.
+        progress.enter(RenameProgress.Phase.AWAITING_CONSENT);
         DestructiveConsentGate.ConsentDecision consentDecision =
             DestructiveConsentGate.getInstance().requireConsent("rename_metadata_object", preview); //$NON-NLS-1$
         if (consentDecision != DestructiveConsentGate.ConsentDecision.ALLOW)
@@ -1700,6 +1722,13 @@ public class MetadataRenameService
                 DestructiveConsentGate.consentDeniedMessage(consentDecision, "rename_metadata_object")) //$NON-NLS-1$
                 .toJson();
         }
+
+        // Past the gate the rename is authorised to rewrite the model, and from here on a caller
+        // that stops waiting must be told the configuration CAN be partially renamed - the one
+        // outcome it must not mistake for "nothing happened". Entered before applyDisableIndices
+        // (which only flips in-memory LTK flags) deliberately: erring towards the warning costs a
+        // check, erring the other way costs a silent half-renamed configuration.
+        progress.enter(RenameProgress.Phase.APPLYING);
 
         // Apply disableIndices by traversing items and their native changes
         if (!disableIndices.isEmpty())
@@ -1723,6 +1752,10 @@ public class MetadataRenameService
                 errors.add(refactoring.getTitle() + ": " + e.getMessage()); //$NON-NLS-1$
             }
         }
+        // The apply LOOP is over - which is not the same as "every change point succeeded":
+        // errors above and disableIndices both survive into the report. The phase says only that
+        // nothing is left to apply.
+        progress.enter(RenameProgress.Phase.APPLIED);
 
         return renderExecutedReport(objectFqn, newName, disableIndices, performed, errors);
     }

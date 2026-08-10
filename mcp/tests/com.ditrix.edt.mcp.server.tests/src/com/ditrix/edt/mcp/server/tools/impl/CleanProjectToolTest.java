@@ -21,6 +21,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+import org.eclipse.core.runtime.jobs.IJobChangeListener;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.junit.Test;
@@ -274,6 +278,63 @@ public class CleanProjectToolTest
 
         assertTrue("the schema must not promise rejection when the tool clamps", //$NON-NLS-1$
             new CleanProjectTool().getInputSchema().contains("clamped")); //$NON-NLS-1$
+    }
+
+    /**
+     * Same defect as the rename's (issue #365 review), in the tool this deadline shipped with: a
+     * clean the deadline caught while it was still QUEUED never started, so the timeout text's
+     * "EDT may still be working on it, so the model can be mid-rebuild" would send the caller
+     * polling a project nothing ever touched. A new outcome must not fall through to that text —
+     * nor, worse, past the switch into the no-error path, which would report a clean that never
+     * happened as a success.
+     */
+    @Test
+    public void testCleanThatNeverStartedSaysNothingWasCleaned()
+    {
+        // A UNIQUE project name, so the name-matching listener below cannot reach into a foreign
+        // job: the job name is derived from it, and 'Demo' is used by the other tests here.
+        String projectName = "NeverStarted" + System.nanoTime(); //$NON-NLS-1$
+        String jobName = CleanProjectTool.NAME + ": clean build " + projectName; //$NON-NLS-1$
+        AtomicBoolean cleaned = new AtomicBoolean(false);
+        AtomicBoolean held = new AtomicBoolean(false);
+        IJobChangeListener sleeper = new JobChangeAdapter()
+        {
+            @Override
+            public void aboutToRun(IJobChangeEvent event)
+            {
+                if (jobName.equals(event.getJob().getName()))
+                {
+                    held.set(event.getJob().sleep());
+                }
+            }
+        };
+        List<ProjectCleanInfo> projects =
+            Collections.singletonList(new ProjectCleanInfo(null, null, projectName));
+        Job.getJobManager().addJobChangeListener(sleeper);
+        String error;
+        try
+        {
+            error = CleanProjectTool.runCleanPhase(projects, SHORT_TIMEOUT_MS,
+                (info, monitor) -> cleaned.set(true));
+        }
+        finally
+        {
+            Job.getJobManager().removeJobChangeListener(sleeper);
+        }
+
+        // Asserted first, and about the LISTENER rather than only the effect: an ambient scheduler
+        // stall would also leave the clean unrun, and the test would pass without ever producing
+        // the scenario it claims to judge.
+        assertTrue("this test must be the reason the clean was held, not ambient scheduler luck", //$NON-NLS-1$
+            held.get());
+        assertTrue("the clean must have been held before it started", !cleaned.get()); //$NON-NLS-1$
+        assertNotNull("a clean that never started must NOT be reported as a success", error); //$NON-NLS-1$
+        assertTrue("it must say the clean did not START: " + error, //$NON-NLS-1$
+            error.contains("did not START")); //$NON-NLS-1$
+        assertTrue("it must say nothing was cleaned: " + error, //$NON-NLS-1$
+            error.contains("NOTHING was cleaned")); //$NON-NLS-1$
+        assertTrue("it must not send the caller polling a project it never touched: " + error, //$NON-NLS-1$
+            !error.contains("mid-rebuild")); //$NON-NLS-1$
     }
 
     /**
