@@ -6,10 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -65,6 +65,13 @@ public final class BslLsRunner
      * buffer), only what is RETAINED is bounded.
      */
     static final int MAX_CAPTURED_OUTPUT_CHARS = 8_000;
+
+    /**
+     * Transient read-buffer size for {@link #drainAsync}. This is what makes
+     * {@link #MAX_CAPTURED_OUTPUT_CHARS} an honest bound: the drain never holds more than this at
+     * once, no matter how far apart (or absent) the child's newlines are.
+     */
+    private static final int DRAIN_CHUNK_CHARS = 8_192;
 
     /**
      * Bound on the engine's JSON report file size, checked BEFORE it is read into memory. A report
@@ -739,23 +746,32 @@ public final class BslLsRunner
     /**
      * Drains the process's merged stdout+stderr on a background thread so the child never blocks
      * on a full OS pipe buffer, while keeping {@code sink}'s RETAINED size bounded to
-     * {@link #MAX_CAPTURED_OUTPUT_CHARS}: the stream is read in full regardless (every line is
-     * consumed), but once the buffer exceeds the cap its FRONT is trimmed, so a subprocess that
-     * produces gigabytes of chatter (or loops printing) cannot grow this buffer without bound — only
-     * the tail is ever shown to a caller anyway (see {@link #tail}).
+     * {@link #MAX_CAPTURED_OUTPUT_CHARS}: the stream is read in full regardless, but once the
+     * buffer exceeds the cap its FRONT is trimmed, so a subprocess that produces gigabytes of
+     * chatter (or loops printing) cannot grow this buffer without bound — only the tail is ever
+     * shown to a caller anyway (see {@link #tail}).
+     * <p>
+     * Read in FIXED-SIZE chunks rather than with {@code readLine()}. The cap above bounds what is
+     * RETAINED; {@code readLine} would defeat it before it is ever consulted, because it must
+     * materialize a whole line first. A child emitting one enormous line with NO newline — a crash
+     * dump, a wrapper echoing a file, an engine looping without ever writing a line separator —
+     * would then allocate that entire line on the EDT heap however small the cap is. Chunked
+     * reading makes the declared bound real: at most {@link #DRAIN_CHUNK_CHARS} are held
+     * transiently, wherever (or whether) newlines fall. CLAUDE.md pre-push item #3 — bound what is
+     * read from an external process BEFORE materializing it.
      */
     private static Thread drainAsync(Process process, StringBuilder sink)
     {
         Thread t = new Thread(() -> {
-            try (BufferedReader reader =
-                new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)))
+            try (Reader reader = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))
             {
-                String line;
-                while ((line = reader.readLine()) != null)
+                char[] chunk = new char[DRAIN_CHUNK_CHARS];
+                int read;
+                while ((read = reader.read(chunk)) != -1)
                 {
                     synchronized (sink)
                     {
-                        sink.append(line).append('\n');
+                        sink.append(chunk, 0, read);
                         if (sink.length() > MAX_CAPTURED_OUTPUT_CHARS)
                         {
                             sink.delete(0, sink.length() - MAX_CAPTURED_OUTPUT_CHARS);

@@ -478,6 +478,35 @@ public class BslLsRunnerTest
     }
 
     @Test
+    public void testFixtureRunWithOneHugeUnterminatedLineStillCompletes() throws Exception
+    {
+        // The gap the line-oriented drain left: testFixtureRunWithHugeStdoutStillSucceedsWithBoundedCapture
+        // above emits 5000 SMALL lines, so readLine() never held more than 2000 chars and the case
+        // never exercised what happens with no line separator at all. This fixture prints ~20 MB as
+        // ONE unterminated line (System.out.print, never println), which is what a crash dump or a
+        // wrapper echoing a file looks like.
+        //
+        // Honest about what this proves: it is a BEHAVIOURAL guard - the drain must still consume
+        // such a stream fully, let the child exit, and leave the report parseable. It does NOT by
+        // itself measure the transient allocation (a readLine-based drain would also have finished
+        // here, just after materializing the whole 20 MB first). The allocation bound is structural
+        // - drainAsync reads into a fixed char[DRAIN_CHUNK_CHARS] - and this test is what fails if
+        // anyone reverts to a line-oriented read that also mishandles the unterminated tail.
+        File fixtureJar = buildFixtureJar();
+        Assume.assumeTrue("no system Java compiler available to build the fixture jar - skip", //$NON-NLS-1$
+            fixtureJar != null);
+        File srcDir = newFolder("fixture-src-huge-single-line"); //$NON-NLS-1$
+        Files.write(srcDir.toPath().resolve("FIXTURE_BEHAVIOR.txt"), "huge-single-line".getBytes()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        BslLsRunner.Request request = new BslLsRunner.Request(srcDir)
+            .jarOverride(fixtureJar).javaOverride(currentJavaExecutable()).timeoutSeconds(60);
+        BslLsRunner.Result result = BslLsRunner.run(request);
+
+        assertTrue("a child emitting one unterminated multi-MB line must still complete and parse: " //$NON-NLS-1$
+            + (result.ok() ? "" : result.errorMessage()), result.ok()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testFixtureRunWithNonZeroExitIsRejectedEvenWithAValidReportPresent() throws Exception
     {
         // The exact bug reported against the engine wrapper: a process that exits non-zero can
@@ -572,6 +601,12 @@ public class BslLsRunnerTest
             + "      StringBuilder line = new StringBuilder();\n" //$NON-NLS-1$
             + "      for (int i = 0; i < 2000; i++) line.append('x');\n" //$NON-NLS-1$
             + "      for (int i = 0; i < 5000; i++) System.out.println(line);\n" //$NON-NLS-1$
+            + "      java.nio.file.Files.write(report.toPath(), \"{\\\"fileinfos\\\":[]}\".getBytes());\n" //$NON-NLS-1$
+            + "    } else if (\"huge-single-line\".equals(behavior)) {\n" //$NON-NLS-1$
+            + "      StringBuilder chunk = new StringBuilder();\n" //$NON-NLS-1$
+            + "      for (int i = 0; i < 100000; i++) chunk.append('y');\n" //$NON-NLS-1$
+            + "      for (int i = 0; i < 200; i++) System.out.print(chunk);\n" //$NON-NLS-1$
+            + "      System.out.flush();\n" //$NON-NLS-1$
             + "      java.nio.file.Files.write(report.toPath(), \"{\\\"fileinfos\\\":[]}\".getBytes());\n" //$NON-NLS-1$
             + "    } else if (\"huge-report\".equals(behavior)) {\n" //$NON-NLS-1$
             + "      java.io.FileOutputStream out = new java.io.FileOutputStream(report);\n" //$NON-NLS-1$
