@@ -55,9 +55,18 @@ public class NavigatorSearchStateTest
     }
 
     @Test
-    public void testBlankNavigatorPatternIsNotASearch()
+    public void testEmptyNavigatorPatternIsNotASearch()
     {
-        assertFalse(NavigatorSearchState.isSearchActive("   ", filters(), null)); //$NON-NLS-1$
+        assertFalse(NavigatorSearchState.isSearchActive("", filters(), null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWhitespaceOnlyPatternIsASearch()
+    {
+        // The native filter bypasses on isEmpty(), so whitespace still narrows the tree - and a
+        // narrowed tree no longer shows the group folders. Same rule in the filter fallback.
+        assertTrue(NavigatorSearchState.isSearchActive("   ", filters(), null)); //$NON-NLS-1$
+        assertTrue(NavigatorSearchState.isSearchActive(null, filters(new NavigatorSearchFilterStub("   ")), null)); //$NON-NLS-1$
     }
 
     @Test

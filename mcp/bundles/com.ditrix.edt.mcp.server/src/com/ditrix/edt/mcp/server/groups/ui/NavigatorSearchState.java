@@ -76,7 +76,10 @@ public final class NavigatorSearchState {
      * @return {@code true} while a non-empty search pattern is applied
      */
     static boolean isSearchActive(String navigatorPattern, ViewerFilter[] filters, ViewerFilter self) {
-        if (navigatorPattern != null && !navigatorPattern.isBlank()) {
+        // Emptiness is decided exactly as the native search filter decides it (isEmpty, not
+        // isBlank): a whitespace-only pattern still narrows the tree, and treating it as "no
+        // search" would hide grouped objects from a result set that no longer shows their group.
+        if (navigatorPattern != null && !navigatorPattern.isEmpty()) {
             return true;
         }
 
@@ -86,7 +89,7 @@ public final class NavigatorSearchState {
             }
             String pattern = readPattern(filter);
             if (pattern != null) {
-                if (!pattern.isBlank()) {
+                if (!pattern.isEmpty()) {
                     return true;
                 }
             } else if (navigatorPattern == null) {
