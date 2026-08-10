@@ -1,6 +1,6 @@
 # get_platform_documentation
 
-Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. A SYSTEM ENUMERATION (e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. For a TYPE, detailed output also carries the descriptions from the platform's own documentation. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').
+Look up 1C:Enterprise platform documentation for built-in types (ValueTable, Array, Structure) and global built-in functions, including their methods, properties, constructors and events. A SYSTEM ENUMERATION (e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. A metadata TYPE SET (CatalogObject, CatalogRef, DocumentObject, EnumRef, ...) renders the API every catalog / document / register object shares. For a TYPE, detailed output also carries the descriptions from the platform's own documentation. Use when you need the exact platform API signature rather than configuration metadata. Full parameters and examples: call get_tool_guide('get_platform_documentation').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -22,9 +22,20 @@ Returns 1C:Enterprise *platform* API documentation (the built-in language and ty
 - You need the exact signature, parameters or return value of a platform method or property.
 - You are unsure which members a platform type exposes.
 - You need the VALUES of a system enumeration (e.g. `DateFractions`, `AccessTokenSignAlgorithm`).
+- You need the API that EVERY catalog / document / register object shares — the metadata TYPE SETS
+  (`CatalogObject`, `CatalogRef`, `DocumentObject`, `EnumRef`, `InformationRegisterRecordSet`, ...).
 - You need a global built-in function's description.
 
 ## What the output carries
+
+A **metadata TYPE SET** (`CatalogObject` / `СправочникОбъект`, `DocumentRef`, `EnumRef`, the
+`*Manager` / `*RecordSet` / `*RecordKey` sets, ...) resolves to the generic platform type behind it —
+the members every catalog object, every document reference and so on carries (`Write`, `GetObject`,
+`Ref`, `IsNew`, ...). The answer is headed by that generic type and names the set it came from in a
+`**Type set:**` line. Ask for the SET, not for a concrete object: `CatalogObject`, not
+`CatalogObject.Currencies` — the members are the same, and a concrete object's own attributes come
+from `get_metadata_details`. `AnyRef` / `ЛюбаяСсылка` is the one set with nothing to render: it
+unions the reference sets and declares no members of its own, and says so.
 
 A **system enumeration** renders a `Values` section listing every value as `<Enum>.<Value>` (with the
 Russian equivalent when it differs). Such a type is not constructible, so it has no `Constructors`
@@ -56,11 +67,14 @@ model-only one.
 - A specific method: `typeName='Array', memberName='Add'`.
 - Only methods: `typeName='ValueTable', memberType='method'`.
 - Russian output: `typeName='Structure', language='ru'`.
+- What every catalog object can do: `typeName='CatalogObject'` (or `typeName='СправочникОбъект'`).
+- One member of a type set: `typeName='DocumentObject', memberName='Write'`.
 - A built-in function: `category='builtin', typeName='Message'`.
 
 ## Notes
 
 - Resolution is bilingual on `typeName`: an English or Russian platform name resolves to the same type. The `language` parameter controls only the output text, not which name you may pass in.
+- A name that resolves to nothing is answered with an error that states how many names exist, lists a sample, and offers the closest ones (`Did you mean: ...`). Every name it lists does resolve.
 - Output is Markdown.
 
 ---

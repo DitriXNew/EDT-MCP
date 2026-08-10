@@ -166,6 +166,8 @@ whole suite by calling the `mcp__EDT-MCP-Server__*` tools and recording PASS/FAI
   - `{typeName:"ТаблицаЗначений"}` → same type via Russian name.
   - `{typeName:"FindFiles", category:"builtin"}` → built‑in function.
   - `{typeName:"ValueTable", language:"ru"}` → Russian output.
+  - `{typeName:"CatalogObject"}` / `{typeName:"СправочникОбъект"}` → the metadata TYPE SET: the generic type behind it plus a `**Type set:**` line.
+  - `{typeName:"AnyRef"}` → `isError`, `No documentation for type set` (a set that unions others carries no members).
 - **Assert:** returns the type with EN/RU names (`ValueTable / ТаблицаЗначений`) and member sections.
 - **Validated 2026‑06‑01:** PASS — methods Add/ChooseRow/Clear/Copy with params & returns.
 

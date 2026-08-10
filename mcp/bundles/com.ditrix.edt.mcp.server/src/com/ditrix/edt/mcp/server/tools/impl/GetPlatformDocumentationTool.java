@@ -54,7 +54,9 @@ public class GetPlatformDocumentationTool implements IMcpTool
         return "Look up 1C:Enterprise platform documentation for built-in types " + //$NON-NLS-1$
                "(ValueTable, Array, Structure) and global built-in functions, including " + //$NON-NLS-1$
                "their methods, properties, constructors and events. A SYSTEM ENUMERATION " + //$NON-NLS-1$
-               "(e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. For a TYPE, " + //$NON-NLS-1$
+               "(e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. A metadata " + //$NON-NLS-1$
+               "TYPE SET (CatalogObject, CatalogRef, DocumentObject, EnumRef, ...) renders the " + //$NON-NLS-1$
+               "API every catalog / document / register object shares. For a TYPE, " + //$NON-NLS-1$
                "detailed output also carries the descriptions from the platform's own " + //$NON-NLS-1$
                "documentation. " + //$NON-NLS-1$
                "Use when you need the " + //$NON-NLS-1$
@@ -196,7 +198,7 @@ public class GetPlatformDocumentationTool implements IMcpTool
      * <p>
      * Keeps every structural / actionable line — the H1 type/function header, the
      * {@code **Type Info:**} block, {@code **Collection element types:**}, the
-     * {@code **Category:**} line, every section ({@code ## ...}) and member
+     * {@code **Category:**} and {@code **Type set:**} lines, every section ({@code ## ...}) and member
      * ({@code ### ...}) heading, and the results-limit footer — so the full member
      * inventory and the headers asserted by callers/e2e survive. It drops only the
      * verbose per-member body: {@code **Parameters:**} and their bullet lines,
@@ -291,6 +293,10 @@ public class GetPlatformDocumentationTool implements IMcpTool
             || (inValues && trimmed.startsWith("- ")) //$NON-NLS-1$
             || trimmed.startsWith("**Collection element types:**") //$NON-NLS-1$
             || trimmed.startsWith("**Category:**") //$NON-NLS-1$
+            // Which TYPE SET the caller's name resolved through. Structural, not a member body:
+            // without it the concise answer to 'СправочникОбъект' is headed by a type name the
+            // caller never asked for and cannot connect back (issue #355).
+            || trimmed.startsWith("**Type set:**") //$NON-NLS-1$
             || trimmed.startsWith("*Results limited to "); //$NON-NLS-1$
     }
 }
