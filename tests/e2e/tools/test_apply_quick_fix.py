@@ -38,6 +38,8 @@ from harness import (
 
 _INDEX_RANGE_RE = re.compile(r"index=<1\.\.(\d+)>")
 _VARIANT_RANGE_RE = re.compile(r"variant=<1\.\.(\d+)>")
+# Either ambiguity prompt: the tool is asking for a selector, not reporting a failure.
+_AMBIGUITY_RE = re.compile(r"(?:index|variant)=<1\.\.\d+>")
 
 # The three per-marker refusal reasons ApplyQuickFixTool documents (see noFixAvailableError,
 # the interactiveFixBundle guard, and the getSelectedFixVariant==null guard in
@@ -59,18 +61,46 @@ def _is_acceptable_refusal(error_text):
     return any(marker in error_text for marker in _ACCEPTABLE_REFUSAL_MARKERS)
 
 
+def _attempt(args):
+    """The ONE place these tests call apply_quick_fix while resolving ambiguity.
+
+    Raises immediately on an error that is neither an ambiguity prompt nor a documented
+    per-marker refusal. That is a STRUCTURAL guarantee, not a per-caller check: the loops
+    below try several candidates and keep only the last outcome, so any "remember the error
+    and return it" scheme silently drops a service/internal failure the moment a later,
+    more benign candidate overwrites it. Raising at the single choke point every attempt
+    passes through makes that impossible to reintroduce - a broken engine fails the run
+    from wherever it first appears, instead of being masked by the next candidate's
+    ordinary "no fix available".
+
+    NOT used by the negative-matrix tests below: those assert on exactly the errors this
+    function rejects, so they call `call()` directly.
+    """
+    r = call("apply_quick_fix", args)
+    if r.is_error:
+        err = r.error_text() or ""
+        if not (_AMBIGUITY_RE.search(err) or _is_acceptable_refusal(err)):
+            raise AssertionError(
+                "apply_quick_fix returned an unexpected error for %r - neither an "
+                "ambiguity prompt (index=/variant=) nor one of its documented refusals "
+                "(no fix available / interactive-only / selection refused). A service or "
+                "internal failure must fail this test, not read as 'this marker simply "
+                "has no fix': %r" % (args, err))
+    return r
+
+
 def _resolve_variant_ambiguity(args, r):
     """Given a Result `r` that reported a 'variant=<1..N>' ambiguity for `args` (the SAME
     marker's fix has several registered variants), tries every variant 1..N in order and
-    returns the first successful Result, or the LAST refusal if none of them applied - a
+    returns the first applied Result, or the last documented refusal if none applied - a
     later variant can be the real automated edit while an earlier one is merely interactive,
     or refused for an unrelated reason, so stopping at the first refusal can silently skip
-    the variant that actually works."""
+    the variant that actually works. An unexpected error from ANY variant raises (_attempt)."""
     m = _VARIANT_RANGE_RE.search(r.error_text() or "")
     variant_count = int(m.group(1)) if m else 1
     last = r
     for variant in range(1, variant_count + 1):
-        last = call("apply_quick_fix", dict(args, variant=variant))
+        last = _attempt(dict(args, variant=variant))
         if not last.is_error:
             return last
     return last
@@ -88,10 +118,11 @@ def _apply_resolving_ambiguity(args):
     silently skip a sibling marker of the SAME check that actually has a headless fix while
     index=1 does not.
 
-    Returns the LAST Result obtained: applied, or the final refusal once every advertised
-    index/variant has been tried.
+    Returns the LAST Result obtained: applied, or the final documented refusal once every
+    advertised index/variant has been tried. An unexpected error from ANY of them raises
+    rather than being overwritten by a later candidate - see _attempt.
     """
-    r = call("apply_quick_fix", args)
+    r = _attempt(args)
     if r.is_error and "variant=" in (r.error_text() or ""):
         return _resolve_variant_ambiguity(args, r)
     if not (r.is_error and "index=" in (r.error_text() or "")):
@@ -101,7 +132,7 @@ def _apply_resolving_ambiguity(args):
     index_count = int(m.group(1)) if m else 1
     last = r
     for index in range(1, index_count + 1):
-        last = call("apply_quick_fix", dict(args, index=index))
+        last = _attempt(dict(args, index=index))
         if not last.is_error:
             return last
         if "variant=" in (last.error_text() or ""):
@@ -217,7 +248,6 @@ def test_never_reports_success_without_actually_changing_anything():
     if not candidates:
         raise E2ESkip("the fixture advertises no 'Fix registered' marker at all - nothing to assert")
     try:
-        checked = 0
         for c in candidates:
             before = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
             args = {"projectName": TESTS_PROJECT, "checkId": c["checkId"],
@@ -225,7 +255,6 @@ def test_never_reports_success_without_actually_changing_anything():
             if c["line"]:
                 args["line"] = int(c["line"])
             r = _apply_resolving_ambiguity(args)
-            checked += 1
 
             if r.is_error:
                 # Acceptable outcome 1: refused for one of the tool's documented per-marker
@@ -251,9 +280,6 @@ def test_never_reports_success_without_actually_changing_anything():
                     "the false report this tool must never produce"
                     % (c["checkId"], c["modulePath"], before, after))
             return  # a genuinely applied fix proves the whole path; stop mutating the fixture
-
-        if checked == 0:
-            raise AssertionError("no candidate was exercised")
     finally:
         _restore_extension_fixture()
 

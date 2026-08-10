@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -368,5 +369,44 @@ public class ApplyQuickFixToolTest
             order1.get(0), order2.get(0));
         assertEquals(toA, order1.get(0));
         assertEquals(toB, order1.get(1));
+    }
+
+    // ---- describeForListing: the listing must SHOW what the ordering above relies on ----
+
+    @Test
+    public void testDescribeForListingSeparatesVariantsSharingOneDescription()
+    {
+        // Exactly the collision the comparator above orders by. Sorting alone is not enough: the
+        // caller answers the listing with a bare number and the tool then MUTATES the source, so
+        // two variants printed identically would be a coin flip.
+        FixVariantDescriptor toA = new FixVariantDescriptor("Rename variable", "to 'a'"); //$NON-NLS-1$ //$NON-NLS-2$
+        FixVariantDescriptor toB = new FixVariantDescriptor("Rename variable", "to 'b'"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String labelA = ApplyQuickFixTool.describeForListing(toA);
+        String labelB = ApplyQuickFixTool.describeForListing(toB);
+
+        assertNotEquals("variants differing only in details must get distinguishable labels", //$NON-NLS-1$
+            labelA, labelB);
+        assertTrue("the label must keep the description: " + labelA, //$NON-NLS-1$
+            labelA.contains("Rename variable")); //$NON-NLS-1$
+        assertTrue("the label must add the details: " + labelA, labelA.contains("to 'a'")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testDescribeForListingDoesNotRepeatDetailsUsedAsTheDescriptionFallback()
+    {
+        // describe() already falls back to details when the description is empty; appending them
+        // again would print the same text twice.
+        FixVariantDescriptor detailsOnly = new FixVariantDescriptor("", "Extract method"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("Extract method", ApplyQuickFixTool.describeForListing(detailsOnly)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescribeForListingLeavesADescriptionOnlyVariantUnchanged()
+    {
+        FixVariantDescriptor descriptionOnly = new FixVariantDescriptor("Remove export", null); //$NON-NLS-1$
+
+        assertEquals("Remove export", ApplyQuickFixTool.describeForListing(descriptionOnly)); //$NON-NLS-1$
     }
 }

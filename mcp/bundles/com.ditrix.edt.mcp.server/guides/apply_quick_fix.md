@@ -23,9 +23,11 @@ EDT validation markers have **no stable per-marker id**, so the tool addresses t
 - `line` (optional) — the row's **Line**.
 
 The tool streams the project's markers, filters to the locator, and sorts the result into a
-**deterministic order** (module path, then line, then check id, then message) before indexing it — the
-underlying marker stream makes no ordering promise, so this keeps a given `index` pointing at the same
-marker across calls, independent of stream iteration order. When the locator still matches **several**
+**deterministic order** (module path, then line, then target object, then check id, then message)
+before indexing it — the underlying marker stream makes no ordering promise, so this keeps a given
+`index` pointing at the same marker across calls, independent of stream iteration order. A chosen
+marker's fix variants are ordered on the same principle (description, then details), so a given
+`variant` likewise keeps meaning the same fix across calls. When the locator still matches **several**
 markers (e.g. two parameter-doc problems on the same line), the error lists them with a 1-based index —
 re-call adding `index=<n>`. When the chosen marker's fix offers **several variants** (e.g. "add to
 Public region" vs "Private"), the error lists those — re-call adding `variant=<n>`.
@@ -41,8 +43,10 @@ Public region" vs "Private"), the error lists those — re-call adding `variant=
 A JSON result:
 - `success` — `true` when the fix was applied.
 - `checkId` — the marker's check.
-- `location` — where the fix landed (`module:line`, or the check id for an object-level marker).
-- `appliedVariant` — the description of the fix variant that ran.
+- `location` — where the fix landed: `module:line` for a BSL marker, the target object (e.g.
+  `Catalog.Products`) for an object-level one, and the check id when neither could be resolved.
+- `appliedVariant` — the fix variant that ran, named the same way the ambiguity listing names it
+  (its description, plus its details when those are what tell two variants apart).
 - `message` — a human-readable summary.
 
 ## Notes & gotchas

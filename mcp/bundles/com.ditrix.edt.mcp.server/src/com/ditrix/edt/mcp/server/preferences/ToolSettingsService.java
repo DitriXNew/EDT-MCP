@@ -80,11 +80,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * such a stored list; the user can still enable it deliberately afterwards.
      * <p>
      * Version 2 covers a narrower case: {@code apply_quick_fix} is a normal (default-ON) tool, so it is
-     * NOT added to every stored list the way {@code git} is - only to a list that, once it gains
-     * {@code apply_quick_fix}, becomes EXACTLY {@link ToolPreset#CODE_REVIEW}'s or
-     * {@link ToolPreset#ANALYSIS_ONLY}'s current disabled set. That is the signature of a store saved
-     * by an older build under one of those two read-only presets, before this write-capable tool
-     * existed to be excluded from them; a CUSTOM selection that merely overlaps is left untouched.
+     * NOT added to every stored list the way {@code git} is - only to a list that already CONTAINS
+     * everything {@link ToolPreset#CODE_REVIEW} or {@link ToolPreset#ANALYSIS_ONLY} disables. That
+     * containment is the signature of a store saved by an older build under one of those two
+     * read-only presets, before this write-capable tool existed to be excluded from them - and it
+     * still holds for a user who tightened such a preset further. A selection that merely OVERLAPS
+     * one (without covering it) is left untouched. See
+     * {@link #migrateApplyQuickFixIntoReadOnlyPreset} for why containment rather than equality.
      *
      * @param store the preference store to migrate (never {@code null} here)
      */
@@ -128,11 +130,35 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Adds {@code apply_quick_fix} to {@code disabled} when doing so would turn it into EXACTLY the
-     * current {@link ToolPreset#CODE_REVIEW} or {@link ToolPreset#ANALYSIS_ONLY} shape - i.e. the
-     * stored list already IS one of those two read-only presets, just saved before this tool existed
-     * to be excluded from them. Reuses {@link ToolPreset#matchPreset}, which already ignores unknown
-     * / stale tool names, so a leftover obsolete entry in the stored list does not defeat the match.
+     * Adds {@code apply_quick_fix} to {@code disabled} when the stored list already expresses a
+     * no-write profile - i.e. it CONTAINS everything {@link ToolPreset#CODE_REVIEW} or
+     * {@link ToolPreset#ANALYSIS_ONLY} disables, whether or not it disables more on top.
+     * <p>
+     * A SUPERSET test, not an exact match, on purpose. Exact matching (via
+     * {@link ToolPreset#matchPreset}) misses the ordinary case of someone who picked a read-only
+     * preset and then unticked another tool or two: their stored list is then a strict superset,
+     * {@code matchPreset} reports {@code CUSTOM}, and this write-capable tool would silently arrive
+     * ENABLED in a profile the user built to be read-only. There is no user intent to respect in
+     * the other direction either - the migration only ever runs against a store saved BEFORE
+     * {@code apply_quick_fix} existed, so nobody could have deliberately enabled it. And the two
+     * failure modes are not symmetric: one extra disabled tool is a checkbox away, whereas a
+     * metadata-MUTATING tool quietly live in a no-write profile is the exact hazard this migration
+     * exists to prevent.
+     * <p>
+     * Deliberately NOT done by loosening {@code matchPreset} itself: that method also decides which
+     * preset the preferences Tools tab shows as active ({@code ToolsTab}), where superset matching
+     * would make a hand-tuned CUSTOM selection claim to be "Code Review".
+     * <p>
+     * Stale/unknown names left in the stored list cannot defeat the check, which asks only whether
+     * the preset's own tools are all present.
+     * <p>
+     * The compared shape drops the tools a preset does not really assert: {@code apply_quick_fix}
+     * (today's presets exclude it, but the stored list predates it by definition) and everything in
+     * {@link PreferenceConstants#DEFAULT_DISABLED_TOOLS}, which every preset merely inherits from
+     * the shipped defaults. Both are things the user may deliberately have switched ON - notably the
+     * opt-in {@code git} tool - and demanding them here would make an ordinary "Code Review, but I
+     * do use git" store fail the containment test and miss the migration entirely, i.e. exactly the
+     * hazard this method exists to close.
      *
      * @param disabled the mutable stored disabled-tools set; modified in place
      * @return {@code true} when {@code apply_quick_fix} was added
@@ -143,12 +169,16 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         {
             return false;
         }
-        Set<String> withQuickFix = new LinkedHashSet<>(disabled);
-        withQuickFix.add("apply_quick_fix"); //$NON-NLS-1$
-        ToolPreset matched = ToolPreset.matchPreset(withQuickFix);
-        if (matched == ToolPreset.CODE_REVIEW || matched == ToolPreset.ANALYSIS_ONLY)
+        Set<String> optional = parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        for (ToolPreset readOnly : new ToolPreset[] {ToolPreset.CODE_REVIEW, ToolPreset.ANALYSIS_ONLY})
         {
-            return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+            Set<String> presetShape = new LinkedHashSet<>(readOnly.getDisabledTools());
+            presetShape.remove("apply_quick_fix"); //$NON-NLS-1$
+            presetShape.removeAll(optional);
+            if (disabled.containsAll(presetShape))
+            {
+                return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+            }
         }
         return false;
     }

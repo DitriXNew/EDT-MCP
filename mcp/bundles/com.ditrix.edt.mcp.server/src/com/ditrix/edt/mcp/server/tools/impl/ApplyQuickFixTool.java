@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -291,26 +292,39 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         {
             return;
         }
-        BmTransactions.<Void>read(bmModel, "ApplyQuickFixResolveTargets", (tx, pm) -> { //$NON-NLS-1$
-            for (MarkerMatch match : matches)
-            {
-                try
+        // The read boundary itself is guarded too, not just the per-marker resolution inside it:
+        // these presentations are cosmetic listing labels, so a transaction that cannot be opened
+        // or is rejected outright (model mid-rebuild, a busy BM) must not turn a perfectly
+        // applicable quick-fix into a failed tool call - which is what an escaping exception here
+        // would do, since AbstractMetadataWriteTool's catch reports it as the tool's own error.
+        try
+        {
+            BmTransactions.<Void>read(bmModel, "ApplyQuickFixResolveTargets", (tx, pm) -> { //$NON-NLS-1$
+                for (MarkerMatch match : matches)
                 {
-                    String presentation = match.marker.getObjectPresentation();
-                    if (presentation != null && !presentation.isEmpty())
+                    try
                     {
-                        match.objectPresentation = presentation;
+                        String presentation = match.marker.getObjectPresentation();
+                        if (presentation != null && !presentation.isEmpty())
+                        {
+                            match.objectPresentation = presentation;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        // Unresolvable target: keep the match, just without a presentation.
+                        Activator.logWarning("Could not resolve the target of a quick-fix candidate for check '" //$NON-NLS-1$
+                            + match.checkId + "': " + e.getMessage()); //$NON-NLS-1$
                     }
                 }
-                catch (Exception e)
-                {
-                    // Unresolvable target: keep the match, just without a presentation.
-                    Activator.logWarning("Could not resolve the target of a quick-fix candidate for check '" //$NON-NLS-1$
-                        + match.checkId + "': " + e.getMessage()); //$NON-NLS-1$
-                }
-            }
-            return null;
-        });
+                return null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("Could not open a read transaction to resolve quick-fix candidate " //$NON-NLS-1$
+                + "targets; the ambiguity listing falls back to module/check locators: " + e.getMessage()); //$NON-NLS-1$
+        }
         // Re-sort now that the presentations are known: it is a tiebreaker in
         // DETERMINISTIC_ORDER, and findMatches sorted while every value was still null - so
         // object-level candidates would otherwise keep the marker stream's arbitrary order and
@@ -337,11 +351,17 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         }
         try
         {
-            List<FixVariantDescriptor> variants = new ArrayList<>(fixManager.getApplicableFixVariants(handle));
-            if (variants.isEmpty())
+            // Null-tolerant for the same reason the handle == null case above is: the engine is
+            // permissive about a fix session that never reached a variant context, and a raw
+            // new ArrayList<>(null) would surface as an NPE with no message - a JSON error
+            // carrying no text at all - instead of the actionable "no quick-fix available" that
+            // the empty case answers with.
+            Collection<FixVariantDescriptor> applicable = fixManager.getApplicableFixVariants(handle);
+            if (applicable == null || applicable.isEmpty())
             {
                 return noFixAvailableError(chosen);
             }
+            List<FixVariantDescriptor> variants = new ArrayList<>(applicable);
             sortVariantsDeterministically(variants);
 
             int chosenIdx = chooseIndex(variants.size(), variant);
@@ -363,7 +383,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             if (selected == null)
             {
                 return ToolResult.error("The quick-fix engine did not accept the selected variant '" //$NON-NLS-1$
-                    + describe(chosenVariant) + "' for check '" + chosen.checkId + "'" //$NON-NLS-1$ //$NON-NLS-2$
+                    + describeForListing(chosenVariant) + "' for check '" + chosen.checkId + "'" //$NON-NLS-1$ //$NON-NLS-2$
                     + " - nothing was applied. Re-run get_project_errors (the marker set may have " //$NON-NLS-1$
                     + "changed since it was listed) and try again, or fix it manually via " //$NON-NLS-1$
                     + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
@@ -372,7 +392,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             if (uiBundle != null)
             {
                 return ToolResult.error("The registered quick-fix for check '" + chosen.checkId //$NON-NLS-1$
-                    + "' (" + describe(chosenVariant) + ") is an INTERACTIVE IDE action from '" + uiBundle //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' (" + describeForListing(chosenVariant) + ") is an INTERACTIVE IDE action from '" + uiBundle //$NON-NLS-1$ //$NON-NLS-2$
                     + "', not an automated edit - it opens an editor/view for a human and changes " //$NON-NLS-1$
                     + "nothing on its own, so it cannot be applied headlessly. Fix this one manually " //$NON-NLS-1$
                     + "via write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
@@ -383,8 +403,8 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 .put("success", true) //$NON-NLS-1$
                 .put(KEY_CHECK_ID, chosen.checkId)
                 .put("location", chosen.location()) //$NON-NLS-1$
-                .put("appliedVariant", describe(chosenVariant)) //$NON-NLS-1$
-                .put("message", "Applied quick-fix '" + describe(chosenVariant) + "' at " + chosen.location()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .put("appliedVariant", describeForListing(chosenVariant)) //$NON-NLS-1$
+                .put("message", "Applied quick-fix '" + describeForListing(chosenVariant) + "' at " + chosen.location()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 .toJson();
         }
         finally
@@ -550,41 +570,68 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             + "write_module_source / modify_metadata.").toJson(); //$NON-NLS-1$
     }
 
-    /** Actionable "several markers match — pick one" error, listing each with its 1-based index. */
-    private static String multipleMarkersError(String checkId, List<MarkerMatch> matches)
+    /**
+     * Builds an actionable "several candidates - pick one" error: the lead-in, the selector range
+     * the caller must answer with, then the choices numbered from 1.
+     * <p>
+     * ONE builder for BOTH ambiguity prompts (several MARKERS matched the locator; several
+     * VARIANTS registered for the chosen marker's fix) deliberately. They are the same decision
+     * asked twice, and while they were two hand-rolled loops they kept drifting: an improvement
+     * landed in one and was found missing from the other a review round later - the marker listing
+     * learned to print its target object so two object-level markers could be told apart, while the
+     * variant listing went on printing a bare description that two variants can share. Building
+     * both here makes that drift structurally impossible: how a choice is presented is now decided
+     * in a single place, and the ordering that backs the numbering is likewise shared discipline
+     * ({@link MarkerMatch#DETERMINISTIC_ORDER} / {@link #sortVariantsDeterministically}).
+     *
+     * @param lead the sentence before the selector clause, e.g. {@code "3 markers match check 'x'"}
+     * @param selector the parameter the caller re-calls with ({@code index} / {@code variant})
+     * @param hint extra guidance for the selector clause (e.g. a narrowing tip), or {@code ""}
+     * @param labels the choices in the order they are numbered; each must identify its own choice
+     *            unambiguously - two identical labels make the selector a coin flip, and this tool
+     *            MUTATES what it selects
+     * @return the ready error JSON
+     */
+    private static String ambiguousChoiceError(String lead, String selector, String hint,
+        List<String> labels)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append(matches.size()).append(" markers match check '").append(checkId) //$NON-NLS-1$
-          .append("'; re-call with index=<1..").append(matches.size()) //$NON-NLS-1$
-          .append("> (or narrow with modulePath/line): "); //$NON-NLS-1$
-        for (int i = 0; i < matches.size(); i++)
+        sb.append(lead).append("; re-call with ").append(selector).append("=<1..") //$NON-NLS-1$ //$NON-NLS-2$
+          .append(labels.size()).append(">").append(hint).append(": "); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < labels.size(); i++)
         {
             if (i > 0)
             {
                 sb.append("; "); //$NON-NLS-1$
             }
-            MarkerMatch m = matches.get(i);
-            sb.append(i + 1).append(") ").append(m.location()).append(" — ").append(m.message); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(i + 1).append(") ").append(labels.get(i)); //$NON-NLS-1$
         }
         return ToolResult.error(sb.toString()).toJson();
+    }
+
+    /** Actionable "several markers match — pick one" error, listing each with its 1-based index. */
+    private static String multipleMarkersError(String checkId, List<MarkerMatch> matches)
+    {
+        List<String> labels = new ArrayList<>(matches.size());
+        for (MarkerMatch m : matches)
+        {
+            labels.add(m.location() + " — " + m.message); //$NON-NLS-1$
+        }
+        return ambiguousChoiceError(matches.size() + " markers match check '" + checkId + "'", //$NON-NLS-1$ //$NON-NLS-2$
+            "index", " (or narrow with modulePath/line)", labels); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Actionable "this fix has several variants — pick one" error. */
     private static String multipleVariantsError(MarkerMatch chosen, List<FixVariantDescriptor> variants)
     {
-        StringBuilder sb = new StringBuilder();
-        sb.append("The fix for check '").append(chosen.checkId).append("' at ").append(chosen.location()) //$NON-NLS-1$ //$NON-NLS-2$
-          .append(" has ").append(variants.size()).append(" variants; re-call with variant=<1..") //$NON-NLS-1$ //$NON-NLS-2$
-          .append(variants.size()).append(">: "); //$NON-NLS-1$
-        for (int i = 0; i < variants.size(); i++)
+        List<String> labels = new ArrayList<>(variants.size());
+        for (FixVariantDescriptor variant : variants)
         {
-            if (i > 0)
-            {
-                sb.append("; "); //$NON-NLS-1$
-            }
-            sb.append(i + 1).append(") ").append(describe(variants.get(i))); //$NON-NLS-1$
+            labels.add(describeForListing(variant));
         }
-        return ToolResult.error(sb.toString()).toJson();
+        return ambiguousChoiceError("The fix for check '" + chosen.checkId + "' at " //$NON-NLS-1$ //$NON-NLS-2$
+            + chosen.location() + " has " + variants.size() + " variants", //$NON-NLS-1$ //$NON-NLS-2$
+            "variant", "", labels); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Trailing " at <module>:<line>" / " at <module>" locator clause for an error message, or "". */
@@ -653,6 +700,39 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         }
         String details = variant.getDetails();
         return details != null && !details.isEmpty() ? details : "(unnamed fix)"; //$NON-NLS-1$
+    }
+
+    /**
+     * A fix variant's label for the {@link #multipleVariantsError} listing: {@link #describe} plus
+     * the variant's {@code details} whenever they say something the description does not.
+     * <p>
+     * {@code describe} alone can print two DIFFERENT variants identically - a check may register
+     * several fixes sharing one description and differing only in details (e.g. "Rename variable"
+     * with details "to 'a'" / "to 'b'"). The caller answers with a bare number and this tool then
+     * MUTATES the source, so an ambiguous listing asks them to choose blind. The same collision is
+     * why {@link #sortVariantsDeterministically} orders by ({@code description}, {@code details})
+     * rather than by {@code describe}: the listing must SHOW whatever the ordering relies on, or
+     * the numbering is stable but unreadable.
+     * <p>
+     * Nothing is appended when {@code details} is empty, or when {@code describe} already returned
+     * the details themselves (its empty-description fallback) - that would just print them twice.
+     * <p>
+     * Package-visible (not {@code private}) for the same reason as
+     * {@link #sortVariantsDeterministically}: it is a pure labelling decision, unit-testable
+     * without a live {@link IFixManager} session.
+     *
+     * @param variant the variant to label
+     * @return the listing label, never {@code null}
+     */
+    static String describeForListing(FixVariantDescriptor variant)
+    {
+        String label = describe(variant);
+        String details = variant.getDetails();
+        if (details != null && !details.isEmpty() && !details.equals(label))
+        {
+            return label + " (" + details + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return label;
     }
 
     /**

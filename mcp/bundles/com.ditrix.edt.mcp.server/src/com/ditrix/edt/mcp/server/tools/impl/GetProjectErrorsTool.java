@@ -2722,7 +2722,7 @@ public class GetProjectErrorsTool implements IMcpTool
             return true;
         }
 
-        String presentationLower = objectPresentation.toLowerCase();
+        String presentationLower = objectPresentation.toLowerCase(Locale.ROOT);
         for (String fqnVariant : objects)
         {
             boolean matches = exactScope
@@ -2775,12 +2775,12 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
     {
-        String needle = checkId.toLowerCase();
-        if (shortUid != null && shortUid.toLowerCase().contains(needle))
+        String needle = checkId.toLowerCase(Locale.ROOT);
+        if (shortUid != null && shortUid.toLowerCase(Locale.ROOT).contains(needle))
         {
             return true;
         }
-        return symbolicCheckId != null && symbolicCheckId.toLowerCase().contains(needle);
+        return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).contains(needle);
     }
 
     /**
@@ -2793,12 +2793,12 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static boolean checkIdMatchesExact(String shortUid, String symbolicCheckId, String checkId)
     {
-        String needle = checkId.toLowerCase();
-        if (shortUid != null && shortUid.toLowerCase().equals(needle))
+        String needle = checkId.toLowerCase(Locale.ROOT);
+        if (shortUid != null && shortUid.toLowerCase(Locale.ROOT).equals(needle))
         {
             return true;
         }
-        return symbolicCheckId != null && symbolicCheckId.toLowerCase().equals(needle);
+        return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).equals(needle);
     }
 
     /**

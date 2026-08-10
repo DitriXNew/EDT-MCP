@@ -324,8 +324,9 @@ public class ToolSettingsServiceTest
         store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.DEFAULT_DISABLED_TOOLS);
         store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
-        // A genuinely custom selection that merely overlaps a preset in a couple of tools must not
-        // be mistaken for one - only an EXACT (minus apply_quick_fix) shape match migrates.
+        // A genuinely custom selection that merely OVERLAPS a preset in a couple of tools must not
+        // be mistaken for one: the migration asks whether the stored list CONTAINS a whole
+        // read-only preset, and two tools out of that preset is not that preset.
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "debug_launch,run_yaxunit_tests");
 
         ToolSettingsService.ensureMigratedForTest(store);
@@ -358,6 +359,78 @@ public class ToolSettingsServiceTest
         Set<String> disabled = ToolSettingsService.parseDisabledTools(
             store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertFalse("an already-migrated store must not be touched again: " + disabled,
+            disabled.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testMigrationAddsApplyQuickFixToAReadOnlyPresetTheUserTightenedFurther()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // The ordinary upgrade path an EXACT-match migration missed: picked Code Review, then
+        // unticked one more tool. The stored list is a strict SUPERSET of the preset, so it is
+        // still a no-write profile - the write-capable quick-fix tool must not arrive enabled in it.
+        Set<String> tightened = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        tightened.remove("apply_quick_fix");
+        tightened.add("get_form_screenshot");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(tightened));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("a Code Review preset the user tightened further is still a no-write profile "
+            + "and must gain apply_quick_fix: " + disabled, disabled.contains("apply_quick_fix"));
+        assertTrue("the migration must not drop the user's own extra selection: " + disabled,
+            disabled.contains("get_form_screenshot"));
+    }
+
+    @Test
+    public void testMigrationAddsApplyQuickFixToAnAnalysisOnlyPresetTheUserTightenedFurther()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        Set<String> tightened = new HashSet<>(ToolPreset.ANALYSIS_ONLY.getDisabledTools());
+        tightened.remove("apply_quick_fix");
+        tightened.add("get_markers");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(tightened));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("an Analysis Only preset the user tightened further must gain apply_quick_fix: "
+            + disabled, disabled.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testMigrationLeavesAPresetItIsMissingOneToolFromAlone()
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // The boundary on the other side: one tool SHORT of a read-only preset is not that preset,
+        // however close it looks. Migrating here would disable a tool in a profile that never
+        // expressed the no-write intent - so the superset test must be a real containment check,
+        // not "mostly overlaps".
+        Set<String> almost = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        almost.remove("apply_quick_fix");
+        almost.remove("write_module_source");
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(almost));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertFalse("a selection one tool short of the preset must not be migrated: " + disabled,
             disabled.contains("apply_quick_fix"));
     }
 }
