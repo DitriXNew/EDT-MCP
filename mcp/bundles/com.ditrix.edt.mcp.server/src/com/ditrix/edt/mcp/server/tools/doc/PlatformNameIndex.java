@@ -7,8 +7,10 @@
 package com.ditrix.edt.mcp.server.tools.doc;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * The names a platform lookup scanned, and the "not found" banner built from them.
@@ -32,6 +34,15 @@ final class PlatformNameIndex
     /** How many "did you mean" candidates the banner offers. */
     private static final int SUGGESTION_LIMIT = 8;
 
+    /** How many single-character edits a name may be from the query and still be offered. */
+    private static final int MAX_TYPO_DISTANCE = 2;
+
+    /**
+     * The shortest query eligible for typo matching. Within two edits of a four-letter query sits a
+     * good part of the vocabulary, so below this the suggestions would be noise, not help.
+     */
+    private static final int MIN_TYPO_QUERY_LENGTH = 5;
+
     private final String query;
 
     private final List<String> samples = new ArrayList<>();
@@ -41,6 +52,19 @@ final class PlatformNameIndex
 
     /** Candidates the query contains, or that it qualifies with a dot ({@code CatalogObject.X}). */
     private final List<String> otherHits = new ArrayList<>();
+
+    /**
+     * Candidates within {@link #MAX_TYPO_DISTANCE} edits of the query - the last resort, offered only
+     * when nothing above matched, so a plain misspelling still gets an answer.
+     */
+    private final List<String> typoHits = new ArrayList<>();
+
+    /**
+     * The names already counted. The platform genuinely publishes the same name twice - two distinct
+     * types can share one Russian name - so without this the total over-reports and one name can eat
+     * two suggestion slots.
+     */
+    private final Set<String> seen = new HashSet<>();
 
     private int total;
 
@@ -64,7 +88,7 @@ final class PlatformNameIndex
      */
     void accept(String name)
     {
-        if (name == null || name.isEmpty())
+        if (name == null || name.isEmpty() || !seen.add(name.toLowerCase(Locale.ROOT)))
         {
             return;
         }
@@ -106,7 +130,11 @@ final class PlatformNameIndex
     List<String> suggestions()
     {
         List<String> all = new ArrayList<>();
-        for (List<String> bucket : List.of(prefixHits, otherHits))
+        // The typo bucket is a LAST resort: a name related to the query by substring or qualification
+        // is a better guess than one that merely looks similar, and mixing them would bury it.
+        List<List<String>> buckets = prefixHits.isEmpty() && otherHits.isEmpty()
+            ? List.of(typoHits) : List.of(prefixHits, otherHits);
+        for (List<String> bucket : buckets)
         {
             for (String hit : bucket)
             {
@@ -195,5 +223,62 @@ final class PlatformNameIndex
         {
             otherHits.add(name);
         }
+        else if (typoHits.size() < SUGGESTION_LIMIT && isTypoOf(lowerName, lowerQuery))
+        {
+            typoHits.add(name);
+        }
+    }
+
+    /**
+     * Whether {@code name} is within {@link #MAX_TYPO_DISTANCE} single-character edits of the query -
+     * the misspelling case none of the substring rules catch ({@code ValueTabel} -> {@code ValueTable}
+     * shares no useful prefix and contains nothing).
+     *
+     * <p>Gated on the length difference first, which is the whole reason this is affordable: a name
+     * that cannot possibly be within the bound is rejected without any character work, so the scan
+     * stays a few string compares per name rather than a matrix per name.
+     */
+    private static boolean isTypoOf(String name, String query)
+    {
+        if (Math.abs(name.length() - query.length()) > MAX_TYPO_DISTANCE
+            || query.length() < MIN_TYPO_QUERY_LENGTH)
+        {
+            return false;
+        }
+        return editDistanceWithin(name, query, MAX_TYPO_DISTANCE);
+    }
+
+    /**
+     * Bounded Levenshtein: {@code true} when {@code a} and {@code b} are at most {@code max} edits
+     * apart. Abandons a row as soon as every cell in it exceeds {@code max}, so a distant pair costs
+     * a fraction of the full matrix.
+     */
+    private static boolean editDistanceWithin(String a, String b, int max)
+    {
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++)
+        {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++)
+        {
+            current[0] = i;
+            int rowBest = current[0];
+            for (int j = 1; j <= b.length(); j++)
+            {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+                rowBest = Math.min(rowBest, current[j]);
+            }
+            if (rowBest > max)
+            {
+                return false;
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[b.length()] <= max;
     }
 }

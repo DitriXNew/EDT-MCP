@@ -134,6 +134,22 @@ public final class PlatformHelpService
     }
 
     /**
+     * Whether the syntax helper has a page for this type at all - asked before committing to a name,
+     * when the caller has two to choose from. A metadata TYPE SET is normally documented under its
+     * own name ({@code CatalogObject.<Catalog name>}), but not always: {@code Characteristic} has no
+     * page while the generic type behind it ({@code CharacteristicsDescription}) does, and asking
+     * under the set would silently lose every description. The node is cached, so the probe costs
+     * nothing beyond the lookup the following read would do anyway.
+     *
+     * @param typeName the English or Russian type name
+     * @return {@code true} when a page exists for it
+     */
+    public boolean documents(String typeName)
+    {
+        return !off && findTypeNode(typeName) != null;
+    }
+
+    /**
      * The documentation of a TYPE itself.
      *
      * @param typeName the English or Russian type name

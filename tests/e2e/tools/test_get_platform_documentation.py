@@ -342,6 +342,39 @@ def test_a_type_set_with_nothing_to_document_says_so_instead_of_not_found():
 
 
 @e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_type_set_the_help_does_not_document_falls_back_to_its_generic_type():
+    # The syntax helper files a type set under its OWN name (CatalogObject.<Catalog name>) — but not
+    # always: 'Characteristic' has no page while the generic type behind it
+    # (CharacteristicsDescription) does. Committing to the set's name unconditionally rendered the
+    # model and silently dropped every description for it.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "Characteristic",
+              "memberName": "KeyField", "responseFormat": "detailed"})
+    assert_ok(r, "detailed lookup of a type set the help does not document")
+    assert_contains(r.text, "**Type set:** Characteristic",
+                    "it is still reached through the type set")
+    # The type's own description and the member's, both from the GENERIC type's help page.
+    assert_contains(r.text, "Contains characteristics description",
+                    "the type description must fall back to the generic type's help page")
+    assert_contains(r.text, "characteristics key",
+                    "the member description must come along with the fallback")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_type_set_the_help_documents_keeps_its_own_page():
+    # The fallback must not steal the normal case: CatalogObject HAS its own help page, and its
+    # set-level prose is what a caller should get, not the generic type's.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "CatalogObject",
+              "memberName": "Write", "responseFormat": "detailed"})
+    assert_ok(r, "detailed lookup of a type set the help documents")
+    assert_contains(r.text, "catalog items",
+                    "the set's OWN documentation page must still win when it exists")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
 def test_a_concrete_metadata_type_is_pointed_at_its_type_set():
     # 'CatalogObject.Currencies' is a configuration-specific type this tool does not document; the
     # generic set is what the caller wants and the banner must say so rather than list 30 unrelated

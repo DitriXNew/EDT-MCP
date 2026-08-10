@@ -323,7 +323,47 @@ public class PlatformDocumentationService
         {
             return true;
         }
-        return containedTypeName(provider, desc) != null;
+        return documentedTypeDescription(provider, desc) != null;
+    }
+
+    /**
+     * The description of the generic type that documents a TYPE SET - the one
+     * {@link #containedTypeName} names, looked UP in the provider so the set is advertised only when
+     * its target is really there.
+     *
+     * <p>Checking the name is non-blank is not enough: it is the platform's own table, and a version
+     * that renamed or dropped a generic type would have the set listed as available and then fail on
+     * query - the very loop this change removes. The check stays a map lookup plus an EClass test, so
+     * it costs nothing; deciding by an actual {@code EcoreUtil.resolve} is what would be unaffordable
+     * (thousands of platform resources loaded on the UI thread for one not-found answer), and is not
+     * needed - the provider registers a type only after its resource parsed at init.
+     *
+     * @param provider the provider the description came from
+     * @param desc the type-set description
+     * @return the target description, or {@code null} when the set documents nothing
+     */
+    private static IEObjectDescription documentedTypeDescription(IEObjectProvider provider,
+        IEObjectDescription desc)
+    {
+        String contains = containedTypeName(provider, desc);
+        if (contains == null)
+        {
+            return null;
+        }
+        for (String candidate : contains.split(",")) //$NON-NLS-1$
+        {
+            String trimmed = candidate.trim();
+            if (trimmed.isEmpty())
+            {
+                continue;
+            }
+            IEObjectDescription target = provider.getEObjectDescription(trimmed);
+            if (target != null && !McorePackage.Literals.TYPE_SET.equals(target.getEClass()))
+            {
+                return target;
+            }
+        }
+        return null;
     }
 
     /**
@@ -404,26 +444,13 @@ public class PlatformDocumentationService
         {
             return new DocumentedType(direct, null, null);
         }
-        String contains = containedTypeName(provider, desc);
-        if (contains == null)
+        IEObjectDescription target = documentedTypeDescription(provider, desc);
+        Type resolved = target != null ? resolveDescriptionAsType(target) : null;
+        if (resolved == null)
         {
             return null;
         }
-        for (String candidate : contains.split(",")) //$NON-NLS-1$
-        {
-            String trimmed = candidate.trim();
-            if (trimmed.isEmpty())
-            {
-                continue;
-            }
-            IEObjectDescription target = provider.getEObjectDescription(trimmed);
-            Type resolved = target != null ? resolveDescriptionAsType(target) : null;
-            if (resolved != null)
-            {
-                return new DocumentedType(resolved, typeSetLabel(provider, desc, matchedName), matchedName);
-            }
-        }
-        return null;
+        return new DocumentedType(resolved, typeSetLabel(provider, desc, matchedName), matchedName);
     }
 
     /**
@@ -508,11 +535,7 @@ public class PlatformDocumentationService
         // at limit 200 that is hundreds of page loads whose result is then thrown away. Issue #299.
         PlatformHelpService help = detailed ? new PlatformHelpService(version, useRussian ? "ru" : "en") //$NON-NLS-1$ //$NON-NLS-2$
             : PlatformHelpService.disabled();
-        // For a TYPE SET the help documents the SET (CatalogObject.<Catalog name>), not the generic
-        // type the model resolved to (CatalogObjectCatalogName), so the set's name is what to ask
-        // with; every other type is asked for under its own name, as before. Issue #355.
-        String typeName = documented.helpName != null ? documented.helpName
-            : (type.getName() != null ? type.getName() : type.getNameRu());
+        String typeName = helpNameFor(documented, type, help);
 
         appendTypeHeader(sb, type, useRussian);
         appendTypeSetLine(sb, documented.typeSetLabel);
@@ -583,6 +606,34 @@ public class PlatformDocumentationService
             sb.append(" / ").append(altName); //$NON-NLS-1$
         }
         sb.append("\n\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * The name the SYNTAX HELPER is asked with, for the type's own description and for every
+     * member's.
+     *
+     * <p>A metadata TYPE SET is normally documented under the SET
+     * ({@code CatalogObject.<Catalog name>}), not under the generic type the model resolved to
+     * ({@code CatalogObjectCatalogName}) - so the set's name comes first. But not every set has a
+     * page: {@code Characteristic} has none while its generic type
+     * ({@code CharacteristicsDescription}) does, and committing to the set's name unconditionally
+     * silently dropped every description for it. So the set's name is used only when the helper
+     * actually documents it, and otherwise the resolved type answers as it always did. Issue #355.
+     *
+     * @param documented the resolved lookup target
+     * @param type the resolved platform type
+     * @param help the syntax-helper reader (a disabled one documents nothing, so CONCISE - which
+     *            reads no descriptions at all - simply keeps the model name)
+     * @return the name to ask the helper with
+     */
+    private static String helpNameFor(DocumentedType documented, Type type, PlatformHelpService help)
+    {
+        String modelName = type.getName() != null ? type.getName() : type.getNameRu();
+        if (documented.helpName == null)
+        {
+            return modelName;
+        }
+        return help.documents(documented.helpName) ? documented.helpName : modelName;
     }
 
     /**

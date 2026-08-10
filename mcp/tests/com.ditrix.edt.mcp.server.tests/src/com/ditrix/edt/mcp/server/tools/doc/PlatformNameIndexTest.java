@@ -10,6 +10,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
+
 import org.junit.Test;
 
 /**
@@ -175,5 +177,64 @@ public class PlatformNameIndexTest
         index.accept(null);
         index.accept(""); //$NON-NLS-1$
         assertEquals(0, index.total());
+    }
+
+    @Test
+    public void testARepeatedNameIsCountedAndOfferedOnce()
+    {
+        // The platform really does publish one name twice - two distinct types can share a single
+        // Russian name - so the total over-reported and one name could eat two suggestion slots.
+        PlatformNameIndex index = new PlatformNameIndex("ValueTab"); //$NON-NLS-1$
+        index.accept("ValueTable"); //$NON-NLS-1$
+        index.accept("ValueTable"); //$NON-NLS-1$
+        index.accept("valuetable"); //$NON-NLS-1$ same name, different spelling of the same letters
+
+        assertEquals("a repeated name must be counted once", 1, index.total()); //$NON-NLS-1$
+        assertEquals("and offered once", 1, index.suggestions().size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMisspellingStillGetsASuggestion()
+    {
+        // A transposition shares no useful prefix and contains nothing, so the substring rules alone
+        // answered a plain typo with no suggestion at all.
+        PlatformNameIndex index = new PlatformNameIndex("ValueTabel"); //$NON-NLS-1$
+        index.accept("ValueTable"); //$NON-NLS-1$
+        index.accept("Structure"); //$NON-NLS-1$
+
+        assertEquals(List.of("ValueTable"), index.suggestions()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATypoSuggestionIsOnlyALastResort()
+    {
+        // A name genuinely related to the query beats one that merely looks similar; mixing them
+        // would bury the good answer under lookalikes.
+        PlatformNameIndex index = new PlatformNameIndex("ValueTabl"); //$NON-NLS-1$
+        index.accept("ValueTablePro"); //$NON-NLS-1$ starts with the query -> the strong bucket
+        index.accept("ValueTable"); //$NON-NLS-1$ also a 1-edit typo hit
+
+        assertEquals("the prefix match alone answers", //$NON-NLS-1$
+            List.of("ValueTablePro", "ValueTable"), index.suggestions()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAShortQueryIsNotTypoMatched()
+    {
+        // Within two edits of a short query sits half the vocabulary - that is noise, not help.
+        PlatformNameIndex index = new PlatformNameIndex("Xyz"); //$NON-NLS-1$
+        index.accept("Xml"); //$NON-NLS-1$
+        index.accept("Map"); //$NON-NLS-1$
+
+        assertTrue(index.suggestions().isEmpty());
+    }
+
+    @Test
+    public void testADistantNameIsNotOfferedAsATypo()
+    {
+        PlatformNameIndex index = new PlatformNameIndex("ValueTabel"); //$NON-NLS-1$
+        index.accept("HTTPConnection"); //$NON-NLS-1$
+
+        assertTrue(index.suggestions().isEmpty());
     }
 }
