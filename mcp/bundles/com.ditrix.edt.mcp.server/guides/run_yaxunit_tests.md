@@ -42,7 +42,7 @@ Note `update_database` identifies the application by `projectName` + `applicatio
 
 **Every call is bounded.** `timeout` is the window for the WHOLE call — resolution, pre-launch preparation, spawn and polling together, not the polling step alone — and it is clamped to **45 seconds**. That ceiling is deliberate: an MCP client cuts a call at roughly 60 seconds, so a longer window does not buy a longer wait, it replaces the tool's answer with a bare transport error carrying no phase and no reason. Ask for less if you want a quick probe; asking for more is silently clamped.
 
-**A call that has not finished the work returns `Pending` naming the phase**, never a transport error:
+**A call that has not finished the work returns `Pending` naming the phase**, never a transport error (the one exception is work that never started at all — that returns an explicit error, see below):
 
 | phase | what the server is doing |
 |---|---|
@@ -57,7 +57,9 @@ Call again with the SAME arguments to keep waiting; nothing is cancelled and the
 
 **What the phase can and cannot tell you.** A phase that ADVANCES between calls proves the server is making progress — keep waiting. A phase that stops changing is ambiguous, and honestly so: a `prep:recompute` that sits still for forty minutes is normal on a large configuration, and one blocked on a modal dialog looks exactly the same from here (the elapsed counter grows either way — it is wall-clock, not a heartbeat). There is no signal that separates them, so **when a phase stops advancing, look at EDT** for a dialog waiting for a click instead of waiting indefinitely. Running the pre-flight above is what keeps that case rare.
 
-The whole-call window is honoured as an aim, not to the millisecond: when a platform call has to be abandoned rather than returning on its own, the backstop adds a few seconds of grace before answering. The bound that matters holds — the answer arrives well inside the ~60s transport limit either way.
+The window is a ceiling, not an aim: the call returns **within** `timeout`. At least 80% of it is available to the work; the remainder is held back so the answer can be assembled instead of being cut off mid-way. Both clocks start when the call does, so a slow start inside EDT's job scheduler cannot eat the reserve.
+
+Two honest edges. A step that blocks inside the platform without ever checking a deadline — acquiring the per-infobase lock, the launch itself, parsing the report — is stopped by the outer bound rather than by its own, so you get the phase it was in rather than a step-specific message; the call still returns on time. And if the job carrying the call never leaves the scheduler at all, establishing that fact costs up to half a second more, and that path returns an explicit "did not start" error rather than a **Pending**.
 
 The tool polls for up to the remaining window. If the launch finishes in that window it returns the parsed JUnit report. If the window expires while the launch is still running it returns **Pending** and does NOT terminate the launch. Call the tool again with the SAME arguments to keep waiting and fetch the result once the launch completes. A run key is derived from the config name plus the filter, so identical arguments reattach to the in-flight launch instead of starting a new one. There is NO time-based result cache. A completed result is delivered to the matching identical call exactly once (to satisfy a re-call fetching a previously reported **Pending** run); every later identical call re-runs the tests. Caveat: if you were told **Pending** and never fetched the result, the next identical call returns that old report once (not a fresh run) before subsequent calls re-execute. To force a fresh run after an abandoned Pending, either change the filter (a new run-key carries no pending result) or make one identical call to drain that result, then call again to re-execute. (`terminate_launch` does NOT help here — it stops the Eclipse launch but leaves the once-only pending result to be served by the next identical call.)
 
@@ -121,7 +123,7 @@ A longer run is waited for by CALLING AGAIN, not by asking for a longer window �
 
 ## Gotchas
 
-- A timeout returns **Pending**, not a failure — do not retry with different arguments; reuse the same ones so the run key matches.
+- A timeout returns **Pending**, not a failure — do not retry with different arguments; reuse the same ones so the run key matches. The single exception is work that never left EDT's scheduler: that returns an explicit "did not start" error, because there is nothing pending to wait for.
 - `timeout` above 45 is clamped, silently and on purpose. If a call ever comes back as a bare transport error rather than **Pending**, that is a bug worth reporting: the whole point of the ceiling is that it cannot happen.
 - A **Pending whose phase never changes** means waiting will not help — look for a modal dialog in EDT. A phase that advances, or an elapsed counter that grows, means the server is working; keep calling.
 - If no JUnit XML appears after the launch finishes, the YAXUnit extension is likely not installed in the infobase, or the filter matched no tests.

@@ -114,16 +114,32 @@ public class RunYaxunitTestsTool implements IMcpTool
     private static final int POLL_INTERVAL_MS = 1000;
 
     /**
-     * Extra time (ms) the backstop job is allowed beyond the caller's window.
+     * Time (ms) held back from the INNER deadline so the backstop cannot steal the answer.
      *
      * <p>The deadline threaded through the call is what normally answers — it returns a
      * {@code Pending} naming the phase. The backstop exists for the case that cannot: a
      * platform call that blocks on the tool thread and never returns to look at any deadline
      * (the pre-launch reads and the spawn both reach EDT services that a running recompute or
-     * an unanswered modal can hold for minutes). The grace keeps the two from racing, so a
-     * run that is merely slow still produces the specific message instead of the generic one.
+     * an unanswered modal can hold for minutes). The two must not race, or a merely-slow run
+     * would get the generic "did not answer" message instead of its real phase.
+     *
+     * <p>The reserve therefore sits INSIDE the caller's window, not on top of it. Adding it to
+     * the backstop instead made the public parameter stop bounding the call: {@code timeout: 1}
+     * held the request for about six seconds, and a client whose transport is shorter than ours
+     * still saw the bare transport error this whole change exists to remove. A parameter named
+     * as the bound of the call has to be the bound of the call.
      */
-    private static final long CALL_BACKSTOP_GRACE_MS = 5_000L;
+    private static final long CALL_BACKSTOP_RESERVE_MS = 5_000L;
+
+    /**
+     * The smallest fraction of the caller's window that is left to the work itself, as a
+     * divisor: the reserve never takes more than {@code 1/RESERVE_MAX_SHARE} of it.
+     *
+     * <p>Without this a short window would go negative ({@code timeout: 1} minus five seconds),
+     * and a healthy quick run would answer "did not finish" the moment it started — a false
+     * "still working" on a call that was doing fine, which is worse than waiting a second longer.
+     */
+    private static final long RESERVE_MAX_SHARE = 5L;
 
     /** Phase label while the launch configuration and its application are being resolved. */
     private static final String PHASE_RESOLVE = "resolve"; //$NON-NLS-1$
@@ -232,8 +248,13 @@ public class RunYaxunitTestsTool implements IMcpTool
         "Wall-clock window in seconds for the WHOLE call, not just the polling step " //$NON-NLS-1$
             + "(default and maximum " + MAX_TIMEOUT_SECONDS + "; a larger value is clamped to it, " //$NON-NLS-1$ //$NON-NLS-2$
             + "because an MCP transport cuts the call at around 60s and a longer window would " //$NON-NLS-1$
-            + "return a bare transport error instead of an answer). On expiry the tool returns " //$NON-NLS-1$
-            + "Pending with the current phase; call again with the same arguments to keep waiting."; //$NON-NLS-1$
+            + "return a bare transport error instead of an answer). The call returns WITHIN this " //$NON-NLS-1$
+            + "window: at least 80% of it is available to the work, the remainder is reserved so " //$NON-NLS-1$
+            + "the answer can be assembled rather than cut off. On expiry the tool returns " //$NON-NLS-1$
+            + "Pending with the current phase — or, if the work never started at all, an explicit " //$NON-NLS-1$
+            + "error saying so (that one case can take up to half a second longer, while the " //$NON-NLS-1$
+            + "server establishes the work never began); call again with the same arguments to " //$NON-NLS-1$
+            + "keep waiting."; //$NON-NLS-1$
 
     /**
      * Shared schema doc for the {@code externalInfobaseChanges} parameter (also forwarded by
@@ -469,6 +490,42 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
+     * The wall clock the backstop is given — EXACTLY the caller's (clamped) window.
+     *
+     * <p>Pure (test seam). This is the number that makes {@code timeout} mean what its name
+     * says, so it is asserted directly rather than inferred from a live run.
+     *
+     * <p>One documented exception, from {@link BoundedJob}: a job the deadline catches while it
+     * is still QUEUED costs up to a further half second while the scheduler establishes that it
+     * never started. That path returns the "did not start" error, not a {@code Pending}.
+     *
+     * @param timeoutSeconds the clamped window
+     * @return the backstop's budget in milliseconds
+     */
+    static long backstopBudgetMs(int timeoutSeconds)
+    {
+        return timeoutSeconds * 1000L;
+    }
+
+    /**
+     * The window the call's own deadline races against: the caller's window minus the reserve.
+     *
+     * <p>Pure (test seam). Strictly smaller than {@link #backstopBudgetMs(int)} for every
+     * accepted {@code timeout}, so the inner flow always gets to answer first with its real
+     * phase, and always positive, so a short window still buys real working time.
+     *
+     * @param timeoutSeconds the clamped window
+     * @return the inner deadline's budget in milliseconds
+     */
+    static long innerWindowMs(int timeoutSeconds)
+    {
+        long requestedMs = backstopBudgetMs(timeoutSeconds);
+        // Proportional on short windows: a flat five seconds would swallow them whole.
+        long reserveMs = Math.min(CALL_BACKSTOP_RESERVE_MS, requestedMs / RESERVE_MAX_SHARE);
+        return requestedMs - reserveMs;
+    }
+
+    /**
      * Runs {@link #runTests} under a hard wall-clock bound, so the call answers while the MCP
      * transport is still listening no matter what the platform does.
      *
@@ -491,9 +548,13 @@ public class RunYaxunitTestsTool implements IMcpTool
     {
         CallState state = new CallState();
         String[] resultHolder = new String[1];
+        // Anchored to the CALL, not to the job body: the job can sit in EDT's scheduler for a
+        // while before it runs, and a deadline started at that point would land AFTER the
+        // backstop's — handing the backstop a race it is supposed to lose.
+        long innerDeadlineMs = System.currentTimeMillis() + innerWindowMs(request.timeout);
         BoundedJob.Result bounded = BoundedJob.run("run_yaxunit_tests: " //$NON-NLS-1$
             + (request.configName != null ? request.configName : String.valueOf(request.projectName)),
-            request.timeout * 1000L + CALL_BACKSTOP_GRACE_MS, monitor -> {
+            backstopBudgetMs(request.timeout), monitor -> {
                 // The suppressor's in-flight window is scoped to execute(); this job can outlive
                 // it, and it reaches the same infobase-connecting calls, so it marks its own.
                 InfobaseAuthDialogSuppressor.markActivityStart();
@@ -501,7 +562,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 {
                     // Write the result BEFORE claiming it: the claim's compare-and-set is the
                     // happens-before edge that publishes this write to whoever reads the holder.
-                    resultHolder[0] = runTests(request, state);
+                    resultHolder[0] = runTests(request, state, innerDeadlineMs);
                     state.publishResult();
                 }
                 finally
@@ -770,13 +831,16 @@ public class RunYaxunitTestsTool implements IMcpTool
      * The temp directory is NEVER deleted in finally — a Pending re-call can fetch the result. Old
      * runs are cleaned up automatically before starting a new launch.
      */
-    private String runTests(RunRequest req, CallState state) // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+    private String runTests(RunRequest req, CallState state, long deadlineMs) // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
     {
         // ONE deadline for the whole call, not one per step: the steps run in sequence, so a
         // per-step budget adds up (resolve + 25s preparation + spawn + the polling window) to
         // far more than the transport allows, which is how a call that honoured every
         // individual limit still died on the wire (#357).
-        long deadlineMs = System.currentTimeMillis() + req.timeout * 1000L;
+        //
+        // The deadline is the caller's window MINUS the backstop reserve, measured from when the
+        // CALL began (see runBounded), so this flow reaches its own deadline first and answers
+        // with the real phase. The reserve comes out of the window, never on top of it.
         try
         {
             ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
@@ -830,7 +894,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             if (existing != null)
             {
                 state.set(PHASE_RUN);
-                return handleExistingLaunch(existing, reportDir, remainingSeconds(deadlineMs), runKey,
+                return handleExistingLaunch(existing, reportDir, deadlineMs, runKey,
                         projectName, applicationId, state);
             }
 
@@ -909,7 +973,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             // moment a result is actually delivered — and put back by publishResult when that
             // delivery turns out to have no one listening.
             PENDING_FETCH.add(runKey);
-            String pollResult = pollLaunch(launch, reportDir, remainingSeconds(deadlineMs), runKey,
+            String pollResult = pollLaunch(launch, reportDir, deadlineMs, runKey,
                     projectName, applicationId);
             if (pollResult != null)
             {
@@ -939,20 +1003,6 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
     }
 
-    /**
-     * Whole seconds left before {@code deadlineMs}, never below zero.
-     *
-     * <p>Pure (test seam). Rounds DOWN and floors at 0: a wait handed a rounded-up remainder
-     * would end after the deadline, which defeats the point of having one. Zero means "do not
-     * wait at all, answer now".
-     *
-     * @param deadlineMs the absolute wall-clock deadline of the call
-     * @return the seconds a further wait may use
-     */
-    static int remainingSeconds(long deadlineMs)
-    {
-        return (int)Math.max(0L, (deadlineMs - System.currentTimeMillis()) / 1000L);
-    }
 
     /**
      * Milliseconds left before {@code deadlineMs}, never below zero.
@@ -1295,7 +1345,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     /**
      * Handles a run-key that already has a launch tracked in {@link #ACTIVE_LAUNCHES}:
      * if it terminated, evicts it and reads the report (or reports a missing one);
-     * otherwise polls up to {@code timeout}s and returns the parsed report or a
+     * otherwise polls until {@code deadlineMs} and returns the parsed report or a
      * Pending message. Does NOT spawn a launch — it only reads results and updates
      * the {@link #ACTIVE_LAUNCHES}/{@link #PENDING_FETCH} tracking maps, exactly as
      * the inline branch did.
@@ -1314,7 +1364,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      *
      * @return the Markdown report, a structured error, or a Pending message — always non-{@code null}
      */
-    private String handleExistingLaunch(ILaunch existing, Path reportDir, int timeout, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+    private String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String projectName, String applicationId, CallState state) throws InterruptedException
     {
         if (existing.isTerminated())
@@ -1337,7 +1387,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         // platform), and an unmarked Pending sends the retry into a fresh run that wipes the
         // report.
         PENDING_FETCH.add(runKey);
-        String pollResult = pollLaunch(existing, reportDir, timeout, runKey,
+        String pollResult = pollLaunch(existing, reportDir, deadlineMs, runKey,
                 projectName, applicationId);
         if (pollResult != null)
         {
@@ -1908,7 +1958,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
-     * Polls a launch for up to {@code timeoutSec} seconds. Returns the parsed Markdown report
+     * Polls a launch until the absolute {@code deadline}. Returns the parsed Markdown report
      * if the launch finished, or {@code null} if still running (caller should return a Pending message).
      * <p>
      * The post-completion read ({@code ACTIVE_LAUNCHES.remove} + {@link #findJunitXml} +
@@ -1922,11 +1972,13 @@ public class RunYaxunitTestsTool implements IMcpTool
      * it across the {@link Thread#sleep} window would serialise the whole IB for the poll duration.
      * Worst case still degrades from a torn parse to a clean null.
      */
-    private String pollLaunch(ILaunch launch, Path reportDir, int timeoutSec, String runKey,
+    private String pollLaunch(ILaunch launch, Path reportDir, long deadline, String runKey,
             String projectName, String applicationId)
             throws InterruptedException
     {
-        long deadline = System.currentTimeMillis() + (timeoutSec * 1000L);
+        // An ABSOLUTE deadline, not a second count: rounding the remainder down to whole seconds
+        // threw away everything below a second, so a short window polled for exactly zero time
+        // and answered Pending without ever having waited.
         while (!launch.isTerminated())
         {
             long remaining = deadline - System.currentTimeMillis();

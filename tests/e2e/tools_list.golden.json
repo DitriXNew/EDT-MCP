@@ -3941,7 +3941,7 @@
           "type": "array"
         },
         "timeout": {
-          "description": "Wall-clock window in seconds for the WHOLE call, not just the polling step (default and maximum 45; a larger value is clamped to it, because an MCP transport cuts the call at around 60s and a longer window would return a bare transport error instead of an answer). On expiry the tool returns Pending with the current phase; call again with the same arguments to keep waiting.",
+          "description": "Wall-clock window in seconds for the WHOLE call, not just the polling step (default and maximum 45; a larger value is clamped to it, because an MCP transport cuts the call at around 60s and a longer window would return a bare transport error instead of an answer). The call returns WITHIN this window: at least 80% of it is available to the work, the remainder is reserved so the answer can be assembled rather than cut off. On expiry the tool returns Pending with the current phase — or, if the work never started at all, an explicit error saying so (that one case can take up to half a second longer, while the server establishes the work never began); call again with the same arguments to keep waiting.",
           "type": "integer"
         },
         "updateBeforeLaunch": {

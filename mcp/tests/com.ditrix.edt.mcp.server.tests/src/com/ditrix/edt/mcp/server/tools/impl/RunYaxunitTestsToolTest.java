@@ -424,16 +424,40 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
-    public void testRemainingSecondsFloorsAtZeroAndNeverOvershootsTheDeadline()
+    public void testTheCallNeverOutlivesTheRequestedWindow()
+    {
+        // #357 follow-up: the backstop used to be given `timeout + 5s`, so the public parameter
+        // stopped bounding the call — `timeout: 1` held the request for about six seconds, and a
+        // client with a shorter transport than ours still got the bare transport error this whole
+        // change exists to remove. Checked across EVERY accepted window, not just the default.
+        for (int timeout = 1; timeout <= RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS; timeout++)
+        {
+            long requestedMs = timeout * 1000L;
+            long backstopMs = RunYaxunitTestsTool.backstopBudgetMs(timeout);
+            long innerMs = RunYaxunitTestsTool.innerWindowMs(timeout);
+
+            assertEquals("the backstop must not outlive the requested window (timeout=" + timeout
+                + ")", requestedMs, backstopMs);
+            assertTrue("the inner deadline must fire BEFORE the backstop, or the backstop steals "
+                + "the answer and replaces a real phase with a generic timeout (timeout=" + timeout
+                + "): inner=" + innerMs + " backstop=" + backstopMs, innerMs < backstopMs);
+            assertTrue("the inner window must stay positive, or a healthy short run answers "
+                + "'did not finish' the moment it starts (timeout=" + timeout + "): inner="
+                + innerMs, innerMs > 0);
+            assertTrue("the work must keep at least 80% of the window it was given (timeout="
+                + timeout + "): inner=" + innerMs, innerMs * 5 >= requestedMs * 4);
+        }
+    }
+
+    @Test
+    public void testRemainingMillisFloorsAtZero()
     {
         long now = System.currentTimeMillis();
-        assertEquals("a deadline already past leaves no time to wait", 0,
-            RunYaxunitTestsTool.remainingSeconds(now - 5_000L));
-        assertEquals("a deadline already past leaves no millis to wait", 0L,
+        assertEquals("a deadline already past leaves no time to wait", 0L,
             RunYaxunitTestsTool.remainingMillis(now - 5_000L));
-        int remaining = RunYaxunitTestsTool.remainingSeconds(now + 10_000L);
+        long remaining = RunYaxunitTestsTool.remainingMillis(now + 10_000L);
         assertTrue("the remainder must not exceed the distance to the deadline",
-            remaining <= 10 && remaining >= 9);
+            remaining <= 10_000L && remaining > 9_000L);
     }
 
     @Test
