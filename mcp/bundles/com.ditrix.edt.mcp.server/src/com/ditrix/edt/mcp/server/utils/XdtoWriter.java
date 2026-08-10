@@ -465,14 +465,6 @@ public final class XdtoWriter
     }
 
     /**
-     * Finds a LOCAL type (an {@link ObjectType} from {@code Package.getObjects()} OR a
-     * {@link ValueType} from {@code Package.getTypes()}) by name, with the same yo fallback
-     * {@link #findObjectType} applies. XDTO property QNames may legitimately target a local
-     * value type (e.g. an imported package's enumerations), not only object types.
-     *
-     * @return the matching type, or {@code null}
-     */
-    /**
      * EXACT-name ObjectType lookup, NO yo fallback: used by create-time duplicate checks, where the
      * yo-tolerant {@link #findObjectType} would wrongly flag a distinct name differing only by yo as
      * a duplicate (XDTO local names are character-sensitive).
@@ -638,6 +630,14 @@ public final class XdtoWriter
         return null;
     }
 
+    /**
+     * Finds a LOCAL type (an {@link ObjectType} from {@code Package.getObjects()} OR a
+     * {@link ValueType} from {@code Package.getTypes()}) by name, with the same yo fallback
+     * {@link #findObjectType} applies. XDTO property QNames may legitimately target a local
+     * value type (e.g. an imported package's enumerations), not only object types.
+     *
+     * @return the matching type, or {@code null}
+     */
     public static Type findLocalType(Package pkg, String name)
     {
         if (pkg == null || name == null)

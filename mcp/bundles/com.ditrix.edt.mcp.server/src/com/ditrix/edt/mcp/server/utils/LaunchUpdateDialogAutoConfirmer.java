@@ -566,13 +566,6 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Which button answers the conflict dialog whose message is {@code dialogBody}, given the
-     * arms outstanding right now? See {@link #choosePolicyFor(String, List)}.
-     *
-     * @param dialogBody the dialog message text (may be {@code null})
-     * @return the policy to apply, or {@code null} when the dialog must be cancelled
-     */
-    /**
      * The live form of {@link #decideFor(String, List)} — decides against the arms outstanding
      * right now.
      *

@@ -286,11 +286,6 @@ public class TagsMenuContribution extends CompoundContributionItem {
     }
     
     /**
-     * Menu item for a tag with checkbox and colored icon.
-     * Uses ResourceManager for proper image lifecycle management.
-     * @deprecated Use {@link MultiTagMenuItem} instead
-     */
-    /**
      * Separator menu item.
      */
     private static class SeparatorItem extends ContributionItem {

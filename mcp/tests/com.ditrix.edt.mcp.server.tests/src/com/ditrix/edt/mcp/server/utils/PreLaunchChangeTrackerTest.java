@@ -68,11 +68,18 @@ public class PreLaunchChangeTrackerTest
     /** Survives {@code simulatePluginRestartForTest} — models the workspace metadata. */
     private final MapStore store = new MapStore();
 
+    /** Counts disk syncs, and lets a test make one "discover" an offline edit. */
+    private final List<String> diskSyncs = new ArrayList<>();
+
     @Before
     public void setUp()
     {
         PreLaunchChangeTracker.setStoreForTest(store);
         PreLaunchChangeTracker.setFingerprinterForTest(project -> content.get(project.getName()));
+        PreLaunchChangeTracker.setDiskSyncForTest(project -> {
+            diskSyncs.add(project.getName());
+            return true;
+        });
     }
 
     @After
@@ -309,6 +316,182 @@ public class PreLaunchChangeTrackerTest
 
         PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(Arrays.asList(closed, null));
         assertFalse("a closed project must not be judged dirty", snapshot.isDirty(closed));
+    }
+
+    // =========================================================================
+    // Disk visibility - the tree must describe the disk before it is believed
+    // =========================================================================
+
+    /**
+     * The whole gate reads the workspace's SAVED tree. Sources changed while EDT was
+     * not running (a {@code git checkout} on a closed workspace) leave that tree
+     * carrying the old timestamps, and no OS monitor reports them - so unless the
+     * project is synced with disk first, the stored fingerprint matches and a launch
+     * is certified against sources nobody has looked at.
+     */
+    @Test
+    public void testOfflineEditIsSeenBecauseTheTreeIsSyncedFirst()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        // EDT goes down; somebody checks out another branch; EDT comes back. The
+        // in-memory state is gone, the tree still says fp-1 - until the sync runs.
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        diskSyncs.clear(); // count only what the new session does
+        PreLaunchChangeTracker.setDiskSyncForTest(syncedProject -> {
+            diskSyncs.add(syncedProject.getName());
+            content.put(syncedProject.getName(), "fp-2"); // the refresh sees the edit
+            return true;
+        });
+
+        assertTrue("a change made while EDT was down must be seen after the disk sync",
+            isDirty(project));
+        assertEquals("the sync must have run", 1, diskSyncs.size());
+    }
+
+    @Test
+    public void testTreeIsSyncedOncePerSessionAndAgainAfterRestart()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+
+        prepare(project);
+        prepare(project);
+        assertEquals("one sync per project per session", 1, diskSyncs.size());
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        prepare(project);
+        assertEquals("a new session must sync again", 2, diskSyncs.size());
+    }
+
+    @Test
+    public void testUnsyncableProjectIsTreatedAsChanged()
+    {
+        // The refresh timed out or failed: we cannot prove the tree describes the
+        // disk, so a matching fingerprint must NOT be trusted.
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        PreLaunchChangeTracker.setDiskSyncForTest(syncedProject -> false);
+
+        assertTrue("an unproven tree must cost a recompute, not grant a certificate",
+            isDirty(project));
+    }
+
+    @Test
+    public void testAFailedSyncIsRetriedOnTheNextLaunch()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        PreLaunchChangeTracker.setDiskSyncForTest(syncedProject -> {
+            diskSyncs.add(syncedProject.getName());
+            return false;
+        });
+
+        isDirty(project);
+        isDirty(project);
+        assertEquals("a project that could not be synced must be retried", 2, diskSyncs.size());
+    }
+
+    /**
+     * A project that is closed and reopened gets its tree rebuilt from saved state,
+     * and an open may be answered by a merely SCHEDULED refresh
+     * ({@code IResource.BACKGROUND_REFRESH}). A sync recorded before that says
+     * nothing about the tree we would read now, so it must not be reused.
+     */
+    @Test
+    public void testReopeningAProjectForcesANewDiskSync()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+        assertEquals("synced once", 1, diskSyncs.size());
+
+        PreLaunchChangeTracker.visitDelta(
+            projectDelta("Config", IResourceDelta.CHANGED, IResourceDelta.OPEN));
+
+        prepare(project);
+        assertEquals("a reopened project must be synced again", 2, diskSyncs.size());
+    }
+
+    @Test
+    public void testAnOrdinaryProjectDeltaDoesNotForceANewDiskSync()
+    {
+        // Marker/description churn on the project node is not a tree replacement;
+        // re-syncing on it would put the refresh back on every launch.
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PreLaunchChangeTracker.visitDelta(
+            projectDelta("Config", IResourceDelta.CHANGED, IResourceDelta.MARKERS));
+
+        prepare(project);
+        assertEquals("an ordinary project delta must not re-sync", 1, diskSyncs.size());
+    }
+
+    /**
+     * Pins the WIRING, not the seam: with the production bindings in place, the gate
+     * itself must reach the real refresh. Without this, replacing the production
+     * {@code diskSync} with something that answers "synced" without doing anything
+     * would leave every other test in this file green.
+     */
+    @Test
+    public void testTheGateUsesTheRealRefreshWithProductionBindings() throws Exception
+    {
+        PreLaunchChangeTracker.resetForTest(); // drop the test seams installed in setUp
+        IProject project = mockProject("Config");
+        stubWalk(project); // production fingerprinter walks an empty tree
+
+        PreLaunchChangeTracker.snapshot(Collections.singletonList(project));
+
+        verify(project).refreshLocal(org.mockito.ArgumentMatchers.eq(IResource.DEPTH_INFINITE),
+            org.mockito.ArgumentMatchers.any());
+    }
+
+    /**
+     * Pins the production mechanism, not the seam: the sync must actually refresh the
+     * project from the file system, and must report a failure as a failure.
+     */
+    @Test
+    public void testProductionDiskSyncRefreshesTheProjectFromDisk() throws Exception
+    {
+        IProject project = mockProject("Config");
+
+        assertTrue("a completed refresh means the tree describes the disk",
+            PreLaunchChangeTracker.refreshFromDisk(project));
+        verify(project).refreshLocal(org.mockito.ArgumentMatchers.eq(IResource.DEPTH_INFINITE),
+            org.mockito.ArgumentMatchers.any());
+
+        IProject failing = mockProject("Failing");
+        org.mockito.Mockito.doThrow(new org.eclipse.core.runtime.CoreException(
+            org.eclipse.core.runtime.Status.error("boom"))).when(failing)
+            .refreshLocal(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.any());
+        assertFalse("a refresh that failed must not certify anything",
+            PreLaunchChangeTracker.refreshFromDisk(failing));
+    }
+
+    /**
+     * A refresh still running when its deadline elapses has proven NOTHING about the
+     * tree — cancellation is cooperative, so the work may well continue. Accepting it
+     * would hand a certificate to a project whose disk state is still unknown.
+     */
+    @Test
+    public void testARefreshThatOutlivesItsDeadlineIsNotProof() throws Exception
+    {
+        IProject slow = mockProject("Slow");
+        doAnswer(invocation -> {
+            Thread.sleep(800);
+            return null;
+        }).when(slow).refreshLocal(anyInt(), any());
+        PreLaunchChangeTracker.setDiskSyncTimeoutForTest(50L);
+
+        assertFalse("a refresh that outlived its deadline must not be accepted as proof",
+            PreLaunchChangeTracker.refreshFromDisk(slow));
     }
 
     // =========================================================================
@@ -910,6 +1093,22 @@ public class PreLaunchChangeTrackerTest
     private static IResourceDelta mockFileDelta(int kind, int flags, boolean derived)
     {
         return mockResourceDelta(kind, flags, IResource.FILE, derived);
+    }
+
+    /** Mocks a PROJECT-level delta for the listener-body tests. */
+    private static IResourceDelta projectDelta(String name, int kind, int flags)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        when(project.getType()).thenReturn(IResource.PROJECT);
+        when(project.exists()).thenReturn(true);
+        when(project.isOpen()).thenReturn(true);
+
+        IResourceDelta delta = mock(IResourceDelta.class);
+        when(delta.getResource()).thenReturn(project);
+        when(delta.getKind()).thenReturn(kind);
+        when(delta.getFlags()).thenReturn(flags);
+        return delta;
     }
 
     private static IResourceDelta mockResourceDelta(int kind, int flags, int resourceType,

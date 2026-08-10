@@ -1498,15 +1498,6 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Returns the application's display name — the string EDT interpolates into its
-     * "Infobase \"<name>\" configuration was changed…" conflict modal — or {@code null} when
-     * it cannot be read. Fully guarded: a name is only an attribution HINT, never a
-     * precondition of the update itself.
-     *
-     * @param application the application being updated (may be {@code null})
-     * @return the name, or {@code null}
-     */
-    /**
      * Resolves the name EDT interpolates into its "Infobase \"<name>\" configuration was
      * changed…" conflict modal: the bound {@link com._1c.g5.v8.dt.platform.services.model
      * .InfobaseReference}'s name, since an application's own (localized) name can differ from
@@ -1537,6 +1528,15 @@ public final class LaunchLifecycleUtils
         return safeApplicationName(application);
     }
 
+    /**
+     * Returns the application's display name — the string EDT interpolates into its
+     * "Infobase \"<name>\" configuration was changed…" conflict modal — or {@code null} when
+     * it cannot be read. Fully guarded: a name is only an attribution HINT, never a
+     * precondition of the update itself.
+     *
+     * @param application the application being updated (may be {@code null})
+     * @return the name, or {@code null}
+     */
     private static String safeApplicationName(IApplication application)
     {
         if (application == null)

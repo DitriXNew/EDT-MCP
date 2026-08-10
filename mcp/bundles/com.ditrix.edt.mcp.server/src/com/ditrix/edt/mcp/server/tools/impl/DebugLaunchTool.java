@@ -890,78 +890,6 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     /**
-     * Launches the given configuration in debug mode, asynchronously.
-     *
-     * <p>Uses a direct {@code config.launch(DEBUG_MODE, monitor)} — not
-     * {@code DebugUITools.launch} — because the latter may open modal dialogs
-     * (save-prompt, perspective-switch, already-running-confirmation) that
-     * block the MCP worker thread indefinitely and eventually close the HTTP
-     * socket. {@code debug_yaxunit_tests} uses the same direct path.
-     *
-     * <p>The launch runs in a BACKGROUND {@link Job} — never
-     * on the SWT UI thread — and this method returns immediately: it does NOT
-     * wait for the 1C client to finish starting. The previous {@code asyncExec}
-     * dispatch ran the ENTIRE {@code RuntimeClientLaunchDelegate.doLaunch} —
-     * including the standalone-server non-debug→debug stop+restart, which takes
-     * minutes — ON the UI thread, freezing the whole workbench ("not responding",
-     * pale window) for that whole time. A manual EDT launch never freezes because
-     * {@code DebugUIPlugin.launchInBackground} runs the launch in a background Job;
-     * this Job mirrors that exact shape: {@link Job#INTERACTIVE} priority, no
-     * scheduling rule, neither {@code setUser} nor {@code setSystem} — so it shows
-     * in the Progress view like EDT's own launches. The delegate's modals
-     * self-marshal to the UI thread ({@code syncCall}), so they still appear there
-     * and the armed auto-confirmer (whose {@link Display} filter fires on the UI
-     * thread regardless of which thread ran {@code launch()}) still presses them.
-     * Callers therefore report {@code status: "launching"}; readiness is observed
-     * separately via {@code debug_status} / {@code wait_for_break}.
-     *
-     * <p>Because the launch now runs after this method returns, any failure can no
-     * longer be surfaced synchronously to the caller — it is logged from inside the
-     * Job body ({@link #runLaunchJobBody}) and reflected in the Job's result
-     * {@link IStatus}. Only the synchronous (headless, no workbench) path can
-     * still return an error message.
-     *
-     * <p>The {@code config.launch(...)} call is always wrapped in
-     * {@link LaunchUpdateDialogAutoConfirmer#arm(boolean, boolean)}/{@link LaunchUpdateDialogAutoConfirmer#disarm(boolean, boolean)}.
-     * Two independently-gated matchers share one {@link Display} filter:
-     * <ul>
-     *   <li>the "Application update" matcher is armed only when
-     *       {@code autoConfirmUpdateDialog} is {@code true}. Even though the
-     *       pre-launch update ({@code updateApplicationIfNeeded}) normally leaves the
-     *       IB {@code UPDATED} so the EDT launch delegate skips its modal, an IB whose
-     *       DB config is genuinely behind (e.g. a restructure the delegate re-detects)
-     *       can still pop the "Update then run / Run without update" dialog; while
-     *       armed the filter auto-presses its default ("Update then run") button.</li>
-     *   <li>the code-1003 "debug session already exists" matcher is armed
-     *       <em>unconditionally</em> on this debug path (independent of
-     *       {@code autoConfirmUpdateDialog}). With {@code restartIfRunning=true} and a
-     *       {@code terminate()} that times out, the relaunch can still race a residual
-     *       1003 modal; auto-pressing its "Keep existing and start new" button (located
-     *       by label — never the destructive default "stop existing and start new")
-     *       keeps an unattended call from hanging. Pressing it performs NO DB update,
-     *       so it does not undo the {@code updateBeforeLaunch=false} opt-out.</li>
-     * </ul>
-     * The arm/disarm runs INSIDE the Job body's try/finally — both are thread-safe
-     * from any thread (counters under a lock + a {@code syncExec} reconcile), and
-     * the dialog shells are always created on the UI thread, so the filter fires
-     * there no matter which thread ran the launch. The MCP worker has already
-     * returned, so the server is never hung.
-     *
-     * <p>Callers pass {@code updateBeforeLaunch} for {@code autoConfirmUpdateDialog}:
-     * with {@code updateBeforeLaunch=false} the documented contract is that the
-     * platform "may then show that modal" — auto-pressing the UPDATE dialog's default
-     * button would silently perform the very DB update the caller disabled, so the
-     * UPDATE matcher is NOT armed and that dialog is left for a human. The 1003
-     * matcher, which performs no update, stays armed regardless.
-     *
-     * <p>Package-private (not {@code private}) so the headless unit tests can
-     * exercise the synchronous fallback directly.
-     *
-     * @return {@code null} when the launch was scheduled (or, in a headless test
-     *         with no UI thread, completed) successfully; otherwise an error message.
-     */
-
-    /**
      * The actionable message for a launch whose external-changes dialog was cancelled while the
      * launch delegate performed the DB update, or {@code null} when nothing was cancelled.
      *
@@ -1039,6 +967,77 @@ public class DebugLaunchTool implements IMcpTool
         }
     }
 
+    /**
+     * Launches the given configuration in debug mode, asynchronously.
+     *
+     * <p>Uses a direct {@code config.launch(DEBUG_MODE, monitor)} — not
+     * {@code DebugUITools.launch} — because the latter may open modal dialogs
+     * (save-prompt, perspective-switch, already-running-confirmation) that
+     * block the MCP worker thread indefinitely and eventually close the HTTP
+     * socket. {@code debug_yaxunit_tests} uses the same direct path.
+     *
+     * <p>The launch runs in a BACKGROUND {@link Job} — never
+     * on the SWT UI thread — and this method returns immediately: it does NOT
+     * wait for the 1C client to finish starting. The previous {@code asyncExec}
+     * dispatch ran the ENTIRE {@code RuntimeClientLaunchDelegate.doLaunch} —
+     * including the standalone-server non-debug→debug stop+restart, which takes
+     * minutes — ON the UI thread, freezing the whole workbench ("not responding",
+     * pale window) for that whole time. A manual EDT launch never freezes because
+     * {@code DebugUIPlugin.launchInBackground} runs the launch in a background Job;
+     * this Job mirrors that exact shape: {@link Job#INTERACTIVE} priority, no
+     * scheduling rule, neither {@code setUser} nor {@code setSystem} — so it shows
+     * in the Progress view like EDT's own launches. The delegate's modals
+     * self-marshal to the UI thread ({@code syncCall}), so they still appear there
+     * and the armed auto-confirmer (whose {@link Display} filter fires on the UI
+     * thread regardless of which thread ran {@code launch()}) still presses them.
+     * Callers therefore report {@code status: "launching"}; readiness is observed
+     * separately via {@code debug_status} / {@code wait_for_break}.
+     *
+     * <p>Because the launch now runs after this method returns, any failure can no
+     * longer be surfaced synchronously to the caller — it is logged from inside the
+     * Job body ({@link #runLaunchJobBody}) and reflected in the Job's result
+     * {@link IStatus}. Only the synchronous (headless, no workbench) path can
+     * still return an error message.
+     *
+     * <p>The {@code config.launch(...)} call is always wrapped in
+     * {@link LaunchUpdateDialogAutoConfirmer#arm(boolean, boolean)}/{@link LaunchUpdateDialogAutoConfirmer#disarm(boolean, boolean)}.
+     * Two independently-gated matchers share one {@link Display} filter:
+     * <ul>
+     *   <li>the "Application update" matcher is armed only when
+     *       {@code autoConfirmUpdateDialog} is {@code true}. Even though the
+     *       pre-launch update ({@code updateApplicationIfNeeded}) normally leaves the
+     *       IB {@code UPDATED} so the EDT launch delegate skips its modal, an IB whose
+     *       DB config is genuinely behind (e.g. a restructure the delegate re-detects)
+     *       can still pop the "Update then run / Run without update" dialog; while
+     *       armed the filter auto-presses its default ("Update then run") button.</li>
+     *   <li>the code-1003 "debug session already exists" matcher is armed
+     *       <em>unconditionally</em> on this debug path (independent of
+     *       {@code autoConfirmUpdateDialog}). With {@code restartIfRunning=true} and a
+     *       {@code terminate()} that times out, the relaunch can still race a residual
+     *       1003 modal; auto-pressing its "Keep existing and start new" button (located
+     *       by label — never the destructive default "stop existing and start new")
+     *       keeps an unattended call from hanging. Pressing it performs NO DB update,
+     *       so it does not undo the {@code updateBeforeLaunch=false} opt-out.</li>
+     * </ul>
+     * The arm/disarm runs INSIDE the Job body's try/finally — both are thread-safe
+     * from any thread (counters under a lock + a {@code syncExec} reconcile), and
+     * the dialog shells are always created on the UI thread, so the filter fires
+     * there no matter which thread ran the launch. The MCP worker has already
+     * returned, so the server is never hung.
+     *
+     * <p>Callers pass {@code updateBeforeLaunch} for {@code autoConfirmUpdateDialog}:
+     * with {@code updateBeforeLaunch=false} the documented contract is that the
+     * platform "may then show that modal" — auto-pressing the UPDATE dialog's default
+     * button would silently perform the very DB update the caller disabled, so the
+     * UPDATE matcher is NOT armed and that dialog is left for a human. The 1003
+     * matcher, which performs no update, stays armed regardless.
+     *
+     * <p>Package-private (not {@code private}) so the headless unit tests can
+     * exercise the synchronous fallback directly.
+     *
+     * @return {@code null} when the launch was scheduled (or, in a headless test
+     *         with no UI thread, completed) successfully; otherwise an error message.
+     */
     String performLaunch(ILaunchConfiguration config, boolean autoConfirmUpdateDialog,
         ExternalInfobaseChangesPolicy policy)
     {

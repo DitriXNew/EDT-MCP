@@ -3896,7 +3896,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. The whole call is bounded by `timeout` (default and maximum 45s, larger values are clamped) so it always answers before an MCP transport cuts it: it returns the report, an error, or **Pending** naming the current phase (resolve / prep:terminate / prep:recompute / prep:db-update / spawn / run) — call again with identical arguments to keep waiting; nothing is terminated. A phase that stops changing is the server's only signal — it means either a legitimately long stage or one blocked on a modal dialog in EDT, and the tool cannot tell them apart: look at EDT before waiting indefinitely. Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once so you can call wait_for_break. The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all. Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
+    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (call again with identical arguments to keep waiting; the launch is not terminated). Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once so you can call wait_for_break. The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all. If recompute+update exceeds 25s the tool returns **Pending** immediately — call again with the same arguments; preparation continues in the background. Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3904,7 +3904,7 @@
           "type": "string"
         },
         "debug": {
-          "description": "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints fire, return a launch handle as soon as it is spawned and call wait_for_break next. It does not POLL, so `timeout` is not a waiting window here — but the call is still bounded by it: a pre-launch preparation longer than the window returns Pending instead of the handle, and the next identical call picks up where it left off.",
+          "description": "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints fire, return immediately and call wait_for_break next (ignores timeout).",
           "type": "boolean"
         },
         "extensions": {
@@ -3941,11 +3941,11 @@
           "type": "array"
         },
         "timeout": {
-          "description": "Wall-clock window in seconds for the WHOLE call, not just the polling step (default and maximum 45; a larger value is clamped to it, because an MCP transport cuts the call at around 60s and a longer window would return a bare transport error instead of an answer). On expiry the tool returns Pending with the current phase; call again with the same arguments to keep waiting.",
+          "description": "Polling window in seconds (default: 60); on expiry returns Pending.",
           "type": "integer"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale), auto-answering the platform's update dialogs. This makes a blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's own windows still waits for a human, and the tool reports it as a Pending whose phase stops changing. false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
+          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale). false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
           "type": "boolean"
         },
         "updateScope": {
