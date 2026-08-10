@@ -45,6 +45,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
 /**
  * Lightweight contract tests for {@link DeleteMetadataTool}: tool metadata and JSON schema, without
@@ -877,12 +878,12 @@ public class DeleteMetadataToolTest
     /**
      * A recording write: it must run ONLY when consent was granted, and exactly once.
      */
-    private static final class RecordingWrite implements java.util.function.Supplier<String>
+    private static final class RecordingWrite implements DeleteMetadataTool.DeleteWrite
     {
         int calls;
 
         @Override
-        public String get()
+        public String perform()
         {
             calls++;
             return "{\"written\":true}"; //$NON-NLS-1$
@@ -967,8 +968,10 @@ public class DeleteMetadataToolTest
         // What this does NOT prove, stated plainly because the comment here used to claim it did: it
         // calls gateFormMemberDelete directly, so re-routing deleteFormMember() straight to
         // performFormDelete() would leave this test green. Driving the real dispatch needs a resolved
-        // project + BM services, which a headless unit test has none of; the production call site is
-        // one line (see deleteFormMember) and is what a reviewer must read.
+        // project + BM services, which a headless unit test has none of. That WIRING is no longer
+        // left to a reviewer's eye either: DeleteMetadataConsentSinglePointRatchetTest reads the
+        // compiled class and fails when any branch can reach a write without passing through
+        // deleteWithConsent (issue #331).
         for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
             DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
         {
@@ -992,7 +995,8 @@ public class DeleteMetadataToolTest
     @Test
     public void testFormObjectBranchRunsItsWriteOnlyWhenConsentIsGranted()
     {
-        // Same scope as its twin above: the authorization STEP, not the branch's wiring to it.
+        // Same scope as its twin above: the authorization STEP; the branch's wiring to it is pinned by
+        // DeleteMetadataConsentSinglePointRatchetTest, which reads the compiled class.
         for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
             DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
         {
@@ -1009,6 +1013,129 @@ public class DeleteMetadataToolTest
             "Catalog.Products.Form.ItemForm", new DeleteMetadataTool.FormContentSummary(), allowed); //$NON-NLS-1$
         assertEquals("an allowed form-object delete runs its write exactly once", 1, allowed.calls); //$NON-NLS-1$
         assertEquals("{\"written\":true}", ok); //$NON-NLS-1$
+    }
+
+    /** A requester that records what it was asked, so a test can assert it was NOT asked at all. */
+    private static final class RecordingRequester implements DeleteMetadataTool.ConsentRequester
+    {
+        final List<ConsentPreview> asked = new ArrayList<>();
+
+        private final DestructiveConsentGate.ConsentDecision answer;
+
+        RecordingRequester(DestructiveConsentGate.ConsentDecision answer)
+        {
+            this.answer = answer;
+        }
+
+        @Override
+        public DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview)
+        {
+            asked.add(preview);
+            return answer;
+        }
+    }
+
+    private static final String XDTO_FQN = "XDTOPackage.MyPackage.ObjectType.Order"; //$NON-NLS-1$
+
+    private static XdtoWriter.MemberRef xdtoRef()
+    {
+        return XdtoWriter.parseMemberRef(XDTO_FQN);
+    }
+
+    /**
+     * The XDTO branch's ORDER, pinned by BEHAVIOUR: a target that is not there must be answered
+     * without a destructive prompt ever being raised. Bytecode offsets alone cannot see this - the
+     * lookup could run first and its RESULT be ignored, which is exactly the defect issue #331 records
+     * (the prompt came first, "not found" after it had been dealt with).
+     */
+    @Test
+    public void testXdtoBranchAnswersAnUnresolvedPackageWithoutAskingForConsent()
+    {
+        RecordingRequester requester = new RecordingRequester(DestructiveConsentGate.ConsentDecision.ALLOW);
+        RecordingWrite write = new RecordingWrite();
+
+        String result = new DeleteMetadataTool(requester).gateXdtoMemberDelete(XDTO_FQN, xdtoRef(),
+            new DeleteMetadataTool.XdtoLookup(false, null), write);
+
+        assertTrue("a delete that cannot even resolve its package must not raise a destructive prompt", //$NON-NLS-1$
+            requester.asked.isEmpty());
+        assertEquals("nothing may be written when the package did not resolve", 0, write.calls); //$NON-NLS-1$
+        assertTrue("the package-level failure must keep ITS own message, not be collapsed into the " //$NON-NLS-1$
+            + "member-level one: " + result, //$NON-NLS-1$
+            result.contains("The XDTO package could not be resolved inside the transaction.")); //$NON-NLS-1$
+        assertFalse("... and it must not be reported as a missing member: " + result, //$NON-NLS-1$
+            result.contains("ObjectType not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testXdtoBranchAnswersAMissingMemberWithoutAskingForConsent()
+    {
+        RecordingRequester requester = new RecordingRequester(DestructiveConsentGate.ConsentDecision.ALLOW);
+        RecordingWrite write = new RecordingWrite();
+
+        String result = new DeleteMetadataTool(requester).gateXdtoMemberDelete(XDTO_FQN, xdtoRef(),
+            new DeleteMetadataTool.XdtoLookup(true, null), write);
+
+        assertTrue("a typo in the member name must not raise a destructive prompt (issue #331)", //$NON-NLS-1$
+            requester.asked.isEmpty());
+        assertEquals("nothing may be written when the member is not there", 0, write.calls); //$NON-NLS-1$
+        assertTrue("the caller must be told WHICH member and where to look: " + result, //$NON-NLS-1$
+            result.contains("ObjectType not found: 'Order' in package XDTOPackage.MyPackage")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testXdtoBranchAsksOnceForAResolvedTargetAndRunsTheWriteOnAllow()
+    {
+        RecordingRequester requester = new RecordingRequester(DestructiveConsentGate.ConsentDecision.ALLOW);
+        RecordingWrite write = new RecordingWrite();
+
+        String result = new DeleteMetadataTool(requester).gateXdtoMemberDelete(XDTO_FQN, xdtoRef(),
+            new DeleteMetadataTool.XdtoLookup(true, new String[] { "ObjectType" }), write); //$NON-NLS-1$
+
+        assertEquals("a resolved target is asked about exactly once", 1, requester.asked.size()); //$NON-NLS-1$
+        assertEquals("the prompt must name what is really removed", //$NON-NLS-1$
+            java.util.Collections.singletonList(XDTO_FQN), requester.asked.get(0).getTopNames());
+        assertEquals("an allowed XDTO delete runs its write exactly once", 1, write.calls); //$NON-NLS-1$
+        assertEquals("{\"written\":true}", result); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testXdtoBranchRunsItsWriteOnlyWhenConsentIsGranted()
+    {
+        for (DestructiveConsentGate.ConsentDecision refused : new DestructiveConsentGate.ConsentDecision[] {
+            DestructiveConsentGate.ConsentDecision.REJECT, DestructiveConsentGate.ConsentDecision.TIMEOUT })
+        {
+            RecordingRequester requester = new RecordingRequester(refused);
+            RecordingWrite write = new RecordingWrite();
+
+            String result = new DeleteMetadataTool(requester).gateXdtoMemberDelete(XDTO_FQN, xdtoRef(),
+                new DeleteMetadataTool.XdtoLookup(true, new String[] { "ObjectType" }), write); //$NON-NLS-1$
+
+            assertEquals("a refused XDTO delete must not run its write (" + refused + ")", //$NON-NLS-1$ //$NON-NLS-2$
+                0, write.calls);
+            assertEquals("a resolved target is still asked about", 1, requester.asked.size()); //$NON-NLS-1$
+            assertTrue(result.contains("error")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The XDTO delete's generic failure now runs BEFORE consent as well (the lookup moved in front of
+     * the gate), so "Delete failed: &lt;whatever the platform said&gt;" is the first and often only thing
+     * the caller sees. It has to say which delete failed, that nothing was removed, and what to do -
+     * CLAUDE.md rule #8 - while keeping the platform's own message, which is the only thing that tells
+     * a corrupt .xdto apart from a stale BM id.
+     */
+    @Test
+    public void testXdtoDeleteFailureNamesTheTargetAndTheWayOut()
+    {
+        String json = DeleteMetadataTool.xdtoDeleteFailure(XDTO_FQN,
+            new IllegalStateException("Resource could not be loaded")); //$NON-NLS-1$
+
+        assertTrue("the error must name the delete it belongs to: " + json, json.contains(XDTO_FQN)); //$NON-NLS-1$
+        assertTrue("... say that nothing was removed: " + json, json.contains("Nothing was deleted")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("... point at the way out: " + json, json.contains("get_metadata_details")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("... and keep the platform's own diagnosis: " + json, //$NON-NLS-1$
+            json.contains("Resource could not be loaded")); //$NON-NLS-1$
     }
 
     @Test

@@ -3,8 +3,10 @@ e2e tests for set_infobase_credentials (kind: action).
 
 WHAT THE TOOL DOES
 ------------------
-set_infobase_credentials only PERSISTS the infobase connection credentials
-(user/password) into EDT's per-infobase access settings. The store path is
+set_infobase_credentials PERSISTS the infobase connection credentials
+(user/password) into EDT's per-infobase access settings — and, when the target is a
+launch configuration, into that configuration's own client-user attributes as well
+(see TWO CONSUMERS below). The store path is
 DESIGNER-FREE: it commits via IInfobaseAccessManager.updateSettings and never opens,
 connects to, or validates a designer session. Those stored credentials are later read
 by EDT when update_database / debug_launch authenticate the designer agent against an
@@ -13,11 +15,27 @@ other tools, not here. The tool selects an EXISTING infobase user (does not crea
 users); an empty password is valid (demo bases). Target by launchConfigurationName
 (preferred) or projectName + applicationId.
 
+TWO CONSUMERS (#359)
+--------------------
+A launch has two processes that authenticate, and they read the user from different
+places: the designer AGENT from EDT's per-infobase access settings (written by every
+call), and the launched 1C CLIENT from the launch configuration's own attributes
+(written ONLY when the target was given as launchConfigurationName). A projectName +
+applicationId call therefore returns success:true with clientConfigured:false, and the
+launched client keeps popping the platform's login dialog — which is exactly how #359
+was reported: the call said success, run_yaxunit_tests then blocked on a password.
+
+The client half is written into the launch configuration's own file, so it is refused
+for a SHARED configuration when a non-empty password is involved: a shared .launch file
+lives inside the project and is normally committed to version control. That path needs a
+shared configuration to exist, which no MCP tool can create (there is no setContainer on
+the wire), so it is covered by the unit tests rather than here.
+
 RESPONSE SHAPE
 --------------
 JSON tool (getResponseType() == JSON); payload in r.structured:
-  stored: {"success": true, "project", "applicationId", "applicationName",
-           "user", "access", "passwordSet", "message"}
+  stored: {"success": true, "clientConfigured", "project", "applicationId",
+           "applicationName", "user", "access", "passwordSet", "message"}
   error:  {"success": false, "error": "..."}
 
 CI STRATEGY
@@ -38,8 +56,12 @@ on timeout the recorded success is returned (else a graceful error). This is a s
 concern only — the wire surface (params / output fields) is unchanged, so this matrix and
 its assert_no_diff() stay exactly as-is.
 
-NOTE: the tool writes EDT's per-infobase access settings (secure storage), never
-TestConfiguration source files — every call leaves the project tree clean: assert_no_diff().
+NOTE: the tool writes EDT's per-infobase access settings (secure storage) and, for a
+launchConfigurationName target, that launch configuration — never TestConfiguration
+source files. A LOCAL launch configuration lives in the workspace metadata, and a shared
+one would be a project file, which is exactly why the password write into a shared
+configuration is refused. Every call therefore leaves the project tree clean:
+assert_no_diff().
 """
 
 import os
@@ -177,6 +199,13 @@ def test_live_standalone_server_application_id_roundtrip():
         assert sc.get("applicationId") == app_id, "applicationId must be echoed: %r" % sc
         assert sc.get("user") == "Admin", "stored user must be echoed: %r" % sc
         assert sc.get("access") == "INFOBASE", "default access must be echoed: %r" % sc
+        # #359: an applicationId target names no launch configuration, so the launched CLIENT is
+        # NOT configured -- and the answer has to say so instead of letting success:true read as
+        # "a launch will now work".
+        assert sc.get("clientConfigured") is False, \
+            "an applicationId target must report clientConfigured=false: %r" % sc
+        assert "NOT covered" in (sc.get("message") or ""), \
+            "the message must warn that the launched client is not configured: %r" % sc
     finally:
         _ensure_standalone_absent()
 

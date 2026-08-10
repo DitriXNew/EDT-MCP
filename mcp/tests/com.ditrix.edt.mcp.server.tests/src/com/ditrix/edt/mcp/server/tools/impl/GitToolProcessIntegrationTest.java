@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -27,6 +28,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
@@ -40,8 +43,10 @@ import com.google.gson.JsonParser;
  * Integration coverage for {@link GitTool}'s EXEC path: a real {@code git} process against a real
  * temporary repository. {@link GitToolTest} covers the parser and the metadata; everything below
  * only shows up when a process actually runs — the exit-code and output plumbing, the redaction of
- * a credential that lives in the repository's own config rather than in the command, and the
- * failure shape of a command git itself rejects.
+ * a credential that lives in the repository's own config rather than in the command, the fact that
+ * real git accepts and stores a credential containing an ASCII space verbatim (the case
+ * {@link GitTool#storedRemoteRefusal} must refuse, because it cannot be masked), and the failure
+ * shape of a command git itself rejects.
  *
  * <p>The repository is built with git itself (not JGit), so the test exercises the same binary the
  * tool will run. Every test is skipped when {@code git} cannot be run, so a machine without it does
@@ -205,6 +210,40 @@ public class GitToolProcessIntegrationTest
         assertFalse("the secret must not reach the caller: " + output, //$NON-NLS-1$
             output.contains("s3cr3t-token")); //$NON-NLS-1$
         assertTrue(output, output.contains("example.com/team/repo.git")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStoredRemoteWhoseCredentialCarriesAnAsciiSpaceIsRefused() throws Exception
+    {
+        // Real git accepts a URL whose userinfo contains a space and writes it into the config
+        // VERBATIM, so 'remote -v' would print the credential in full: the output redactor cannot
+        // delimit an authority that carries whitespace, so such a remote is REFUSED rather than
+        // masked. The space is built from its code point - a literal one would be indistinguishable
+        // from formatting whitespace on review.
+        String poisoned = "https://user:s3cr3t-token" + (char)0x20 //$NON-NLS-1$
+            + "spaced@example.com/team/repo.git"; //$NON-NLS-1$
+        git("remote", "add", "origin", poisoned); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        try (Repository repo = new FileRepositoryBuilder().findGitDir(repository.toFile()).build())
+        {
+            // Positive control for the whole test: had the setup dropped or normalised the space,
+            // a refusal below would prove nothing. This is the parity the in-process check rests on
+            // - what real git PERSISTS is exactly what JGit READS BACK, no probe process needed.
+            String storedByRealGit = repo.getConfig().getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertEquals("real git must store the whitespace verbatim and JGit must read it back", //$NON-NLS-1$
+                poisoned, storedByRealGit);
+
+            String refusal = GitTool.storedRemoteRefusal(repo, GitTool.parseCommand("remote -v")); //$NON-NLS-1$
+
+            assertNotNull("a stored credential that cannot be masked must be refused, not printed", //$NON-NLS-1$
+                refusal);
+            // The remote is named, so the caller knows which one to fix...
+            assertTrue(refusal, refusal.contains("origin")); //$NON-NLS-1$
+            // ...and nothing of the offending value leaks with it: no secret, no host, no URL.
+            assertFalse(refusal, refusal.contains("s3cr3t-token")); //$NON-NLS-1$
+            assertFalse(refusal, refusal.contains("example.com")); //$NON-NLS-1$
+            assertFalse(refusal, refusal.contains("https://")); //$NON-NLS-1$
+        }
     }
 
     @Test

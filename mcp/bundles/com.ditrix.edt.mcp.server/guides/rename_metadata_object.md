@@ -17,6 +17,17 @@ Use to rename an existing object or member and have all callers updated automati
 - confirm (optional, default false): false previews, true applies.
 - disableIndices (optional): comma-separated '#' indices from the preview to skip, e.g. '2,3,5'. Only OPTIONAL change points can be disabled; required ones are always applied. One '#' index may span several context rows in the table - skipping it skips them all.
 - maxResults (optional, default 20): caps how many change points the preview lists; 0 = no limit. This only trims the preview display, never what execute actually changes.
+- timeout (optional, default 420): how long to wait for the cascade itself, in seconds, clamped to 60..3600. It bounds the rename only - the pre-flight index drain that runs before it has its own separate 60s bound, so the worst-case call is a minute longer than this. Raise it for a very large configuration; the default can also be changed in Preferences > MCP Server > Tools > `rename_metadata_object`.
+
+## Timeout, and what the model is left in
+The cascade runs on EDT's UI thread and cannot be preempted, so `timeout` bounds only how long the CALL waits - it does not stop the rename. When it expires the call fails with an error that names the stage the rename had reached, because that stage is what decides your next move:
+- the rename never STARTED (the deadline elapsed while it was still queued and cancelling it kept it from starting) - the model is untouched and nothing needs checking; EDT's job scheduler is saturated, so retry when it is less busy or raise `timeout`;
+- a PREVIEW (confirm not set) can never apply anything, so its timeout means only that the change points were not computed in time - nothing was or will be renamed;
+- on an execute, still building the refactoring or still at the destructive-operation consent gate - nothing was rewritten yet, but the rename is not cancelled and may still apply;
+- past the consent gate, in the apply phase - the configuration may be PARTIALLY renamed; inspect it with `get_metadata_objects` / `get_project_errors` and reload with `clean_project` (or revert in version control) before renaming again;
+- apply phase finished - the rename is in the model apart from any change point that failed or was skipped, and it is the report listing those that was lost; confirm rather than repeat it.
+
+In every case verify the model before retrying: a retry against an already-renamed object fails with "Object not found". The default is set above the worst measured legitimate wait (301s, EDT waiting out its own derived-data timeout inside the refactoring's batch session), so lowering it trades a hang for the riskier failure of reporting a rename that then lands anyway.
 
 ## Bilingual notes (ru/en)
 - objectFqn resolves by the object's programmatic Name; in the FQN only the leading TYPE token may be bilingual (e.g. 'Catalog' or the Russian 'Справочник'). The synonym is never used to locate the target.

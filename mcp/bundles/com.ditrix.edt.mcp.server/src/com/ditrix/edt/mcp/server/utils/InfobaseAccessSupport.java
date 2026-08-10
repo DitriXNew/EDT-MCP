@@ -71,6 +71,20 @@ public final class InfobaseAccessSupport
     }
 
     /**
+     * Whether the requested access kind is OS authentication — the same decision
+     * {@link #parseAccess(String)} makes, exposed as a boolean for callers that configure a
+     * launch configuration's client-user section rather than the infobase access settings
+     * (issue #359).
+     *
+     * @param access the raw {@code access} argument (may be {@code null}/empty — INFOBASE by default)
+     * @return {@code true} only for the OS kind
+     */
+    public static boolean isOsAccess(String access)
+    {
+        return InfobaseAccess.OS == parseAccess(access);
+    }
+
+    /**
      * Validates an {@code access} argument against the closed {@code INFOBASE | OS} enum the schema
      * declares. {@code null}/empty is accepted (it defaults to {@link InfobaseAccess#INFOBASE} in
      * {@link #parseAccess(String)}); a non-empty value outside the enum is rejected so a typo (e.g.

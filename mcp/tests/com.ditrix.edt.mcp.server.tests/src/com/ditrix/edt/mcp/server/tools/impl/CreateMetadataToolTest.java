@@ -88,6 +88,21 @@ public class CreateMetadataToolTest
     }
 
     @Test
+    public void testNestedSubsystemIsAdvertisedOnTheWire()
+    {
+        // Issue #351: create_metadata now creates a nested subsystem, and the wire surface has to
+        // say so - modify_metadata already documents the same chain, and the two must not disagree
+        // about what is addressable. Both texts are checked: the tool description is what a client
+        // reads in tools/list, the fqn schema is what a schema-driven client builds its input from.
+        String desc = new CreateMetadataTool().getDescription();
+        assertTrue("the description must advertise the nested-subsystem address", //$NON-NLS-1$
+            desc.contains("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$
+        String schema = new CreateMetadataTool().getInputSchema();
+        assertTrue("the fqn schema must document the nested-subsystem shape", //$NON-NLS-1$
+            schema.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testGenerateContentIsOptional()
     {
         // generateContent is a form-object-create flag, defaults false -> must not be required.

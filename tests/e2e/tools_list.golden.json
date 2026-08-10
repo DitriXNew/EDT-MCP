@@ -524,7 +524,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Also creates an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), 'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or 'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with owner-specific 'properties'). Full parameters and examples: call get_tool_guide('create_metadata').",
+    "description": "Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind is inferred from the FQN; type and kind tokens may be English or Russian. Also creates an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), 'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or 'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with owner-specific 'properties'). Also creates a NESTED SUBSYSTEM at any depth ('Subsystem.Sales.Subsystem.Orders'); the parent subsystem must already exist. Full parameters and examples: call get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
         "callType": {
@@ -553,7 +553,7 @@
           "type": "boolean"
         },
         "fqn": {
-          "description": "Full-name FQN of the node to create (required). Top object: 'Type.Name' (e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' (e.g. 'Catalog.Products.Attribute.Weight'). The trailing Name is the new node's programmatic Name; type / kind tokens may be English or Russian.",
+          "description": "Full-name FQN of the node to create (required). Top object: 'Type.Name' (e.g. 'Catalog.Products'). Member: 'Type.Name.Kind.Name' (e.g. 'Catalog.Products.Attribute.Weight'). Nested subsystem: 'Subsystem.<Parent>.Subsystem.<Child>', repeatable to any depth - the parent chain must already exist. The trailing Name is the new node's programmatic Name; type / kind tokens may be English or Russian.",
           "type": "string"
         },
         "generateContent": {
@@ -3710,6 +3710,10 @@
         "projectName": {
           "description": "EDT project name.",
           "type": "string"
+        },
+        "timeout": {
+          "description": "How long to wait for the cascade itself, in seconds (default 420, clamped to 60..3600). On expiry the call fails with a timeout error naming the stage it reached instead of waiting forever; EDT may still finish the rename afterwards, so verify the model. Does not cover the pre-flight index drain (a separate 60s bound).",
+          "type": "integer"
         }
       },
       "required": [
@@ -4218,7 +4222,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
+    "description": "Store infobase connection credentials (user/password) so update_database and debug_launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). With launchConfigurationName the launched 1C CLIENT is configured too so it stops asking for a password (issue #359); with projectName + applicationId only the agent is - check clientConfigured in the result. Full parameters and examples: call get_tool_guide('set_infobase_credentials').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -4234,7 +4238,7 @@
           "type": "string"
         },
         "launchConfigurationName": {
-          "description": "Exact runtime-client config name from list_configurations (preferred target).",
+          "description": "Exact runtime-client config name from list_configurations (preferred target: the only shape that also configures the launched 1C client).",
           "type": "string"
         },
         "password": {
@@ -4242,7 +4246,7 @@
           "type": "string"
         },
         "projectName": {
-          "description": "EDT project name; required if launchConfigurationName is omitted.",
+          "description": "EDT project name; required if launchConfigurationName is omitted. Configures the designer agent only - this call does not touch any launch configuration's own client-user settings.",
           "type": "string"
         },
         "user": {
@@ -4267,6 +4271,10 @@
         "applicationName": {
           "description": "Display name of the target application (falls back to the application ID).",
           "type": "string"
+        },
+        "clientConfigured": {
+          "description": "True when THIS call also wrote the launched client's own authentication onto a launch configuration - only possible when the target was given as launchConfigurationName. False means this call did not configure the client (no configuration named, or the write failed); see message.",
+          "type": "boolean"
         },
         "message": {
           "description": "Human-readable status message.",

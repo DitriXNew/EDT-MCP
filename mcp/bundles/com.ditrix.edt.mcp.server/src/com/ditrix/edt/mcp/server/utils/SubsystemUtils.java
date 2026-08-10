@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import org.eclipse.emf.common.util.EMap;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -21,6 +22,15 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  */
 public final class SubsystemUtils
 {
+    /**
+     * The CANONICAL English type token of a subsystem segment - the single spelling EDT itself
+     * stores in a nested subsystem's FQN ({@code Subsystem.Sales.Subsystem.Orders}, as serialized
+     * into {@code parentSubsystem}). Every ACCEPTED spelling still comes from the shared bilingual
+     * catalogue through {@link #isSubsystemTypeToken}; this constant is only how the canonical form
+     * is WRITTEN back.
+     */
+    private static final String SUBSYSTEM_TOKEN = "Subsystem"; //$NON-NLS-1$
+
     private SubsystemUtils()
     {
     }
@@ -64,22 +74,159 @@ public final class SubsystemUtils
      */
     public static Subsystem resolveByFqn(Configuration config, String fqn)
     {
-        if (config == null)
-        {
-            return null;
-        }
         String[] names = parseSubsystemPath(fqn);
         if (names == null)
         {
             return null;
         }
+        return resolveByPath(config, names, names.length);
+    }
 
+    /**
+     * The parsed chain of an address that names a NESTED subsystem - a subsystem chain of depth 2 or
+     * more, e.g. {@code Subsystem.Sales.Subsystem.Orders} - or {@code null} for anything else
+     * (including a plain top-level {@code Subsystem.Sales}).
+     *
+     * <p>This is the gate {@code create_metadata} dispatches on, kept here rather than in the tool so
+     * the answer comes from the ONE bilingual token catalogue every subsystem consumer already
+     * shares: EVERY position of the chain is judged by {@link #isSubsystemTypeToken}, so the tokens
+     * may be English or Russian independently at each level
+     * ({@code Подсистема.Продажи.Subsystem.Orders}).</p>
+     *
+     * <p>This decides the SHAPE only. Whether the address is well-FORMED is a separate question
+     * answered by {@link #malformedSegmentError}, deliberately kept apart: a sloppy subsystem
+     * address must still reach the subsystem branch so it can be refused by NAMING what is wrong
+     * with it, instead of falling through to the generic "cannot resolve a create target" whose
+     * list of kinds does not even mention subsystems.</p>
+     *
+     * @param fqn the requested address (may be {@code null})
+     * @return the parsed chain of subsystem names (length &gt;= 2), or {@code null} when the address
+     *     is not a nested-subsystem chain
+     */
+    public static String[] nestedChain(String fqn)
+    {
+        String[] names = parseSubsystemPath(fqn);
+        if (names == null || names.length < 2)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        return names;
+    }
+
+    /**
+     * An actionable refusal when {@code fqn} carries a MALFORMED segment - one that is empty, or
+     * padded with whitespace - or {@code null} when every segment is clean.
+     *
+     * <p>ONE rule for both, because they are one question: an address that reads differently from a
+     * well-formed one must not be silently accepted AS a well-formed one. {@link #parseSubsystemPath}
+     * tolerates both, and rightly so - it answers LOOKUPS, where a padded name has only one reading -
+     * but a CREATE stores the leaf and navigates by the ancestors, so the difference is the
+     * difference between two nodes.</p>
+     *
+     * <ul>
+     *   <li><b>Padded</b> ({@code Subsystem. Sales .Subsystem. Child }): the ordinary create path
+     *       refuses this on both counts - {@code MetadataTypeUtils.findObject} matches an owner name
+     *       verbatim, and the identifier check rejects a leading space - so accepting it here would
+     *       create {@code Child} for {@code ' Child '}: a different node from the one requested.</li>
+     *   <li><b>Empty</b> ({@code Subsystem.Sales.Subsystem.Child.}, {@code ...Child..}): a stray or
+     *       doubled separator. It has no single reading - the child, or a deeper node whose name the
+     *       caller failed to type - which is exactly the verdict {@code get_project_errors} already
+     *       gives an empty segment.</li>
+     * </ul>
+     *
+     * <p>The split takes an explicit {@code -1} limit ON PURPOSE: the default drops TRAILING empty
+     * strings, so {@code Subsystem.Sales.Subsystem.Child.} splits into the same four segments as the
+     * clean address and the stray separator becomes invisible. A leading or mid-string empty segment
+     * survives either limit and is already refused upstream by the arity / empty-name checks in
+     * {@link #parseSubsystemPath}; the trailing one is the only spelling that needs {@code -1}.</p>
+     *
+     * @param fqn the requested address (may be {@code null})
+     * @return the refusal message naming what is wrong, or {@code null} when the address is clean
+     */
+    public static String malformedSegmentError(String fqn)
+    {
+        if (fqn == null)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        // No separate check for whitespace around the WHOLE address: it can only ever land in the
+        // first or the last segment, so the per-segment loop already catches it - and catches it with
+        // the better message, one that QUOTES the segment at fault instead of the whole address.
+        String[] segments = fqn.split("\\.", -1); //$NON-NLS-1$
+        for (String segment : segments)
+        {
+            if (segment.isEmpty())
+            {
+                return "The address '" + fqn + "' has an EMPTY segment - a stray or doubled '.'. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "It has no single reading (the node named here, or a deeper one whose name " //$NON-NLS-1$
+                    + "was not typed), so it is refused rather than guessed: address the node as " //$NON-NLS-1$
+                    + "'Subsystem.<Parent>.Subsystem.<Child>' with exactly one '.' between " //$NON-NLS-1$
+                    + "segments."; //$NON-NLS-1$
+            }
+            if (!segment.equals(segment.trim()))
+            {
+                return "The address '" + fqn + "' has a padded segment '" + segment + "'. A Name " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "is stored and matched exactly as written, so the surrounding whitespace " //$NON-NLS-1$
+                    + "would address or create a different node - remove it."; //$NON-NLS-1$
+            }
+        }
+        return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+    }
+
+    /**
+     * Resolves the subsystem addressed by the FIRST {@code depth} names of a parsed chain.
+     *
+     * <p>The PREFIX overload exists so a caller that has to address the PARENT of a chain - a
+     * nested-subsystem create, whose leaf does not exist yet - walks the very same descent as
+     * {@link #resolveByFqn} instead of re-splitting the FQN and re-implementing the walk. Name
+     * matching is case-insensitive at every level, exactly as for a whole chain.</p>
+     *
+     * @param config the configuration to resolve against
+     * @param names the parsed chain of subsystem names (see {@link #parseSubsystemPath})
+     * @param depth how many leading names to follow; {@code 0} addresses the configuration itself
+     *     and therefore resolves to nothing
+     * @return the resolved subsystem, or {@code null} when any segment does not resolve
+     */
+    public static Subsystem resolveByPath(Configuration config, String[] names, int depth)
+    {
+        if (config == null || names == null || depth <= 0 || depth > names.length)
+        {
+            return null;
+        }
         Subsystem current = findChild(config.getSubsystems(), names[0]);
-        for (int i = 1; i < names.length && current != null; i++)
+        for (int i = 1; i < depth && current != null; i++)
         {
             current = findChild(current.getSubsystems(), names[i]);
         }
         return current;
+    }
+
+    /**
+     * Renders the first {@code depth} names of a parsed chain back as a canonical FQN
+     * ({@code Subsystem.Sales.Subsystem.Orders}) - the inverse of {@link #parseSubsystemPath},
+     * with every type token written in the canonical English spelling regardless of how the
+     * caller spelled it.
+     *
+     * @param names the parsed chain of subsystem names
+     * @param depth how many leading names to render
+     * @return the canonical FQN, or {@code null} when the request is out of range
+     */
+    public static String chainFqn(String[] names, int depth)
+    {
+        if (names == null || depth <= 0 || depth > names.length)
+        {
+            return null; // NOSONAR null is a deliberate signal (omit/sentinel), not an empty collection
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < depth; i++)
+        {
+            if (i > 0)
+            {
+                sb.append('.');
+            }
+            sb.append(SUBSYSTEM_TOKEN).append('.').append(names[i]);
+        }
+        return sb.toString();
     }
 
     /**
@@ -266,7 +413,31 @@ public final class SubsystemUtils
         {
             return false;
         }
-        return "Subsystem".equals(MetadataTypeUtils.toEnglishSingular(token.trim())); //$NON-NLS-1$
+        return SUBSYSTEM_TOKEN.equals(MetadataTypeUtils.toEnglishSingular(token.trim()));
+    }
+
+    /**
+     * EVERY spelling {@link #isSubsystemTypeToken} accepts, lowercase.
+     *
+     * <p>Published so a regression check can compare this set with the NESTED-kind catalogue the
+     * object filters advertise a {@code Subsystem} segment through, in BOTH directions. The two are
+     * genuinely independent lists - the predicate answers from the TOP-LEVEL type catalogue
+     * ({@code MetadataTypeUtils.toEnglishSingular}), while a nested {@code Subsystem} segment is
+     * translated through the nested-kind catalogue - so either one can gain a spelling the other
+     * does not have. An alias added to the nested catalogue alone is an address the filter
+     * documents and this predicate then refuses; an alias added to the type catalogue alone is an
+     * address this predicate accepts and the filter cannot translate. Asking whether the sets
+     * OVERLAP would see neither.</p>
+     *
+     * <p>Derived from the type catalogue, i.e. from the very map the predicate reads, never from
+     * the nested catalogue it is compared against: a set copied from the other side of a comparison
+     * makes the comparison vacuous.</p>
+     *
+     * @return the accepted tokens, lowercase (never {@code null})
+     */
+    public static Set<String> acceptedTypeTokens()
+    {
+        return MetadataTypeUtils.typeAliases(SUBSYSTEM_TOKEN);
     }
 
     private static Subsystem findChild(Iterable<Subsystem> children, String name)
