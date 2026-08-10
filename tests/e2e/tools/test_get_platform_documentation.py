@@ -252,9 +252,13 @@ def test_the_available_types_list_only_holds_names_that_resolve():
         assert_contains(probe.text, "# ",
                         "the listed name %r must render a real doc, not a banner" % name)
 
-    # The scale is stated, not hidden behind "... (more available)".
-    assert_contains(err, "documented names",
+    # The scale is stated, not hidden behind "... (more available)". "published", not "documented":
+    # the total counts what the provider publishes, while the LISTED names are the ones re-checked
+    # one by one — the banner must not claim more than it verified.
+    assert_contains(err, "published names",
                     "the banner must state how many names exist, not just show a sample")
+    assert_contains(err, "every name listed here resolves",
+                    "the banner must state the guarantee it now keeps")
     assert_no_diff("an invalid lookup must not touch the project on disk")
 
 
@@ -525,3 +529,35 @@ def test_a_documented_return_value_is_rendered_next_to_the_modelled_type():
                     "the documented meaning of the return must render next to it")
     assert_no_diff("a read tool must not touch the project")
 
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_a_misspelled_type_gets_a_did_you_mean():
+    # A transposition shares no prefix with the real name and contains nothing of it, so the
+    # substring rules alone answered the commonest kind of miss with no suggestion at all.
+    r = call("get_platform_documentation", {"projectName": PROJECT, "typeName": "ValueTabel"})
+    err = assert_error(r, "a misspelled type is a miss")
+    assert_error_quality(err, names=["ValueTabel"], suggests=["Did you mean", "ValueTable"],
+                         ctx="a misspelling is offered the name it was reaching for")
+    assert_no_diff("an invalid lookup must not touch the project on disk")
+
+
+@e2e_test(tool="get_platform_documentation", kind="read")
+def test_the_builtin_not_found_list_only_holds_names_that_resolve():
+    # The builtin branch had the same defect as the type branch: it advertised the first 30 names the
+    # METHOD provider handed out, without checking any of them resolves. Same proof as for types —
+    # take the list apart and re-query it.
+    r = call("get_platform_documentation",
+             {"projectName": PROJECT, "typeName": "NoSuchBuiltin_ZZZ_e2e", "category": "builtin"})
+    err = assert_error(r, "nonexistent builtin is a real is_error")
+    assert_contains(err, "published names", "the builtin banner must state the scale too")
+
+    listed = [ln[2:].strip() for ln in err.splitlines() if ln.startswith("- ")]
+    assert len(listed) >= 10, "the builtin banner must offer a usable sample, got %r" % listed[:5]
+    for name in listed[:10]:
+        probe = call("get_platform_documentation",
+                     {"projectName": PROJECT, "typeName": name, "category": "builtin"})
+        assert_ok(probe, "a name the builtin banner lists must resolve: %r" % name)
+        assert_contains(probe.text, "Built-in function",
+                        "the listed builtin %r must render a real doc, not a banner" % name)
+    assert_no_diff("an invalid lookup must not touch the project on disk")

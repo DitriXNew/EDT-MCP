@@ -152,8 +152,12 @@ public class PlatformDocumentationService
             return ToolResult.error("Could not get type provider. Make sure EDT workspace is open.").toJson(); //$NON-NLS-1$
         }
 
-        // Find type by iterating through all type descriptions
-        PlatformNameIndex index = new PlatformNameIndex(typeName);
+        // Find type by iterating through all type descriptions. The index re-checks each name it is
+        // about to PRINT by actually resolving it, so the banner cannot advertise a name that then
+        // fails - the loop issue #355 is about.
+        IEObjectProvider provider = typeProvider;
+        PlatformNameIndex index =
+            new PlatformNameIndex(typeName, candidate -> resolvesAsType(provider, candidate));
         DocumentedType foundType = findType(typeProvider, typeName, index);
 
         // If not found, show available types
@@ -303,6 +307,21 @@ public class PlatformDocumentationService
             index.accept(name);
         }
         return null;
+    }
+
+    /**
+     * Whether {@code name} really answers a type lookup - the same resolution the tool would run for
+     * it, so a name that passes this is a name the caller can copy out of the banner and query.
+     * Applied only to the handful of names about to be printed.
+     *
+     * @param provider the type provider
+     * @param name the candidate name, exactly as it would be passed back
+     * @return {@code true} when the lookup resolves
+     */
+    private boolean resolvesAsType(IEObjectProvider provider, String name)
+    {
+        IEObjectDescription desc = provider.getEObjectDescription(name);
+        return desc != null && resolveDocumentedType(provider, desc, name) != null;
     }
 
     /**
@@ -1402,8 +1421,12 @@ public class PlatformDocumentationService
 
         ResourceSet resourceSet = findAnyProjectResourceSet();
 
-        // Search for the function
-        PlatformNameIndex index = new PlatformNameIndex(functionName);
+        // Search for the function. As on the type branch, each name the banner is about to print is
+        // re-checked by actually resolving it: the METHOD provider hands out proxies too, and a name
+        // that cannot resolve must not be advertised as available.
+        ResourceSet proxyContext = resourceSet;
+        PlatformNameIndex index = new PlatformNameIndex(functionName,
+            candidate -> resolvesAsBuiltin(methodProvider, candidate, proxyContext));
         Method foundMethod = findBuiltinMethod(methodProvider, functionName, resourceSet, index);
 
         // If not found, show available methods
@@ -1418,6 +1441,21 @@ public class PlatformDocumentationService
 
         // Build documentation for the found method
         return buildBuiltinMethodDocumentation(foundMethod, useRussian);
+    }
+
+    /**
+     * Whether {@code name} really answers a built-in lookup - the same resolution the tool would run
+     * for it. Applied only to the handful of names about to be printed.
+     *
+     * @param provider the global-method provider
+     * @param name the candidate name, exactly as it would be passed back
+     * @param resourceSet resource set used to resolve the proxy (may be {@code null})
+     * @return {@code true} when the lookup resolves
+     */
+    private boolean resolvesAsBuiltin(IEObjectProvider provider, String name, ResourceSet resourceSet)
+    {
+        IEObjectDescription desc = provider.getEObjectDescription(name);
+        return desc != null && resolveDescriptionAsMethod(desc, resourceSet) != null;
     }
 
     /**

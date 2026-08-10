@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * The names a platform lookup scanned, and the "not found" banner built from them.
@@ -19,9 +20,12 @@ import java.util.Set;
  * and called them "Available types" - and on a metadata-aware platform those first 30 are exactly
  * the names the lookup could not resolve. An answer that says "Type not found: CatalogObject" and
  * then lists {@code CatalogObject} among the available types sends a caller round a loop of
- * equivalent retries (issue #355). So the index is fed ONLY names the lookup would actually
- * resolve, it counts them all (a bare "first 30 ... more available" hid the scale), and it puts the
- * names CLOSE to what was asked first - a miss is far more often a spelling than a wrong concept.
+ * equivalent retries (issue #355). So a name earns its place twice: it is only COLLECTED if the
+ * lookup would resolve it, and only PRINTED if it still passes {@link #resolvable} - a real
+ * resolution attempt, affordable because it runs on the few dozen names about to be shown rather
+ * than on the whole vocabulary. The index also counts everything it saw (a bare "first 30 ... more
+ * available" hid the scale) and puts the names CLOSE to what was asked first - a miss is far more
+ * often a spelling than a wrong concept.
  *
  * <p>Fed while the single scan over the provider's descriptions runs, so the banner costs no second
  * pass. Pure string logic with no platform dependency, hence unit-testable.
@@ -31,8 +35,18 @@ final class PlatformNameIndex
     /** How many names the banner lists as a sample of what is available. */
     private static final int SAMPLE_LIMIT = 30;
 
+    /**
+     * How many candidates are held back for the printed list. More than {@link #SAMPLE_LIMIT},
+     * because a candidate that fails the resolvability check at render time is dropped and the list
+     * has to stay full.
+     */
+    private static final int CANDIDATE_LIMIT = SAMPLE_LIMIT * 4;
+
     /** How many "did you mean" candidates the banner offers. */
     private static final int SUGGESTION_LIMIT = 8;
+
+    /** How many candidates each suggestion bucket holds, so filtering still leaves a full list. */
+    private static final int SUGGESTION_CANDIDATE_LIMIT = SUGGESTION_LIMIT * 3;
 
     /** How many single-character edits a name may be from the query and still be offered. */
     private static final int MAX_TYPO_DISTANCE = 2;
@@ -44,6 +58,18 @@ final class PlatformNameIndex
     private static final int MIN_TYPO_QUERY_LENGTH = 5;
 
     private final String query;
+
+    /**
+     * The last word on whether a name really answers a lookup - applied to the handful of names the
+     * banner is about to PRINT, never to the whole vocabulary.
+     *
+     * <p>Cheap structural checks decide what to collect ({@code isDocumentable}), but a check that
+     * cannot lie has to actually resolve the name, and resolving thousands of descriptions on the
+     * UI thread for one error message is not affordable. Verifying only what is printed costs a few
+     * dozen resolutions and makes the printed list PROVABLY usable, which is the whole point: a
+     * caller must be able to take any name off this list and query it.
+     */
+    private final Predicate<String> resolvable;
 
     private final List<String> samples = new ArrayList<>();
 
@@ -72,11 +98,24 @@ final class PlatformNameIndex
     private String undocumentedLabel;
 
     /**
+     * An index that trusts what it is fed. For a caller that has no way to re-check a name.
+     *
      * @param query the name that was looked up (used to rank the suggestions)
      */
     PlatformNameIndex(String query)
     {
+        this(query, null);
+    }
+
+    /**
+     * @param query the name that was looked up (used to rank the suggestions)
+     * @param resolvable the final check applied to each name before it is PRINTED, or {@code null}
+     *            to print what was collected
+     */
+    PlatformNameIndex(String query, Predicate<String> resolvable)
+    {
         this.query = query == null ? "" : query.trim(); //$NON-NLS-1$
+        this.resolvable = resolvable;
     }
 
     /**
@@ -93,7 +132,7 @@ final class PlatformNameIndex
             return;
         }
         total++;
-        if (samples.size() < SAMPLE_LIMIT)
+        if (samples.size() < CANDIDATE_LIMIT)
         {
             samples.add(name);
         }
@@ -129,23 +168,33 @@ final class PlatformNameIndex
     /** @return the "did you mean" candidates, best first, capped at {@link #SUGGESTION_LIMIT} */
     List<String> suggestions()
     {
-        List<String> all = new ArrayList<>();
         // The typo bucket is a LAST resort: a name related to the query by substring or qualification
         // is a better guess than one that merely looks similar, and mixing them would bury it.
-        List<List<String>> buckets = prefixHits.isEmpty() && otherHits.isEmpty()
-            ? List.of(typoHits) : List.of(prefixHits, otherHits);
-        for (List<String> bucket : buckets)
+        List<String> strong = new ArrayList<>(prefixHits);
+        strong.addAll(otherHits);
+        return verified(strong.isEmpty() ? typoHits : strong, SUGGESTION_LIMIT);
+    }
+
+    /**
+     * The first {@code limit} names of {@code candidates} that pass {@link #resolvable}. This is the
+     * one place a name becomes something the banner will show, so it is the one place the promise
+     * "every name here answers a lookup" is kept.
+     */
+    private List<String> verified(List<String> candidates, int limit)
+    {
+        List<String> kept = new ArrayList<>();
+        for (String candidate : candidates)
         {
-            for (String hit : bucket)
+            if (kept.size() >= limit)
             {
-                if (all.size() >= SUGGESTION_LIMIT)
-                {
-                    return all;
-                }
-                all.add(hit);
+                break;
+            }
+            if (resolvable == null || resolvable.test(candidate))
+            {
+                kept.add(candidate);
             }
         }
-        return all;
+        return kept;
     }
 
     /**
@@ -170,7 +219,8 @@ final class PlatformNameIndex
             sb.append("Did you mean: ").append(String.join(", ", suggestions)).append("?\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
 
-        if (total == 0)
+        List<String> listed = verified(samples, SAMPLE_LIMIT);
+        if (total == 0 || listed.isEmpty())
         {
             sb.append("(no ").append(itemsLabel).append(" found - provider may be empty)\n"); //$NON-NLS-1$ //$NON-NLS-2$
             return sb.toString();
@@ -178,9 +228,12 @@ final class PlatformNameIndex
 
         // "N of TOTAL" rather than the old "first N ... (more available)": a caller - and an agent
         // in particular - needs to know whether it is looking at a sample of 30 or at everything.
-        sb.append("Available ").append(itemsLabel).append(" (").append(samples.size()) //$NON-NLS-1$ //$NON-NLS-2$
-            .append(" of ").append(total).append(" documented names, English and Russian):\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        for (String item : samples)
+        // "published" and not "documented", because TOTAL is what the platform publishes while the
+        // listed ones are the ones checked one by one - the banner must not claim more than it did.
+        sb.append("Available ").append(itemsLabel).append(" (").append(listed.size()) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" of ").append(total).append(" published names, English and Russian; ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append("every name listed here resolves):\n"); //$NON-NLS-1$
+        for (String item : listed)
         {
             sb.append("- ").append(item).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -202,7 +255,7 @@ final class PlatformNameIndex
     {
         // Enough of the BEST kind is enough: the weaker bucket is still filled while prefix hits are
         // scarce, but a full prefix bucket already answers the question.
-        if (query.isEmpty() || prefixHits.size() >= SUGGESTION_LIMIT)
+        if (query.isEmpty() || prefixHits.size() >= SUGGESTION_CANDIDATE_LIMIT)
         {
             return;
         }
@@ -219,11 +272,11 @@ final class PlatformNameIndex
             prefixHits.add(name);
         }
         else if ((lowerName.contains(lowerQuery) || lowerQuery.startsWith(lowerName + '.'))
-            && otherHits.size() < SUGGESTION_LIMIT)
+            && otherHits.size() < SUGGESTION_CANDIDATE_LIMIT)
         {
             otherHits.add(name);
         }
-        else if (typoHits.size() < SUGGESTION_LIMIT && isTypoOf(lowerName, lowerQuery))
+        else if (typoHits.size() < SUGGESTION_CANDIDATE_LIMIT && isTypoOf(lowerName, lowerQuery))
         {
             typoHits.add(name);
         }

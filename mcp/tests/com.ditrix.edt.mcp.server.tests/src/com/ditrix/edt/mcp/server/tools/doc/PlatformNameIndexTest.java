@@ -230,6 +230,34 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testANameThatDoesNotResolveIsNeverPrinted()
+    {
+        // The final guard. A name can pass every cheap structural check and still fail to resolve;
+        // printing it recreates the retry loop, so the banner re-checks what it is about to show.
+        PlatformNameIndex index = new PlatformNameIndex("Nope", n -> !n.startsWith("Broken")); //-NLS-1$ //-NLS-2$
+        index.accept("BrokenType"); //-NLS-1$
+        index.accept("Array"); //-NLS-1$
+        String banner = index.buildNotFoundBanner("Type not found: ", "Nope", "types", null); //-NLS-1$ //-NLS-2$ //-NLS-3$
+
+        assertTrue("a resolvable name is listed", banner.contains("- Array")); //-NLS-1$ //-NLS-2$
+        assertFalse("an unresolvable name must never be advertised", //-NLS-1$
+            banner.contains("- BrokenType")); //-NLS-1$
+        // The total still reports what the platform PUBLISHES, and says so rather than calling them
+        // all documented.
+        assertTrue(banner.contains("1 of 2 published names")); //-NLS-1$
+    }
+
+    @Test
+    public void testAnUnresolvableSuggestionIsDroppedToo()
+    {
+        PlatformNameIndex index = new PlatformNameIndex("Value", n -> !n.startsWith("Broken")); //-NLS-1$ //-NLS-2$
+        index.accept("BrokenValueThing"); //-NLS-1$
+        index.accept("ValueTable"); //-NLS-1$
+
+        assertEquals(List.of("ValueTable"), index.suggestions()); //-NLS-1$
+    }
+
+    @Test
     public void testADistantNameIsNotOfferedAsATypo()
     {
         PlatformNameIndex index = new PlatformNameIndex("ValueTabel"); //$NON-NLS-1$

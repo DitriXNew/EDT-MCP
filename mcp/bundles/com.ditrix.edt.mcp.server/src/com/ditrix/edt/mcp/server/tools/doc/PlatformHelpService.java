@@ -360,8 +360,14 @@ public final class PlatformHelpService
                 }
             }
         }
-        catch (Exception e) // NOSONAR optional enrichment, see valueOf
+        catch (Exception | LinkageError e) // NOSONAR optional enrichment, see valueOf
         {
+            // LinkageError too, not just Exception. Every OTHER path into this walk goes through
+            // read(), which absorbs both because the platform.doc package is an OPTIONAL import - on
+            // an EDT that ships a binary-incompatible one, the first touch of a helper type raises
+            // NoClassDefFoundError. The `documents` probe calls this method DIRECTLY, outside read(),
+            // so without widening the catch here an Error would escape and turn a perfectly usable
+            // model-only lookup into a failed request.
             Activator.logInfo("Platform help tree could not be walked: " + e); //$NON-NLS-1$
         }
         typeNodes.put(key, found);
