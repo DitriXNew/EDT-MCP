@@ -24,6 +24,10 @@ import com.ditrix.edt.mcp.server.tags.TagUtils;
  * not in the main collection list. This filter ensures that when viewing the
  * original collection (e.g., Common Modules), objects that have been added to
  * a group are hidden from the list.</p>
+ *
+ * <p>While a text search narrows the tree the filter switches itself off (see
+ * {@link NavigatorSearchState}): the search hides the virtual group folders, so a grouped
+ * object has to stay visible in its original location to remain findable.</p>
  */
 public class GroupedObjectsFilter extends ViewerFilter {
     
@@ -35,7 +39,7 @@ public class GroupedObjectsFilter extends ViewerFilter {
 
         // Check if search/filter is active on the viewer
         // When search is active, we should show all objects (disable group filtering)
-        if (isSearchActive(viewer)) {
+        if (NavigatorSearchState.isSearchActive(viewer, this)) {
             return true;
         }
         
@@ -77,43 +81,8 @@ public class GroupedObjectsFilter extends ViewerFilter {
             return true; // Service not available, show object
         }
         Group containingGroup = service.findGroupForObject(project, fqn);
-        
+
         // If object is in a group, hide it from the original location
         return containingGroup == null;
-    }
-    
-    /**
-     * Checks if a text search filter is currently active on the viewer.
-     * When text search is active, we disable group filtering to allow finding objects in groups.
-     * Note: Tag filter (TagSearchFilter) does NOT disable group filtering - it handles groups itself.
-     */
-    private boolean isSearchActive(Viewer viewer) {
-        if (viewer == null) {
-            return false;
-        }
-        
-        // Check if there are any PatternFilter-like filters active on the viewer
-        if (viewer instanceof org.eclipse.jface.viewers.StructuredViewer sv) {
-            ViewerFilter[] filters = sv.getFilters();
-            for (ViewerFilter filter : filters) { // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
-                // Skip ourselves
-                if (filter == this) {
-                    continue;
-                }
-                // Skip TagSearchFilter - it handles groups itself (use instanceof for type safety)
-                if (filter instanceof com.ditrix.edt.mcp.server.tags.ui.TagSearchFilter) {
-                    continue;
-                }
-                // Check for common text search filter types by class name
-                String className = filter.getClass().getName();
-                if (className.contains("Pattern") || className.contains("Search") || 
-                    className.contains("Quick") || className.contains("Text")) {
-                    // This is a text search filter - our filter should be disabled
-                    return true;
-                }
-            }
-        }
-        
-        return false;
     }
 }
