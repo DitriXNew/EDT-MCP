@@ -234,7 +234,8 @@ The suite requires the **live server up** on `:8765` with `TestConfiguration` lo
 python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2e-results.xml
 ```
 
-- Execution is **serial** (see §3). Do not try to parallelize the run.
+- Execution within one runner is **serial** (see §3). Do not try to parallelize tests against a single workspace: every test resets the same git fixture and the same EDT model.
+- **Sharding across MACHINES is the supported way to go faster:** `--shard I/N` runs only every Nth test (round-robin, deterministic), and each shard is a normal serial run with its own baseline, cleanup, exit code and JUnit report. CI does this with a matrix, so every shard gets its own runner, clone, EDT install and port — the isolation comes from **not sharing a working tree**, never from locking one. **Never point two shards at the same checkout.** Round-robin, not contiguous blocks, because tests are registered file by file and `modify_metadata` alone is ~40% of the wall clock: block-splitting caps the speed-up at ~2.5×, striping scales linearly (4 shards ≈ 3.8× on measured durations). Change the shard count in ONE place — `inputs.shards` in `e2e-tests.yml`; the divisor comes from `strategy.job-total`.
 - The run **mutates** `TestConfiguration` and reverts it; on a clean checkout that is expected. The final state must be clean.
 - The existing `.github/workflows/e2e-tests.yml` invokes the runner against a running server; keep its CLI flags (`--host/--port/--project/--junit-xml`) stable.
 - **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages. (Research-backed: the official MCP SDK's in-memory transport doesn't fit a server that lives inside EDT; the hand-rolled client is kept spec-conformant instead — initialize + notifications/initialized handshake, Mcp-Session-Id + MCP-Protocol-Version headers, robust SSE.)

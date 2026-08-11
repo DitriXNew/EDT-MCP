@@ -4,12 +4,19 @@ EDT-MCP e2e orchestrator.
 
 Discovers every @e2e_test in tests/e2e/tools/test_*.py and runs them SERIALLY
 (all tests mutate the same TestConfiguration + git tree, so they cannot run in
-parallel). Resets the fixture before EVERY test, enforces a clean final state,
-and emits a JUnit XML report. See SKILL.md.
+parallel WITHIN one runner). Resets the fixture before EVERY test, enforces a
+clean final state, and emits a JUnit XML report. See SKILL.md.
+
+--shard I/N splits the suite ACROSS runners instead: each shard is an ordinary
+serial run of its own subset, on its own machine, with its own workspace and its
+own fixture checkout. That is what makes it safe - the isolation comes from not
+sharing a working tree, not from locking one. Never point two shards at the same
+checkout.
 
 Usage:
     python tests/e2e/run_all.py [--host H] [--port P] [--project NAME]
                                 [--junit-xml PATH] [--filter SUBSTR]
+                                [--shard I/N]
 
 Python stdlib only.
 """
@@ -31,6 +38,12 @@ def parse_args():
     ap.add_argument("--project", default=os.environ.get("MCP_PROJECT", "TestConfiguration"))
     ap.add_argument("--junit-xml", dest="junit", default=None)
     ap.add_argument("--filter", default=None, help="substring filter on test name or tool")
+    ap.add_argument("--shard", default=None, metavar="I/N",
+                    help="run only shard I of N (1-based), e.g. --shard 2/4. Each shard is a "
+                         "self-contained run: its own baseline, its own cleanup, its own exit "
+                         "code and JUnit report. Intended for a CI matrix where every shard gets "
+                         "its OWN runner, workspace and fixture checkout - two shards must never "
+                         "share a working tree, because reset_fixture is a git operation on it.")
     ap.add_argument("--test-timeout", type=float,
                     default=float(os.environ.get("MCP_TEST_TIMEOUT", "3600")),
                     help="per-test wall-clock timeout in seconds (default 3600). Must exceed the "
@@ -44,6 +57,40 @@ def parse_args():
                          "must never do: it FAILS the test and SKIPS all the rest. No auto-relaunch "
                          "- restart EDT and re-run.")
     return ap.parse_args()
+
+
+def parse_shard(spec):
+    """'I/N' -> (index, total), both 1-based and validated. Returns (1, 1) for None.
+
+    A malformed spec is a hard exit rather than a fallback to "run everything": in a matrix the
+    shards divide the suite between them, so one silently running the WHOLE suite would look like
+    a pass while the split it was supposed to prove never happened."""
+    if not spec:
+        return (1, 1)
+    parts = spec.split("/")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        print("!! --shard expects I/N with both parts numeric (e.g. 2/4), got %r" % spec)
+        sys.exit(2)
+    index, total = int(parts[0]), int(parts[1])
+    if total < 1 or not 1 <= index <= total:
+        print("!! --shard %r is out of range: need 1 <= I <= N and N >= 1" % spec)
+        sys.exit(2)
+    return (index, total)
+
+
+def select_shard(tests, index, total):
+    """The slice of `tests` this shard owns - every Nth test, NOT a contiguous block.
+
+    Round-robin, and that is the whole point. Tests are registered file by file, so a contiguous
+    split hands one shard whole files: modify_metadata alone is ~40% of the suite's wall clock, so
+    block-splitting caps the speed-up at ~2.5x however many shards you add, while striping the same
+    files across all of them scales linearly (the slowest SINGLE test is ~110s, which is the real
+    floor). Deterministic and stateless - shard 3/4 selects the same tests on every runner, with no
+    timing file to keep in sync.
+
+    Every test lands in exactly one shard, and the union is the full list: the arithmetic is a
+    plain stride, so there is no rounding case where a test at the tail belongs to nobody."""
+    return tests[index - 1::total] if total > 1 else tests
 
 
 def write_junit(results, path, final_clean, cleanup_failed=False, status_error=None,
@@ -284,8 +331,19 @@ def main():
     tests = harness.REGISTRY
     if args.filter:
         tests = [t for t in tests if args.filter in t["name"] or args.filter in t["tool"]]
+    # Sharded AFTER filtering, so --filter and --shard compose the way a reader expects: the
+    # filter says WHICH tests exist for this run, the shard says which of those this runner takes.
+    # harness.REGISTRY itself is left whole - the coverage ratchet reads it to check that every
+    # advertised tool has a test, and that question has one answer for the suite, not one per shard.
+    shard_index, shard_total = parse_shard(args.shard)
+    selected = select_shard(tests, shard_index, shard_total)
+    shard_note = ""
+    if shard_total > 1:
+        shard_note = " [shard %d/%d of %d selected]" % (shard_index, shard_total, len(tests))
+    tests = selected
 
-    print("EDT-MCP e2e: %d test(s) against %s, project=%s" % (len(tests), harness.MCP_URL, harness.PROJECT))
+    print("EDT-MCP e2e: %d test(s)%s against %s, project=%s"
+          % (len(tests), shard_note, harness.MCP_URL, harness.PROJECT))
     harness.wait_for_server()
     harness.initialize()     # proper MCP handshake (captures Mcp-Session-Id if issued)
     if not harness.wait_for_project_ready():

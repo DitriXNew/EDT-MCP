@@ -76,6 +76,31 @@ from harness import (
 # Read-back helpers (model truth over the wire — the primary verification)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _settle_before_rename():
+    """Drain EDT's derived-data queue BEFORE a test starts a real rename.
+
+    This test file is the single biggest source of red e2e runs: the common-module rename failed
+    in 4 of the last 12 master runs, always the same way ("Renaming ... did not finish within 420
+    seconds"), while passing in ~6s on the runs in between. That bimodality is the whole diagnosis
+    - it is not the rename that is slow, it is the DERIVED-DATA PIPELINE it has to drain first.
+    The orchestrator git-reverts the fixture before every test, EDT notices those files and starts
+    recomputing, and a rename fired into that recompute ends up waiting for it from inside its own
+    budget. So the deeper the PRECEDING test's diff, the likelier THIS one times out - on a cold
+    shared runner most of all.
+
+    Draining the queue before starting the clock costs seconds when there is nothing to drain and
+    removes the coin flip when there is. It is NOT a timeout bump: 420s is the tool's own budget
+    for a rename, and these failures are not renames that needed longer, they are renames that
+    started too early. (resync_to_disk's happy path had the same flake and stopped failing once it
+    got the same precondition.)
+
+    Only for tests that actually EXECUTE a rename. A refused one - a bad FQN, a missing argument,
+    a designer-owned child - never reaches the engine, so it has no pipeline to wait for and
+    settling first would just spend time to prove nothing.
+    """
+    wait_for_project_ready()
+
+
 def _commonmodule_names(name_filter=None):
     """Return the get_metadata_objects MARKDOWN body for the commonModules family.
 
@@ -103,6 +128,7 @@ def _catalog_names():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_common_module_and_readback_shows_new_name():
+    _settle_before_rename()  # the flake this file is known for — see the helper
     # Rename CommonModule.Calc -> Compute. The new name deliberately shares NO
     # substring with "Calc", so an "old name absent" check on the row marker "| Calc "
     # is unambiguous. A broken/no-op rename would leave "Calc" present and "Compute"
@@ -139,6 +165,7 @@ def test_confirm_renames_common_module_and_readback_shows_new_name():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_catalog_and_readback_shows_new_name():
+    _settle_before_rename()  # executes a real rename - see the helper
     # Rename Catalog.Catalog -> Goods. New name shares no substring with "Catalog",
     # so the row-marker absence check is clean.
     r = call("rename_metadata_object", {
@@ -164,6 +191,7 @@ def test_confirm_renames_catalog_and_readback_shows_new_name():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_catalog_attribute_and_details_readback_shows_new_name():
+    _settle_before_rename()  # executes a real rename - see the helper
     # Nested rename: Catalog.Catalog.Attribute.Attribute -> Title. Verified through a
     # DIFFERENT read tool (get_metadata_details full=true), whose ### Attributes table
     # lists attribute Names. The new attribute name must appear and the old one must
@@ -211,6 +239,7 @@ def test_confirm_renames_catalog_attribute_and_details_readback_shows_new_name()
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_cascade_rewrites_english_named_module_reference_in_bsl():
+    _settle_before_rename()  # executes a real rename - see the helper
     # New name "Reckoner" shares no substring with "CascadeEn", so the search
     # assertions are unambiguous. A rename that left the BSL reference untouched would
     # keep "CascadeEn.Marker" in the code and FAIL every cascade assertion below.
@@ -251,6 +280,7 @@ def test_cascade_rewrites_english_named_module_reference_in_bsl():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_cascade_rewrites_russian_named_module_reference_in_bsl():
+    _settle_before_rename()  # executes a real rename - see the helper
     # Bilingual cascade: the renamed object has a RUSSIAN (Cyrillic) Name. A cascade
     # that mishandled the Cyrillic identifier — the exact failure mode this case exists
     # to catch — would leave the old reference and FAIL. "Вычислитель" is not a
@@ -630,6 +660,7 @@ def test_form_element_preview_lists_change_points_and_does_not_mutate():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_a_form_attribute_and_the_form_on_disk_follows():
+    _settle_before_rename()  # executes a real rename - see the helper
     _seed_form_attribute("RNAttr")
     poll_disk_contains(_FORM, "<name>RNAttr</name>", ctx="the seeded attribute must be on disk")
     r = call("rename_metadata_object", {
@@ -713,6 +744,7 @@ def test_renaming_a_form_element_also_refreshes_its_derived_title():
     an unpinned doc claim is how that sentence survived being false. Pinning it here means the day
     EDT stops doing it, the sentence gets revisited instead of quietly rotting.
     """
+    _settle_before_rename()  # executes a real rename - see the helper
     grp = "RNTitleGroup"
     _seed_form_group(grp)
     before = _form_item_titles(grp)
@@ -875,6 +907,7 @@ def test_a_dotted_new_name_is_refused_on_the_form_path_too():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_a_cyrillic_new_name_is_accepted():
+    _settle_before_rename()  # executes a real rename - see the helper
     # The other half: the rule must not become a blanket refusal. A Cyrillic name is legal
     # 1C, and a hand-written ASCII rule would have passed every assertion above while
     # rejecting half the configurations in the country.
