@@ -361,6 +361,37 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testAnUnusedPrefixBudgetIsInheritedByTheSubstringBucket()
+    {
+        // Capping the first bucket must not cap the second. With no prefix matches at all, half the
+        // allowance went unspent by ANYBODY while otherHits was still held to its own half - so the
+        // one resolvable substring candidate could sit just past a limit that existed to protect
+        // it. The arrangement below is exact, because the defect is: 101 candidates in the
+        // substring bucket with the good one at index 21 is reached on attempt 62 under a 60-cap
+        // (missed) and on attempt 22 once the unused half is inherited (found).
+        //
+        // The fillers must CONTAIN the query without STARTING with it, or they land in no strong
+        // bucket at all and the budget is never the constraint - the first version of this test
+        // got that wrong and passed with the fix reverted, which is to say it tested nothing.
+        PlatformNameIndex index = new PlatformNameIndex(
+            "CatalogObject.Currencies", "CatalogObject"::equals); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 21; i++)
+        {
+            index.accept("ZCatalogObject.CurrenciesBroken" + i); //$NON-NLS-1$
+        }
+        // The base type the query qualifies - the one name here that resolves, and the most useful
+        // suggestion this banner could give a qualified query.
+        index.accept("CatalogObject"); //$NON-NLS-1$
+        for (int i = 21; i < 100; i++)
+        {
+            index.accept("ZCatalogObject.CurrenciesBroken" + i); //$NON-NLS-1$
+        }
+
+        assertTrue("the substring bucket must inherit the attempts the prefix bucket never used", //$NON-NLS-1$
+            index.suggestions().contains("CatalogObject")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testABrokenPrefixBucketDoesNotStarveTheSubstringBucket()
     {
         // Ranked first is not entitled to everything. A wall of unresolvable prefix matches used to

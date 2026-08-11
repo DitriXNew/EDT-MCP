@@ -268,18 +268,25 @@ final class PlatformNameIndex
         // at the tail is reached only after ~150 attempts - past the budget, never tried. The
         // stride has to be sized so ONE pass spans the pool within the attempts available.
         //
-        // And each strong bucket gets its OWN half of the budget rather than sharing one. Ranked
-        // first does not mean entitled to everything: 120 unresolvable prefix matches would
-        // otherwise consume the whole allowance and a query like `CatalogObject.Currencies` would
-        // lose the base-type hint sitting in otherHits - the single most useful suggestion this
-        // banner has, dropped because unrelated broken names happened to sort ahead of it. The
-        // total stays what it was; only its division changed.
+        // The budget is CAPPED for the first bucket and INHERITED by the second. Ranked first does
+        // not mean entitled to everything: 120 unresolvable prefix matches would otherwise consume
+        // the whole allowance and a query like `CatalogObject.Currencies` would lose the base-type
+        // hint sitting in otherHits - the single most useful suggestion this banner has, dropped
+        // because unrelated broken names happened to sort ahead of it. Hence the cap.
+        //
+        // But a cap on the first must not become a cap on the second. Splitting the budget in two
+        // fixed halves protected otherHits from a greedy prefix bucket and then threw away the
+        // unused half whenever prefixHits was small or empty - so otherHits could run out of
+        // attempts while half the allowance had never been spent by anyone. The second pass gets
+        // everything the first did not use: the guarantee is a FLOOR for otherHits, not a ceiling.
         int share = Math.max(1, VERIFY_ATTEMPT_LIMIT / 2);
-        List<String> best =
-            new ArrayList<>(verified(strided(prefixHits, share), SUGGESTION_LIMIT, share));
+        Pass prefixPass = verifyPass(strided(prefixHits, share), SUGGESTION_LIMIT, share);
+        List<String> best = new ArrayList<>(prefixPass.names);
         if (best.size() < SUGGESTION_LIMIT)
         {
-            best.addAll(verified(strided(otherHits, share), SUGGESTION_LIMIT - best.size(), share));
+            int left = Math.max(share, VERIFY_ATTEMPT_LIMIT - prefixPass.attempts);
+            best.addAll(
+                verifyPass(strided(otherHits, left), SUGGESTION_LIMIT - best.size(), left).names);
         }
         return best.isEmpty()
             ? verified(strided(typoHits, VERIFY_ATTEMPT_LIMIT), SUGGESTION_LIMIT) : best;
@@ -342,7 +349,22 @@ final class PlatformNameIndex
 
     private List<String> verified(List<String> candidates, int limit)
     {
-        return verified(candidates, limit, VERIFY_ATTEMPT_LIMIT);
+        return verifyPass(candidates, limit, VERIFY_ATTEMPT_LIMIT).names;
+    }
+
+    /** What one verification pass produced, and what it COST - the caller needs both to divide a
+     * shared budget without wasting it. */
+    private static final class Pass
+    {
+        final List<String> names;
+
+        final int attempts;
+
+        Pass(List<String> names, int attempts)
+        {
+            this.names = names;
+            this.attempts = attempts;
+        }
     }
 
     /**
@@ -355,7 +377,7 @@ final class PlatformNameIndex
      * @param attemptLimit how many resolutions this pass may attempt
      * @return the names that passed, in the order given
      */
-    private List<String> verified(List<String> candidates, int limit, int attemptLimit)
+    private Pass verifyPass(List<String> candidates, int limit, int attemptLimit)
     {
         List<String> kept = new ArrayList<>();
         int attempts = 0;
@@ -375,7 +397,7 @@ final class PlatformNameIndex
                 kept.add(candidate);
             }
         }
-        return kept;
+        return new Pass(kept, attempts);
     }
 
     /**
