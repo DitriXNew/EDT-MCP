@@ -174,7 +174,17 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
     assert_no_diff("default resync of an in-sync project must not change any tracked file")
 
 
-@e2e_test(tool="resync_to_disk", kind="action")
+# kind="write-metadata" (NOT "action") on purpose: fullExport=true force-exports EVERY top
+# object model->disk, and that export is ASYNC (it can land AFTER the test body returns), so
+# the test needs the write-metadata teardown — reset_fixture()+reset_model() — to settle the
+# export and re-sync the model, exactly like test_apply_quick_fix's teardown. As an action it
+# got NO teardown: in a serial run the next write-metadata test's reset_model() masked the
+# residue, but once the suite is sharded by kind (issue #385) this test lands in the cheap
+# read-action lane with no such neighbour, and its residue desynced the very next default
+# resync (test_report_only) into exporting a phantom -> a dirty tree. On success it still
+# rewrites identical bytes (assert_no_diff holds); the honest kind is about the async WRITE,
+# not the net byte diff.
+@e2e_test(tool="resync_to_disk", kind="write-metadata")
 def test_full_export_reexports_every_top_object():
     """fullExport=true opts back in to the export-everything refresh: every walked top
     object is force-exported (objectsExported == totalTopObjects > 0), the flag is
