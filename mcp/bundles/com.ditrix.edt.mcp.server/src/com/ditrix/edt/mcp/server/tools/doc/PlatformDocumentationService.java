@@ -172,10 +172,12 @@ public class PlatformDocumentationService
     }
 
     /**
-     * The soft banner for a type lookup that resolved nothing. A name the platform KNOWS but
-     * documents nothing for (a type set that unions other types, e.g. {@code AnyRef}) gets its own
-     * diagnosis: telling a caller such a name does not exist is a different - and wrong - answer,
-     * and it is what sent agents round a loop of equivalent retries in issue #355.
+     * The soft banner for a type lookup that resolved nothing. Three different failures, three
+     * different answers - telling a caller a name does not exist when the platform KNOWS it is a
+     * different, wrong answer, and it is what sent agents round a loop of equivalent retries in
+     * issue #355. The mirror-image mistake matters just as much: declaring "the platform documents
+     * nothing for it" over a set whose target we merely failed to reach states a fact about the
+     * platform that is not in evidence, and buries a condition a retry could clear.
      *
      * @param typeName the name that was looked up
      * @param index the names the scan collected
@@ -183,18 +185,27 @@ public class PlatformDocumentationService
      */
     private String buildTypeNotFoundBanner(String typeName, PlatformNameIndex index)
     {
-        if (index.isUndocumented())
+        switch (index.missReason())
         {
+        case DOCUMENTS_NOTHING:
             return index.buildNotFoundBanner("No documentation for type set: ", typeName, "types", //$NON-NLS-1$ //$NON-NLS-2$
                 "A TYPE SET unions other types and declares no members of its own, so the platform " //$NON-NLS-1$
                     + "documents nothing for it. Ask for one of the type sets it unions " //$NON-NLS-1$
                     + "(CatalogRef, DocumentRef, EnumRef, ...) or for the concrete platform type."); //$NON-NLS-1$
+        case TARGET_UNRESOLVED:
+            return index.buildNotFoundBanner("Documentation unavailable for type set: ", typeName, //$NON-NLS-1$
+                "types", //$NON-NLS-1$
+                "The platform publishes this type set and names the generic type that documents it, " //$NON-NLS-1$
+                    + "but that type could not be resolved in this platform version's model - which " //$NON-NLS-1$
+                    + "usually means the model is not fully loaded yet. Retry; if it persists, ask " //$NON-NLS-1$
+                    + "for the concrete platform type instead."); //$NON-NLS-1$
+        default:
+            return index.buildNotFoundBanner("Type not found: ", typeName, "types", //$NON-NLS-1$ //$NON-NLS-2$
+                "Names are matched exactly (case-insensitive) against the platform type names, in " //$NON-NLS-1$
+                    + "English or Russian. An object of your own configuration is not a platform " //$NON-NLS-1$
+                    + "type - use get_metadata_details for that; for a global built-in function " //$NON-NLS-1$
+                    + "pass category='builtin'."); //$NON-NLS-1$
         }
-        return index.buildNotFoundBanner("Type not found: ", typeName, "types", //$NON-NLS-1$ //$NON-NLS-2$
-            "Names are matched exactly (case-insensitive) against the platform type names, in " //$NON-NLS-1$
-                + "English or Russian. An object of your own configuration is not a platform type - " //$NON-NLS-1$
-                + "use get_metadata_details for that; for a global built-in function pass " //$NON-NLS-1$
-                + "category='builtin'."); //$NON-NLS-1$
     }
 
     /**
@@ -286,10 +297,22 @@ public class PlatformDocumentationService
             if (!isDocumentable(typeProvider, desc))
             {
                 // Deliberately NOT offered as an available name: it answers nothing. When it IS what
-                // was asked for, say so precisely instead of "not found" (issue #355).
+                // was asked for, say so precisely instead of "not found" (issue #355) - and split
+                // the two ways a set can get here, because they are not the same news. A set that
+                // names NO target documents nothing and never will; a set that names one the
+                // provider does not currently hold is a model that may simply not be loaded yet,
+                // and telling that caller "the platform documents nothing for it" would be a claim
+                // about the platform made from our own failure to find something.
                 if (matches)
                 {
-                    index.markUndocumented(name);
+                    if (containedTypeName(typeProvider, desc) == null)
+                    {
+                        index.markDocumentsNothing();
+                    }
+                    else
+                    {
+                        index.markTargetUnresolved();
+                    }
                 }
                 continue;
             }
@@ -302,6 +325,16 @@ public class PlatformDocumentationService
                 }
                 // Matched and yet resolved nothing. Whatever the reason, this name does not answer,
                 // so it must not come back as an "available" one - that is the loop, exactly.
+                //
+                // A TYPE SET that got this far passed the cheap "its target is registered" test and
+                // still failed to resolve - the registered-vs-resolved distinction again, one level
+                // up. Answering a plain "Type not found" for a name the platform demonstrably knows
+                // is the wrong diagnosis; so is "the platform documents nothing for it", because it
+                // named a target and we simply could not reach it. It gets its own answer.
+                if (McorePackage.Literals.TYPE_SET.equals(desc.getEClass()))
+                {
+                    index.markTargetUnresolved();
+                }
                 continue;
             }
             index.accept(name);

@@ -255,7 +255,7 @@ def test_the_available_types_list_only_holds_names_that_resolve():
     # The scale is stated, not hidden behind "... (more available)". "published", not "documented":
     # the total counts what the provider publishes, while the LISTED names are the ones re-checked
     # one by one — the banner must not claim more than it verified.
-    assert_contains(err, "published names",
+    assert_contains(err, "candidate names",
                     "the banner must state how many names exist, not just show a sample")
     assert_contains(err, "every name listed here resolves",
                     "the banner must state the guarantee it now keeps")
@@ -342,6 +342,11 @@ def test_a_type_set_with_nothing_to_document_says_so_instead_of_not_found():
         # ... and it must NOT be advertised as available, which is what made the old list a loop.
         assert_not_contains(err, "\n- %s\n" % name,
                             "a name that answers nothing must not be listed as available")
+        # There are two ways a known type set can fail, and they carry OPPOSITE advice: this one
+        # documents nothing and never will, while an unreachable target is worth retrying. Telling
+        # a caller to retry a set that has nothing to give is the same wasted loop in a new costume.
+        assert_not_contains(err, "Documentation unavailable",
+                            "a set that genuinely documents nothing must not read as unreachable")
     assert_no_diff("an invalid lookup must not touch the project on disk")
 
 
@@ -550,7 +555,7 @@ def test_the_builtin_not_found_list_only_holds_names_that_resolve():
     r = call("get_platform_documentation",
              {"projectName": PROJECT, "typeName": "NoSuchBuiltin_ZZZ_e2e", "category": "builtin"})
     err = assert_error(r, "nonexistent builtin is a real is_error")
-    assert_contains(err, "published names", "the builtin banner must state the scale too")
+    assert_contains(err, "candidate names", "the builtin banner must state the scale too")
 
     listed = [ln[2:].strip() for ln in err.splitlines() if ln.startswith("- ")]
     assert len(listed) >= 10, "the builtin banner must offer a usable sample, got %r" % listed[:5]

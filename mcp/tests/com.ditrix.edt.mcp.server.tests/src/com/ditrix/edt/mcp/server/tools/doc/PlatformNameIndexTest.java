@@ -50,7 +50,7 @@ public class PlatformNameIndexTest
 
         assertEquals(45, index.total());
         assertTrue("the banner must state the sample size and the total", //$NON-NLS-1$
-            banner.contains("30 of 45")); //$NON-NLS-1$
+            banner.contains("30 shown of 45")); //$NON-NLS-1$
         assertTrue("the sample must be capped at 30", banner.contains("- Type29")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("the 31st name must not be listed", banner.contains("- Type30")); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -141,10 +141,40 @@ public class PlatformNameIndexTest
         // is a wrong diagnosis and offers no way forward.
         PlatformNameIndex index = new PlatformNameIndex("AnyRef"); //$NON-NLS-1$
         index.accept("CatalogRef"); //$NON-NLS-1$
-        assertFalse(index.isUndocumented());
+        assertEquals(PlatformNameIndex.MissReason.UNKNOWN_NAME, index.missReason());
 
-        index.markUndocumented("AnyRef"); //$NON-NLS-1$
-        assertTrue(index.isUndocumented());
+        index.markDocumentsNothing();
+        assertEquals(PlatformNameIndex.MissReason.DOCUMENTS_NOTHING, index.missReason());
+    }
+
+    @Test
+    public void testAnUnreachableTargetIsNotReportedAsDocumentingNothing()
+    {
+        // The two failures are not the same answer: one says the platform HAS nothing (a retry is
+        // pointless), the other says we could not reach what it has (a retry may well work). Saying
+        // the first over the second states a fact about the platform that is not in evidence.
+        PlatformNameIndex index = new PlatformNameIndex("CatalogObject"); //$NON-NLS-1$
+
+        index.markTargetUnresolved();
+        assertEquals(PlatformNameIndex.MissReason.TARGET_UNRESOLVED, index.missReason());
+    }
+
+    @Test
+    public void testAReachabilityFailureOutranksADocumentsNothingVerdict()
+    {
+        // One name can match two descriptions (the platform publishes duplicates) and fail
+        // differently in each. The claim that survives must be the one that is still true.
+        PlatformNameIndex index = new PlatformNameIndex("CatalogObject"); //$NON-NLS-1$
+
+        index.markDocumentsNothing();
+        index.markTargetUnresolved();
+        assertEquals(PlatformNameIndex.MissReason.TARGET_UNRESOLVED, index.missReason());
+
+        // ... and in the other arrival order too.
+        PlatformNameIndex reversed = new PlatformNameIndex("CatalogObject"); //$NON-NLS-1$
+        reversed.markTargetUnresolved();
+        reversed.markDocumentsNothing();
+        assertEquals(PlatformNameIndex.MissReason.TARGET_UNRESOLVED, reversed.missReason());
     }
 
     @Test
@@ -203,9 +233,85 @@ public class PlatformNameIndexTest
 
         assertFalse("the provider is not empty - it published 2 names", //$NON-NLS-1$
             banner.contains("provider may be empty")); //$NON-NLS-1$
-        assertTrue(banner.contains("2 types are published")); //$NON-NLS-1$
+        assertTrue(banner.contains("2 candidate types were found")); //$NON-NLS-1$
         assertTrue("the next step must survive", //$NON-NLS-1$
             banner.contains("Use get_metadata_details for a configuration object.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAQueryCannotForgeItsOwnEntryInTheVerifiedList()
+    {
+        // The bullets carry a promise ("every name listed here resolves") that consumers parse.
+        // A looked-up name is echoed back, so a name carrying newlines could write its own bullet
+        // and get an unverifiable name counted under that promise.
+        String forged = "Nope\n- ForgedType"; //$NON-NLS-1$
+        PlatformNameIndex index = new PlatformNameIndex(forged);
+        index.accept("Array"); //$NON-NLS-1$
+        String banner = index.buildNotFoundBanner("Type not found: ", forged, "types", null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a newline in the query must not produce a bullet line", //$NON-NLS-1$
+            banner.contains("\n- ForgedType")); //$NON-NLS-1$
+        assertTrue("the bad value is still echoed, just flattened", //$NON-NLS-1$
+            banner.contains("ForgedType")); //$NON-NLS-1$
+        assertTrue(banner.contains("- Array")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAProviderNameThatCannotBePrintedOnOneLineIsDropped()
+    {
+        // The echoed query is flattened; a LISTED name may not be. A listed name is one the caller
+        // is invited to copy and query, so printing a flattened version would advertise a string
+        // that no longer resolves - and its tail would read as a second bullet nobody verified.
+        String twoLine = "Good" + (char)0x2028 + "- Sneaky"; //$NON-NLS-1$ //$NON-NLS-2$
+        PlatformNameIndex index = new PlatformNameIndex("Nope", candidate -> true); //$NON-NLS-1$
+        index.accept(twoLine);
+        index.accept("Array"); //$NON-NLS-1$
+        String banner = index.buildNotFoundBanner("Type not found: ", "Nope", "types", null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse("a name that cannot be printed on one line must not be listed", //$NON-NLS-1$
+            banner.contains("Sneaky")); //$NON-NLS-1$
+        assertTrue("the printable names are still listed", banner.contains("- Array")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("an unprintable name must not be counted as a candidate either", //$NON-NLS-1$
+            1, index.total());
+    }
+
+    @Test
+    public void testAnUnprintableNameDoesNotSuppressTheRealSuggestion()
+    {
+        // Refusing such a name only at render time is not enough. Matching the query by prefix, it
+        // fills the STRONG suggestion bucket, and a non-empty strong bucket is what stops the typo
+        // bucket from being offered - so the one good answer would be suppressed by a name the
+        // banner was never going to print.
+        PlatformNameIndex index = new PlatformNameIndex("ValueTabel", candidate -> true); //$NON-NLS-1$
+        index.accept("ValueTabel" + (char)0x2028 + "Injected"); //$NON-NLS-1$ //$NON-NLS-2$
+        index.accept("ValueTable"); //$NON-NLS-1$
+
+        assertTrue("the typo suggestion must survive", //$NON-NLS-1$
+            index.suggestions().contains("ValueTable")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheForgeryGuardCoversEveryTerminatorAReaderHonours()
+    {
+        // Flattening CR/LF alone is not enough: this banner is parsed by consumers that break lines
+        // more widely than a Java reader does (Python's str.splitlines breaks on VT, FF, the three
+        // information separators, NEL and the Unicode line/paragraph separators). Any terminator
+        // that survives into the output is a working forgery for exactly those readers. Built with
+        // (char) casts on purpose - a \\uXXXX escape for U+2028 in Java SOURCE is itself a line
+        // terminator to the compiler.
+        int[] terminators = {0x000B, 0x000C, 0x001C, 0x001D, 0x001E, 0x0085, 0x2028, 0x2029};
+        for (int terminator : terminators)
+        {
+            String forged = "Nope" + (char)terminator + "- ForgedType"; //$NON-NLS-1$ //$NON-NLS-2$
+            PlatformNameIndex index = new PlatformNameIndex(forged);
+            index.accept("Array"); //$NON-NLS-1$
+            String banner = index.buildNotFoundBanner("Type not found: ", forged, "types", null); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertEquals(String.format("U+%04X survived into the banner and can still start a line", //$NON-NLS-1$
+                Integer.valueOf(terminator)), -1, banner.indexOf(terminator));
+            assertTrue("the bad value is still echoed, just flattened", //$NON-NLS-1$
+                banner.contains("ForgedType")); //$NON-NLS-1$
+        }
     }
 
     @Test
@@ -282,7 +388,7 @@ public class PlatformNameIndexTest
             banner.contains("- BrokenType")); //-NLS-1$
         // The total still reports what the platform PUBLISHES, and says so rather than calling them
         // all documented.
-        assertTrue(banner.contains("1 of 2 published names")); //-NLS-1$
+        assertTrue(banner.contains("1 shown of 2 candidate names")); //-NLS-1$
     }
 
     @Test

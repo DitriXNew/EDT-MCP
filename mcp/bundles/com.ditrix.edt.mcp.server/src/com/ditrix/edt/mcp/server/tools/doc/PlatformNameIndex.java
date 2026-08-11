@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.regex.Pattern;
 
 /**
  * The names a platform lookup scanned, and the "not found" banner built from them.
@@ -65,6 +66,20 @@ final class PlatformNameIndex
      */
     private static final int MIN_TYPO_QUERY_LENGTH = 5;
 
+    /**
+     * Every character a consumer may read as a line break, not just CR/LF.
+     *
+     * <p>"Line" has to be taken as widely as the READERS take it. A Java {@code BufferedReader}
+     * breaks on CR/LF only, but the banner is parsed elsewhere - the tool's own e2e checks are
+     * Python, and {@code str.splitlines()} additionally breaks on VT, FF, the three information
+     * separators, NEL and the Unicode line/paragraph separators. Flattening only CR/LF would leave
+     * exactly those consumers a working forgery, so the whole {@code splitlines} set is covered.
+     * Written as {@code \\uXXXX} escapes deliberately: a raw U+2028 in a Java source file is itself
+     * a line terminator to the compiler.
+     */
+    private static final Pattern LINE_BREAK =
+        Pattern.compile("[\\r\\n\\u000B\\f\\u001C\\u001D\\u001E\\u0085\\u2028\\u2029]+"); //$NON-NLS-1$
+
     private final String query;
 
     /**
@@ -102,8 +117,31 @@ final class PlatformNameIndex
 
     private int total;
 
-    /** Set when the query DID name something the platform documents nothing for. */
-    private String undocumentedLabel;
+    /** Why the query failed - see {@link MissReason}. */
+    private MissReason missReason = MissReason.UNKNOWN_NAME;
+
+    /**
+     * Why a lookup came back empty. The three are NOT interchangeable: each one sends the caller
+     * somewhere different, and answering with the wrong one is the class of defect this whole file
+     * exists to remove.
+     */
+    enum MissReason
+    {
+        /** The platform does not publish this name at all. Offer the vocabulary. */
+        UNKNOWN_NAME,
+        /**
+         * A type SET the platform does publish, which unions other types and declares no members of
+         * its own ({@code AnyRef} / {@code ЛюбаяСсылка}). Nothing to render, ever - a retry cannot
+         * help, so send the caller to the sets it unions.
+         */
+        DOCUMENTS_NOTHING,
+        /**
+         * A type SET that DOES name a documented target, registered in the provider, which still
+         * could not be resolved. Nothing is known to be missing from the platform here - the model
+         * may simply not be fully loaded - so a retry is a reasonable next step.
+         */
+        TARGET_UNRESOLVED
+    }
 
     /**
      * An index that trusts what it is fed. For a caller that has no way to re-check a name.
@@ -131,11 +169,19 @@ final class PlatformNameIndex
      * the whole point of the index is that everything it lists is a name a caller can actually ask
      * for.
      *
+     * <p>A name carrying a line break is refused HERE, at intake, rather than filtered later. The
+     * banner cannot advertise it (see {@link #verified}), so it is not a name that answers - the
+     * same category as a type set that documents nothing. Filtering it downstream instead would
+     * leave it holding a candidate slot, a suggestion slot, and a place in the total, and worse:
+     * a poisoned name matching the query by prefix makes the strong suggestion bucket non-empty,
+     * which SUPPRESSES the typo bucket that held the real answer.
+     *
      * @param name the resolvable name, ignored when blank
      */
     void accept(String name)
     {
-        if (name == null || name.isEmpty() || !seen.add(name.toLowerCase(Locale.ROOT)))
+        if (name == null || name.isEmpty() || LINE_BREAK.matcher(name).find()
+            || !seen.add(name.toLowerCase(Locale.ROOT)))
         {
             return;
         }
@@ -148,23 +194,40 @@ final class PlatformNameIndex
     }
 
     /**
-     * Records that the query DID name a known platform entry which simply carries no documentation -
-     * a type SET that unions other types and declares no members of its own ({@code AnyRef} /
-     * {@code ЛюбаяСсылка}). Such a name is deliberately absent from {@link #accept} (it is not a
-     * name that answers), so without this the caller would be told it does not exist at all, which
-     * is a different - and wrong - diagnosis.
-     *
-     * @param label the entry as it should be named back to the caller
+     * Records that the query named a type set the platform documents NOTHING for - it unions other
+     * types and declares no members of its own. Such a name is deliberately absent from
+     * {@link #accept} (it is not a name that answers), so without this the caller would be told it
+     * does not exist at all, which is a different - and wrong - diagnosis.
      */
-    void markUndocumented(String label)
+    void markDocumentsNothing()
     {
-        this.undocumentedLabel = label;
+        // Never downgrade TARGET_UNRESOLVED: see markTargetUnresolved.
+        if (missReason == MissReason.UNKNOWN_NAME)
+        {
+            missReason = MissReason.DOCUMENTS_NOTHING;
+        }
     }
 
-    /** @return {@code true} when the query named a known but undocumented entry */
-    boolean isUndocumented()
+    /**
+     * Records that the query named a type set whose documented target IS registered and still could
+     * not be resolved. Distinct from {@link #markDocumentsNothing()} on purpose: only one of the two
+     * is entitled to tell the caller the platform has nothing to say about this name.
+     *
+     * <p>It also OVERRIDES a {@code DOCUMENTS_NOTHING} already recorded, in the rare case where one
+     * name matched two descriptions and each failed differently. "The platform documents nothing for
+     * it" is an assertion about the platform; "we could not reach it" is an admission about us. When
+     * one registration demonstrably named a target, the first statement is false, and a false
+     * explanation is exactly what this file exists to stop shipping.
+     */
+    void markTargetUnresolved()
     {
-        return undocumentedLabel != null;
+        missReason = MissReason.TARGET_UNRESOLVED;
+    }
+
+    /** @return why the lookup failed; {@link MissReason#UNKNOWN_NAME} unless something marked it */
+    MissReason missReason()
+    {
+        return missReason;
     }
 
     /** @return how many resolvable names the scan saw */
@@ -187,6 +250,13 @@ final class PlatformNameIndex
      * The first {@code limit} names of {@code candidates} that pass {@link #resolvable}. This is the
      * one place a name becomes something the banner will show, so it is the one place the promise
      * "every name here answers a lookup" is kept.
+     *
+     * <p>A name carrying a line break is DROPPED rather than flattened, and unlike the echoed query
+     * that is not a matter of taste. The query is echoed to show the caller what was asked, so
+     * flattening it keeps it useful; a listed name is a name the caller is invited to copy and
+     * query, so a flattened one would be a different string that no longer resolves - breaking the
+     * exact promise the list makes. {@link #accept} already refuses such names, so this is the
+     * backstop on the choke point where the promise is actually made, for any future feed.
      */
     private List<String> verified(List<String> candidates, int limit)
     {
@@ -197,6 +267,10 @@ final class PlatformNameIndex
             if (kept.size() >= limit || attempts >= VERIFY_ATTEMPT_LIMIT)
             {
                 break;
+            }
+            if (LINE_BREAK.matcher(candidate).find())
+            {
+                continue;
             }
             attempts++;
             if (accepts(candidate))
@@ -221,7 +295,7 @@ final class PlatformNameIndex
     String buildNotFoundBanner(String subject, String name, String itemsLabel, String hint)
     {
         StringBuilder sb = new StringBuilder();
-        sb.append("Error: ").append(subject).append(name).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("Error: ").append(subject).append(oneLine(name)).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
 
         List<String> suggestions = suggestions();
         if (!suggestions.isEmpty())
@@ -242,8 +316,8 @@ final class PlatformNameIndex
             // tried could be resolved. Saying "may be empty" here would be a false diagnosis, and
             // dropping the hint would leave the caller with no next step at the moment it needs one
             // most. State what actually happened and still point somewhere.
-            sb.append("(").append(total).append(" ").append(itemsLabel) //$NON-NLS-1$
-                .append(" are published, but none of the ones checked could be resolved - the " //$NON-NLS-1$
+            sb.append("(").append(total).append(" candidate ").append(itemsLabel) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" were found, but none of the ones checked could be resolved - the " //$NON-NLS-1$
                     + "platform model may not be fully loaded yet)\n"); //$NON-NLS-1$
             if (hint != null && !hint.isEmpty())
             {
@@ -254,10 +328,12 @@ final class PlatformNameIndex
 
         // "N of TOTAL" rather than the old "first N ... (more available)": a caller - and an agent
         // in particular - needs to know whether it is looking at a sample of 30 or at everything.
-        // "published" and not "documented", because TOTAL is what the platform publishes while the
-        // listed ones are the ones checked one by one - the banner must not claim more than it did.
+        // TOTAL is the count of names this lookup CONSIDERED - deduplicated, and already without
+        // the ones that answer nothing (AnyRef) - not everything the provider publishes, so it is
+        // not called "published". Claiming the wider number would be the same kind of small lie
+        // this banner exists to remove.
         sb.append("Available ").append(itemsLabel).append(" (").append(listed.size()) //$NON-NLS-1$ //$NON-NLS-2$
-            .append(" of ").append(total).append(" published names, English and Russian; ") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(" shown of ").append(total).append(" candidate names, English and Russian; ") //$NON-NLS-1$ //$NON-NLS-2$
             .append("every name listed here resolves):\n"); //$NON-NLS-1$
         for (String item : listed)
         {
@@ -268,6 +344,21 @@ final class PlatformNameIndex
             sb.append('\n').append(hint).append('\n');
         }
         return sb.toString();
+    }
+
+    /**
+     * The looked-up name, flattened to a single line, for echoing back into the banner.
+     *
+     * <p>The name comes straight from the caller, and the banner is a LINE-STRUCTURED document
+     * whose {@code "- "} bullets carry a promise ("every name listed here resolves") that
+     * consumers parse. A name containing newlines could therefore forge its own bullet and get a
+     * non-resolving name counted under that promise - the tool's own e2e parser reads every
+     * {@code "- "} line. Echoing the bad value is worth keeping; letting it choose the shape of
+     * the answer is not.
+     */
+    private static String oneLine(String name)
+    {
+        return name == null ? "" : LINE_BREAK.matcher(name).replaceAll(" ").trim(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
