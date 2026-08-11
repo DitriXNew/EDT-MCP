@@ -11,10 +11,13 @@ name: E2E Tests (reusable)
 # against the local :8765.
 #
 # The `e2e` job is a SHARD MATRIX (issue #385): each matrix job is a full independent
-# runner (own checkout, EDT install, workspace, git fixture) that runs one --shard I/N
-# slice of the suite, cutting the ~60-min serial gate to ~17 min wall-clock. Stock
-# ubuntu-latest runners give that isolation for free. The `report` job merges the
-# per-shard JUnit reports into ONE "E2E Test Results" check.
+# runner (own checkout, EDT install, workspace, git fixture) that runs one NAMED shard
+# lane (`--shard <name>`) of the suite, cutting the ~60-min serial gate to ~17 min
+# wall-clock. Stock ubuntu-latest runners give that isolation for free. The lane names
+# ("read-action", "metadata-write-N") come from run_all.py — the `shards` job reads them
+# with `--list-shards` so the matrix has a single source of truth (add a lane in Python
+# and the matrix follows). The `report` job merges the per-lane JUnit reports into ONE
+# "E2E Test Results" check.
 #
 # Scope: skips the live-infobase round-trip (requires_live_infobase) by default, so
 # it needs NO licensed 1C platform — EDT indexes the project model without one. The
@@ -64,6 +67,21 @@ on:
         type: string
 
 jobs:
+  # Read the shard lane names straight from run_all.py so the matrix has ONE source of
+  # truth: add/rename a lane in Python and this matrix follows, no workflow edit needed.
+  shards:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      names: ${{ steps.list.outputs.names }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: List shard lanes
+        id: list
+        run: echo "names=$(python3 tests/e2e/run_all.py --list-shards)" >> "$GITHUB_OUTPUT"
+
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -115,24 +133,23 @@ jobs:
           if-no-files-found: error
 
   e2e:
-    needs: build
+    needs: [build, shards]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     # Shard the suite across independent runners for wall-clock: each matrix job gets its
     # OWN runner, checkout, EDT install, workspace and git fixture, so nothing is shared and
-    # the reset_fixture serialisation only has to hold WITHIN a shard (see issue #385). The
-    # split is by TEST, not by file (run_all.py --shard I/N), so the one heavy tool
-    # (modify_metadata ≈ 40% of the run) is spread across shards rather than pinning one.
-    # fail-fast: false so a red shard does not cancel the others — we want every shard's
-    # report, and the merge job (report) stitches them into one check.
-    #
-    # Denominator N is `${{ strategy.job-total }}` (the matrix size), so changing the shard
-    # count is a one-line edit to this list — nothing else references the number.
+    # the reset_fixture serialisation only has to hold WITHIN a shard (see issue #385). Lanes
+    # are NAMED areas (run_all.py --shard <name>) so a red shard says WHERE it failed; routing
+    # is by test `kind`, and the one heavy tool (modify_metadata ≈ 40% of the run) is spread
+    # across the metadata-write lanes rather than pinning one. The lane list comes from the
+    # `shards` job (--list-shards), so this matrix needs no edit when a lane is added.
+    # fail-fast: false so a red lane does not cancel the others — we want every lane's report,
+    # and the merge job (report) stitches them into one check.
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.shards.outputs.names) }}
     # The EDT setup below is INLINED (instead of the ./.github/actions/setup-edt
     # composite) so each phase shows as its own step in the Actions UI — you can see at
     # a glance which steps are cached/skipped vs which run. These env values mirror the
@@ -420,8 +437,8 @@ jobs:
         run: |
           python -u tests/e2e/run_all.py \
             --project TestConfiguration \
-            --shard ${{ matrix.shard }}/${{ strategy.job-total }} \
-            --junit-xml tests/e2e/e2e-results-shard${{ matrix.shard }}.xml
+            --shard "${{ matrix.shard }}" \
+            --junit-xml "tests/e2e/e2e-results-${{ matrix.shard }}.xml"
 
       # Coverage: dump the in-memory JaCoCo data out of the still-running EDT JVM (the
       # agent is in tcpserver mode), then upload it for the Coverage workflow to merge
@@ -436,16 +453,16 @@ jobs:
           # overwrite each other and only one shard's coverage would survive the merge.
           java -jar "$JACOCO_CLI" dump \
             --address 127.0.0.1 --port 6300 \
-            --destfile "$RUNNER_TEMP/e2e-jacoco-shard${{ matrix.shard }}.exec" \
+            --destfile "$RUNNER_TEMP/e2e-jacoco-${{ matrix.shard }}.exec" \
             || echo "[coverage] jacoco dump failed (agent unreachable / EDT not up)"
-          ls -la "$RUNNER_TEMP/e2e-jacoco-shard${{ matrix.shard }}.exec" 2>/dev/null || echo "[coverage] no e2e exec produced"
+          ls -la "$RUNNER_TEMP/e2e-jacoco-${{ matrix.shard }}.exec" 2>/dev/null || echo "[coverage] no e2e exec produced"
 
       - name: "Coverage · upload e2e JaCoCo exec"
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-jacoco-exec-${{ inputs.edt }}-shard${{ matrix.shard }}
-          path: ${{ runner.temp }}/e2e-jacoco-shard${{ matrix.shard }}.exec
+          name: e2e-jacoco-exec-${{ inputs.edt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-jacoco-${{ matrix.shard }}.exec
           if-no-files-found: warn
 
       - name: Dump EDT IDE log (the real boot/index log — separate from this console)
@@ -470,15 +487,15 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-test-results-${{ inputs.edt }}-shard${{ matrix.shard }}
-          path: tests/e2e/e2e-results-shard${{ matrix.shard }}.xml
+          name: e2e-test-results-${{ inputs.edt }}-${{ matrix.shard }}
+          path: tests/e2e/e2e-results-${{ matrix.shard }}.xml
           if-no-files-found: ignore
 
       - name: Upload EDT log
         if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-edt-log-${{ inputs.edt }}-shard${{ matrix.shard }}
+          name: e2e-edt-log-${{ inputs.edt }}-${{ matrix.shard }}
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 
@@ -502,7 +519,7 @@ jobs:
       - name: Download all shard test reports
         uses: actions/download-artifact@v8
         with:
-          pattern: e2e-test-results-${{ inputs.edt }}-shard*
+          pattern: e2e-test-results-${{ inputs.edt }}-*
           path: e2e-reports
           merge-multiple: true
 

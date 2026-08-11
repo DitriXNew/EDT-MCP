@@ -7,30 +7,42 @@ Discovers every @e2e_test in tests/e2e/tools/test_*.py and runs them SERIALLY
 they cannot run in parallel). Resets the fixture before EVERY test, enforces a
 clean final state, and emits a JUnit XML report. See SKILL.md.
 
-Parallelism across MULTIPLE workspaces is done by sharding: `--shard I/N` runs
-only shard I of N (1-based). Each shard is a disjoint slice of the whole test
-list, so N shards on N independent runners (each with its own EDT + git fixture)
-cover the suite with no shared state. Sharding is BY TEST, not by file: the slice
-is a stride over the tests sorted by (tool, name), so a single heavy tool
-(modify_metadata is ~40% of the run) is spread across shards instead of pinning
-one shard to its total. See issue #385.
+Parallelism across MULTIPLE workspaces is done by sharding into NAMED lanes:
+`--shard <name>` runs only that lane. Each lane is a disjoint slice of the suite,
+so the lanes on independent runners (each with its own EDT + git fixture) cover
+everything with no shared state. See issue #385 and SHARDS below.
+
+Lanes are named by AREA, not by number, so a failing shard says WHAT failed and a
+new test lands in the right lane automatically — routing is by the `kind` already
+declared on every @e2e_test:
+  * read-action ..... reads, source writes, and actions — everything cheap
+                      (~4% of the runtime, all in one lane).
+  * metadata-write-N  the write-metadata kind (~96% of the runtime). One tool,
+                      modify_metadata, is ~40% of the whole suite on its own, so
+                      write-metadata cannot fit one named lane and is spread across
+                      N lanes by a stable hash of the test id (deterministic across
+                      runners). Bump _METADATA_LANES to add more parallelism.
+Adding a tool needs NO edit here: its `kind` routes it. `--list-shards` prints the
+lane names (JSON) so CI can build the matrix straight from this file.
 
 Usage:
     python tests/e2e/run_all.py [--host H] [--port P] [--project NAME]
                                 [--junit-xml PATH] [--filter SUBSTR]
-                                [--shard I/N]
+                                [--shard NAME | --list-shards]
 
 Python stdlib only.
 """
 
 import argparse
 import importlib
+import json
 import os
 import sys
 import threading
 import time
 import traceback
 import xml.sax.saxutils as su
+import zlib
 
 
 def parse_args():
@@ -40,10 +52,12 @@ def parse_args():
     ap.add_argument("--project", default=os.environ.get("MCP_PROJECT", "TestConfiguration"))
     ap.add_argument("--junit-xml", dest="junit", default=None)
     ap.add_argument("--filter", default=None, help="substring filter on test name or tool")
-    ap.add_argument("--shard", default=None,
-                    help="run only shard I of N as 'I/N' (1-based, e.g. 2/4). The suite is split "
-                         "deterministically by TEST (a stride over tests sorted by tool+name), so a "
-                         "single heavy tool is spread across shards. Applied AFTER --filter.")
+    ap.add_argument("--shard", default=None, metavar="NAME",
+                    help="run only the named shard lane (see --list-shards). Lanes are areas, not "
+                         "numbers: 'read-action' plus 'metadata-write-N'. Applied AFTER --filter.")
+    ap.add_argument("--list-shards", action="store_true",
+                    help="print the shard lane names as a JSON array and exit (CI reads this to "
+                         "build the matrix, so the lanes have a single source of truth).")
     ap.add_argument("--test-timeout", type=float,
                     default=float(os.environ.get("MCP_TEST_TIMEOUT", "3600")),
                     help="per-test wall-clock timeout in seconds (default 3600). Must exceed the "
@@ -59,31 +73,47 @@ def parse_args():
     return ap.parse_args()
 
 
-def parse_shard(spec):
-    """Parse a '--shard I/N' spec into (index, total) with 1 <= index <= total.
+# ── Named shard lanes (issue #385) ─────────────────────────────────────────────
+# A shard is a NAMED area, not a number, so a red shard says WHERE it failed and a new
+# test routes itself. Routing is by the `kind` already on every @e2e_test:
+#   - read / write / action  -> the single "read-action" lane (~4% of the runtime).
+#   - write-metadata         -> spread across _METADATA_LANES "metadata-write-N" lanes.
+# Why write-metadata is spread and not one named lane: it is ~96% of the runtime and one
+# tool (modify_metadata, 101 tests) is ~40% of the WHOLE suite, so no single lane can hold
+# it without becoming the bottleneck (this is exactly the file-sharding ceiling issue #385
+# is about). The spread is a stable hash of "tool::name" (zlib.crc32 — deterministic across
+# machines, unlike the salted built-in hash()), so it is balanced and every runner agrees
+# which lane a test is in. Order within a lane never matters: the fixture resets before each
+# test. Bump _METADATA_LANES for more parallelism (CI reads the names via --list-shards).
+# 4 lanes puts each metadata lane (~3560s of write-metadata / 4) level with the single cheap
+# read-action lane (~850s + the modify_metadata stragglers), so the slowest shard is ~17 min
+# — the balance point for this suite. Add lanes to go faster, at the cost of runner-minutes.
+_METADATA_LANES = 4
 
-    Raises SystemExit with an actionable message on a malformed spec, so a typo in the
-    CI matrix fails the job loudly instead of silently running the whole suite (or none).
-    """
-    parts = spec.split("/")
-    if len(parts) != 2:
-        raise SystemExit("--shard must be 'I/N' (e.g. 2/4), got %r" % spec)
-    try:
-        index, total = int(parts[0]), int(parts[1])
-    except ValueError:
-        raise SystemExit("--shard I/N must be integers (e.g. 2/4), got %r" % spec)
-    if total < 1 or index < 1 or index > total:
-        raise SystemExit("--shard I/N requires 1 <= I <= N (got %r)" % spec)
-    return index, total
+READ_ACTION_LANE = "read-action"
 
 
-def select_shard(tests, index, total):
-    """Deterministic 1-based shard: the stride tests[index-1::total] over tests sorted by
-    (tool, name). A stride (not a contiguous chunk) spreads a heavy tool — whose tests are
-    adjacent once sorted — evenly across shards, so no shard is pinned to one tool's total.
-    Order within a shard does not matter: the run resets the fixture before every test."""
-    ordered = sorted(tests, key=lambda t: (t["tool"], t["name"]))
-    return ordered[index - 1::total]
+def shard_names():
+    """The ordered list of lane names — the single source of truth CI builds its matrix from."""
+    return [READ_ACTION_LANE] + ["metadata-write-%d" % (i + 1) for i in range(_METADATA_LANES)]
+
+
+def route_shard(t):
+    """The one lane a test belongs to. Total by construction (an unknown/new kind falls to
+    read-action), so the lanes always PARTITION the suite — no test is dropped or double-run."""
+    if t.get("kind") == "write-metadata":
+        bucket = zlib.crc32(("%s::%s" % (t["tool"], t["name"])).encode("utf-8")) % _METADATA_LANES
+        return "metadata-write-%d" % (bucket + 1)
+    return READ_ACTION_LANE
+
+
+def select_shard(tests, name):
+    """Tests routed to lane `name`. Rejects an unknown lane loudly, so a typo in the CI
+    matrix fails the job instead of silently running nothing."""
+    valid = shard_names()
+    if name not in valid:
+        raise SystemExit("--shard must be one of: %s (got %r)" % (", ".join(valid), name))
+    return [t for t in tests if route_shard(t) == name]
 
 
 def write_junit(results, path, final_clean, cleanup_failed=False):
@@ -235,6 +265,10 @@ def _run_with_timeout(harness, t, timeout_s):
 
 def main():
     args = parse_args()
+    if args.list_shards:
+        # Pure metadata query — no server, no harness import. CI uses it to build the matrix.
+        print(json.dumps(shard_names()))
+        return
     # Set env BEFORE importing harness (it reads config once at import).
     os.environ["MCP_HOST"] = args.host
     os.environ["MCP_PORT"] = str(args.port)
@@ -257,10 +291,9 @@ def main():
 
     shard_note = ""
     if args.shard:
-        index, total = parse_shard(args.shard)
         selected = len(tests)
-        tests = select_shard(tests, index, total)
-        shard_note = " [shard %d/%d: %d of %d test(s)]" % (index, total, len(tests), selected)
+        tests = select_shard(tests, args.shard)
+        shard_note = " [shard '%s': %d of %d test(s)]" % (args.shard, len(tests), selected)
 
     print("EDT-MCP e2e: %d test(s) against %s, project=%s%s"
           % (len(tests), harness.MCP_URL, harness.PROJECT, shard_note))

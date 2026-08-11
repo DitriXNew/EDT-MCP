@@ -41,7 +41,7 @@ tests/e2e/
 - **`tools/test_<tool>.py`** — one file per MCP tool. It contains the test functions for that one tool: the happy path(s) **and** the negative matrix. Because each agent owns one file, there are **no merge conflicts** when many agents work in parallel.
 - **`run_all.py`** — discovers every `@e2e_test` function, runs them **one at a time** (see §3 — execution is serial), resets the fixture before each, and emits a `--junit-xml` report.
 
-**Golden rule of parallelism:** writing the test files can be parallelized across agents. **Running** them cannot be parallelized *within one workspace* — every test mutates the same `TestConfiguration` project and the same git working tree, so the orchestrator runs them serially with a hard reset between each. Parallelism comes from running MULTIPLE workspaces: CI shards the suite across independent runners (`--shard I/N`, §8), each with its own EDT + git fixture, and each shard still runs its slice serially.
+**Golden rule of parallelism:** writing the test files can be parallelized across agents. **Running** them cannot be parallelized *within one workspace* — every test mutates the same `TestConfiguration` project and the same git working tree, so the orchestrator runs them serially with a hard reset between each. Parallelism comes from running MULTIPLE workspaces: CI shards the suite into **named lanes** across independent runners (`--shard <name>`, §8), each with its own EDT + git fixture, and each lane still runs its slice serially.
 
 ---
 
@@ -181,6 +181,8 @@ assert_error_quality(e,
 - `kind="write-metadata"` — create/add/delete/rename metadata. Verify with MODEL READ-BACK (call a read tool) AND on-disk structure (`poll_diff_contains` of the element, or `poll_disk_path_gone`/`poll_disk_lacks` for delete). The orchestrator runs `reset_fixture()`+`reset_model()` after each such test (you don't).
 - `kind="action"` — clean/revalidate/import/export/update_database. Usually `assert_no_diff()` + status.
 
+> **`kind` also picks the CI shard lane** (§8). It is the one field that decides *where a test runs*: `read`/`write`/`action` go to the cheap `read-action` lane, `write-metadata` is spread across the `metadata-write-N` lanes (it dominates the runtime). So pick the **honest** kind — a metadata mutation mis-tagged `read` lands in the wrong lane, skips the `reset_model()` a write needs, AND unbalances the shards. You never edit a shard map: the right `kind` routes the test for you. (`python run_all.py --list-shards` shows the lanes; routing lives in `run_all.py`.)
+
 The orchestrator discovers `@e2e_test` functions, runs them serially, `reset_fixture()` **before each**, and enforces final cleanliness.
 
 ```python
@@ -234,7 +236,7 @@ The suite requires the **live server up** on `:8765` with `TestConfiguration` lo
 python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2e-results.xml
 ```
 
-- Execution is **serial WITHIN a workspace** (see §3). Do not try to parallelize a single run. To parallelize across CI, shard: `--shard I/N` runs shard I of N (1-based) — a deterministic disjoint slice split BY TEST (a stride over tests sorted by tool+name, so the heavy `modify_metadata` spreads across shards, not by file). Applied after `--filter`. N independent runners with N workspaces cover the suite; `e2e-tests.yml` runs a 4-shard matrix and merges the reports into one check.
+- Execution is **serial WITHIN a workspace** (see §3). Do not try to parallelize a single run. To parallelize across CI, shard into **named lanes**: `--shard <name>` runs one lane; `--list-shards` prints them (JSON). Lanes are **areas, not numbers**, so a red shard says *where* it failed and a new test routes itself — routing is by the test's `kind` (§3): `read`/`write`/`action` → the one `read-action` lane; `write-metadata` → spread across `metadata-write-N` lanes (that kind is ~96% of the runtime and one tool, `modify_metadata`, is ~40%, so it cannot fit a single named lane — the file-sharding ceiling issue #385 is about). **Adding a tool needs no shard edit** — pick the right `kind` and it lands in the right lane; only if a genuinely new heavy area appears do you add a lane (bump `_METADATA_LANES` or extend the routing in `run_all.py`, and CI's matrix follows via `--list-shards`). `e2e-tests.yml` runs this matrix and merges the per-lane reports into one check.
 - The run **mutates** `TestConfiguration` and reverts it; on a clean checkout that is expected. The final state must be clean.
 - The existing `.github/workflows/e2e-tests.yml` invokes the runner against a running server; keep its CLI flags (`--host/--port/--project/--junit-xml`) stable.
 - **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages. (Research-backed: the official MCP SDK's in-memory transport doesn't fit a server that lives inside EDT; the hand-rolled client is kept spec-conformant instead — initialize + notifications/initialized handshake, Mcp-Session-Id + MCP-Protocol-Version headers, robust SSE.)
