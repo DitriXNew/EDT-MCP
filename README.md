@@ -44,7 +44,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection, with a toolbar toggle to hide groups temporarily
-- ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
+- ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects, their members and managed-form elements with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
 ## Installation
@@ -409,7 +409,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_configurations`](docs/tools/list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
 | [`list_subsystems`](docs/tools/list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
 | [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{n… |
-| [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call wi… |
+| [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ### Code
 

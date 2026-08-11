@@ -41,7 +41,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`list_configurations`](list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
 | [`list_subsystems`](list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
 | [`modify_metadata`](modify_metadata.md) | Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{n… |
-| [`rename_metadata_object`](rename_metadata_object.md) | Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call wi… |
+| [`rename_metadata_object`](rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ## Code
 

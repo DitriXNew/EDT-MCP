@@ -25,11 +25,19 @@ import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
- * Tool to rename a metadata object or attribute with full refactoring support.
+ * Tool to rename a metadata object, one of its members, or a managed-form element, with
+ * full refactoring support.
  *
  * Two-phase workflow:
  * 1. Preview mode (confirm=false, default): Returns list of affected refactoring items and problems.
  * 2. Execute mode (confirm=true): Performs the rename with all cascading code updates.
+ * <p>
+ * A form-element FQN ({@code Type.Object.Form.FormName.<Kind>.Name}, or its
+ * {@code CommonForm.FormName.<Kind>.Name} variant) is dispatched to its own branch in the
+ * service and renamed through EDT's own form refactoring; every other FQN takes the mdclass
+ * path. Both branches produce the same preview / apply contract, so nothing in this adapter
+ * distinguishes them - see {@link MetadataRenameService} for what each cascade covers and
+ * which form shapes it refuses.
  * <p>
  * Thin adapter: parameter parsing, the required-argument guards, the UI-thread
  * {@code Display.syncExec} boundary and the deadline that keeps a wedged cascade from holding the
@@ -93,10 +101,13 @@ public class RenameMetadataObjectTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Rename a metadata object or attribute, cascading the change across all references in " + //$NON-NLS-1$
-               "BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm " + //$NON-NLS-1$
+        return "Rename a metadata object, one of its members, or a managed-form element " + //$NON-NLS-1$
+               "(attribute / command / field / button / group / decoration / table / attribute " + //$NON-NLS-1$
+               "column), cascading the change across the references EDT resolves for it in BSL " + //$NON-NLS-1$
+               "code, forms, and other metadata. Use the two-phase workflow: call without confirm " + //$NON-NLS-1$
                "for an indexed preview of every change point, review it, then call again with " + //$NON-NLS-1$
-               "confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object')."; //$NON-NLS-1$
+               "confirm=true to apply. Full parameters and examples: call " + //$NON-NLS-1$
+               "get_tool_guide('rename_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override
@@ -106,10 +117,15 @@ public class RenameMetadataObjectTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name.", true) //$NON-NLS-1$
             .stringProperty(KEY_OBJECT_FQN,
-                "FQN of the object to rename, e.g. 'Catalog.Products' or " + //$NON-NLS-1$
-                "'Document.SalesOrder.Attribute.Amount' (Russian type names also accepted).", true) //$NON-NLS-1$
+                "FQN of the rename target: an object ('Catalog.Products'), a member " + //$NON-NLS-1$
+                "('Document.SalesOrder.Attribute.Amount'), or a managed-form element " + //$NON-NLS-1$
+                "('Catalog.Products.Form.ItemForm.Field.Price', " + //$NON-NLS-1$
+                "'CommonForm.Settings.Group.Main', " + //$NON-NLS-1$
+                "'Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price'). Russian type " + //$NON-NLS-1$
+                "and kind tokens are also accepted.", true) //$NON-NLS-1$
             .stringProperty(KEY_NEW_NAME,
-                "New programmatic Name for the object.", true) //$NON-NLS-1$
+                "New programmatic Name for the rename target (the object, member or " + //$NON-NLS-1$
+                "form element addressed by objectFqn).", true) //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the rename; default false = preview only.") //$NON-NLS-1$
             .stringProperty("disableIndices", //$NON-NLS-1$
@@ -178,7 +194,8 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
         err = JsonUtils.requireArgument(params, KEY_OBJECT_FQN,
             ". Examples: 'Catalog.Products', 'Document.SalesOrder.Attribute.Amount', " //$NON-NLS-1$
-            + "'Catalog.Products.TabularSection.Prices'"); //$NON-NLS-1$
+            + "'Catalog.Products.TabularSection.Prices', " //$NON-NLS-1$
+            + "'Catalog.Products.Form.ItemForm.Field.Price'"); //$NON-NLS-1$
         if (err != null)
         {
             return err;

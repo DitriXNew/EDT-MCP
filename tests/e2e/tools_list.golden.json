@@ -3635,7 +3635,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm for an indexed preview of every change point, review it, then call again with confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object').",
+    "description": "Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column), cascading the change across the references EDT resolves for it in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm for an indexed preview of every change point, review it, then call again with confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -3651,11 +3651,11 @@
           "type": "integer"
         },
         "newName": {
-          "description": "New programmatic Name for the object.",
+          "description": "New programmatic Name for the rename target (the object, member or form element addressed by objectFqn).",
           "type": "string"
         },
         "objectFqn": {
-          "description": "FQN of the object to rename, e.g. 'Catalog.Products' or 'Document.SalesOrder.Attribute.Amount' (Russian type names also accepted).",
+          "description": "FQN of the rename target: an object ('Catalog.Products'), a member ('Document.SalesOrder.Attribute.Amount'), or a managed-form element ('Catalog.Products.Form.ItemForm.Field.Price', 'CommonForm.Settings.Group.Main', 'Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price'). Russian type and kind tokens are also accepted.",
           "type": "string"
         },
         "projectName": {

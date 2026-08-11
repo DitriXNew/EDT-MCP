@@ -22,6 +22,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -294,6 +295,17 @@ public class Activator extends AbstractUIPlugin
     public IMdRefactoringService getMdRefactoringService()
     {
         return services.getMdRefactoringService();
+    }
+
+    /**
+     * Returns the IFormRefactoringService for FORM-element rename/delete refactoring - the twin of
+     * {@link #getMdRefactoringService()} for elements that live on a form's content model.
+     *
+     * @return form refactoring service or null if not available
+     */
+    public IFormRefactoringService getFormRefactoringService()
+    {
+        return services.getFormRefactoringService();
     }
 
     /**
