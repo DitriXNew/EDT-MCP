@@ -139,14 +139,33 @@ def _run_test_unit(harness, t):
 
 
 def _reset_after_write(harness, t):
-    """reset_fixture (disk) + reset_model (in-memory) for a write-metadata test."""
+    """reset_fixture (disk) + reset_model (in-memory) for a write-metadata test.
+
+    The model reset is SKIPPED when the model provably did not move. It is the single most
+    expensive thing the suite does - 331 write-metadata tests, ~11 s each, ~84% of the whole
+    run - and most of those tests are negative: they hand a write tool a bad argument, assert
+    the refusal, and then pay a full clean_project to re-import a model that never changed.
+
+    "Provably" is the operative word: harness.model_is_pristine() answers only on positive
+    evidence (git-clean fixtures AND an unchanged top-object inventory, and no deep-mutation
+    tool involved). Anything unclear answers False and the full reset runs, so the shortcut
+    can cost time but never correctness."""
     if _ABANDONED:
         # This worker was given up on; the main thread has already decided the fixtures are
         # not safe to touch. Do not undo that decision from a thread nobody is waiting for.
         return
-    if t.get("kind") == "write-metadata":
-        harness.reset_fixture()
-        harness.reset_model()
+    if t.get("kind") != "write-metadata":
+        return
+    if harness.model_is_pristine():
+        _SKIPPED_RESETS.append(t.get("name", "?"))
+        return
+    harness.reset_fixture()
+    harness.reset_model()
+
+
+# Names of the tests whose model reset was skipped — reported at the end so the shortcut is
+# VISIBLE. A silent optimization in a suite whose value is trustworthiness is not acceptable.
+_SKIPPED_RESETS = []
 
 
 def _run_with_timeout(harness, t, timeout_s):
@@ -250,6 +269,13 @@ def main():
         print("!! setup cleanup could not sync the model: %s" % e)
         sys.exit(2)
 
+    # Fingerprint the pristine model ONCE, right after the setup cleanup proved it is in sync.
+    # Every later "may I skip this test's model reset?" answer is measured against this. If it
+    # cannot be read, the shortcut simply never engages and every write-metadata test resets in
+    # full, exactly as before.
+    if not harness.snapshot_model_baseline():
+        print("!! could not fingerprint the baseline model - every write test will reset in full")
+
     # Each test (incl. its write-metadata model cleanup, see _run_test_unit) runs under a
     # per-test wall-clock timeout. If a test exceeds it, EDT is almost certainly hung (the
     # clean_project / ProjectRestartJob wedge that motivated this), so the test is FAILED
@@ -275,6 +301,7 @@ def main():
                   % ("SKIP", t["tool"], t["name"], aborted_after))
             continue
         harness.reset_fixture()  # hard reset BEFORE each test (fast local git) — never trust the previous
+        harness.begin_test_calls()  # so the cleanup can tell what this test actually invoked
         start = time.time()
         status, msg, timed_out = _run_with_timeout(harness, t, args.test_timeout)
         dur = time.time() - start
@@ -329,6 +356,10 @@ def main():
     # disk check (EDT may re-dirty after exit) — label it so it is not read as a guarantee.
     clean_label = ("%s (point-in-time; EDT wedged)" % final_clean) if aborted_after else str(final_clean)
     print("\n== %d/%d passed%s | fixture clean: %s ==" % (npass, len(results) - nskip, skip_note, clean_label))
+    if _SKIPPED_RESETS:
+        # Say it out loud: a shortcut nobody can see is a shortcut nobody can audit.
+        print("   model reset skipped for %d write test(s) whose model provably did not move"
+              % len(_SKIPPED_RESETS))
     if aborted_after:
         print("!! RUN ABORTED after a TIMEOUT in %s - subsequent tests were skipped. "
               "Restart EDT and re-run." % aborted_after)

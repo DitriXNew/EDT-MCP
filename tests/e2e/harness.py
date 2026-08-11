@@ -360,9 +360,79 @@ def call(tool, arguments):
     while True:
         result = Result(_post("tools/call", {"name": tool, "arguments": arguments}))
         if not _is_transient_building(result) or time.time() >= deadline:
+            _record_call(tool)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
+
+
+# ── Model-reset shortcut: don't pay for a reset when nothing was changed ──────────────
+#
+# The write-metadata cleanup (reset_fixture + reset_model) dominates the whole suite: 331
+# tests, ~3560 s, ~11 s each, while the tool call itself is a fraction of a second. Most of
+# those tests are NEGATIVE - they hand a write tool a bad argument and assert the refusal -
+# and refusing changes nothing, so the clean_project they pay for re-imports a model that
+# never moved.
+#
+# The shortcut is decided on EVIDENCE, never on a guess about what a tool "probably" did:
+# after the test the fixture must be git-clean AND the model's top-object inventory must
+# equal the snapshot taken before the suite ran. Failing either, the full reset runs. On top
+# of that, a test that invoked one of the DEEP tools always pays in full - those mutate
+# broadly enough (cascades, cross-object rewrites, whole-configuration import) that an
+# unchanged inventory is not evidence of an unchanged model.
+DEEP_MUTATION_TOOLS = frozenset({
+    "rename_metadata_object", "delete_metadata", "adopt_metadata_object",
+    "update_database", "import_configuration_from_xml", "resync_to_disk",
+    "clean_project", "create_project", "delete_project",
+})
+
+_CALLED_TOOLS = set()
+_BASELINE_INVENTORY = None
+
+
+def _record_call(tool):
+    _CALLED_TOOLS.add(tool)
+
+
+def begin_test_calls():
+    """Start recording which tools a test invokes (the orchestrator calls this per test)."""
+    _CALLED_TOOLS.clear()
+
+
+def _top_object_inventory():
+    """A stable, cheap fingerprint of the model's top-level metadata objects.
+
+    One call. It sees exactly the mutations a git-clean tree can still hide: an object
+    created, deleted or renamed IN MEMORY without reaching disk. Returns None when it cannot
+    be read, which callers must treat as "no evidence" (and therefore reset in full)."""
+    try:
+        r = call("get_metadata_objects", {"projectName": PROJECT, "limit": 1000})
+    except Exception:
+        return None
+    if r.is_error or not (r.text or "").strip():
+        return None
+    return "\n".join(sorted(line.strip() for line in r.text.splitlines() if line.strip()))
+
+
+def snapshot_model_baseline():
+    """Record the pristine inventory once, before the first test runs."""
+    global _BASELINE_INVENTORY
+    _BASELINE_INVENTORY = _top_object_inventory()
+    return _BASELINE_INVENTORY is not None
+
+
+def model_is_pristine():
+    """Is there POSITIVE evidence that the model still matches the committed baseline?
+
+    False whenever the evidence is missing or ambiguous - the caller then does the full
+    reset, so a wrong answer here costs time, never correctness."""
+    if _BASELINE_INVENTORY is None:
+        return False
+    if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
+        return False
+    if all_fixtures_status().strip():
+        return False
+    return _top_object_inventory() == _BASELINE_INVENTORY
 
 
 def _notify(method, params):
