@@ -68,6 +68,7 @@ file does not touch the golden; the golden's own coverage-ratchet test enforces 
 import os
 import shutil
 import tempfile
+import time
 
 from harness import (
     call,
@@ -166,10 +167,30 @@ def _assert_absent_sentinel_quality(err):
              "set_infobase_credentials (an infobase precondition), got: %r" % (err,))
 
 
-def _ensure_absent(name):
-    """Best-effort pre/post cleanup of the runtime-created external-object project
-    (removes a leftover from a prior crashed run; idempotent when already gone)."""
+def _ensure_absent(name, verify=False):
+    """Pre/post cleanup of the runtime-created external-object project (removes a leftover
+    from a prior crashed run; idempotent when already gone).
+
+    With verify=True the removal is CONFIRMED before returning, which the pre-test call
+    needs: a leftover of the WRONG KIND (an aborted earlier run leaves a half-created
+    project behind) is not removed by a delete that quietly failed, and create_project then
+    reports ok for the name that already exists — so the test proceeds against the stale
+    project and fails with "is not an external-object project", blaming the tool for the
+    previous run's debris. Fire-and-forget is fine for the teardown call, where nothing
+    depends on the outcome."""
     call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+    if not verify:
+        return
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        listed = call("list_projects", {})
+        if name not in (listed.text or ""):
+            return
+        time.sleep(1)
+        call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
+    raise AssertionError(
+        "a leftover project %r could not be removed; a stale one would be silently reused "
+        "and make this test fail for the wrong reason" % name)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,7 +222,7 @@ def test_build_all_succeeds_or_clear_precondition_sentinel():
     fabricated success that named a built object but wrote no file, or an
     unexpected/vague error.
     """
-    _ensure_absent(EXT_OBJ_PROJECT)
+    _ensure_absent(EXT_OBJ_PROJECT, verify=True)
     out_dir = tempfile.mkdtemp(prefix="edt_build_extobj_e2e_")
     try:
         cr = call("create_project", {"projectKind": "externalObjects", "name": EXT_OBJ_PROJECT})

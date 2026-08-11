@@ -145,6 +145,15 @@ def test_replace_over_existing_without_precondition_is_rejected_and_no_write():
     # expectedSource — must be rejected by the lost-update guard and leave disk intact.
     # (The guard itself is owned by write-replace-mode-precondition; here we prove the
     # tool actually enforces it and steers the caller to the right next step.)
+    #
+    # The guard only applies to an EXISTING module (creating a new one is unconditional), so
+    # "the module is there" is this test's premise, not an assumption. Prove it first: when
+    # EDT's view of the file is stale — the fixture is restored by git, behind the workbench's
+    # back — the tool legitimately treats the write as a CREATE and succeeds, and the bare
+    # assertion below would report that as "the guard is broken", which is the wrong bug.
+    existing = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_ok(existing, "the blind-replace guard needs the module to exist first (%s)" % MODULE)
+
     r = call("write_module_source", {
         "projectName": PROJECT, "modulePath": MODULE,
         "mode": "replace", "source": "// blind overwrite attempt\n",

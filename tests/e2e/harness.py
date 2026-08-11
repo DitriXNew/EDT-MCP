@@ -78,13 +78,31 @@ MODEL_SETTLE_TIMEOUT = int(os.environ.get(
     "E2E_MODEL_SETTLE_TIMEOUT",
     str(max(int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180")), 300))))
 
-# reset_model's POST-CONDITION probe: an object the committed fixture always has and no
-# test may leave renamed or deleted (a rename test that targets it must be reverted by the
-# same reset). Resolving it is the only direct evidence that clean_project's re-import
-# actually landed — 'clean_project ok' + 'project ready' can both hold while the model
-# still carries the previous test's write (see reset_model). Override with
-# E2E_BASELINE_PROBE_FQN if the fixture's canonical object is ever renamed.
-BASELINE_PROBE_FQN = os.environ.get("E2E_BASELINE_PROBE_FQN", "Catalog.Catalog")
+# reset_model's POST-CONDITION probe: objects the committed fixture always has and no test
+# may leave renamed or deleted (a rename test that targets one must be reverted by the same
+# reset). Resolving them is the only direct evidence that clean_project's re-import actually
+# landed — 'clean_project ok' + 'project ready' can both hold while the model still carries
+# the previous test's write (see reset_model).
+#
+# It has to be a LIST, and the list has to include what the suite actually RENAMES. A single
+# Catalog probe could not see the one residue that really leaks: rename_metadata_object
+# renames CommonModule.Calc -> Compute, and a probe that only asks for a Catalog answers
+# "baseline is back" while the renamed common module is still in the model. The next tests to
+# depend on model/disk agreement then fail far from the cause — a resync exporting the stale
+# model over the clean tree, or a module whose IFile no longer resolves. So probe the
+# canonical Catalog AND the common modules the write/rename tests touch.
+#
+# Override the whole set with E2E_BASELINE_PROBE_FQN (comma-separated) if the fixture's
+# canonical objects are ever renamed.
+BASELINE_PROBE_FQNS = [
+    fqn.strip() for fqn in os.environ.get(
+        "E2E_BASELINE_PROBE_FQN",
+        "Catalog.Catalog,CommonModule.Calc,CommonModule.OK").split(",")
+    if fqn.strip()
+]
+
+# Kept as the single-value alias some tests/messages still read.
+BASELINE_PROBE_FQN = BASELINE_PROBE_FQNS[0]
 
 # How many full revert + clean_project cycles reset_model may spend getting the model back
 # to the baseline before it gives up and stops the run. >1 because the lost race it recovers
@@ -523,15 +541,21 @@ def _baseline_is_back():
 
     'clean_project returned ok' and 'the project reports ready' are both SIGNALS, not
     proof: they say EDT finished the work it knew about, not that the model now matches
-    the committed fixture. Only reading the model says that. So probe the one object every
-    baseline is guaranteed to have and no test is allowed to leave renamed or deleted —
-    if BASELINE_PROBE_FQN resolves, the re-import landed.
+    the committed fixture. Only reading the model says that. So probe the objects every
+    baseline is guaranteed to have and no test is allowed to leave renamed or deleted — if
+    ALL of BASELINE_PROBE_FQNS resolve, the re-import landed.
 
-    Best-effort by construction: any failure to read it counts as 'not back' and the caller
+    Probing ALL of them, not one, is the point: the residue that actually leaks is a RENAMED
+    COMMON MODULE (rename_metadata_object turns CommonModule.Calc into Compute), and a probe
+    that only asked for a Catalog reported "baseline is back" while that rename was still in
+    the model. One request carries the whole list, so the stronger check costs nothing.
+
+    Best-effort by construction: any failure to read them counts as 'not back' and the caller
     retries the whole revert+clean cycle. A call TIMEOUT still propagates (see call()).
     """
     try:
-        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [BASELINE_PROBE_FQN]})
+        r = call("get_metadata_details",
+                 {"projectName": PROJECT, "objectFqns": list(BASELINE_PROBE_FQNS)})
     except E2ECallTimeout:
         raise
     except Exception:

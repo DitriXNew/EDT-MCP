@@ -84,6 +84,7 @@ from harness import (
     assert_error_quality,
     assert_no_diff,
     e2e_test,
+    reset_model,
     wait_for_project_ready,
     PROJECT,
     PROJECT_DIR,
@@ -220,6 +221,13 @@ def test_report_only_is_the_default():
 
     Mutation thinking: a regression back to default-true would echo true here and (on
     a project that DID have dangling entries) silently rewrite Configuration.mdo."""
+    # PRECONDITION, not politeness: this test asserts the tree is untouched, and resync's job
+    # is to write the MODEL out to disk. So "no change" only means "the tool wrote nothing" if
+    # the model already matches the committed disk. A prior write-metadata test whose model
+    # residue outlived its cleanup would be exported by this very call - a real export of a
+    # stale model, reported here as a mysterious dirty tree far from its cause. Waiting for
+    # 'ready' does not establish that; only the model reset does.
+    reset_model()
     wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
     r = call("resync_to_disk", {"projectName": PROJECT})
     assert_ok(r, "resync_to_disk with all-default parameters")
