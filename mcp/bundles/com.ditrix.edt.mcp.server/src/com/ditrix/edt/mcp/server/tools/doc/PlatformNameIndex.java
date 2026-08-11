@@ -400,9 +400,7 @@ final class PlatformNameIndex
      */
     private void collectSuggestion(String name)
     {
-        // Enough of the BEST kind is enough: the weaker bucket is still filled while prefix hits are
-        // scarce, but a full prefix bucket already answers the question.
-        if (query.isEmpty() || prefixHits.size() >= SUGGESTION_CANDIDATE_LIMIT)
+        if (query.isEmpty())
         {
             return;
         }
@@ -416,7 +414,18 @@ final class PlatformNameIndex
         }
         if (lowerName.startsWith(lowerQuery))
         {
-            prefixHits.add(name);
+            // Each bucket is capped SEPARATELY, and the scan goes on regardless. Stopping the whole
+            // collection once the prefix bucket filled was the same mistake as picking the bucket by
+            // its raw contents, one step earlier: the weaker buckets are the FALLBACK for when every
+            // strong candidate fails verification, and a scan that returned here left them empty for
+            // good - 24 unresolvable prefix matches at the head of the provider's output and the
+            // banner had no "Did you mean" to give, however many usable names came later. The work
+            // this used to skip is two lowercase comparisons; the resolution attempts are what cost
+            // anything, and those are bounded elsewhere.
+            if (prefixHits.size() < SUGGESTION_CANDIDATE_LIMIT)
+            {
+                prefixHits.add(name);
+            }
         }
         else if ((lowerName.contains(lowerQuery) || lowerQuery.startsWith(lowerName + '.'))
             && otherHits.size() < SUGGESTION_CANDIDATE_LIMIT)

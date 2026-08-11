@@ -505,8 +505,12 @@ DEEP_MUTATION_TOOLS = frozenset({
 # top-object inventory identical. Both probes then report "pristine" while the next test
 # inherits an in-memory child. A refusal changes nothing, so negative tests — the ones the
 # shortcut is actually for — still qualify.
+# Kept honest by test_mutation_set_ratchet.py: a tool that extends AbstractMetadataWriteTool on
+# the Java side and is missing here fails the suite. Hand-maintained membership silently rots -
+# apply_quick_fix landed on master mutating the model, and this set did not know about it.
 MODEL_MUTATION_TOOLS = frozenset({
     "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
+    "apply_quick_fix",
 }) | DEEP_MUTATION_TOOLS
 
 _CALLED_TOOLS = set()

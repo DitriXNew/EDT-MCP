@@ -276,6 +276,26 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testAFullPrefixBucketDoesNotStopTheWeakerBucketsFromFilling()
+    {
+        // Collection used to stop entirely once the prefix bucket was full - so a run of
+        // unresolvable prefix matches at the head of the provider's output emptied the fallback for
+        // the whole rest of the scan. Verification then found nothing in the strong bucket and had
+        // nothing to fall back ON, and the misspelling got no "Did you mean" however many usable
+        // names came later. Each bucket is capped separately now; the scan does not stop.
+        PlatformNameIndex index =
+            new PlatformNameIndex("ValueTabel", candidate -> "ValueTable".equals(candidate)); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 40; i++)
+        {
+            index.accept("ValueTabelBroken" + i); // all match by prefix, none resolve //$NON-NLS-1$
+        }
+        index.accept("ValueTable"); // arrives long after the prefix bucket filled //$NON-NLS-1$
+
+        assertTrue("a candidate seen after the prefix bucket filled must still be offered", //$NON-NLS-1$
+            index.suggestions().contains("ValueTable")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnUnresolvableStrongCandidateDoesNotSuppressTheTypoFallback()
     {
         // The strong bucket outranks the typo bucket - but "last resort" has to be decided on what
