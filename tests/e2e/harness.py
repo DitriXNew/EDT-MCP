@@ -425,10 +425,22 @@ def model_is_pristine():
     """Is there POSITIVE evidence that the model still matches the committed baseline?
 
     False whenever the evidence is missing or ambiguous - the caller then does the full
-    reset, so a wrong answer here costs time, never correctness."""
+    reset, so a wrong answer here costs time, never correctness.
+
+    SETTLE FIRST, then look. A metadata write's disk export is ASYNC: read git the moment the
+    test returns and a write that has not flushed yet reads as "clean", the reset is skipped,
+    and the export lands later - inside some LATER test, which then fails for a change it
+    never made. That is not hypothetical; skipping the settle did exactly this to
+    modify_metadata::test_subsystem_content_reject_subsystem_member. reset_model settles for
+    the same reason before it reverts, and the settle is the cheap half of it - the expensive
+    half is the clean_project this shortcut is trying to avoid."""
     if _BASELINE_INVENTORY is None:
         return False
     if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
+        return False
+    try:
+        wait_for_project_ready()
+    except Exception:
         return False
     if all_fixtures_status().strip():
         return False
