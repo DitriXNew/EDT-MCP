@@ -510,7 +510,7 @@ DEEP_MUTATION_TOOLS = frozenset({
 # apply_quick_fix landed on master mutating the model, and this set did not know about it.
 MODEL_MUTATION_TOOLS = frozenset({
     "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
-    "apply_quick_fix",
+    "apply_quick_fix", "build_external_objects",
 }) | DEEP_MUTATION_TOOLS
 
 _CALLED_TOOLS = set()
@@ -810,6 +810,27 @@ def wait_for_project_ready(timeout=None):
             last_log = now
         time.sleep(2)
     return False
+
+
+def settle_or_fail(what):
+    """Wait for the project to be ready, and FAIL the test if it never is.
+
+    The precondition form of wait_for_project_ready, and the only one a test should use. Calling
+    the bare function and dropping its answer is a trap that has now been walked into twice in
+    this suite: the settle gets added precisely because a still-building EDT breaks the test, and
+    then the code proceeds into that exact state when the wait expires - looking fixed, behaving
+    as before. There is no sensible way to continue from a False here, so it is not a decision a
+    caller should be offered.
+
+    Failing (rather than skipping) is deliberate: a project that cannot reach ready within the
+    ready timeout is a broken environment, and a run that quietly skipped its way past that would
+    report green over tests nobody executed.
+
+    @param what a short phrase naming what was about to run, for the message
+    """
+    if not wait_for_project_ready():
+        _fail("the project never reported ready, so EDT is still recomputing derived data - %s "
+              "would be measuring that recompute, not itself." % what)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

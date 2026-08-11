@@ -66,7 +66,7 @@ from harness import (
     poll_disk_contains,
     poll_disk_lacks,
     read_disk,
-    wait_for_project_ready,
+    settle_or_fail,
     e2e_test,
     PROJECT,
 )
@@ -97,8 +97,12 @@ def _settle_before_rename():
     Only for tests that actually EXECUTE a rename. A refused one - a bad FQN, a missing argument,
     a designer-owned child - never reaches the engine, so it has no pipeline to wait for and
     settling first would just spend time to prove nothing.
+
+    Goes through settle_or_fail, which honours the wait's VERDICT. Calling the bare
+    wait_for_project_ready and dropping its answer would start the rename into the very state this
+    precondition exists to avoid - looking fixed while behaving exactly as before.
     """
-    wait_for_project_ready()
+    settle_or_fail("a rename (it waits for the derived-data drain inside its own 420s budget)")
 
 
 def _commonmodule_names(name_filter=None):
@@ -556,13 +560,15 @@ def _form_fqn(kind, name):
 def _seed_form_attribute(attr):
     r = call("create_metadata", {"projectName": PROJECT, "fqn": _form_fqn("Attribute", attr)})
     assert_ok(r, "seed form attribute " + attr)
-    wait_for_project_ready()
+    # The seed lands BETWEEN _settle_before_rename and the rename, so a settle that expires
+    # here undoes the precondition just as surely as never having one.
+    settle_or_fail("the rename this seed precedes")
 
 
 def _seed_form_group(grp):
     r = call("create_metadata", {"projectName": PROJECT, "fqn": _form_fqn("Group", grp)})
     assert_ok(r, "seed form group " + grp)
-    wait_for_project_ready()
+    settle_or_fail("the rename this seed precedes")
 
 
 def _await_preview_change_point(object_fqn, new_name, marker, timeout=90):
@@ -703,7 +709,7 @@ def test_confirm_renames_a_form_group_and_the_module_reference_follows():
         "mode": "replace", "overwrite": True, "source": probe,
     })
     assert_ok(w, "plant a module reference to the group")
-    wait_for_project_ready()
+    settle_or_fail("the cascade rename this setup precedes")
     _poll_form_module_contains(grp, ctx="setup: the planted reference must be in the module")
     # GATE, not a sleep: a module written seconds ago may not be in EDT's index yet, and a
     # rename that runs first simply finds no BSL reference to rewrite. The preview is the

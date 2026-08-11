@@ -17,9 +17,12 @@ as the tools that change the BM model - had never heard of it. Nothing failed. T
 shortcut simply started skipping resets after a write, and an unresolved quick fix would
 have been cleaned up on top of rather than aborted on.
 
-So the set stops being a list somebody remembers to update. `extends
-AbstractMetadataWriteTool` is the Java side's own declaration that a tool writes the
-model; this test reads that declaration and requires the Python side to agree.
+So the set stops being a list somebody remembers to update. The Java side already says which
+tools write - by extending AbstractMetadataWriteTool, or by calling BmTransactions.write /
+forceExportToDisk - and this test reads that and requires the Python side to agree. All three
+signals are needed: the base class is a statement of INTENT that a writer can simply not make
+(build_external_objects implements IMcpTool directly and writes anyway), so a ratchet reading
+only the base class certified a set that was already missing a tool.
 
 The check is deliberately ONE-WAY: every write tool must be IN the set, but the set may
 hold more (rename_metadata_object, update_database, clean_project and the project tools
@@ -39,8 +42,20 @@ _TOOLS_IMPL_DIR = os.path.join(
     REPO_ROOT, "mcp", "bundles", "com.ditrix.edt.mcp.server", "src", "com", "ditrix", "edt",
     "mcp", "server", "tools", "impl")
 
-# The base class every metadata-writing tool extends - the Java side's own statement of intent.
-_WRITE_BASE = "extends AbstractMetadataWriteTool"
+# How a tool declares, in Java, that it writes. THREE signals, because one was not enough: the
+# base class is a statement of INTENT, and a tool can write without making it -
+# BuildExternalObjectsTool `implements IMcpTool` directly and still calls BmTransactions.write +
+# forceExportToDisk, so a base-class-only ratchet certified a set that was missing it. Reading the
+# mutation CALLS as well catches a writer however it is declared.
+#
+# forceExportToDisk counts even without a write transaction: it puts bytes on disk, and the thing
+# this set protects against is a cleanup racing work the server is still doing - which a disk
+# export is just as much as a model change.
+_WRITE_MARKERS = (
+    "extends AbstractMetadataWriteTool",
+    "BmTransactions.write(",
+    "forceExportToDisk(",
+)
 
 # Each tool publishes its wire name as a NAME constant; that is the string the harness sees.
 _NAME_RE = re.compile(r'String\s+NAME\s*=\s*"([a-z_0-9]+)"')
@@ -55,7 +70,7 @@ def _write_tools():
         path = os.path.join(_TOOLS_IMPL_DIR, entry)
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        if _WRITE_BASE not in source:
+        if not any(marker in source for marker in _WRITE_MARKERS):
             continue
         match = _NAME_RE.search(source)
         if match:
@@ -74,9 +89,8 @@ def test_every_metadata_write_tool_is_a_known_mutation():
     it is added, rather than in whichever later test inherits the leaked state."""
     writers = _write_tools()
     if not writers:
-        _fail("found no tools extending AbstractMetadataWriteTool under %s - the ratchet is "
-              "looking in the wrong place and would pass no matter what happened"
-              % _TOOLS_IMPL_DIR)
+        _fail("found no model-writing tools under %s - the ratchet is looking in the wrong place "
+              "and would pass no matter what happened" % _TOOLS_IMPL_DIR)
 
     unnamed = [java for name, java in writers if name is None]
     if unnamed:
@@ -87,7 +101,8 @@ def test_every_metadata_write_tool_is_a_known_mutation():
     missing = sorted("%s (%s)" % (name, java) for name, java in writers
                      if name not in MODEL_MUTATION_TOOLS)
     if missing:
-        _fail("these tools extend AbstractMetadataWriteTool but are absent from "
+        _fail("these tools write the model (they extend AbstractMetadataWriteTool, or call "
+              "BmTransactions.write / forceExportToDisk) but are absent from "
               "harness.MODEL_MUTATION_TOOLS: %s. A successful call to one of them must forfeit "
               "the reset shortcut, and one that dies in flight must abort the run instead of "
               "being cleaned up on top of - neither happens while the set does not know the "
@@ -97,11 +112,14 @@ def test_every_metadata_write_tool_is_a_known_mutation():
 
 @e2e_test(tool="_mutation_set_ratchet", kind="read")
 def test_the_ratchet_actually_reads_the_write_tools():
-    """Guards the guard: if the base-class marker or the layout ever changes, the scan above
-    would quietly find nothing and pass. Pin a writer that must always be found."""
+    """Guards the guard: if the markers or the layout ever change, the scan above would quietly
+    find nothing and pass. Pin writers that must always be found - including the one that is only
+    visible through its mutation CALLS. build_external_objects implements IMcpTool directly, so it
+    is exactly what a base-class-only scan misses, and pinning it means the detection cannot
+    silently narrow back to what it was."""
     names = {name for name, _ in _write_tools()}
-    for expected in ("create_metadata", "modify_metadata"):
+    for expected in ("create_metadata", "modify_metadata", "build_external_objects"):
         if expected not in names:
-            _fail("the scan did not find %r among the metadata-write tools - the marker %r or "
-                  "the NAME convention changed, and this ratchet is no longer checking anything"
-                  % (expected, _WRITE_BASE))
+            _fail("the scan did not find %r among the model-writing tools - one of the markers %r "
+                  "or the NAME convention changed, and this ratchet is no longer checking what it "
+                  "claims to" % (expected, _WRITE_MARKERS))
