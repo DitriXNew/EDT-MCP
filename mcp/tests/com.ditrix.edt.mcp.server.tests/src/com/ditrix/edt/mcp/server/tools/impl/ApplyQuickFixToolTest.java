@@ -409,4 +409,72 @@ public class ApplyQuickFixToolTest
 
         assertEquals("Remove export", ApplyQuickFixTool.describeForListing(descriptionOnly)); //$NON-NLS-1$
     }
+
+    // ---- hasUnresolvableAmbiguity: never hand out an index the caller cannot rely on ----
+
+    @Test
+    public void testUnresolvableAmbiguityWhenTwoObjectLevelTargetsDidNotResolve()
+    {
+        // The hazard: no module position to separate them and no resolved target either, so they
+        // print identically AND sort arbitrarily - yet they may be different objects. An index over
+        // this batch can select a different one on the retry, and this tool MUTATES what it selects.
+        List<MarkerMatch> matches = new ArrayList<>(List.of(
+            new MarkerMatch(null, "check-a", null, null, "same message"), //$NON-NLS-1$ //$NON-NLS-2$
+            new MarkerMatch(null, "check-a", null, null, "same message"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(ApplyQuickFixTool.hasUnresolvableAmbiguity(matches));
+    }
+
+    @Test
+    public void testResolvedObjectTargetsAreNotAnUnresolvableAmbiguity()
+    {
+        // Same shape, but the targets DID resolve: the comparator separates them and the listing
+        // names them, so indexing is safe. This is the case a transaction-outcome flag would have
+        // got wrong whenever the read merely opened.
+        MarkerMatch alpha = new MarkerMatch(null, "check-a", null, null, "same message"); //$NON-NLS-1$ //$NON-NLS-2$
+        MarkerMatch beta = new MarkerMatch(null, "check-a", null, null, "same message"); //$NON-NLS-1$ //$NON-NLS-2$
+        alpha.objectPresentation = "Catalog.Alpha"; //$NON-NLS-1$
+        beta.objectPresentation = "Catalog.Beta"; //$NON-NLS-1$
+        List<MarkerMatch> matches = new ArrayList<>(List.of(alpha, beta));
+        matches.sort(MarkerMatch.DETERMINISTIC_ORDER);
+
+        assertFalse(ApplyQuickFixTool.hasUnresolvableAmbiguity(matches));
+    }
+
+    @Test
+    public void testOneUnresolvedObjectMarkerAmongDistinguishableOnesIsNotRefused()
+    {
+        // Only ONE candidate lacks a module position, so nothing ties: the batch is fully ordered
+        // and every label is unique. Refusing here would turn a workable disambiguation into a
+        // failed fix for no safety gain.
+        List<MarkerMatch> matches = new ArrayList<>(List.of(
+            new MarkerMatch(null, "check-a", null, null, "object level"), //$NON-NLS-1$ //$NON-NLS-2$
+            new MarkerMatch(null, "check-a", "CommonModules/A/Module.bsl", 10, "first"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new MarkerMatch(null, "check-a", "CommonModules/B/Module.bsl", 3, "second"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        matches.sort(MarkerMatch.DETERMINISTIC_ORDER);
+
+        assertFalse(ApplyQuickFixTool.hasUnresolvableAmbiguity(matches));
+    }
+
+    @Test
+    public void testTiedBslMarkersAtTheSamePositionAreNotRefused()
+    {
+        // Two markers tying at the same module:line with the same check and message are the same
+        // choice presented twice - the label is identical either way, so picking either is
+        // equivalent and there is nothing unsafe to refuse.
+        List<MarkerMatch> matches = new ArrayList<>(List.of(
+            new MarkerMatch(null, "check-a", "CommonModules/A/Module.bsl", 10, "dup"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new MarkerMatch(null, "check-a", "CommonModules/A/Module.bsl", 10, "dup"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertFalse(ApplyQuickFixTool.hasUnresolvableAmbiguity(matches));
+    }
+
+    @Test
+    public void testSingleMatchIsNeverAnUnresolvableAmbiguity()
+    {
+        List<MarkerMatch> matches = new ArrayList<>(List.of(
+            new MarkerMatch(null, "check-a", null, null, "only one"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse(ApplyQuickFixTool.hasUnresolvableAmbiguity(matches));
+    }
 }

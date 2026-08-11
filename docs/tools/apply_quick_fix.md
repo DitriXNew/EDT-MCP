@@ -40,7 +40,9 @@ EDT validation markers have **no stable per-marker id**, so the tool addresses t
 The tool streams the project's markers, filters to the locator, and sorts the result into a
 **deterministic order** (module path, then line, then target object, then check id, then message)
 before indexing it — the underlying marker stream makes no ordering promise, so this keeps a given
-`index` pointing at the same marker across calls, independent of stream iteration order. A chosen
+`index` pointing at the same marker across calls, independent of stream iteration order. That holds as
+long as the candidates can actually be told apart; when two of them cannot be (see the refusal in
+*Notes & gotchas*), the tool refuses rather than hand out an index it cannot honour. A chosen
 marker's fix variants are ordered on the same principle (description, then details), so a given
 `variant` likewise keeps meaning the same fix across calls. When the locator still matches **several**
 markers (e.g. two parameter-doc problems on the same line), the error lists them with a 1-based index —
@@ -70,6 +72,14 @@ A JSON result:
   have one. That is a type-level flag, not a per-marker guarantee — even a registered check can still
   turn out inapplicable to a particular occurrence, and this tool returns the same clear "no quick-fix
   is available …" error for both cases — fix those by hand via `write_module_source` / `modify_metadata`.
+- **Indistinguishable candidates** → "… markers match check '…', and at least two of them are
+  object-level markers whose target object could not be resolved right now": object/metadata-level
+  markers carry no module path, so their target object is the only thing naming and ordering them. When
+  the model is momentarily unavailable and two of them resolve to nothing, no `index` can be trusted —
+  and this tool mutates whatever it selects — so it refuses instead of guessing. Usually transient:
+  retry in a moment. Narrowing with `modulePath` does NOT help here (these markers have none); if it
+  persists, use `get_project_errors` (responseFormat=detailed) to see the affected objects and fix them
+  via `modify_metadata`.
 - **No match** → "No marker matches check '…'": the locator hit nothing. Re-read `get_project_errors`
   (responseFormat=detailed); line numbers and the marker set change after each edit/rebuild.
 - The fix **mutates the source** through the platform's own change processor; re-validate afterwards to

@@ -199,6 +199,24 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 + "'Fix registered' column is 'yes'.").toJson(); //$NON-NLS-1$
         }
 
+        // BEFORE any selection, including one the caller already made: when two candidates cannot be
+        // told apart AND cannot be stably ordered, no index over this batch means anything - neither
+        // the one this call would print nor the one a previous call handed out. Checking only on the
+        // listing path would leave the MUTATING path (index supplied) unguarded, which is the one
+        // that actually applies the fix to the wrong object.
+        if (hasUnresolvableAmbiguity(matches))
+        {
+            return ToolResult.error(matches.size() + " markers match check '" + checkId //$NON-NLS-1$ //$NON-NLS-2$
+                + "', and at least two of them are object-level markers whose target object could " //$NON-NLS-1$
+                + "not be resolved right now (the model was unavailable or busy). They are therefore " //$NON-NLS-1$
+                + "indistinguishable and their order is not stable, so no index can be trusted to " //$NON-NLS-1$
+                + "select the one you mean - and this tool would MUTATE whatever it selected. These " //$NON-NLS-1$
+                + "markers carry no module path, so narrowing the locator cannot separate them " //$NON-NLS-1$
+                + "either. Retry in a moment (the targets usually resolve once the model settles); " //$NON-NLS-1$
+                + "if it persists, run get_project_errors (responseFormat=detailed) to see which " //$NON-NLS-1$
+                + "objects are affected and fix them via modify_metadata.").toJson(); //$NON-NLS-1$
+        }
+
         int chosenIdx = chooseIndex(matches.size(), index);
         if (chosenIdx < 0)
         {
@@ -273,9 +291,14 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
      * would list several candidates as an identical "{@code <checkId> - <message>}" and an
      * {@code index} would select a target the caller cannot tell apart.
      * <p>
-     * Best-effort and never fatal: a project with no BM model, or a marker whose target cannot be
-     * resolved, simply leaves that presentation {@code null} and the listing falls back to the
-     * module/check locator - a marker is never dropped just because its presentation failed.
+     * Best-effort and never fatal HERE: a project with no BM model, or a marker whose target cannot
+     * be resolved, simply leaves that presentation {@code null} and the listing falls back to the
+     * module/check locator - a marker is never dropped just because its presentation failed. The
+     * CALLER decides what an unresolved batch means, which is not the same question: for a single
+     * match the labels are pure cosmetics, but for an AMBIGUOUS object-level batch they are the only
+     * thing that distinguishes the choices and orders them, so proceeding there would hand out an
+     * {@code index} that a later, successful resolution would renumber. See
+     * {@link #ambiguityNeedsTargets}.
      *
      * @param project the project the markers belong to
      * @param matches the matches to enrich, modified in place (may be empty)
@@ -323,13 +346,59 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         catch (Exception e)
         {
             Activator.logWarning("Could not open a read transaction to resolve quick-fix candidate " //$NON-NLS-1$
-                + "targets; the ambiguity listing falls back to module/check locators: " + e.getMessage()); //$NON-NLS-1$
+                + "targets: " + e.getMessage()); //$NON-NLS-1$
         }
         // Re-sort now that the presentations are known: it is a tiebreaker in
         // DETERMINISTIC_ORDER, and findMatches sorted while every value was still null - so
         // object-level candidates would otherwise keep the marker stream's arbitrary order and
         // an index=N could point at a different object on the next call.
         matches.sort(MarkerMatch.DETERMINISTIC_ORDER);
+    }
+
+    /**
+     * Whether any two candidates are BOTH indistinguishable to the caller AND not stably ordered —
+     * in which case no {@code index} over this batch can be trusted and the call must be refused
+     * rather than allowed to mutate.
+     * <p>
+     * Asks {@link MarkerMatch#DETERMINISTIC_ORDER} directly instead of re-deriving a proxy rule: the
+     * comparator IS this class's definition of "told apart", so a tie between two adjacent entries
+     * of the sorted list means the sort had nothing left to separate them and their printed order is
+     * whatever {@code IMarkerManager.markers()} happened to enumerate. Asking the comparator also
+     * keeps this correct if its key list ever changes.
+     * <p>
+     * A tie alone is not enough. Two candidates identical across every field INCLUDING a resolved
+     * target are genuinely the same choice presented twice, and picking either is equivalent — the
+     * stance {@code DETERMINISTIC_ORDER} already documents. The hazard is a tie caused by MISSING
+     * information: object-level candidates ({@code modulePath} null — no module position to separate
+     * them) whose {@code objectPresentation} never resolved. Those print identically, sort
+     * arbitrarily, and may well be DIFFERENT objects, so a retry that does resolve the targets
+     * renumbers them and the caller's {@code index} lands somewhere else. Since they tie, both
+     * carry the same (absent) values, so testing one of the pair is testing both.
+     * <p>
+     * Package-visible (not {@code private}) for the same reason as
+     * {@link #sortVariantsDeterministically} and {@link #describeForListing}: a pure decision worth
+     * pinning by unit test, without a live {@link IFixManager} session or a BM model.
+     *
+     * @param matches the candidate matches, ALREADY sorted with {@link MarkerMatch#DETERMINISTIC_ORDER}
+     * @return {@code true} when the batch must be refused instead of indexed
+     */
+    static boolean hasUnresolvableAmbiguity(List<MarkerMatch> matches)
+    {
+        for (int i = 1; i < matches.size(); i++)
+        {
+            MarkerMatch previous = matches.get(i - 1);
+            MarkerMatch current = matches.get(i);
+            if (MarkerMatch.DETERMINISTIC_ORDER.compare(previous, current) != 0)
+            {
+                continue;
+            }
+            boolean noModulePosition = previous.modulePath == null || previous.modulePath.isEmpty();
+            if (noModulePosition && previous.objectPresentation == null)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

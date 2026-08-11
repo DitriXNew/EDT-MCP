@@ -50,6 +50,10 @@ _ACCEPTABLE_REFUSAL_MARKERS = (
     "No quick-fix is available",
     "INTERACTIVE IDE action",
     "did not accept the selected variant",
+    # The tool refuses rather than index an ambiguity it cannot order: object-level markers whose
+    # target did not resolve. Transient (the model was busy) and self-describing - a documented
+    # per-call refusal, not the broken-engine case this classifier exists to catch.
+    "could not be resolved right now",
 )
 
 
@@ -217,6 +221,10 @@ def _restore_extension_fixture():
               "or the extension model/tree stays polluted for later tests")
     wait_for_project_ready()
     reset_all_fixtures()
+    # The second revert is a git checkout EDT has not seen yet. Anything that reads the model
+    # straight after (the next candidate's `before` count) would otherwise race the re-import and
+    # read a half-synced marker set - which reads exactly like "the fix changed nothing".
+    wait_for_project_ready()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -243,12 +251,21 @@ def test_never_reports_success_without_actually_changing_anything():
 
     Mandatory, not skippable: it asserts over whatever fixable markers the fixture has, and
     only an EMPTY fixable set (nothing to assert about) skips.
+
+    EVERY advertised candidate is checked, including the ones after one genuinely applies.
+    Stopping at the first success would hide exactly the regression this test exists for -
+    a LATER fix reporting success while changing nothing - behind whichever earlier
+    candidate happens to work. A candidate that really applied mutates the extension, so the
+    fixture is restored before moving on and each candidate is measured from the same
+    baseline. That restore only happens on the rare success path: when every candidate is
+    refused (the fixture's doc-comment fixes are all interactive today) the loop costs
+    nothing extra.
     """
     candidates = _find_fixable(TESTS_PROJECT)
     if not candidates:
         raise E2ESkip("the fixture advertises no 'Fix registered' marker at all - nothing to assert")
     try:
-        for c in candidates:
+        for position, c in enumerate(candidates):
             before = _count_markers(TESTS_PROJECT, c["checkId"], c["modulePath"])
             args = {"projectName": TESTS_PROJECT, "checkId": c["checkId"],
                     "modulePath": c["modulePath"]}
@@ -279,7 +296,14 @@ def test_never_reports_success_without_actually_changing_anything():
                     "not drop (before=%d, after=%d) - a success that changed nothing is exactly "
                     "the false report this tool must never produce"
                     % (c["checkId"], c["modulePath"], before, after))
-            return  # a genuinely applied fix proves the whole path; stop mutating the fixture
+            # This candidate really applied, so the extension now differs from the committed
+            # fixture. Put it back before judging the next one: the remaining candidates were
+            # discovered against the baseline, and their before/after counts have to be measured
+            # against that same baseline to mean anything. Skipped for the LAST candidate - the
+            # `finally` below restores anyway, and this teardown is expensive (clean_project plus
+            # two ready-waits), so running it twice back to back is pure cost.
+            if position < len(candidates) - 1:
+                _restore_extension_fixture()
     finally:
         _restore_extension_fixture()
 
