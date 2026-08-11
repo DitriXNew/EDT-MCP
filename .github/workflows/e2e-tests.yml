@@ -530,7 +530,14 @@ jobs:
           # A missing shard report is not a pass. It means a runner died before writing one, and
           # the combined check would then quietly describe a fraction of the suite.
           ls -la shard-reports || true
-          COUNT=$(ls shard-reports/*.xml 2>/dev/null | wc -l)
+          # Counted with nullglob, NOT `ls *.xml | wc -l`. GitHub runs `shell: bash` as
+          # `bash -eo pipefail`, so with zero reports the ls fails, pipefail propagates it out of
+          # the command substitution, and -e kills the step - taking with it the very diagnostic
+          # this step exists to print. The empty case is the one it was written for, so it is the
+          # one case it must survive; an unmatched glob has to expand to nothing, not to an error.
+          shopt -s nullglob
+          reports=(shard-reports/*.xml)
+          COUNT=${#reports[@]}
           EXPECTED=$(echo '${{ inputs.shards }}' | tr -d '[] ' | tr ',' '\n' | grep -c .)
           echo "shard reports: $COUNT of $EXPECTED expected"
           if [ "$COUNT" -lt "$EXPECTED" ]; then
