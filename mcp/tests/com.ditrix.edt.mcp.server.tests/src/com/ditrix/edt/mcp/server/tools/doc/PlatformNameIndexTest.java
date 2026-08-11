@@ -276,6 +276,25 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testAnUnresolvableStrongCandidateDoesNotSuppressTheTypoFallback()
+    {
+        // The strong bucket outranks the typo bucket - but "last resort" has to be decided on what
+        // the strong bucket YIELDS, not on what it holds. One registered-but-unresolvable name
+        // sharing the query's prefix used to consume the decision, and the misspelling then got no
+        // "Did you mean" at all - the one case the typo bucket exists for.
+        PlatformNameIndex index =
+            new PlatformNameIndex("ValueTabel", candidate -> "ValueTable".equals(candidate)); //$NON-NLS-1$ //$NON-NLS-2$
+        index.accept("ValueTabelBroken"); // matches by prefix, does not resolve //$NON-NLS-1$
+        index.accept("ValueTable"); // two edits away, resolves //$NON-NLS-1$
+
+        List<String> suggestions = index.suggestions();
+        assertTrue("the resolvable typo match must still be offered", //$NON-NLS-1$
+            suggestions.contains("ValueTable")); //$NON-NLS-1$
+        assertFalse("an unresolvable name must never be advertised", //$NON-NLS-1$
+            suggestions.contains("ValueTabelBroken")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnUnprintableNameDoesNotSuppressTheRealSuggestion()
     {
         // Refusing such a name only at render time is not enough. Matching the query by prefix, it

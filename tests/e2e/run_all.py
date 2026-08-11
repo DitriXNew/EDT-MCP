@@ -365,12 +365,16 @@ def main():
     # (clean_project came back isError, not hung), so there is no live worker to race.
     still_running_in = None
     cleanup_failed = False
+    # WHY the run stopped, in words. Not every abort is a timeout: a mutating request that died in
+    # flight stops the run too, and calling that "a TIMEOUT" in the skip reason, the summary and the
+    # JUnit report sends whoever reads them looking for a hang that never happened.
+    abort_cause = None
     for t in tests:
         if aborted_after is not None:
             results.append((t, "skip",
-                            "skipped: run aborted after a TIMEOUT in %s (EDT is still busy or "
-                            "hung; restart it and re-run)" % aborted_after, 0.0))
-            print("[%-7s] %s::%s - aborted after timeout in %s"
+                            "skipped: the run was aborted at %s - %s"
+                            % (aborted_after, abort_cause), 0.0))
+            print("[%-7s] %s::%s - aborted at %s"
                   % ("SKIP", t["tool"], t["name"], aborted_after))
             continue
         harness.reset_fixture()  # hard reset BEFORE each test (fast local git) — never trust the previous
@@ -385,9 +389,24 @@ def main():
         # A per-CALL timeout aborts the run for the same reason a per-TEST one does: the server
         # is still busy with work we cannot cancel, and every later test would be reading a
         # model it is still writing.
-        if timed_out or status in ("call-timeout", "reset-failed"):
+        # The latch is armed by a call timeout AND by a mutating request that died on the wire. The
+        # second one fails only its own test, in no category the runner would recognise - but every
+        # later call is refused from that point on, so carrying on would just pin a wall of cascade
+        # failures on tests that did nothing. Asking the latch covers both without guessing at
+        # statuses; it means the same thing in either case: something we cannot cancel may still be
+        # running, so nothing may read the model and nothing may touch the tree.
+        latched = harness.calls_aborted()
+        if timed_out or latched or status == "reset-failed":
             aborted_after = "%s::%s" % (t["tool"], t["name"])
-            if timed_out or status == "call-timeout":
+            if timed_out:
+                abort_cause = ("the test outlived --test-timeout and was abandoned; EDT is likely "
+                               "hung, so restart it and re-run")
+            elif latched:
+                abort_cause = harness.abort_reason()
+            else:
+                abort_cause = ("the model could not be re-synced, so every later test would read "
+                               "the last one's write")
+            if timed_out or latched:
                 still_running_in = aborted_after
 
     # Final cleanliness guarantee across BOTH fixtures (base + extension). On a normal run,
@@ -436,7 +455,13 @@ def main():
     skip_note = (" | %d skipped" % nskip) if nskip else ""
     # On abort the EDT is wedged and was NOT model-synced, so 'clean' is only a point-in-time
     # disk check (EDT may re-dirty after exit) — label it so it is not read as a guarantee.
-    clean_label = ("%s (point-in-time; EDT wedged)" % final_clean) if aborted_after else str(final_clean)
+    # On abort the model was NOT synced, so 'clean' is only what the disk said at this instant -
+    # and when a live worker may remain (still_running_in), it can stop being true right after.
+    clean_label = str(final_clean)
+    if still_running_in:
+        clean_label = "%s (point-in-time; something may still be running)" % final_clean
+    elif aborted_after:
+        clean_label = "%s (point-in-time; the model was not synced)" % final_clean
     print("\n== %d/%d passed%s | fixture clean: %s ==" % (npass, len(results) - nskip, skip_note, clean_label))
     if _SKIPPED_RESETS:
         # Say it out loud: a shortcut nobody can see is a shortcut nobody can audit.
@@ -446,8 +471,8 @@ def main():
         print("!! a mutating call died without an answer during this run and was never accounted "
               "for - the server may have executed it, so this run is NOT certified clean")
     if aborted_after:
-        print("!! RUN ABORTED after a TIMEOUT in %s - subsequent tests were skipped. "
-              "Restart EDT and re-run." % aborted_after)
+        print("!! RUN ABORTED at %s - subsequent tests were skipped. Cause: %s"
+              % (aborted_after, abort_cause))
     if status_error:
         print("!! could not read the fixture status, so this run is NOT certified clean: %s"
               % status_error)

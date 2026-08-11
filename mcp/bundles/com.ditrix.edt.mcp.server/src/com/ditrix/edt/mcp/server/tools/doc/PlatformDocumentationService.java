@@ -302,10 +302,13 @@ public class PlatformDocumentationService
                 // names NO target documents nothing and never will; a set that names one the
                 // provider does not currently hold is a model that may simply not be loaded yet,
                 // and telling that caller "the platform documents nothing for it" would be a claim
-                // about the platform made from our own failure to find something.
+                // about the platform made from our own failure to find something. The bilingual
+                // trap sits right here: containsType lives on the ENGLISH description, so a Russian
+                // one is silent about it either way - namesNoTarget is what separates "read it, it
+                // names nothing" from "never got to read it".
                 if (matches)
                 {
-                    if (containedTypeName(typeProvider, desc) == null)
+                    if (namesNoTarget(typeProvider, desc))
                     {
                         index.markDocumentsNothing();
                     }
@@ -462,6 +465,23 @@ public class PlatformDocumentationService
      */
     private static IEObjectDescription englishSibling(IEObjectProvider provider, IEObjectDescription desc)
     {
+        String name = englishName(desc);
+        if (name == null || name.equals(desc.getName().getLastSegment()))
+        {
+            return null;
+        }
+        return provider.getEObjectDescription(name);
+    }
+
+    /**
+     * The ENGLISH name a type-set description's URI fragment carries
+     * ({@code .../mdTypeSets#/CatalogObject}), or {@code null} when there is no usable fragment.
+     *
+     * @param desc the type-set description
+     * @return the English name, or {@code null}
+     */
+    private static String englishName(IEObjectDescription desc)
+    {
         org.eclipse.emf.common.util.URI uri = desc.getEObjectURI();
         String fragment = uri != null ? uri.fragment() : null;
         if (fragment == null || fragment.isEmpty())
@@ -469,11 +489,42 @@ public class PlatformDocumentationService
             return null;
         }
         String name = fragment.startsWith("/") ? fragment.substring(1) : fragment; //$NON-NLS-1$
-        if (name.isEmpty() || name.equals(desc.getName().getLastSegment()))
+        return name.isEmpty() ? null : name;
+    }
+
+    /**
+     * Whether the absence of a {@code containsType} is a statement about the PLATFORM rather than
+     * about our own reach - i.e. whether the description that carries the field was actually read.
+     *
+     * <p>The field lives on the ENGLISH description only. So a Russian one that named no target may
+     * mean the set documents nothing ({@code ЛюбаяСсылка}), or merely that its English sibling was
+     * out of reach - a missing URI fragment, a provider that does not currently hold it. Those two
+     * deserve opposite answers ("never retry" vs "retry"), and telling them apart is only possible
+     * here, where it is known WHY the lookup came back empty.
+     *
+     * @param provider the provider the description came from
+     * @param desc the type-set description
+     * @return {@code true} when the authoritative description was read and simply named no target
+     */
+    private static boolean namesNoTarget(IEObjectProvider provider, IEObjectDescription desc)
+    {
+        if (containedTypeName(provider, desc) != null)
         {
-            return null;
+            return false;
         }
-        return provider.getEObjectDescription(name);
+        if (desc.getUserData(USER_DATA_CONTAINS_TYPE) != null)
+        {
+            // It carries the field itself (blank), so it IS the authoritative word on the matter.
+            return true;
+        }
+        String name = englishName(desc);
+        if (name == null)
+        {
+            return false;
+        }
+        // A fragment naming THIS description means it already is the English one - nothing to
+        // fetch, and its silence is the platform's own answer.
+        return name.equals(desc.getName().getLastSegment()) || provider.getEObjectDescription(name) != null;
     }
 
     /**

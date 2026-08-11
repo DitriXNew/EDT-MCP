@@ -11,6 +11,7 @@ Python stdlib only. No third-party dependencies.
 """
 
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -390,6 +391,31 @@ def abort_further_calls(reason):
     return freeze_fixtures()
 
 
+# Failures that mean the request MAY have reached the server and its outcome is UNKNOWN - the only
+# ones that justify stopping the run over a write. Deliberately not "any exception":
+#   * a body we could not build (json.dumps on a bad argument) never left this process;
+#   * a response we could not parse DID arrive, so nothing is still in flight;
+# neither leaves work running that a cleanup could race, and aborting a suite over either would be
+# a false alarm. http.client's own exceptions are listed because a truncated body (IncompleteRead)
+# is not an OSError and is exactly the uncertain case.
+_UNCERTAIN_TRANSPORT_ERRORS = (E2ECallTimeout, OSError, http.client.HTTPException)
+
+
+def calls_aborted():
+    """Has the latch been armed - i.e. is something uncancellable believed to be still running?
+
+    The orchestrator asks after every test. A test can arm it without failing in a way the runner
+    would otherwise recognise (a mutating request that died on the wire errors that ONE test), and
+    from that moment every later call is refused anyway - so continuing would only manufacture
+    cascade failures against tests that did nothing wrong."""
+    return _TIMED_OUT
+
+
+def abort_reason():
+    """Why calls are being refused, in words fit to print. Meaningless unless calls_aborted()."""
+    return _ABORT_REASON
+
+
 def _call_timeout_message(cause):
     return ("no response in %gs (MCP_CALL_TIMEOUT). The server may still be RUNNING this call, "
             "so the model is not safe to read or even to reset - the run stops here. Check the "
@@ -428,7 +454,21 @@ def call(tool, arguments):
     # unknown outcome counts as a mutation; a REFUSAL that was actually read back takes it back.
     _record_attempt(tool)
     while True:
-        result = Result(_post("tools/call", {"name": tool, "arguments": arguments}))
+        try:
+            raw = _post("tools/call", {"name": tool, "arguments": arguments})
+        except _UNCERTAIN_TRANSPORT_ERRORS:
+            # A MUTATING request that died IN FLIGHT is the same situation as one that timed out,
+            # and gets the same treatment. The socket is gone; the server-side handler is not
+            # necessarily gone with it, and it may still be committing the write. Cleaning up on top
+            # of that - git-reverting the fixture, then clean_project - RACES it: the late commit or
+            # export lands on the restored tree and leaks into the next test. So arm the same latch
+            # a timeout arms, which also freezes the fixtures, and let the run stop. Reading a write
+            # back is what makes it safe to undo; nothing else does.
+            if tool in MODEL_MUTATION_TOOLS and not _TIMED_OUT:
+                abort_further_calls(
+                    "a %s request died in flight, so the server may still be executing it" % tool)
+            raise
+        result = Result(raw)
         if not _is_transient_building(result) or time.time() >= deadline:
             _record_outcome(tool, result.is_error)
             return result

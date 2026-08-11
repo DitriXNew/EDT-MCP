@@ -241,9 +241,17 @@ final class PlatformNameIndex
     {
         // The typo bucket is a LAST resort: a name related to the query by substring or qualification
         // is a better guess than one that merely looks similar, and mixing them would bury it.
+        //
+        // "Last resort" has to be decided on what the strong bucket YIELDS, not on what it contains.
+        // Deciding on its raw contents let a single unresolvable name that happens to share the
+        // query's prefix suppress the whole typo fallback: query ValueTabel, one broken
+        // ValueTabelBroken in the provider, and the resolvable ValueTable never gets offered - the
+        // banner drops its "Did you mean" exactly where a misspelling needed one. The second pass
+        // costs a verification round only when the first produced nothing at all.
         List<String> strong = new ArrayList<>(prefixHits);
         strong.addAll(otherHits);
-        return verified(strong.isEmpty() ? typoHits : strong, SUGGESTION_LIMIT);
+        List<String> best = verified(strong, SUGGESTION_LIMIT);
+        return best.isEmpty() ? verified(typoHits, SUGGESTION_LIMIT) : best;
     }
 
     /**
