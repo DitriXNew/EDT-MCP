@@ -46,14 +46,16 @@ def parse_args():
     return ap.parse_args()
 
 
-def write_junit(results, path, final_clean, cleanup_failed=False):
+def write_junit(results, path, final_clean, cleanup_failed=False, status_error=None,
+                unresolved_mutation=False):
     # Skips are neither pass nor failure: they are reported as JUnit <skipped/> and
     # excluded from the failure count (the gated live-infobase suite skips in a
     # headless run and must not turn the report red).
     # A cleanup that failed is its own synthetic case: without it an all-green run whose
     # final model sync never completed publishes a green report while the process exits
     # non-zero, and the report is what the CI check reads.
-    extra = (0 if final_clean else 1) + (1 if cleanup_failed else 0)
+    extra = ((0 if final_clean else 1) + (1 if cleanup_failed else 0)
+             + (1 if unresolved_mutation else 0))
     total = len(results) + extra
     fails = sum(1 for _, s, _, _ in results if s not in ("pass", "skip")) + extra
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
@@ -74,13 +76,25 @@ def write_junit(results, path, final_clean, cleanup_failed=False):
             tag = "failure" if status == "fail" else "error"
             out.append('  <testcase name=%s time="%.3f"><%s>%s</%s></testcase>'
                        % (nm, dur, tag, su.escape(msg), tag))
-    if not final_clean:
+    if status_error:
+        # "Dirty" and "we could not tell" are both red, and they are NOT the same message: one
+        # sends a reader looking for a test that left files behind, the other for a broken git.
+        # Both are failures, so the count is unchanged; only the diagnosis differs.
+        out.append('  <testcase name="fixture::final_clean"><failure>could not read the fixture '
+                   'status, so the run is not certified clean: %s</failure></testcase>'
+                   % su.escape(status_error))
+    elif not final_clean:
         out.append('  <testcase name="fixture::final_clean">'
                    '<failure>TestConfiguration left dirty after the run</failure></testcase>')
     if cleanup_failed:
         out.append('  <testcase name="fixture::final_cleanup">'
                    '<failure>the final model sync did not complete: the workspace model may still '
                    'differ from the committed disk</failure></testcase>')
+    if unresolved_mutation:
+        out.append('  <testcase name="fixture::unresolved_mutation">'
+                   '<failure>a mutating call died without an answer and was never accounted for: '
+                   'the server may have executed it after the cleanliness check</failure>'
+                   '</testcase>')
     out.append('</testsuite>')
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
@@ -89,7 +103,9 @@ def write_junit(results, path, final_clean, cleanup_failed=False):
 # Set when the run is abandoning a worker (a per-test timeout). The worker thread is a daemon
 # that was never actually stopped: if its slow call returns before the process exits, it would
 # walk on into its own post-test cleanup and git-reset files the server may still be writing -
-# the very race the abort is avoiding. It checks this flag before touching anything.
+# the very race the abort is avoiding. It reads this flag to skip work it no longer needs to do;
+# what makes that SAFE rather than merely likely is the harness's fixture freeze, which decides
+# "abandoned?" and "resetting" under one lock (see harness.freeze_fixtures).
 _ABANDONED = False
 
 
@@ -99,13 +115,20 @@ def abandon_workers(harness):
     The flag alone is checked only AFTER the test function returns, which is too late for a
     worker already inside reset_model or inside a test's own teardown - it would resume and
     keep calling the server the moment its current request came back. So the harness latch is
-    armed as well: from here on every request is refused before it is sent.
+    armed as well: from here on every request is refused before it is sent, and the git fixtures
+    are frozen - which also WAITS OUT a reset already in progress, so this function returns only
+    once nobody is touching the tree any more.
     """
     global _ABANDONED
     _ABANDONED = True
-    harness.abort_further_calls(
-        "the run abandoned a test that outlived its timeout, and the server may still be "
-        "working on it")
+    if not harness.abort_further_calls(
+            "the run abandoned a test that outlived its timeout, and the server may still be "
+            "working on it"):
+        # A git reset was running and did not finish while we waited. Every LATER one is refused,
+        # but that one is beyond reach - so the tree may still be moving under the final status
+        # check, and a reader deserves to know that rather than wonder at the result.
+        print("!! a fixture reset was still running when the run gave up on the worker - the "
+              "working tree may have been touched after this point", flush=True)
 
 
 def _run_test_unit(harness, t):
@@ -154,18 +177,46 @@ def _reset_after_write(harness, t):
         # This worker was given up on; the main thread has already decided the fixtures are
         # not safe to touch. Do not undo that decision from a thread nobody is waiting for.
         return
-    if t.get("kind") != "write-metadata":
+    if t.get("kind") != "write-metadata" and not harness.mutations_unresolved():
+        # The declared kind decides the ROUTINE case: a test that means to write says so, and only
+        # those pay the cleanup. It cannot decide the accidental one. A mutating request that died
+        # on the wire (connection reset, truncated body) may have been committed by the server
+        # anyway, and it can happen to a test of any kind - 17 tests declare kind='write' and 123
+        # kind='action', and every one of them would have carried that unknown into the next test.
+        # So the kind gate is checked WITH the evidence, never instead of it.
         return
     if harness.model_is_pristine():
         _SKIPPED_RESETS.append(t.get("name", "?"))
         return
-    harness.reset_fixture()
+    # model_is_pristine() spends real time in MCP calls (a settle can burn the whole ready
+    # timeout), so the main thread may have given up on this worker while it waited. Re-reading
+    # the flag here would still be check-then-act - the abandonment can land in the gap - so the
+    # decision belongs to reset_fixture(), which makes it under the freeze lock and answers False
+    # when the tree is off limits. Believe that answer instead of racing it.
+    if not harness.reset_fixture():
+        return
     harness.reset_model()
 
 
 # Names of the tests whose model reset was skipped — reported at the end so the shortcut is
 # VISIBLE. A silent optimization in a suite whose value is trustworthiness is not acceptable.
 _SKIPPED_RESETS = []
+
+
+def _fixture_status(harness):
+    """The end-of-run cleanliness read, which must never take the summary down with it.
+
+    all_fixtures_status() REFUSES to read a failed `git status` as "clean" - it raises, which is
+    the only safe direction for a check whose false positive certifies a dirty tree. But this call
+    site sits after every test has run and before the summary and the JUnit report are written, so
+    an unhandled raise here would replace the entire result of a 50-minute run with a traceback.
+    Turn it into what it actually means instead: not certified clean, and the reason why.
+
+    @return (status_text, error) - exactly one of the two is None"""
+    try:
+        return (harness.all_fixtures_status(), None)
+    except Exception as e:  # noqa: BLE001 - any failure to READ the tree means the same thing
+        return (None, str(e))
 
 
 def _run_with_timeout(harness, t, timeout_s):
@@ -273,8 +324,30 @@ def main():
     # Every later "may I skip this test's model reset?" answer is measured against this. If it
     # cannot be read, the shortcut simply never engages and every write-metadata test resets in
     # full, exactly as before.
-    if not harness.snapshot_model_baseline():
+    if harness.mutations_unresolved():
+        # Checked BEFORE the fingerprint, not after: the setup's own clean_project died on the wire,
+        # so the model may still be moving under the very snapshot every later "did it move?" answer
+        # is measured against. A suspect baseline is worse than none - it would certify the wrong
+        # state as home - so take none, and let every write test reset in full.
+        print("!! a setup call died without an answer - skipping the baseline fingerprint, so "
+              "every write test resets in full (the model may still be moving server-side)")
+        inventory_ok, details_ok = (False, False)
+    else:
+        try:
+            inventory_ok, details_ok = harness.snapshot_model_baseline()
+        except harness.E2ECallTimeout as e:
+            # The probe hung, which arms the global latch: every later call is refused, so the run
+            # would report a wall of cascade failures against innocent tests. Stop here, like the
+            # setup cleanup does, with the reason intact.
+            print("!! baseline fingerprint timed out: %s" % e)
+            sys.exit(2)
+    if not inventory_ok:
         print("!! could not fingerprint the baseline model - every write test will reset in full")
+    elif not details_ok:
+        # Degraded, not broken: the shortcut still runs on the inventory + git evidence, and a
+        # SUCCESSFUL write forfeits it outright regardless. Say so rather than quietly weakening
+        # a check nobody would notice had gone missing.
+        print("!! baseline object DETAILS unreadable - the shortcut keeps only its coarse braces")
 
     # Each test (incl. its write-metadata model cleanup, see _run_test_unit) runs under a
     # per-test wall-clock timeout. If a test exceeds it, EDT is almost certainly hung (the
@@ -346,7 +419,16 @@ def main():
             # model may still be out of sync. Do not call the run green over that either.
             print("!! final cleanup could not sync the model: %s" % e)
             cleanup_failed = True
-    final_clean = (harness.all_fixtures_status() == "")
+    final_status, status_error = _fixture_status(harness)
+    final_clean = (final_status == "")
+    # A mutating request that died on the wire and was never accounted for is the same class of
+    # unknown as a cleanup that did not complete, and gets the same answer: the run is not green.
+    # The disk check above is point-in-time - the server may still execute that request and
+    # re-dirty the tree a second after it - so certifying the run over it would assert something
+    # nobody checked. Consistency with cleanup_failed is the point; a suite whose green means
+    # "probably" is not worth running. It is also not a flake risk: a timeout already aborts the
+    # whole run, so reaching here at all means a transport died mid-write, which is never normal.
+    unresolved_mutation = harness.mutations_unresolved()
 
     npass = sum(1 for _, s, _, _ in results if s == "pass")
     nskip = sum(1 for _, s, _, _ in results if s == "skip")
@@ -360,21 +442,30 @@ def main():
         # Say it out loud: a shortcut nobody can see is a shortcut nobody can audit.
         print("   model reset skipped for %d write test(s) whose model provably did not move"
               % len(_SKIPPED_RESETS))
+    if unresolved_mutation:
+        print("!! a mutating call died without an answer during this run and was never accounted "
+              "for - the server may have executed it, so this run is NOT certified clean")
     if aborted_after:
         print("!! RUN ABORTED after a TIMEOUT in %s - subsequent tests were skipped. "
               "Restart EDT and re-run." % aborted_after)
-    if not final_clean:
-        print("!! fixtures left dirty after cleanup:\n%s" % harness.all_fixtures_status()[:500])
+    if status_error:
+        print("!! could not read the fixture status, so this run is NOT certified clean: %s"
+              % status_error)
+    elif not final_clean:
+        print("!! fixtures left dirty after cleanup:\n%s" % final_status[:500])
 
     if args.junit:
-        write_junit(results, args.junit, final_clean, cleanup_failed)
+        write_junit(results, args.junit, final_clean, cleanup_failed, status_error,
+                    unresolved_mutation)
         print("junit -> %s" % args.junit)
 
     # A skip is neither pass nor fail: the run is green when nothing FAILED and the
     # fixture is clean (skipped gated tests do not block a headless green run).
     # A cleanup that timed out is a failed run even when every test passed and the tree LOOKS
     # clean: the server may still be finishing that call and can re-dirty it after this check.
-    sys.exit(0 if (nfail == 0 and final_clean and not cleanup_failed) else 1)
+    # An unaccounted-for mutating request is the same unknown, so it gets the same answer.
+    sys.exit(0 if (nfail == 0 and final_clean and not cleanup_failed and not unresolved_mutation)
+             else 1)
 
 
 if __name__ == "__main__":
