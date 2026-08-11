@@ -22,6 +22,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -34,6 +35,8 @@ import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
+import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
 /**
@@ -197,7 +200,29 @@ public class Activator extends AbstractUIPlugin
     {
         return services.getCheckRepository();
     }
-    
+
+    /**
+     * Returns the IFixManager service that applies EDT's official quick-fixes for a
+     * validation marker. Used by apply_quick_fix.
+     *
+     * @return fix manager or null if not available
+     */
+    public IFixManager getFixManager()
+    {
+        return services.getFixManager();
+    }
+
+    /**
+     * Returns the IFixRepository service used to test whether a check has a registered
+     * quick-fix. Used by get_project_errors and apply_quick_fix.
+     *
+     * @return fix repository or null if not available
+     */
+    public IFixRepository getFixRepository()
+    {
+        return services.getFixRepository();
+    }
+
     /**
      * Returns the IBmModelManager service for BM model operations.
      * 
@@ -294,6 +319,17 @@ public class Activator extends AbstractUIPlugin
     public IMdRefactoringService getMdRefactoringService()
     {
         return services.getMdRefactoringService();
+    }
+
+    /**
+     * Returns the IFormRefactoringService for FORM-element rename/delete refactoring - the twin of
+     * {@link #getMdRefactoringService()} for elements that live on a form's content model.
+     *
+     * @return form refactoring service or null if not available
+     */
+    public IFormRefactoringService getFormRefactoringService()
+    {
+        return services.getFormRefactoringService();
     }
 
     /**

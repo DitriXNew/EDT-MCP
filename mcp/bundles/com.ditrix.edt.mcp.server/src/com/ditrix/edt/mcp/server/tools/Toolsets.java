@@ -170,7 +170,7 @@ public final class Toolsets
             "get_event_log", //$NON-NLS-1$
             "get_mcp_history", //$NON-NLS-1$
             "list_git_branches", "switch_git_branch", "set_branch_infobase", "create_git_branch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "get_check_description", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$
+            "get_check_description", "apply_quick_fix", "get_platform_documentation"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assign(GIT,
             "git"); //$NON-NLS-1$

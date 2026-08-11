@@ -36,6 +36,7 @@ import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
 import com._1c.g5.v8.dt.validation.marker.StandardExtraInfo;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 
@@ -115,6 +116,7 @@ public class GetProjectErrorsTool implements IMcpTool
                "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
                "Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. " + //$NON-NLS-1$
                "Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). " + //$NON-NLS-1$
+               "A 'Fix registered' column flags rows whose CHECK TYPE has an official EDT auto-fix registered (not a promise this exact marker will produce an applicable fix - apply_quick_fix may still report none available for it); pass that row's Check code (+ Module path + Line) to apply_quick_fix to try applying it. " + //$NON-NLS-1$
                "Use this for the detailed marker list; for severity totals only call get_problem_summary. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
@@ -307,6 +309,10 @@ public class GetProjectErrorsTool implements IMcpTool
             }
 
             final ICheckRepository checkRepository = Activator.getDefault().getCheckRepository();
+            // Optional: when the fix repository is available, each marker is flagged with
+            // hasQuickFix (its check has a registered EDT auto-fix) so the caller knows which
+            // rows apply_quick_fix can act on. A null repository simply leaves every row unflagged.
+            final IFixRepository fixRepository = Activator.getDefault().getFixRepository();
             IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
 
             // Parse severity filter
@@ -334,7 +340,7 @@ public class GetProjectErrorsTool implements IMcpTool
             final int[] unresolvedFilteredOut = {0};
 
             final CollectContext collectContext = new CollectContext(finalSeverityFilter,
-                finalCheckId, finalObjects, checkRepository, limit, unresolvedShown,
+                finalCheckId, finalObjects, checkRepository, fixRepository, limit, unresolvedShown,
                 unresolvedFilteredOut, exactScope);
             final List<ErrorInfo> errors = collectErrors(markersByProject, bmModelManager,
                 collectContext);
@@ -545,8 +551,9 @@ public class GetProjectErrorsTool implements IMcpTool
                 // merged set (that would apply one project's spelling to another's markers).
                 CollectContext collectContext = new CollectContext(parseSeverityFilter(severity),
                     checkId, Collections.<String> emptySet(),
-                    Activator.getDefault().getCheckRepository(), limit, unresolvedShown,
-                    unresolvedFilteredOut, true, filterVariantsByProject(resolution.scopeByProject));
+                    Activator.getDefault().getCheckRepository(), Activator.getDefault().getFixRepository(),
+                    limit, unresolvedShown, unresolvedFilteredOut, true,
+                    filterVariantsByProject(resolution.scopeByProject));
                 errors = collectErrors(groupMarkersByProject(markerManager, projectName),
                     bmModelManager, collectContext);
             }
@@ -2221,8 +2228,8 @@ public class GetProjectErrorsTool implements IMcpTool
 
             Runnable collector = () -> projectMarkers.stream()
                 .map(marker -> buildIfMatches(marker, context.severityFilter, context.checkId,
-                    projectObjects, context.checkRepository, context.unresolvedShown,
-                    context.unresolvedFilteredOut, context.exactScope))
+                    projectObjects, context.checkRepository, context.fixRepository,
+                    context.unresolvedShown, context.unresolvedFilteredOut, context.exactScope))
                 .filter(Objects::nonNull)
                 .limit(remaining)
                 .forEach(errors::add);
@@ -2256,6 +2263,7 @@ public class GetProjectErrorsTool implements IMcpTool
         final String checkId;
         final Set<String> objects;
         final ICheckRepository checkRepository;
+        final IFixRepository fixRepository;
         final int limit;
         final int[] unresolvedShown;
         final int[] unresolvedFilteredOut;
@@ -2269,22 +2277,23 @@ public class GetProjectErrorsTool implements IMcpTool
         final Map<String, Set<String>> objectsByProject;
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
-            ICheckRepository checkRepository, int limit, int[] unresolvedShown,
-            int[] unresolvedFilteredOut, boolean exactScope)
+            ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
+            int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope)
         {
-            this(severityFilter, checkId, objects, checkRepository, limit, unresolvedShown,
-                unresolvedFilteredOut, exactScope, null);
+            this(severityFilter, checkId, objects, checkRepository, fixRepository, limit,
+                unresolvedShown, unresolvedFilteredOut, exactScope, null);
         }
 
         CollectContext(MarkerSeverity severityFilter, String checkId, Set<String> objects,
-            ICheckRepository checkRepository, int limit, int[] unresolvedShown,
-            int[] unresolvedFilteredOut, boolean exactScope,
+            ICheckRepository checkRepository, IFixRepository fixRepository, int limit,
+            int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope,
             Map<String, Set<String>> objectsByProject)
         {
             this.severityFilter = severityFilter;
             this.checkId = checkId;
             this.objects = objects;
             this.checkRepository = checkRepository;
+            this.fixRepository = fixRepository;
             this.limit = limit;
             this.unresolvedShown = unresolvedShown;
             this.unresolvedFilteredOut = unresolvedFilteredOut;
@@ -2402,12 +2411,12 @@ public class GetProjectErrorsTool implements IMcpTool
         if (detailed)
         {
             md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                "Module path", "Line", "Check code", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "Module path", "Line", "Check code", "Fix registered", "Has docs")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         }
         else
         {
             md.append(MarkdownUtils.tableHeader("Description", "Location", //$NON-NLS-1$ //$NON-NLS-2$
-                "Module path", "Line", "Check code")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "Module path", "Line", "Check code", "Fix registered")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         }
     }
 
@@ -2430,17 +2439,25 @@ public class GetProjectErrorsTool implements IMcpTool
         String checkCell = "`" + (displayCheckId != null ? displayCheckId : "") + "`"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         String modulePathCell = error.modulePath != null ? error.modulePath : ""; //$NON-NLS-1$
         String lineCell = error.line != null ? error.line.toString() : ""; //$NON-NLS-1$
+        // "Fix registered" flag: "yes" when this CHECK TYPE has a fix registered with
+        // IFixRepository - NOT a promise that THIS specific marker will actually produce an
+        // applicable fix. apply_quick_fix's own context-specific filtering (prepareFix ->
+        // getApplicableFixVariants) can still yield zero variants for an individual marker even
+        // when its check type is registered here; try apply_quick_fix and read its error if a
+        // registered check turns out not to be applicable to this particular occurrence. Plain
+        // ASCII so the Tycho build stays encoding-safe.
+        String fixCell = error.hasQuickFix ? "yes" : ""; //$NON-NLS-1$ //$NON-NLS-2$
 
         if (detailed)
         {
             md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
-                modulePathCell, lineCell, checkCell,
+                modulePathCell, lineCell, checkCell, fixCell,
                 error.hasDocumentation ? "true" : "false")); //$NON-NLS-1$ //$NON-NLS-2$
         }
         else
         {
             md.append(MarkdownUtils.tableRow(error.message, error.objectPresentation,
-                modulePathCell, lineCell, checkCell));
+                modulePathCell, lineCell, checkCell, fixCell));
         }
     }
 
@@ -2560,31 +2577,49 @@ public class GetProjectErrorsTool implements IMcpTool
      * {@code unresolvedFilteredOut} counter keeps the same semantics.</p>
      */
     static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
-        Set<String> objects, ICheckRepository checkRepository, int[] unresolvedShown, int[] unresolvedFilteredOut)
+        Set<String> objects, ICheckRepository checkRepository, IFixRepository fixRepository,
+        int[] unresolvedShown, int[] unresolvedFilteredOut)
     {
-        return buildIfMatches(marker, severityFilter, checkId, objects, checkRepository, unresolvedShown,
-            unresolvedFilteredOut, false);
+        return buildIfMatches(marker, severityFilter, checkId, objects, checkRepository, fixRepository,
+            unresolvedShown, unresolvedFilteredOut, false);
     }
 
     /**
-     * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, ICheckRepository, int[], int[])}
+     * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, ICheckRepository, IFixRepository, int[], int[])}
      * but threading {@code exactScope} into the objects filter (segment-boundary vs substring - see
      * {@link #excludedByObjectsFilter(Set, boolean, String, int[], boolean)}).
      */
     static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
-        Set<String> objects, ICheckRepository checkRepository, int[] unresolvedShown, int[] unresolvedFilteredOut,
-        boolean exactScope)
+        Set<String> objects, ICheckRepository checkRepository, IFixRepository fixRepository,
+        int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope)
     {
         // Severity filter
         if (severityFilter != null && marker.getSeverity() != severityFilter)
         {
             return null;
         }
-        
-        // Resolve the symbolic check id once; reused below for the checkId filter and display.
+
+        // Resolve the check UID once; reused for the symbolic check id (display + checkId filter)
+        // AND for the hasQuickFix flag (does this check have a registered EDT auto-fix?).
         String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
-        String symbolicCheckId = resolveSymbolicCheckId(marker, shortUid, checkRepository);
-        
+        CheckUid checkUid = resolveCheckUid(marker, shortUid, checkRepository);
+        String symbolicCheckId = checkUid != null ? checkUid.getCheckId() : null;
+        // Best-effort, like the object-presentation resolution below: a repository hiccup on ONE
+        // marker (stale registration, transient service state) must not abort the whole listing -
+        // just leave this row's flag unset.
+        boolean hasQuickFix = false;
+        if (checkUid != null && fixRepository != null)
+        {
+            try
+            {
+                hasQuickFix = fixRepository.hasFixes(checkUid);
+            }
+            catch (Exception e)
+            {
+                hasQuickFix = false;
+            }
+        }
+
         // checkId filter: match either the short UID (e.g. "SU23") or the symbolic id
         // (e.g. "semicolon-missing"). The short UID alone is rarely what callers type.
         if (checkId != null && !checkId.isEmpty() && !checkIdMatches(shortUid, symbolicCheckId, checkId))
@@ -2620,6 +2655,7 @@ public class GetProjectErrorsTool implements IMcpTool
         error.checkId = symbolicCheckId;
         error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
             && GetCheckDescriptionTool.hasCheckDocumentation(symbolicCheckId);
+        error.hasQuickFix = hasQuickFix;
         error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
 
         // Structural locator: for a marker that points at a BSL text position the
@@ -2686,7 +2722,7 @@ public class GetProjectErrorsTool implements IMcpTool
             return true;
         }
 
-        String presentationLower = objectPresentation.toLowerCase();
+        String presentationLower = objectPresentation.toLowerCase(Locale.ROOT);
         for (String fqnVariant : objects)
         {
             boolean matches = exactScope
@@ -2706,36 +2742,65 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static String resolveSymbolicCheckId(Marker marker, String shortUid, ICheckRepository checkRepository)
     {
+        CheckUid uid = resolveCheckUid(marker, shortUid, checkRepository);
+        return uid != null ? uid.getCheckId() : null;
+    }
+
+    /**
+     * Resolves a marker's full {@link CheckUid} (e.g. {@code semicolon-missing}) from its short UID
+     * (e.g. {@code SU23}) via the check repository, or {@code null} when it cannot be resolved. The
+     * UID is the key both for the symbolic check id (display) and for {@code IFixRepository.hasFixes}
+     * (the quick-fix flag), so it is resolved once and reused.
+     */
+    static CheckUid resolveCheckUid(Marker marker, String shortUid, ICheckRepository checkRepository)
+    {
         if (checkRepository == null || shortUid == null || shortUid.isEmpty() || marker.getProject() == null)
         {
             return null;
         }
         try
         {
-            CheckUid uid = checkRepository.getUidForShortUid(shortUid, marker.getProject());
-            return uid != null ? uid.getCheckId() : null;
+            return checkRepository.getUidForShortUid(shortUid, marker.getProject());
         }
         catch (Exception e)
         {
-            // Ignore - caller falls back to the short UID
+            // Ignore - caller falls back to the short UID / no fix flag
             return null;
         }
     }
-    
+
     /**
      * Returns true when the user supplied checkId substring matches either the marker
      * short UID or its already resolved symbolic check id.
      */
     static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
     {
-        String needle = checkId.toLowerCase();
-        if (shortUid != null && shortUid.toLowerCase().contains(needle))
+        String needle = checkId.toLowerCase(Locale.ROOT);
+        if (shortUid != null && shortUid.toLowerCase(Locale.ROOT).contains(needle))
         {
             return true;
         }
-        return symbolicCheckId != null && symbolicCheckId.toLowerCase().contains(needle);
+        return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).contains(needle);
     }
-    
+
+    /**
+     * Returns true when {@code checkId} is EXACTLY (case-insensitively) either the marker short
+     * UID or its resolved symbolic check id. Unlike {@link #checkIdMatches}, this is NOT a
+     * substring match: a read-only filter (get_project_errors) can afford to over-match and show
+     * extra rows, but a mutation locator (apply_quick_fix) cannot - a loose needle like "doc"
+     * would substring-match several unrelated checks, and if only one marker among them currently
+     * exists the tool would silently auto-fix it without ever surfacing the ambiguity.
+     */
+    static boolean checkIdMatchesExact(String shortUid, String symbolicCheckId, String checkId)
+    {
+        String needle = checkId.toLowerCase(Locale.ROOT);
+        if (shortUid != null && shortUid.toLowerCase(Locale.ROOT).equals(needle))
+        {
+            return true;
+        }
+        return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).equals(needle);
+    }
+
     /**
      * Placeholder location for a marker whose {@link Marker#getObjectPresentation()} could not
      * be resolved, so the marker is reported instead of being dropped.
@@ -2850,5 +2915,6 @@ public class GetProjectErrorsTool implements IMcpTool
         boolean hasDocumentation;  // Whether documentation exists for this check
         String modulePath;         // Source-folder-relative BSL module path, or null
         Integer line;              // 1-based line inside the module, or null
+        boolean hasQuickFix;       // Whether this check has an EDT auto-fix (apply via apply_quick_fix)
     }
 }

@@ -33,8 +33,9 @@ The `maxResults` parameter of `rename_metadata_object` controls only the size of
 
 - Top-level: `Catalog.Products`, `Document.SalesOrder`, `CommonModule.MyModule`, `Subsystem.Sales`, etc. Russian type names are also accepted (`Справочник.Товары`).
 - Nested child objects (member FQNs): `Catalog.Products.Attribute.Weight`, `Document.SalesOrder.TabularSection.Goods`, `InformationRegister.Prices.Dimension.Product`, `AccumulationRegister.Stock.Resource.Quantity`.
+- Managed-form ELEMENTS (`rename_metadata_object` and `delete_metadata`): `Catalog.Products.Form.ItemForm.Field.Price`, `CommonForm.Settings.Group.Main`, a column of a collection form attribute `...Form.ItemForm.Attribute.Rows.Column.Price`. Kind = `Attribute` / `Command` / `Field` / `Button` / `Group` / `Decoration` / `Table`; the kind token is bilingual and may be singular or plural.
 
-**Supported child types** in FQNs for rename/delete: `Attribute`, `TabularSection`, `Dimension`, `Resource` (and their Russian singular/plural forms: `Реквизит`, `ТабличнаяЧасть`, `Измерение`, `Ресурс`). Other kinds (Forms, Commands, Templates, EnumValues, AccountingFlags, etc.) are **not** handled by these tools — for those, either edit XML manually or use dedicated tools.
+**Child types differ per tool.** `rename_metadata_object` resolves mdclass members of only four kinds — `Attribute`, `TabularSection`, `Dimension`, `Resource` (plus their Russian singular/plural forms `Реквизит`, `ТабличнаяЧасть`, `Измерение`, `Ресурс`) — and, separately, the managed-form ELEMENTS listed above. Everything else is **not** a rename target: the form OBJECT itself (`Catalog.X.Form.ItemForm`), a form EVENT handler (`...Form.F.Handler.OnOpen` — the event name is fixed by the platform), commands, templates, accounting flags. `delete_metadata` accepts a **wider** set — any node `create_metadata` can address (attribute / tabular section / dimension / resource / enum value / command / template / recalculation / type-specific child) plus an owned form object, a form member and an XDTO package member — so check its own guide instead of assuming this list.
 
 ## `find_references` — top-level only
 

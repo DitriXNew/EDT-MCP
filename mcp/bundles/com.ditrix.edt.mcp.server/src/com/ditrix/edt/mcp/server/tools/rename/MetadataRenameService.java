@@ -8,11 +8,13 @@ package com.ditrix.edt.mcp.server.tools.rename;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -24,6 +26,9 @@ import org.osgi.framework.Bundle;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
+import com._1c.g5.v8.dt.common.StringUtils;
+import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
+import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -48,14 +53,20 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
- * Domain service backing {@code rename_metadata_object}: resolves the target object, builds the
- * LTK refactoring, renders the preview, and performs the rename (applying disabled change-point
+ * Domain service backing {@code rename_metadata_object}: resolves the target, builds the LTK
+ * refactoring, renders the preview, and performs the rename (applying disabled change-point
  * indices).
+ * <p>
+ * Two targets, two branches, one contract: a managed-form ELEMENT FQN goes through
+ * {@code IFormRefactoringService}, everything else through {@code IMdRefactoringService}, and
+ * both end in the same preview rendering and the same consent-gated apply.
  * <p>
  * Two-phase workflow:
  * 1. Preview mode (confirm=false, default): Returns list of affected refactoring items and problems.
@@ -68,6 +79,16 @@ public class MetadataRenameService
 {
     /** Em dash placeholder rendered in markdown table cells with no value. */
     private static final String DASH = "\u2014"; //$NON-NLS-1$
+
+    /**
+     * Form-model EClasses the DESIGNER owns: the platform derives each one's name from the element
+     * that owns it and refuses a direct rename ({@code FormItemNamingService} rejects a predefined
+     * item). Addressable through their kind tokens (an AutoCommandBar / ContextMenu IS a Group, an
+     * ExtendedTooltip IS a Decoration), so the rename branch has to recognize and refuse them by
+     * EClass rather than by address (issue #381).
+     */
+    private static final Set<String> DESIGNER_OWNED_ECLASSES =
+        Set.of("AutoCommandBar", "ContextMenu", "ExtendedTooltip"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     /** Change-point type tag for BSL reference changes. */
     private static final String BSL_REF = "bslRef"; //$NON-NLS-1$
@@ -89,7 +110,7 @@ public class MetadataRenameService
      * Runs the rename (preview or execute), reporting how far it got to {@code progress}.
      *
      * @param projectName the EDT project holding the object
-     * @param objectFqn the FQN of the object or member to rename
+     * @param objectFqn the FQN of the object, member or managed-form element to rename
      * @param newName the new programmatic Name
      * @param confirm {@code false} previews, {@code true} applies
      * @param disableIndices preview '#' indices of optional change points to skip
@@ -105,6 +126,15 @@ public class MetadataRenameService
         // picked the work up" from "the work started" for a caller that gave up on its deadline.
         progress.enter(RenameProgress.Phase.PREPARING);
 
+        // ONE point of judgment for BOTH branches, and it runs before anything is resolved: an
+        // identifier is an identifier whether the target lives in the mdclass tree or on a form, so
+        // the rule cannot sit inside one of the two paths.
+        String badName = invalidNewNameError(newName);
+        if (badName != null)
+        {
+            return ToolResult.error(badName).toJson();
+        }
+
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
         if (!resolved.ok())
@@ -114,6 +144,21 @@ public class MetadataRenameService
         IProject project = resolved.project();
         Configuration config = resolved.configuration();
 
+        objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
+
+        // A FQN addressing a FORM element (attribute / column / command / field / button / group /
+        // decoration / table) is handled by a dedicated branch BEFORE the mdclass path, mirroring how
+        // delete_metadata dispatches the same shapes: form elements live on the form's content model,
+        // not the mdclass tree, so resolveObject below can never see them. The dispatch precedes the
+        // IMdRefactoringService lookup on purpose - a form rename must not fail because an unrelated
+        // mdclass service is unavailable (issue #381).
+        FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(objectFqn);
+        if (formRef != null)
+        {
+            return renameFormMember(project, config, objectFqn, newName, confirm, disableIndices,
+                maxResults, progress, formRef);
+        }
+
         // Get refactoring service
         IMdRefactoringService refactoringService = Activator.getDefault().getMdRefactoringService();
         if (refactoringService == null)
@@ -121,15 +166,19 @@ public class MetadataRenameService
             return ToolResult.error("IMdRefactoringService not available").toJson(); //$NON-NLS-1$
         }
 
-        // Normalize and find the object
-        objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
+        // Find the object
         MdObject targetObject = resolveObject(config, objectFqn);
         if (targetObject == null)
         {
             return ToolResult.error("Object not found: " + objectFqn + ". " + //$NON-NLS-1$
                 "Check the FQN format: 'Type.Name' for top-level objects (e.g. 'Catalog.Products'), " + //$NON-NLS-1$
                 "'Type.Name.ChildType.ChildName' for nested (e.g. 'Document.Order.Attribute.Amount'). " + //$NON-NLS-1$
-                "Supported child types: Attribute, TabularSection, Dimension, Resource.").toJson(); //$NON-NLS-1$
+                "Supported child types: Attribute, TabularSection, Dimension, Resource. " + //$NON-NLS-1$
+                "A managed-form ELEMENT is addressed through its form instead: " + //$NON-NLS-1$
+                "'Type.Object.Form.FormName.<Kind>.Name' or 'CommonForm.FormName.<Kind>.Name', " + //$NON-NLS-1$
+                "Kind = Attribute / Command / Field / Button / Group / Decoration / Table (an " + //$NON-NLS-1$
+                "attribute column as '...Attribute.AttrName.Column.ColName'). A form itself " + //$NON-NLS-1$
+                "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
         }
 
         // NB: an ADOPTED object in a configuration extension CAN be renamed. Its link to the base
@@ -152,7 +201,305 @@ public class MetadataRenameService
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableIndices, progress);
+            return performRename(objectFqn, newName, refactorings, disableIndices, progress,
+                "metadata object"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The refusal for a {@code newName} that is not a legal 1C identifier, or {@code null} when it
+     * is one. Applies to EVERY rename target - top object, member, form element - because the rule
+     * belongs to the identifier, not to where it is stored.
+     * <p>
+     * The verdict is the PLATFORM'S OWN, {@link StringUtils#isValidName(String)}: a non-empty string
+     * whose first code point is alphabetic or {@code '_'} and whose remaining code points are
+     * alphabetic, decimal digits or {@code '_'} (Cyrillic included - it asks
+     * {@code Character.isAlphabetic}, not an ASCII range; read off its bytecode, not guessed).
+     * Deferring to it rather than writing another rule is the whole point: an invented predicate
+     * would refuse names the platform accepts, and a false refusal on a legal rename is worse than
+     * the miss it was meant to prevent. Note what it therefore does NOT judge - length, for one:
+     * an over-long name is a validation MARKER for the platform to raise, not grounds for this tool
+     * to refuse a rename.
+     * <p>
+     * Without this an agent could rename an element to something like {@code Bad.Name}: the write
+     * itself succeeds, but the result is addressable by no FQN (the dot is the FQN separator) and
+     * the form module it cascades into no longer parses. The old name is gone by then, so the
+     * damage is not undoable through this tool.
+     * <p>
+     * PUBLIC because the tool adapter calls the SAME predicate before it drains the derived-data
+     * pipeline: a malformed name is a deterministic argument error and answering it should not cost
+     * a settle wait (or be masked by a BUILDING refusal). The check stays here as well, so the
+     * domain guarantee does not depend on which adapter reached it.
+     *
+     * @param newName the requested new name
+     * @return the refusal message, or {@code null} when the name is a legal identifier
+     */
+    public static String invalidNewNameError(String newName)
+    {
+        if (newName != null && StringUtils.isValidName(newName))
+        {
+            return null;
+        }
+        return "'" + newName + "' is not a valid 1C name. A name must start with a letter or " //$NON-NLS-1$ //$NON-NLS-2$
+            + "underscore and contain only letters, digits and underscores - no dots, spaces or " //$NON-NLS-1$
+            + "punctuation (Cyrillic letters are allowed). Pass only the new NAME here, not an FQN."; //$NON-NLS-1$
+    }
+
+    /**
+     * Renames a FORM element (attribute / attribute column / command / field / button / group /
+     * decoration / table) addressed by a form FQN, through EDT's OWN
+     * {@link IFormRefactoringService} - the exact twin of the mdclass path's
+     * {@code createMdObjectRenameRefactoring}. Because the result is the same {@link IRefactoring}
+     * type, the preview rendering and the apply path (including the destructive-consent gate) are
+     * shared verbatim with the mdclass branch; only the two mdclass-only BSL preview inputs are
+     * skipped (see {@link #renderPreview}).
+     * <p>
+     * Using EDT's refactoring rather than a hand-written name write is what makes the cascade real:
+     * it carries the form's internal references and the {@code Items.<Name>} / {@code Элементы.<Имя>}
+     * occurrences in the form module, exactly as the designer's own rename does - and, as a side
+     * effect that is EDT's and not ours, it refreshes the element's derived title. String literals
+     * holding an element name are deliberately NOT rewritten - that was the issue author's explicit
+     * scope call (issue #381).
+     * <p>
+     * The refactoring is BUILT inside a BM READ transaction (the form element only exists as a live
+     * EObject there) but PERFORMED outside it: {@code IRefactoring.perform()} opens its own batch
+     * session and write transaction, exactly as the mdclass path does, and nothing is force-exported
+     * by hand. What THIS method carries out of the read is a plain {@code String} old name; the
+     * refactoring itself is EDT's object and may hold model elements of its own - the mdclass branch
+     * hands the identical kind of object to the identical preview and apply code, so nothing here is
+     * a new exposure, but the claim is stated as it is rather than as "nothing escapes".
+     *
+     * @param project the EDT project
+     * @param config the project's configuration
+     * @param normFqn the normalized form FQN
+     * @param newName the new element name
+     * @param confirm {@code false} previews, {@code true} applies
+     * @param disableIndices preview '#' indices to skip
+     * @param maxResults cap on the change points listed
+     * @param progress the phase sink
+     * @param ref the parsed form-member reference
+     * @return the Markdown report, or a {@link ToolResult#error} JSON payload
+     */
+    private String renameFormMember(IProject project, Configuration config, String normFqn,
+        String newName, boolean confirm, java.util.Set<Integer> disableIndices, int maxResults,
+        RenameProgress progress, FormElementWriter.FormMemberRef ref)
+    {
+        String ineligible = formRenameIneligibility(ref);
+        if (ineligible != null)
+        {
+            return ToolResult.error(ineligible).toJson();
+        }
+        IFormRefactoringService formRefactoringService =
+            Activator.getDefault().getFormRefactoringService();
+        if (formRefactoringService == null)
+        {
+            return ToolResult.error("IFormRefactoringService not available").toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, config,
+                ref.formPath, "Form not found for '" + normFqn //$NON-NLS-1$
+                    + "'. Address a form element as 'Type.Object.Form.FormName.<Kind>.Name' or " //$NON-NLS-1$
+                    + "'CommonForm.FormName.<Kind>.Name' (Kind = Attribute / Command / Field / " //$NON-NLS-1$
+                    + "Button / Group / Decoration / Table / Column on a collection attribute)."); //$NON-NLS-1$
+
+            // Only the old name and the refactoring leave the read transaction - never the element.
+            FormRenameTarget target = FormElementWriter.readEditableForm(fctx,
+                "Prepare form element rename", (formModel, tx) -> { //$NON-NLS-1$
+                    EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                    if (member == null)
+                    {
+                        return FormRenameTarget.notFound(FormElementWriter.kindMismatchAdvice(
+                            formModel, ref.kindToken, ref.name, normFqn));
+                    }
+                    String designerChild = designerChildRefusal(member, ref);
+                    if (designerChild != null)
+                    {
+                        return FormRenameTarget.refused(designerChild);
+                    }
+                    if (!(member instanceof NamedElement))
+                    {
+                        return FormRenameTarget.refused("Form element '" + ref.name //$NON-NLS-1$
+                            + "' cannot be renamed: its model type carries no renameable name."); //$NON-NLS-1$
+                    }
+                    String duplicate = duplicateNameRefusal(formModel, member, ref, newName);
+                    if (duplicate != null)
+                    {
+                        return FormRenameTarget.refused(duplicate);
+                    }
+                    return FormRenameTarget.of(((NamedElement)member).getName(),
+                        formRefactoringService.createFormRenameRefactoring((NamedElement)member,
+                            newName));
+                });
+
+            if (target.error != null)
+            {
+                return ToolResult.error(target.error).toJson();
+            }
+            Collection<IRefactoring> refactorings = Collections.singletonList(target.refactoring);
+            if (!confirm)
+            {
+                return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
+                    Collections.emptyMap(), Collections.emptyList());
+            }
+            return performRename(normFqn, newName, refactorings, disableIndices, progress,
+                "form element"); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            String ready = FormValidationException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
+            Activator.logError("Error renaming form element", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to rename form element: " //$NON-NLS-1$
+                + causeMessage(e)).toJson();
+        }
+    }
+
+    /**
+     * The most specific message in {@code e}'s cause chain - the deepest non-empty one - so a
+     * generic wrapper does not hide what the platform actually said. Falls back to the exception's
+     * simple type name when nothing in the chain carries a message.
+     */
+    private static String causeMessage(Throwable e)
+    {
+        String message = null;
+        Throwable current = e;
+        int depth = 0;
+        while (current != null && depth < 10)
+        {
+            if (current.getMessage() != null && !current.getMessage().isEmpty())
+            {
+                message = current.getMessage();
+            }
+            current = current.getCause();
+            depth++;
+        }
+        return message != null ? message : e.getClass().getSimpleName();
+    }
+
+    /**
+     * The refusal for a form FQN shape this branch cannot rename, or {@code null} when the address is
+     * eligible. Checked BEFORE anything is resolved, so a shape that could never work says so without
+     * opening a transaction.
+     */
+    private static String formRenameIneligibility(FormElementWriter.FormMemberRef ref)
+    {
+        if (FormElementWriter.isHandlerToken(ref.kindToken)
+            || FormElementWriter.isHandlerToken(ref.itemKindToken))
+        {
+            // A handler address names an EVENT BINDING, not a named element: its leaf is the event
+            // name, which the platform owns. Renaming the BSL procedure behind it is a different
+            // operation with its own path.
+            return "This FQN addresses a form event handler, not a renameable form element. " //$NON-NLS-1$
+                + "An event name is fixed by the platform; to point the handler at a different BSL " //$NON-NLS-1$
+                + "procedure use modify_metadata with the 'procedure' property, or rename the " //$NON-NLS-1$
+                + "procedure itself in the form module."; //$NON-NLS-1$
+        }
+        return FormElementWriter.columnAddressingError(ref);
+    }
+
+    /**
+     * The refusal for a DESIGNER-OWNED child whose name the platform derives from its owner - an
+     * auto command bar, a context menu, an extended tooltip. EDT's own naming service refuses to
+     * rename a predefined item, so this says why (and what to rename instead) rather than letting the
+     * refactoring fail with a platform message. Returns {@code null} for an ordinary element.
+     */
+    private static String designerChildRefusal(EObject member, FormElementWriter.FormMemberRef ref)
+    {
+        String eClassName = member.eClass().getName();
+        if (!DESIGNER_OWNED_ECLASSES.contains(eClassName))
+        {
+            return null;
+        }
+        return "Form element '" + ref.name + "' is a designer-owned " + eClassName //$NON-NLS-1$ //$NON-NLS-2$
+            + ": the platform derives its name from the element that owns it, and refuses a direct " //$NON-NLS-1$
+            + "rename. Rename the OWNING element instead - its auto children follow."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal when {@code newName} is already taken IN THE SAME NAMESPACE, or {@code null}.
+     * <p>
+     * A form has FOUR independent name spaces, and each addressed kind must be checked against its
+     * own: attributes, form commands, an attribute's columns, and the visual item tree. Checking a
+     * command or a column against the ITEM tree got it wrong in both directions - it refused a
+     * command whose new name merely matched some field (a false refusal on a healthy rename), and it
+     * let a genuine duplicate command through.
+     * <p>
+     * The element BEING RENAMED is excluded by identity, so a case-only rename ({@code Price} to
+     * {@code price}) is not refused as a clash with itself: every lookup here is case-INSENSITIVE, so
+     * without that exclusion the target always finds itself. EDT's own naming service does the same.
+     *
+     * @param formModel the tx-bound form model
+     * @param member the element being renamed - excluded from the clash search
+     * @param ref the parsed form-member ref
+     * @param newName the proposed name
+     * @return the refusal, or {@code null} when the name is free
+     */
+    private static String duplicateNameRefusal(EObject formModel, EObject member,
+        FormElementWriter.FormMemberRef ref, String newName)
+    {
+        FormElementWriter.Kind kind = FormElementWriter.kindForToken(ref.kindToken);
+        EObject clash;
+        if (kind == FormElementWriter.Kind.ATTRIBUTE)
+        {
+            clash = FormElementWriter.findFormAttribute(formModel, newName);
+        }
+        else if (kind == FormElementWriter.Kind.COLUMN)
+        {
+            EObject owner = FormElementWriter.findFormAttribute(formModel, ref.ownerAttributeName);
+            clash = owner == null ? null : FormElementWriter.findColumn(owner, newName);
+        }
+        else if (kind == FormElementWriter.Kind.COMMAND)
+        {
+            clash = FormElementWriter.findFormCommand(formModel, newName);
+        }
+        else
+        {
+            clash = FormElementWriter.findFormItem(formModel, newName);
+        }
+        if (clash == null || clash == member)
+        {
+            return null;
+        }
+        return "Form element '" + newName + "' already exists on " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Pick a different name."; //$NON-NLS-1$
+    }
+
+    /** What survives the prepare read transaction: the old name plus EDT's refactoring, or an error. */
+    private static final class FormRenameTarget
+    {
+        private final String oldName;
+        private final IRefactoring refactoring;
+        private final String error;
+
+        private FormRenameTarget(String oldName, IRefactoring refactoring, String error)
+        {
+            this.oldName = oldName;
+            this.refactoring = refactoring;
+            this.error = error;
+        }
+
+        static FormRenameTarget of(String oldName, IRefactoring refactoring)
+        {
+            return refactoring == null
+                ? new FormRenameTarget(null, null, "EDT created no rename refactoring for this " //$NON-NLS-1$
+                    + "form element.") //$NON-NLS-1$
+                : new FormRenameTarget(oldName, refactoring, null);
+        }
+
+        static FormRenameTarget notFound(String advice)
+        {
+            return new FormRenameTarget(null, null, "Form element not found." //$NON-NLS-1$
+                + (advice == null || advice.isEmpty()
+                    ? " Use get_metadata_details to list the form's elements." : advice)); //$NON-NLS-1$
+        }
+
+        static FormRenameTarget refused(String error)
+        {
+            return new FormRenameTarget(null, null, error);
         }
     }
 
@@ -165,8 +512,31 @@ public class MetadataRenameService
     {
         Map<String, ExactMatchInfo> exactMatches = buildExactMatchInfo(project, targetObject, newName);
         List<ChangePoint> edtBslPreviewChanges = buildEdtBslPreviewChanges(targetObject, newName, exactMatches);
-        String oldName = targetObject.getName();
+        return renderPreview(objectFqn, newName, targetObject.getName(), refactorings, maxResults,
+            exactMatches, edtBslPreviewChanges);
+    }
 
+    /**
+     * Assembles the preview markdown from data the caller already gathered. Split out of
+     * {@link #buildPreview} so the FORM-element branch can reuse the identical rendering without the
+     * two mdclass-only inputs it has no equivalent for: {@code buildExactMatchInfo} and
+     * {@code buildEdtBslPreviewChanges} both take an {@code MdObject} and describe the supplemental
+     * BSL pipeline for a metadata object. A form element's BSL change points arrive inside EDT's own
+     * form refactoring instead, so that branch passes an empty map and list (issue #381).
+     *
+     * @param objectFqn the FQN being renamed
+     * @param newName the new programmatic Name
+     * @param oldName the current Name of the rename target
+     * @param refactorings the refactorings EDT created for the rename
+     * @param maxResults cap on the change points listed (0 = no limit)
+     * @param exactMatches the mdclass exact-match data, or an empty map
+     * @param edtBslPreviewChanges the mdclass supplemental BSL change points, or an empty list
+     * @return the Markdown preview report
+     */
+    private String renderPreview(String objectFqn, String newName, String oldName,
+        Collection<IRefactoring> refactorings, int maxResults,
+        Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> edtBslPreviewChanges)
+    {
         // Phase 1: collect all changes and problems
         List<ChangePoint> allChanges = new ArrayList<>();
         List<String> allProblems = new ArrayList<>();
@@ -1695,16 +2065,19 @@ public class MetadataRenameService
 
     private String performRename(String objectFqn, String newName,
         Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices,
-        RenameProgress progress)
+        RenameProgress progress, String subject)
     {
         // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
         // model (rewriting every reference across BSL, forms and metadata). Built from the refactorings
         // the tool already resolved; on ALLOW the behaviour is byte-identical, on REJECT nothing is
         // mutated. This runs inside the tool's UI-thread syncExec scope, so the dialog (when armed)
         // opens directly. Headless / env-bypass / non-ASK never block.
-        ConsentPreview preview = new ConsentPreview("Rename metadata object", //$NON-NLS-1$
+        // The subject is passed in rather than hardcoded: this path now also renames FORM elements,
+        // and a prompt saying "metadata object" about a form field would misdescribe what is being
+        // authorized (issue #381).
+        ConsentPreview preview = new ConsentPreview("Rename " + subject, //$NON-NLS-1$
             "This renames '" + objectFqn + "' to '" + newName //$NON-NLS-1$ //$NON-NLS-2$
-                + "' and cascades the change across all references in BSL code, forms and metadata.", //$NON-NLS-1$
+                + "' and cascades the change across the references EDT resolves for it.", //$NON-NLS-1$
             countRefactoringItems(refactorings), collectRefactoringTitles(refactorings));
         // The tool NAME literal is intentionally inlined here (matching the frozen value in
         // DestructiveConsentGate.GATED_TOOLS, asserted by DestructiveConsentGateTest) rather than

@@ -19,21 +19,59 @@ Optional test filters (each an array of names, AND-combined; a comma-separated s
 
 Control:
 
-- `timeout` — polling window in seconds (default 60). See ## Polling and Pending.
+- `timeout` — wall-clock window in seconds for the WHOLE call (default and maximum 45; a larger value is clamped). See ## Polling and Pending.
 - `updateBeforeLaunch` — auto-chain, default `true`. See ## Auto-chain.
 - `updateScope` — which projects to force-recompute + update before the run when `updateBeforeLaunch=true`: `all` (configuration + dependent extensions, default), `configuration`, or `extension:<ProjectName>` (comma-separate several). See ## Auto-chain.
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 
+## Required order before the first run
+
+Do this once before the first run against an infobase, and again after anything changed the infobase outside EDT:
+
+```
+get_applications                      # read updateState of the target application
+  -> update_database(projectName, applicationId, confirm: true)   # ONLY if an update is required
+  -> run_yaxunit_tests
+```
+
+Why it is worth the extra call: applying the infobase update through `update_database` is a call you watch, with its own error if it cannot proceed. Letting the auto-chain do it inside a launch is convenient but harder to observe — if the platform decides it needs a human there, all you see is a `Pending` whose phase stops changing (see ## Polling and Pending).
+
+Note `update_database` identifies the application by `projectName` + `applicationId` from `get_applications` (for example `ServerApplication.MyApp`), NOT by the `applicationId` that `list_configurations` prints for a launch configuration.
+
 ## Polling and Pending
 
-The tool polls for up to `timeout` seconds. If the launch finishes in that window it returns the parsed JUnit report. If the window expires while the launch is still running it returns **Pending** and does NOT terminate the launch. Call the tool again with the SAME arguments to keep waiting and fetch the result once the launch completes. A run key is derived from the config name plus the filter, so identical arguments reattach to the in-flight launch instead of starting a new one. There is NO time-based result cache. A completed result is delivered to the matching identical call exactly once (to satisfy a re-call fetching a previously reported **Pending** run); every later identical call re-runs the tests. Caveat: if you were told **Pending** and never fetched the result, the next identical call returns that old report once (not a fresh run) before subsequent calls re-execute. To force a fresh run after an abandoned Pending, either change the filter (a new run-key carries no pending result) or make one identical call to drain that result, then call again to re-execute. (`terminate_launch` does NOT help here — it stops the Eclipse launch but leaves the once-only pending result to be served by the next identical call.)
+**Every call is bounded.** `timeout` is the window for the WHOLE call — resolution, pre-launch preparation, spawn and polling together, not the polling step alone — and it is clamped to **45 seconds**. That ceiling is deliberate: an MCP client cuts a call at roughly 60 seconds, so a longer window does not buy a longer wait, it replaces the tool's answer with a bare transport error carrying no phase and no reason. Ask for less if you want a quick probe; asking for more is silently clamped.
+
+**A call that has not finished the work returns `Pending` naming the phase**, never a transport error (the one exception is work that never started at all — that returns an explicit error, see below):
+
+| phase | what the server is doing |
+|---|---|
+| `resolve` | resolving the launch configuration and its application |
+| `prep:terminate` | sweeping live / stale launches of this application |
+| `prep:recompute` | force-recomputing the scoped projects |
+| `prep:db-update` | updating the infobase |
+| `spawn` | starting the 1C client |
+| `run` | the client is running the tests |
+
+Call again with the SAME arguments to keep waiting; nothing is cancelled and the work continues server-side.
+
+**What the phase can and cannot tell you.** A phase that ADVANCES between calls proves the server is making progress — keep waiting. A phase that stops changing is ambiguous, and honestly so: a `prep:recompute` that sits still for forty minutes is normal on a large configuration, and one blocked on a modal dialog looks exactly the same from here (the elapsed counter grows either way — it is wall-clock, not a heartbeat). There is no signal that separates them, so **when a phase stops advancing, look at EDT** for a dialog waiting for a click instead of waiting indefinitely. Running the pre-flight above is what keeps that case rare.
+
+The window is a ceiling, not an aim: the call returns **within** `timeout`. At least 80% of it is available to the work; the remainder is held back so the answer can be assembled instead of being cut off mid-way. Both clocks start when the call does, so a slow start inside EDT's job scheduler cannot eat the reserve.
+
+Two honest edges. A step that blocks inside the platform without ever checking a deadline — acquiring the per-infobase lock, the launch itself, parsing the report — is stopped by the outer bound rather than by its own, so you get the phase it was in rather than a step-specific message; the call still returns on time. And if the job carrying the call never leaves the scheduler at all, establishing that fact costs up to half a second more, and that path returns an explicit "did not start" error rather than a **Pending**.
+
+The tool polls for up to the remaining window. If the launch finishes in that window it returns the parsed JUnit report. If the window expires while the launch is still running it returns **Pending** and does NOT terminate the launch. Call the tool again with the SAME arguments to keep waiting and fetch the result once the launch completes. A run key is derived from the config name plus the filter, so identical arguments reattach to the in-flight launch instead of starting a new one. There is NO time-based result cache. A completed result is delivered to the matching identical call exactly once (to satisfy a re-call fetching a previously reported **Pending** run); every later identical call re-runs the tests. Caveat: if you were told **Pending** and never fetched the result, the next identical call returns that old report once (not a fresh run) before subsequent calls re-execute. To force a fresh run after an abandoned Pending, either change the filter (a new run-key carries no pending result) or make one identical call to drain that result, then call again to re-execute. (`terminate_launch` does NOT help here — it stops the Eclipse launch but leaves the once-only pending result to be served by the next identical call.)
 
 ## Auto-chain (updateBeforeLaunch)
 
 Default `true`: before spawning a new test launch, the tool runs the **pre-launch preparation chain** (selectively force-recompute changed projects, wait for the workspace build to settle, politely terminate any live 1C client running this configuration, then run a silent database update) in a background job with a **25-second budget**:
 
 - **If the chain completes within 25s** the tool proceeds to spawn and poll the test launch as normal.
-- **If the chain is still running after 25s** the tool returns **Pending** immediately — call again with the same arguments; the background preparation continues and the follow-up call waits another 25s (or proceeds to launch if it finds the prep done). This prevents MCP client timeouts on large configurations where a recompute can take 2–8 minutes.
+- **If the chain is still running after 25s** the tool returns **Pending** with the chain's live phase (`prep:terminate` / `prep:recompute` / `prep:db-update`) — call again with the same arguments; the background preparation continues and the follow-up call waits again (or proceeds to launch if it finds the prep done). This prevents MCP client timeouts on large configurations where a recompute can take 2–8 minutes.
+- The 25s budget is a maximum, not an allowance: the wait takes whatever is smaller, the budget or what is left of the call's own window. Waiting a full 25s *after* spending time resolving would push the call past the transport limit, which is how a call that respected every individual limit still died on the wire.
+
+**Dialogs are not impossible with `updateBeforeLaunch=true`.** The auto-chain answers the platform's update dialogs automatically (`Application update`, `Restructure data`, `Infobase configuration changes`), including any that are already on screen when it starts, so the common cases do not block. What it cannot promise is that EDT never raises a dialog outside those windows. If one does appear, the run stops making progress and shows up as a **Pending whose phase stops changing** — check EDT for a dialog waiting for a click, answer it, and the next call continues. Running the pre-flight in ## Required order before the first run is what keeps the infobase update out of the launch and makes this case rare.
 
 The recompute step is **selective**: a project is force-recomputed (`recomputeAll`) only when its sources differ from the content state of its last successful preparation, or when a non-derived file change was observed since then; projects with no change get only a cheap derived-data drain that returns immediately when nothing is pending. The "prepared at" mark is a fingerprint of the project content (paths plus workspace modification stamps of all non-derived files) recorded on the project itself, so it **survives an EDT restart** — restarting EDT no longer forces a full recompute by itself, only a real source change does. A project with no recorded mark yet (a fresh workspace, or a preparation that did not complete) still recomputes fully. That fingerprint is read from the workspace's own resource tree, so the first preparation of a project in each EDT session refreshes the project from disk first (bounded — a refresh that cannot finish in time makes the project count as changed): the operating system reports no events for changes made while EDT was **not running**, so without that refresh a `git checkout` performed on a closed workspace would still look unchanged. Whether the infobase itself is then updated stays EDT's own decision: the application update state (`UPDATED` — the value `get_applications` reports) means nothing to update. This eliminates the per-call 2–8 minute delay on large configurations while keeping the stale-`.cfe` safety guarantee: a test extension edited just before the run is still force-rebuilt and its regenerated `.cfe` is loaded into the infobase before the run, and a change that lands *during* the recompute keeps the project dirty for the next run instead of being recorded as prepared.
 
@@ -45,7 +83,7 @@ On a **standalone-server** application (`applicationId` starting with `ServerApp
 
 ## Debug mode (debug=true)
 
-Pass `debug=true` to launch in DEBUG mode so breakpoints set with `set_breakpoint` trip. Then the tool does NOT poll (it ignores `timeout`): it returns a Markdown launch handle immediately and you call `wait_for_break` next. The full cycle:
+Pass `debug=true` to launch in DEBUG mode so breakpoints set with `set_breakpoint` trip. Then the tool does NOT poll: it returns a Markdown launch handle as soon as the launch is spawned and you call `wait_for_break` next. `timeout` is therefore not a waiting window here — but the call is still bounded by it, exactly like the polling path: a pre-launch preparation that outlasts the window returns **Pending** with its phase instead of the handle, and the next identical call carries on from there. The full cycle:
 
 ```
 set_breakpoint -> run_yaxunit_tests(debug=true) -> wait_for_break
@@ -69,11 +107,13 @@ Run by project + application, filtered to two modules:
 { "projectName": "MyProject", "applicationId": "<id-from-get_applications>", "modules": ["Tests_Catalog", "Tests_Document"] }
 ```
 
-Run a single test method with a longer window:
+Run a single test method, waiting the full window:
 
 ```json
-{ "launchConfigurationName": "TestClient", "tests": "Tests_Catalog.CreateAndPost", "timeout": 180 }
+{ "launchConfigurationName": "TestClient", "tests": "Tests_Catalog.CreateAndPost", "timeout": 45 }
 ```
+
+A longer run is waited for by CALLING AGAIN, not by asking for a longer window — `"timeout": 180` is clamped to 45 and behaves exactly like the call above.
 
 ## Notes
 
@@ -83,7 +123,9 @@ Run a single test method with a longer window:
 
 ## Gotchas
 
-- A timeout returns **Pending**, not a failure — do not retry with different arguments; reuse the same ones so the run key matches.
+- A timeout returns **Pending**, not a failure — do not retry with different arguments; reuse the same ones so the run key matches. The single exception is work that never left EDT's scheduler: that returns an explicit "did not start" error, because there is nothing pending to wait for.
+- `timeout` above 45 is clamped, silently and on purpose. If a call ever comes back as a bare transport error rather than **Pending**, that is a bug worth reporting: the whole point of the ceiling is that it cannot happen.
+- A **Pending whose phase never changes** means waiting will not help — look for a modal dialog in EDT. A phase that advances, or an elapsed counter that grows, means the server is working; keep calling.
 - If no JUnit XML appears after the launch finishes, the YAXUnit extension is likely not installed in the infobase, or the filter matched no tests.
 - The config must be a runtime-client launch configuration; other types are rejected.
 

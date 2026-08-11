@@ -19,11 +19,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
@@ -100,6 +102,23 @@ public final class LaunchLifecycleUtils
     private static final long INFLIGHT_EXPIRY_MS = 10 * 60 * 1000L; // 10 min
 
     /**
+     * Phase label published while the prep is sweeping live / stale launches of the target
+     * application.
+     *
+     * <p>The three labels are the ONLY values {@link #prepareForFreshLaunch} publishes, and it
+     * publishes each one as it ENTERS that stage. That direction matters: a label written after
+     * a stage finished names work that is already over, which is exactly what a caller reading
+     * "what is it doing right now?" must not be told.
+     */
+    public static final String PHASE_TERMINATE = "terminate"; //$NON-NLS-1$
+
+    /** Phase label published while the prep is force-recomputing the scoped projects. */
+    public static final String PHASE_RECOMPUTE = "recompute"; //$NON-NLS-1$
+
+    /** Phase label published while the prep is updating the infobase. */
+    public static final String PHASE_DB_UPDATE = "db-update"; //$NON-NLS-1$
+
+    /**
      * Live state of a background pre-launch preparation job keyed by the same
      * {@code project\u0000applicationId} string as {@link #KEY_LOCKS}.
      *
@@ -116,8 +135,16 @@ public final class LaunchLifecycleUtils
      */
     public static final class PrepInFlight
     {
-        /** Human-readable phase label set by the background job. */
-        public volatile String phase = "recompute"; //$NON-NLS-1$
+        /**
+         * Human-readable phase label, published by {@link #prepareForFreshLaunch} as it
+         * ENTERS each stage (see {@link #PHASE_TERMINATE} / {@link #PHASE_RECOMPUTE} /
+         * {@link #PHASE_DB_UPDATE}).
+         *
+         * <p>The initial value is the first stage the prep enters, so a reader that wins
+         * the race with the job's own first publish still names a phase the prep is
+         * genuinely in — never one it has not reached.
+         */
+        public volatile String phase = PHASE_TERMINATE;
         /** Wall-clock time the job started (used to compute elapsed seconds). */
         public final long startedAtMs;
         /** Set to {@code true} by the background job when preparation completed. */
@@ -137,9 +164,74 @@ public final class LaunchLifecycleUtils
          */
         public final AtomicBoolean started = new AtomicBoolean(false);
 
+        /**
+         * The job carrying this preparation, once it has been handed over; {@code null} until
+         * then. Read only through {@link #isCarrierAlive()} — its liveness is what tells a
+         * waiting entry apart from an abandoned one.
+         */
+        private volatile Job carrier;
+
         public PrepInFlight(long startedAtMs)
         {
             this.startedAtMs = startedAtMs;
+        }
+
+        /**
+         * Hands over the job that carries this preparation, so the entry can observe whether the
+         * work is still going to happen.
+         *
+         * <p>Called from a {@code finally} around {@code schedule()}: a schedule that THREW must
+         * still hand the job over, because that entry is exactly the kind nothing will ever
+         * complete, and it has to be replaceable.
+         *
+         * @param scheduledJob the job that was (or was meant to be) scheduled
+         */
+        public void trackScheduledJob(Job scheduledJob)
+        {
+            this.carrier = scheduledJob;
+        }
+
+        /**
+         * Whether this entry has been told which job carries it.
+         *
+         * <p>Observability for the hand-over itself, which is otherwise invisible: an entry
+         * whose job always completes behaves identically with and without it, so only the
+         * abandoned case — the one that made entries immortal — depends on it. Something has to
+         * be able to assert the hand-over happened at all, or deleting it would go unnoticed.
+         *
+         * @return {@code true} once {@link #trackScheduledJob(Job)} has been called
+         */
+        public boolean hasTrackedCarrier()
+        {
+            return carrier != null;
+        }
+
+        /**
+         * Whether the work behind this entry is still going to happen.
+         *
+         * <p>A job that is queued, sleeping or running is alive. A job that has left the
+         * scheduler is not — whether it ran to completion, was cancelled before it started, or
+         * never got scheduled at all.
+         */
+        private boolean isCarrierAlive()
+        {
+            Job job = carrier;
+            if (job == null)
+            {
+                // Not handed over yet: either nobody has scheduled it (the creating thread is
+                // about to) or we are inside the window between schedule() and the hand-over.
+                // Both mean the work is about to run — unless the body already finished, in
+                // which case the entry is a completed one and ages out below.
+                //
+                // This is the ONE state the carrier cannot report on, so it is the one place a
+                // clock is still needed: the hand-over follows the scheduling CAS within
+                // microseconds, so an entry that STILL has no carrier a whole expiry window
+                // later never got one — the thread that claimed the scheduling died before it
+                // could build the job. Without this bound that entry would be immortal exactly
+                // like the cancelled-while-queued one, just by a rarer route.
+                return !done && System.currentTimeMillis() - startedAtMs <= INFLIGHT_EXPIRY_MS;
+            }
+            return job.getState() != Job.NONE;
         }
 
         /** Elapsed whole seconds since the job started. */
@@ -148,10 +240,37 @@ public final class LaunchLifecycleUtils
             return (System.currentTimeMillis() - startedAtMs) / 1000L;
         }
 
-        /** {@code true} when the entry is older than {@link #INFLIGHT_EXPIRY_MS}. */
+        /**
+         * {@code true} when this entry may be discarded and replaced by a fresh preparation.
+         *
+         * <p>ONE rule: an entry is replaceable once <b>nothing more will come of waiting on
+         * it</b>. Whether that is so is read off the carrying job, not guessed from the clock:
+         * <ul>
+         *   <li>the job is queued, sleeping or running — the work is in flight, so waiting is
+         *       the correct answer and replacing it would only stack a second preparation
+         *       behind the per-infobase monitor the first one holds (#357);</li>
+         *   <li>the job has left the scheduler without completing — cancelled while it was
+         *       still queued, or never scheduled because {@code schedule()} threw — so the
+         *       entry will NEVER complete and is replaceable at once;</li>
+         *   <li>the job has left the scheduler having completed — the result is worth keeping
+         *       for {@link #INFLIGHT_EXPIRY_MS} so a returning caller can still collect it,
+         *       and after that the entry ages out.</li>
+         * </ul>
+         *
+         * <p>Age alone was wrong because it evicted honest long-running preparations. Requiring
+         * {@code done} was wrong the other way: a job cancelled before it ran has neither
+         * {@code done} nor a live carrier, so it fell between the two and became IMMORTAL —
+         * every later call for that project and application saw "already started", scheduled no
+         * replacement, and returned Pending forever. The carrier's own state is the single
+         * signal that separates all three cases.
+         */
         public boolean isExpired()
         {
-            return System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
+            if (isCarrierAlive())
+            {
+                return false;
+            }
+            return !done || System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
         }
     }
 
@@ -1904,6 +2023,39 @@ public final class LaunchLifecycleUtils
             IProject project, String applicationId, IApplicationManager appManager,
             int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy)
     {
+        return prepareForFreshLaunch(launchManager, project, applicationId, appManager,
+            terminateTimeoutSeconds, updateScope, policy, phase -> {
+                // No sink: the caller does not report progress.
+            });
+    }
+
+    /**
+     * Same contract as
+     * {@link #prepareForFreshLaunch(ILaunchManager, IProject, String, IApplicationManager, int, String, ExternalInfobaseChangesPolicy)},
+     * additionally publishing the stage it is entering to {@code phaseSink}.
+     *
+     * <p>The prep runs for minutes on a real configuration while the caller can only hold the
+     * MCP transport open for seconds, so "what is it doing right now?" is the one piece of
+     * information a polling caller can act on. The sink is therefore called on ENTRY to each
+     * stage ({@link #PHASE_TERMINATE} → {@link #PHASE_RECOMPUTE} → {@link #PHASE_DB_UPDATE}),
+     * never after one completes: a label published on exit describes work that is already
+     * finished and would have the reader waiting on the wrong thing.
+     *
+     * @param launchManager the debug-platform launch manager
+     * @param project the launch (configuration) project
+     * @param applicationId the application the launch targets
+     * @param appManager the EDT application manager
+     * @param terminateTimeoutSeconds how long to wait for each swept launch to die
+     * @param updateScope the caller's update scope (see {@link #resolveUpdateScope})
+     * @param policy how to answer the external-changes conflict modal (may be {@code null})
+     * @param phaseSink receives the label of each stage as it is entered; never {@code null}
+     * @return the prep result
+     */
+    public static PreLaunchResult prepareForFreshLaunch(ILaunchManager launchManager, // NOSONAR pass-through signature; the sink is the 8th value, not a new concern
+            IProject project, String applicationId, IApplicationManager appManager,
+            int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
+            Consumer<String> phaseSink)
+    {
         if (launchManager == null)
         {
             return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
@@ -1935,6 +2087,7 @@ public final class LaunchLifecycleUtils
             // permanently block future auto-chains.
             OWNED_LAUNCHES.removeIf(ILaunch::isTerminated);
 
+            phaseSink.accept(PHASE_TERMINATE);
             TerminationOutcome outcome = new TerminationOutcome();
             terminateMatchingLiveLaunches(launchManager, project, applicationId,
                 terminateTimeoutSeconds, outcome);
@@ -1950,7 +2103,7 @@ public final class LaunchLifecycleUtils
             }
 
             return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope, policy,
-                outcome.terminated);
+                outcome.terminated, phaseSink);
         }
     }
 
@@ -2081,10 +2234,11 @@ public final class LaunchLifecycleUtils
      * the inline tail produced.
      *
      * @param terminated the swept-launch count accumulated by the terminate passes
+     * @param phaseSink receives the label of each stage as it is entered
      */
-    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId,
+    private static PreLaunchResult finalizeFreshLaunchPrep(IProject project, String applicationId, // NOSONAR pass-through signature; the sink is the 7th value, not a new concern
             IApplicationManager appManager, String updateScope, ExternalInfobaseChangesPolicy policy,
-            int terminated)
+            int terminated, Consumer<String> phaseSink)
     {
         // Selectively force a derived-data recompute of projects that have
         // had file changes since the last successful prepare (dirty projects).
@@ -2101,6 +2255,7 @@ public final class LaunchLifecycleUtils
         // markPrepared on the success paths — a change arriving DURING the
         // recompute bumps the generation counter; the conditional remove in
         // markPrepared then fails and the project stays dirty (stale-.cfe fix).
+        phaseSink.accept(PHASE_RECOMPUTE);
         List<IProject> scopeProjects = resolveUpdateScope(project, updateScope);
         PrepareSnapshot prepareSnapshot = recomputeAndSettleIfDirty(scopeProjects);
 
@@ -2150,6 +2305,7 @@ public final class LaunchLifecycleUtils
         // The blocking-modal arming lives in performUpdateAndAwaitApplied - the single point
         // where the update is actually issued - so every caller of the pre-launch update is
         // covered, not just this one; see the comment there.
+        phaseSink.accept(PHASE_DB_UPDATE);
         Optional<String> updateErr =
             updateApplicationIfNeeded(project, applicationId, appManager, true, policy);
         if (updateErr.isPresent())

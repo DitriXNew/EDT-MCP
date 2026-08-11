@@ -1924,12 +1924,10 @@ public final class FormElementWriter
         setBooleanFeature(attr, FEATURE_MAIN, true);
         setBooleanFeature(attr, FEATURE_SAVED_DATA, true);
         // The designer's predefined Object attribute also carries view/edit = common("use"), so the
-        // generated attribute is byte-identical to a designer-built object form (issue #208). Both are
-        // AdjustableBoolean references, so reuse the existing guarded helper (it creates the reference
-        // type, sets common = true, and guards isAbstract()/isMany() - the abstract guard matters since
-        // the declared AdjustableBoolean type may be abstract on the live stand).
-        setAdjustableBooleanFeature(attr, FEATURE_VIEW);
-        setAdjustableBooleanFeature(attr, FEATURE_EDIT);
+        // generated attribute is byte-identical to a designer-built object form (issue #208). These are
+        // the same AbstractFormAttribute defaults every other new attribute needs, so they come from the
+        // one shared helper rather than a copy that can drift out of step (issue #382).
+        applyFormAttributeDefaults(attr);
         addToList(content, FEATURE_ATTRIBUTES, attr);
     }
 
@@ -2263,6 +2261,7 @@ public final class FormElementWriter
         setStringFeature(attr, FEATURE_NAME, name);
         setIntFeature(attr, FEATURE_ID, nextAttributeId(formModel));
         setDefaultValueType(attr);
+        applyFormAttributeDefaults(attr);
         applyTitle(attr, titleLanguage, title);
         addToList(formModel, FEATURE_ATTRIBUTES, attr);
         recordKind(attr, createdKind);
@@ -2317,6 +2316,7 @@ public final class FormElementWriter
         setStringFeature(column, FEATURE_NAME, name);
         setIntFeature(column, FEATURE_ID, nextAttributeId(formModel));
         setDefaultValueType(column);
+        applyFormAttributeDefaults(column);
         applyTitle(column, titleLanguage, title);
         addToList(owner, FEATURE_COLUMNS, column);
         recordKind(column, createdKind);
@@ -5263,6 +5263,20 @@ public final class FormElementWriter
     }
 
     /**
+     * Finds a COLUMN of a collection-typed form attribute by programmatic name, or {@code null}.
+     * A column lives in its owner's own {@code columns} namespace - not the form-wide item tree - so
+     * a name check for a column has to be made here rather than against the items (issue #381).
+     *
+     * @param attribute the OWNING form attribute, tx-bound
+     * @param name the column's programmatic name
+     * @return the column, or {@code null} when the attribute has no such column
+     */
+    public static EObject findColumn(EObject attribute, String name)
+    {
+        return findByName(referenceList(attribute, FEATURE_COLUMNS), name);
+    }
+
+    /**
      * Resolves a form member EObject from a parsed member ref on the tx-bound form model: ATTRIBUTE
      * &rarr; the attributes list, COMMAND &rarr; the formCommands list, anything else (Field / Button /
      * Group / Decoration / Table / ...) &rarr; the items tree by name. Returns {@code null} if no such
@@ -6140,9 +6154,9 @@ public final class FormElementWriter
 
     /**
      * Fills a contained {@code AdjustableBoolean} feature ({@code userVisible} on a visual item,
-     * {@code use} on a command, {@code view} / {@code edit} on the main object attribute) with a fresh
-     * instance whose {@code common} flag is set - what the platform factory's
-     * {@code newAdjustableBoolean} produces. A no-op when the feature is absent.
+     * {@code use} on a command, {@code view} / {@code edit} on a form attribute) with an instance whose
+     * {@code common} flag is set - what the platform factory's {@code newAdjustableBoolean} produces.
+     * A no-op when the feature is absent.
      * <p>
      * When the declared reference type is ABSTRACT (the {@code AdjustableBoolean} EReference type may be
      * abstract on a live stand - the EFactory cannot instantiate it directly), a CONCRETE instantiable
@@ -6153,24 +6167,75 @@ public final class FormElementWriter
      */
     private static void setAdjustableBooleanFeature(EObject owner, String featureName)
     {
+        setAdjustableBooleanFeature(owner, featureName, true);
+    }
+
+    /**
+     * The {@link #setAdjustableBooleanFeature(EObject, String)} variant that writes an explicit
+     * {@code common} value, so {@code modify_metadata} can turn an {@code AdjustableBoolean} feature
+     * OFF as well as on (issue #382).
+     * <p>
+     * An ALREADY PRESENT instance is reused and only its {@code common} flag is rewritten. Replacing it
+     * with a fresh one would silently drop the sibling {@code for} list - the per-role / per-functional
+     * option overrides the designer writes next to {@code common} - turning a flag edit into a quiet
+     * loss of adjustment data. A new instance is created only when the feature is genuinely unset.
+     *
+     * @param owner the object carrying the feature
+     * @param featureName the {@code AdjustableBoolean} feature's name
+     * @param common the value for the nested {@code common} flag
+     * @return {@code true} when the feature was written, {@code false} when it is absent or its type
+     *     cannot be instantiated (both left untouched, unattended-safe)
+     */
+    public static boolean setAdjustableBooleanFeature(EObject owner, String featureName, boolean common)
+    {
         EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
         if (!(feature instanceof EReference) || feature.isMany())
         {
-            return;
+            return false;
+        }
+        Object existing = owner.eGet(feature);
+        if (existing instanceof EObject)
+        {
+            // Reuse: keep the sibling 'for' overrides, rewrite only the common flag.
+            setBooleanFeature((EObject)existing, FEATURE_COMMON, common);
+            return true;
         }
         EClass declared = ((EReference)feature).getEReferenceType();
         if (declared == null || declared.getEPackage() == null)
         {
-            return;
+            return false;
         }
         EClass concrete = declared.isAbstract() ? concreteSubtype(declared) : declared;
         if (concrete == null)
         {
-            return;
+            return false;
         }
         EObject adjustable = concrete.getEPackage().getEFactoryInstance().create(concrete);
-        setBooleanFeature(adjustable, FEATURE_COMMON, true);
+        setBooleanFeature(adjustable, FEATURE_COMMON, common);
         owner.eSet(feature, adjustable);
+        return true;
+    }
+
+    /**
+     * Applies the designer's {@code AbstractFormAttribute} presentation defaults - {@code view} and
+     * {@code edit}, each an {@code AdjustableBoolean} with {@code common = true} - to a newly created
+     * form attribute or attribute column.
+     * <p>
+     * The platform REQUIRES these blocks: an attribute written without them makes the configuration
+     * unloadable, the XDTO reader rejecting the generated {@code Form.xml} (issue #382). Every
+     * GUI-created attribute carries them, so a new one must too.
+     * <p>
+     * Both features are declared on {@code AbstractFormAttribute}, the common supertype of
+     * {@code FormAttribute} and {@code FormAttributeColumn}, which is why this single helper serves the
+     * attribute, the column and the seeded main object attribute alike - one point of judgment rather
+     * than three call sites free to drift apart.
+     *
+     * @param attribute the freshly created form attribute or attribute column
+     */
+    private static void applyFormAttributeDefaults(EObject attribute)
+    {
+        setAdjustableBooleanFeature(attribute, FEATURE_VIEW);
+        setAdjustableBooleanFeature(attribute, FEATURE_EDIT);
     }
 
     /**

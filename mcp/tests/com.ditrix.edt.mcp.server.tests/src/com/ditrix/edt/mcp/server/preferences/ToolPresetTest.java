@@ -121,6 +121,26 @@ public class ToolPresetTest
         assertNull("CUSTOM preset should have null disabled tools", ToolPreset.CUSTOM.getDisabledTools());
     }
 
+    /**
+     * apply_quick_fix mutates BSL source (it's the headless "Quick Fix" action), even though it sits
+     * in the PROBLEMS group alongside read-only tools like get_project_errors. Both read-only-ish
+     * presets must disable it explicitly, or picking them would still leave source mutation callable.
+     */
+    @Test
+    public void testAnalysisOnlyAndCodeReviewDisableApplyQuickFix()
+    {
+        assertTrue("ANALYSIS_ONLY should disable apply_quick_fix",
+            ToolPreset.ANALYSIS_ONLY.getDisabledTools().contains("apply_quick_fix"));
+        assertTrue("CODE_REVIEW should disable apply_quick_fix",
+            ToolPreset.CODE_REVIEW.getDisabledTools().contains("apply_quick_fix"));
+
+        // Sibling read-only tools in the same PROBLEMS group must stay enabled.
+        assertFalse("ANALYSIS_ONLY should not disable get_project_errors",
+            ToolPreset.ANALYSIS_ONLY.getDisabledTools().contains("get_project_errors"));
+        assertFalse("CODE_REVIEW should not disable get_project_errors",
+            ToolPreset.CODE_REVIEW.getDisabledTools().contains("get_project_errors"));
+    }
+
     // === Preset matching ===
 
     @Test

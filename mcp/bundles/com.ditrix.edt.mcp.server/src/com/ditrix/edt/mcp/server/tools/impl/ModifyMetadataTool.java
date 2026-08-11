@@ -5426,6 +5426,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareManyReference(ctx.config, name, prop, info, out);
             case STYLE_VALUE:
                 return prepareStyleValue(name, prop, target, info, out);
+            case ADJUSTABLE_BOOLEAN:
+                return prepareAdjustableBoolean(name, value, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -5521,6 +5523,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'. Use true or false.").toJson(); //$NON-NLS-1$
         }
         out.add(PreparedChange.scalar(info.feature, b));
+        return null;
+    }
+
+    /**
+     * Validates an {@code ADJUSTABLE_BOOLEAN} property value and, on success, appends the prepared
+     * change to {@code out}. The wire value is a plain boolean and addresses the nested {@code common}
+     * flag; the sibling {@code for} overrides are preserved by the applier (issue #382).
+     *
+     * @param name the property name (for the error text)
+     * @param value the raw wire value
+     * @param info the introspected property
+     * @param out the prepared-change sink
+     * @return a JSON error on a non-boolean value, or {@code null} on success
+     */
+    private static String prepareAdjustableBoolean(String name, String value, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        Boolean b = parseBoolean(value);
+        if (b == null)
+        {
+            return ToolResult.error("'" + value + "' is not a valid boolean for '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use true or false.").toJson(); //$NON-NLS-1$
+        }
+        out.add(PreparedChange.adjustableBoolean(info.feature, b.booleanValue()));
         return null;
     }
 
@@ -5898,7 +5924,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     private static final class PreparedChange
     {
-        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE }
+        private enum Kind { SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, STYLE_VALUE, ADJUSTABLE_BOOLEAN }
 
         private final EStructuralFeature feature;
         private final Kind kind;
@@ -5933,6 +5959,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange scalar(EStructuralFeature feature, Object value)
         {
             return new PreparedChange(feature, Kind.SCALAR, value, null, null, null, null, false);
+        }
+
+        /**
+         * An {@code ADJUSTABLE_BOOLEAN} change: the boolean addresses the CONTAINED object's
+         * {@code common} flag, so the applier must NOT {@code eSet} the feature itself - that would
+         * replace the contained object and silently discard its {@code for} overrides (issue #382).
+         */
+        static PreparedChange adjustableBoolean(EStructuralFeature feature, boolean common)
+        {
+            return new PreparedChange(feature, Kind.ADJUSTABLE_BOOLEAN, Boolean.valueOf(common),
+                null, null, null, null, false);
         }
 
         /**
@@ -6048,6 +6085,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     target.eSet(feature, scalarValue);
                     return;
                 }
+                case ADJUSTABLE_BOOLEAN:
+                    // Reuse the contained object and rewrite only `common`, so the sibling `for`
+                    // overrides survive; create one only when the slot is genuinely empty. A plain
+                    // eSet here would replace the object and lose them (issue #382).
+                    if (!FormElementWriter.setAdjustableBooleanFeature(target, feature.getName(),
+                        Boolean.TRUE.equals(scalarValue)))
+                    {
+                        throw new IllegalStateException("Cannot set '" + feature.getName() //$NON-NLS-1$
+                            + "': its AdjustableBoolean type cannot be instantiated"); //$NON-NLS-1$
+                    }
+                    return;
                 case SCALAR:
                 default:
                     target.eSet(feature, scalarValue);

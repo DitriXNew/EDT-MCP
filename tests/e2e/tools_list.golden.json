@@ -67,6 +67,76 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Apply EDT's official quick-fix (auto-fix) to one validation marker — the headless counterpart of the 'Quick Fix' action in the problems view. Address the marker by the locator get_project_errors prints: its Check code (+ Module path + Line to narrow); its 'Fix registered' column flags rows whose CHECK TYPE has one (not a guarantee for that exact marker - this tool reports when none is applicable). When the locator matches several markers (or the fix has several variants) the error lists them, each with its location, and you re-call with index / variant. Full parameters and examples: call get_tool_guide('apply_quick_fix').",
+    "inputSchema": {
+      "properties": {
+        "checkId": {
+          "description": "Check id of the marker to fix (required): the 'Check code' from get_project_errors (symbolic id like 'doc-comment-parameter-section', or the short UID). Matched by EXACT case-insensitive equality against either - not a substring, since this mutates the model and a loose match could silently pick the wrong check.",
+          "type": "string"
+        },
+        "index": {
+          "description": "1-based selector when the locator still matches several markers (the error lists them). Omit for a single match. If supplied, it must be >= 1 (0 or negative is rejected, never silently treated as 'omitted') and is validated strictly against the CURRENT match count and rejected when out of range - even against a single match - so a stale index from an earlier response is never silently applied to the wrong marker.",
+          "type": "integer"
+        },
+        "line": {
+          "description": "Narrow to the 1-based 'Line' from get_project_errors. Optional; if supplied it must be >= 1 - 0 or negative is rejected rather than treated as 'omitted'.",
+          "type": "integer"
+        },
+        "modulePath": {
+          "description": "Narrow to a BSL module: the 'Module path' from get_project_errors (e.g. 'CommonModules/MyModule/Module.bsl'). Optional but recommended when the same check fires in several modules.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "EDT project name the marker belongs to (required).",
+          "type": "string"
+        },
+        "variant": {
+          "description": "1-based fix-variant index, required only when the chosen marker's fix exposes more than one variant (the error then lists them). If supplied, it must be >= 1 (0 or negative is rejected, never silently treated as 'omitted') and is validated strictly against the CURRENT variant count and rejected when out of range - even against a single variant - so a stale selector is never silently applied to the wrong fix.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "projectName",
+        "checkId"
+      ],
+      "type": "object"
+    },
+    "name": "apply_quick_fix",
+    "outputSchema": {
+      "properties": {
+        "appliedVariant": {
+          "description": "Description of the fix variant that was applied.",
+          "type": "string"
+        },
+        "checkId": {
+          "description": "The marker's check id.",
+          "type": "string"
+        },
+        "location": {
+          "description": "Where the fix was applied (module:line or object).",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable summary.",
+          "type": "string"
+        },
+        "success": {
+          "description": "True when the fix was applied.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL of them when objectName is omitted. Requires an associated infobase + a resolvable 1C runtime (like update_database): if missing, set it up with create_infobase / set_infobase_credentials. Full parameters and examples: call get_tool_guide('build_external_objects').",
     "inputSchema": {
       "properties": {
@@ -2634,7 +2704,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
+    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). A 'Fix registered' column flags rows whose CHECK TYPE has an official EDT auto-fix registered (not a promise this exact marker will produce an applicable fix - apply_quick_fix may still report none available for it); pass that row's Check code (+ Module path + Line) to apply_quick_fix to try applying it. Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
     "inputSchema": {
       "properties": {
         "checkId": {
@@ -3635,7 +3705,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm for an indexed preview of every change point, review it, then call again with confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object').",
+    "description": "Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column), cascading the change across the references EDT resolves for it in BSL code, forms, and other metadata. Use the two-phase workflow: call without confirm for an indexed preview of every change point, review it, then call again with confirm=true to apply. Full parameters and examples: call get_tool_guide('rename_metadata_object').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -3651,11 +3721,11 @@
           "type": "integer"
         },
         "newName": {
-          "description": "New programmatic Name for the object.",
+          "description": "New programmatic Name for the rename target (the object, member or form element addressed by objectFqn).",
           "type": "string"
         },
         "objectFqn": {
-          "description": "FQN of the object to rename, e.g. 'Catalog.Products' or 'Document.SalesOrder.Attribute.Amount' (Russian type names also accepted).",
+          "description": "FQN of the rename target: an object ('Catalog.Products'), a member ('Document.SalesOrder.Attribute.Amount'), or a managed-form element ('Catalog.Products.Form.ItemForm.Field.Price', 'CommonForm.Settings.Group.Main', 'Catalog.Products.Form.ItemForm.Attribute.Rows.Column.Price'). Russian type and kind tokens are also accepted.",
           "type": "string"
         },
         "projectName": {
@@ -3896,7 +3966,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (call again with identical arguments to keep waiting; the launch is not terminated). Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once so you can call wait_for_break. The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all. If recompute+update exceeds 25s the tool returns **Pending** immediately — call again with the same arguments; preparation continues in the background. Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
+    "description": "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. The whole call is bounded by `timeout` (default and maximum 45s, larger values are clamped) so it always answers before an MCP transport cuts it: it returns the report, an error, or **Pending** naming the current phase (resolve / prep:terminate / prep:recompute / prep:db-update / spawn / run) — call again with identical arguments to keep waiting; nothing is terminated. A phase that stops changing is the server's only signal — it means either a legitimately long stage or one blocked on a modal dialog in EDT, and the tool cannot tell them apart: look at EDT before waiting indefinitely. Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once so you can call wait_for_break. The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all. Requires an existing runtime-client launch configuration and the YAXUnit extension installed in the infobase. Full parameters and examples: call get_tool_guide('run_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3904,7 +3974,7 @@
           "type": "string"
         },
         "debug": {
-          "description": "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints fire, return immediately and call wait_for_break next (ignores timeout).",
+          "description": "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints fire, return a launch handle as soon as it is spawned and call wait_for_break next. It does not POLL, so `timeout` is not a waiting window here — but the call is still bounded by it: a pre-launch preparation longer than the window returns Pending instead of the handle, and the next identical call picks up where it left off.",
           "type": "boolean"
         },
         "extensions": {
@@ -3941,11 +4011,11 @@
           "type": "array"
         },
         "timeout": {
-          "description": "Polling window in seconds (default: 60); on expiry returns Pending.",
+          "description": "Wall-clock window in seconds for the WHOLE call, not just the polling step (default and maximum 45; a larger value is clamped to it, because an MCP transport cuts the call at around 60s and a longer window would return a bare transport error instead of an answer). The call returns WITHIN this window: at least 80% of it is available to the work, the remainder is reserved so the answer can be assembled rather than cut off. On expiry the tool returns Pending with the current phase — or, if the work never started at all, an explicit error saying so (that one case can take up to half a second longer, while the server establishes the work never began); call again with the same arguments to keep waiting.",
           "type": "integer"
         },
         "updateBeforeLaunch": {
-          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale). false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
+          "description": "Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale), auto-answering the platform's update dialogs. This makes a blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's own windows still waits for a human, and the tool reports it as a Pending whose phase stops changing. false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag.",
           "type": "boolean"
         },
         "updateScope": {

@@ -965,12 +965,114 @@ public class PreLaunchChangeTrackerTest
     }
 
     @Test
-    public void testPrepInFlightExpiredAfterExpiryTime()
+    public void testPrepInFlightCancelledBeforeItRanIsReplaceable() throws Exception
+    {
+        // The regression this closes: requiring `done` to expire an entry left a job that was
+        // cancelled while still QUEUED with neither a live carrier nor `done`. It fell between
+        // the two and became IMMORTAL — every later call for that project+application saw
+        // "already started", scheduled no replacement, and returned Pending forever.
+        //
+        // Driven deterministically, no threads: a job scheduled far in the future is in the
+        // scheduler (sleeping) and has definitely not entered its body; cancelling it takes it
+        // off the scheduler in exactly the state the bug is about.
+        org.eclipse.core.runtime.jobs.Job queued =
+            new org.eclipse.core.runtime.jobs.Job("prep-cancelled-while-queued") //$NON-NLS-1$
+            {
+                @Override
+                protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+                {
+                    return org.eclipse.core.runtime.Status.OK_STATUS;
+                }
+            };
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        try
+        {
+            queued.schedule(10 * 60 * 1000L);
+            entry.trackScheduledJob(queued);
+
+            assertFalse("a job still in the scheduler must NOT be replaced — that is the honest "
+                + "long-running preparation this expiry was narrowed for", entry.isExpired());
+            assertFalse("the body never ran, so the entry cannot be done", entry.done);
+
+            queued.cancel();
+
+            assertTrue("a job that left the scheduler without ever entering its body must be "
+                + "replaceable at once — waiting on it would be waiting forever",
+                entry.isExpired());
+        }
+        finally
+        {
+            queued.cancel();
+        }
+    }
+
+    @Test
+    public void testPrepInFlightThatNeverGotACarrierIsNotImmortal()
+    {
+        // The rarer route to the same immortality: the thread that won the scheduling CAS dies
+        // before it can build and hand over the job, so the entry has no carrier, is not done,
+        // and nothing will ever change either. The hand-over follows the CAS within
+        // microseconds, so still having no carrier a whole expiry window later means it never
+        // got one — and the entry must become replaceable rather than block the key forever.
+        long veryOld = System.currentTimeMillis() - (11 * 60 * 1000L);
+        LaunchLifecycleUtils.PrepInFlight orphaned =
+            new LaunchLifecycleUtils.PrepInFlight(veryOld);
+        orphaned.started.set(true);
+
+        assertFalse("no carrier was ever handed over", orphaned.hasTrackedCarrier());
+        assertTrue("an entry that never got a carrier must not block its key forever",
+            orphaned.isExpired());
+
+        // ...while the hand-over window itself is still protected: a FRESH carrier-less entry is
+        // one whose job is about to be scheduled, and evicting it would duplicate the work.
+        LaunchLifecycleUtils.PrepInFlight justCreated =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        justCreated.started.set(true);
+        assertFalse("a brand-new entry is inside the hand-over window and must be left alone",
+            justCreated.isExpired());
+    }
+
+    @Test
+    public void testPrepInFlightExpiredAfterExpiryTimeOnceItHasFinished()
     {
         // Seed with a start time well in the past (> INFLIGHT_EXPIRY_MS = 10 min).
         long veryOld = System.currentTimeMillis() - (11 * 60 * 1000L);
         LaunchLifecycleUtils.PrepInFlight entry = new LaunchLifecycleUtils.PrepInFlight(veryOld);
-        assertTrue("an entry older than 10 min must be expired", entry.isExpired());
+
+        // #357: age alone no longer expires an entry. A preparation that is STILL RUNNING must
+        // survive — replacing it would only queue a second job behind the per-infobase monitor
+        // the first one holds (a caller polling a legitimately long recompute would stack up one
+        // more on every retry). "Still running" is modelled the way production observes it: by a
+        // carrier that is in the scheduler, NOT by the absence of one.
+        org.eclipse.core.runtime.jobs.Job live =
+            new org.eclipse.core.runtime.jobs.Job("still-running-preparation") //$NON-NLS-1$
+            {
+                @Override
+                protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+                {
+                    return org.eclipse.core.runtime.Status.OK_STATUS;
+                }
+            };
+        try
+        {
+            live.schedule(10 * 60 * 1000L);
+            entry.trackScheduledJob(live);
+            assertFalse("an old but still-running preparation must NOT be replaced",
+                entry.isExpired());
+
+            // Finished: the job has left the scheduler and the body completed.
+            live.cancel();
+            entry.done = true;
+            assertTrue("an entry older than 10 min that has FINISHED must be expired",
+                entry.isExpired());
+        }
+        finally
+        {
+            live.cancel();
+        }
     }
 
     @Test

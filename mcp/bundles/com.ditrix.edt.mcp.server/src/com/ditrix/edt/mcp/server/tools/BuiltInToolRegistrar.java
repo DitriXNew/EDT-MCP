@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateGitBranchTool;
@@ -137,6 +138,7 @@ public final class BuiltInToolRegistrar
         registry.register(new DeleteProjectTool());
         registry.register(new CreateProjectTool());
         registry.register(new GetProblemSummaryTool());
+        registry.register(new ApplyQuickFixTool());
         registry.register(new GetProjectErrorsTool());
         registry.register(new GetMarkersTool());
         registry.register(new GetEventLogTool());

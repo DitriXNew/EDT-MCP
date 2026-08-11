@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
@@ -39,6 +40,8 @@ import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.wiring.ServiceProperties;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
+import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.google.inject.Injector;
 
@@ -59,6 +62,8 @@ public class EdtServices
     private ServiceTracker<IMarkerManager, IMarkerManager> markerManagerTracker;
     private ServiceTracker<ICheckScheduler, ICheckScheduler> checkSchedulerTracker;
     private ServiceTracker<ICheckRepository, ICheckRepository> checkRepositoryTracker;
+    private ServiceTracker<IFixManager, IFixManager> fixManagerTracker;
+    private ServiceTracker<IFixRepository, IFixRepository> fixRepositoryTracker;
     private ServiceTracker<IBmModelManager, IBmModelManager> bmModelManagerTracker;
     private ServiceTracker<IDerivedDataManagerProvider, IDerivedDataManagerProvider> derivedDataManagerProviderTracker;
     private ServiceTracker<IServicesOrchestrator, IServicesOrchestrator> servicesOrchestratorTracker;
@@ -68,6 +73,7 @@ public class EdtServices
     private ServiceTracker<IInfobaseAssociationManager, IInfobaseAssociationManager> infobaseAssociationManagerTracker;
     private ServiceTracker<INavigatorContentProviderStateProvider, INavigatorContentProviderStateProvider> navigatorStateProviderTracker;
     private ServiceTracker<IMdRefactoringService, IMdRefactoringService> mdRefactoringServiceTracker;
+    private ServiceTracker<IFormRefactoringService, IFormRefactoringService> formRefactoringServiceTracker;
     private ServiceTracker<IPresentationService, IPresentationService> presentationServiceTracker;
     private ServiceTracker<ITopObjectFqnGenerator, ITopObjectFqnGenerator> topObjectFqnGeneratorTracker;
     private ServiceTracker<IExtensionProjectManager, IExtensionProjectManager> extensionProjectManagerTracker;
@@ -145,6 +151,12 @@ public class EdtServices
         checkRepositoryTracker = new ServiceTracker<>(context, ICheckRepository.class, null);
         checkRepositoryTracker.open();
 
+        fixManagerTracker = new ServiceTracker<>(context, IFixManager.class, null);
+        fixManagerTracker.open();
+
+        fixRepositoryTracker = new ServiceTracker<>(context, IFixRepository.class, null);
+        fixRepositoryTracker.open();
+
         bmModelManagerTracker = new ServiceTracker<>(context, IBmModelManager.class, null);
         bmModelManagerTracker.open();
 
@@ -172,6 +184,9 @@ public class EdtServices
 
         mdRefactoringServiceTracker = new ServiceTracker<>(context, IMdRefactoringService.class, null);
         mdRefactoringServiceTracker.open();
+
+        formRefactoringServiceTracker = new ServiceTracker<>(context, IFormRefactoringService.class, null);
+        formRefactoringServiceTracker.open();
 
         presentationServiceTracker = new ServiceTracker<>(context, IPresentationService.class, null);
         presentationServiceTracker.open();
@@ -251,6 +266,8 @@ public class EdtServices
         markerManagerTracker = closeTracker(markerManagerTracker);
         checkSchedulerTracker = closeTracker(checkSchedulerTracker);
         checkRepositoryTracker = closeTracker(checkRepositoryTracker);
+        fixManagerTracker = closeTracker(fixManagerTracker);
+        fixRepositoryTracker = closeTracker(fixRepositoryTracker);
         bmModelManagerTracker = closeTracker(bmModelManagerTracker);
         derivedDataManagerProviderTracker = closeTracker(derivedDataManagerProviderTracker);
         servicesOrchestratorTracker = closeTracker(servicesOrchestratorTracker);
@@ -260,6 +277,7 @@ public class EdtServices
         infobaseAssociationManagerTracker = closeTracker(infobaseAssociationManagerTracker);
         navigatorStateProviderTracker = closeTracker(navigatorStateProviderTracker);
         mdRefactoringServiceTracker = closeTracker(mdRefactoringServiceTracker);
+        formRefactoringServiceTracker = closeTracker(formRefactoringServiceTracker);
         presentationServiceTracker = closeTracker(presentationServiceTracker);
         topObjectFqnGeneratorTracker = closeTracker(topObjectFqnGeneratorTracker);
         extensionProjectManagerTracker = closeTracker(extensionProjectManagerTracker);
@@ -379,6 +397,38 @@ public class EdtServices
             return null;
         }
         return checkRepositoryTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IFixManager} service that drives EDT's official quick-fixes for a
+     * validation marker (prepare -&gt; list variants -&gt; select -&gt; execute -&gt; finish).
+     * Used by apply_quick_fix.
+     *
+     * @return fix manager or null if not available
+     */
+    public IFixManager getFixManager()
+    {
+        if (fixManagerTracker == null)
+        {
+            return null;
+        }
+        return fixManagerTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IFixRepository} service used to test whether a check has any
+     * registered quick-fix ({@code hasFixes(CheckUid)}). Used by get_project_errors to flag
+     * fixable markers and by apply_quick_fix.
+     *
+     * @return fix repository or null if not available
+     */
+    public IFixRepository getFixRepository()
+    {
+        if (fixRepositoryTracker == null)
+        {
+            return null;
+        }
+        return fixRepositoryTracker.getService();
     }
 
     /**
@@ -514,6 +564,43 @@ public class EdtServices
             return null;
         }
         return mdRefactoringServiceTracker.getService();
+    }
+
+    /**
+     * Returns the {@link IFormRefactoringService} that renames / deletes FORM-model elements - the
+     * twin of {@link #getMdRefactoringService()} for everything that lives on a form's content model
+     * (a form attribute, an attribute column, a field, a button, a group, a table, a form command)
+     * rather than in the mdclass tree. It is EDT's own refactoring, so it carries the cascade the
+     * designer's rename carries: the form's internal references and the {@code Items.<Name>} /
+     * {@code Элементы.<Имя>} occurrences in the form module (issue #381).
+     * <p>
+     * Like {@link #getFormModelObjectFactory()} this must survive a COLD form bundle: the bundle is
+     * lazily activated and registers this service in {@code FormPlugin.start()}, so an empty tracker
+     * is not proof of absence - the bundle's activation is tripped and the tracker re-read before
+     * giving up. Without that, the first rename after a fresh EDT start would fail spuriously.
+     *
+     * @return the form refactoring service, or {@code null} if unavailable
+     */
+    public IFormRefactoringService getFormRefactoringService()
+    {
+        if (formRefactoringServiceTracker == null)
+        {
+            return null;
+        }
+        IFormRefactoringService service = formRefactoringServiceTracker.getService();
+        if (service == null)
+        {
+            Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
+            if (formBundle == null)
+            {
+                Activator.logError("form bundle '" + FORM_BUNDLE_ID //$NON-NLS-1$
+                    + "' not found in the running platform", null); //$NON-NLS-1$
+                return null;
+            }
+            ensureFormBundleActive(formBundle);
+            service = formRefactoringServiceTracker.getService();
+        }
+        return service;
     }
 
     /**

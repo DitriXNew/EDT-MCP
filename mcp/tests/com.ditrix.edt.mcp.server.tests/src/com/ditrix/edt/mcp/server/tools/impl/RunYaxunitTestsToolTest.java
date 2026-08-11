@@ -10,6 +10,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
@@ -23,6 +24,7 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
 
@@ -359,15 +361,18 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
-    public void testDescriptionDocuments25sPendingBudget()
+    public void testDescriptionDocumentsTheClampedWindowAndThePhases()
     {
-        // Ratchet: the description must mention the 25s pre-launch budget and
-        // that the tool returns Pending when it is exceeded.
+        // Ratchet: the description must state the ceiling the code enforces (a window the
+        // transport cannot deliver is a promise the tool cannot keep, #357) and name the phases
+        // a Pending can report, since that label is the caller's only signal.
         String desc = new RunYaxunitTestsTool().getDescription();
-        assertTrue("description must mention the 25s budget",
-            desc.contains("25s")); //$NON-NLS-1$
-        assertTrue("description must say Pending is returned when budget exceeded",
-            desc.contains("Pending")); //$NON-NLS-1$
+        assertTrue("description must state the maximum window",
+            desc.contains(String.valueOf(RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS)));
+        assertTrue("description must say a larger timeout is clamped",
+            desc.contains("clamped")); //$NON-NLS-1$
+        assertTrue("description must say Pending names the phase",
+            desc.contains("Pending") && desc.contains("phase")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -395,6 +400,451 @@ public class RunYaxunitTestsToolTest
             guide.contains("background")); //$NON-NLS-1$
         assertTrue("guide must document the pending-retry contract for prep",
             guide.contains("same arguments")); //$NON-NLS-1$
+    }
+
+    // ============ #357 — the call never outlives the MCP transport ============
+
+    @Test
+    public void testTimeoutIsClampedToTheTransportSafeCeiling()
+    {
+        // #357: the parameter used to accept any window while the transport cut the call at
+        // ~60s, so `timeout: 240` bought a bare "operation timed out" instead of an answer.
+        // A caller may ask for LESS, never for more.
+        assertEquals("a window above the ceiling must be clamped, not honoured",
+            RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS, RunYaxunitTestsTool.clampTimeout(240));
+        assertEquals("the ceiling itself is accepted unchanged",
+            RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS,
+            RunYaxunitTestsTool.clampTimeout(RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS));
+        assertEquals("a shorter probe window is honoured as asked", 5,
+            RunYaxunitTestsTool.clampTimeout(5));
+        assertEquals("a non-positive window still waits at least one second", 1,
+            RunYaxunitTestsTool.clampTimeout(0));
+        assertTrue("the ceiling must sit BELOW the ~60s transport limit it exists to respect",
+            RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS < 60);
+    }
+
+    @Test
+    public void testTheCallNeverOutlivesTheRequestedWindow()
+    {
+        // #357 follow-up: the backstop used to be given `timeout + 5s`, so the public parameter
+        // stopped bounding the call — `timeout: 1` held the request for about six seconds, and a
+        // client with a shorter transport than ours still got the bare transport error this whole
+        // change exists to remove. Checked across EVERY accepted window, not just the default.
+        for (int timeout = 1; timeout <= RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS; timeout++)
+        {
+            long requestedMs = timeout * 1000L;
+            long backstopMs = RunYaxunitTestsTool.backstopBudgetMs(timeout);
+            long innerMs = RunYaxunitTestsTool.innerWindowMs(timeout);
+
+            assertEquals("the backstop must not outlive the requested window (timeout=" + timeout
+                + ")", requestedMs, backstopMs);
+            assertTrue("the inner deadline must fire BEFORE the backstop, or the backstop steals "
+                + "the answer and replaces a real phase with a generic timeout (timeout=" + timeout
+                + "): inner=" + innerMs + " backstop=" + backstopMs, innerMs < backstopMs);
+            assertTrue("the inner window must stay positive, or a healthy short run answers "
+                + "'did not finish' the moment it starts (timeout=" + timeout + "): inner="
+                + innerMs, innerMs > 0);
+            assertTrue("the work must keep at least 80% of the window it was given (timeout="
+                + timeout + "): inner=" + innerMs, innerMs * 5 >= requestedMs * 4);
+        }
+    }
+
+    @Test
+    public void testRemainingMillisFloorsAtZero()
+    {
+        long now = System.currentTimeMillis();
+        assertEquals("a deadline already past leaves no time to wait", 0L,
+            RunYaxunitTestsTool.remainingMillis(now - 5_000L));
+        long remaining = RunYaxunitTestsTool.remainingMillis(now + 10_000L);
+        assertTrue("the remainder must not exceed the distance to the deadline",
+            remaining <= 10_000L && remaining > 9_000L);
+    }
+
+    @Test
+    public void testPreparationWaitIsCappedByTheCallDeadlineNotTheFullBudget() throws Exception
+    {
+        // THE #357 guarantee, driven directly: a repeat call joins a preparation that is already
+        // running and must come back inside the CALLER's window. Before the fix the wait always
+        // took the full 25s preparation budget — spent AFTER resolution — so the call routinely
+        // outlived the transport and the client saw nothing at all.
+        //
+        // The entry's latch is never counted down, so the ONLY thing that can end this wait is
+        // the deadline. The test therefore also carries its own ceiling: an unbounded wait fails
+        // it by the elapsed assertion rather than hanging the suite.
+        String prepKey = "ratchet-357-" + System.nanoTime(); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+        // Pretend the job is already running: the CAS is spent, so no Job is scheduled and this
+        // call is a pure waiter — exactly the "second identical call" of the bug report.
+        entry.started.set(true);
+        entry.phase = LaunchLifecycleUtils.PHASE_DB_UPDATE;
+        LaunchLifecycleUtils.PREP_INFLIGHT.put(prepKey, entry);
+        try
+        {
+            RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+                "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+                null, null, ExternalInfobaseChangesPolicy.DEFAULT, "ratchet"); //$NON-NLS-1$
+            RunYaxunitTestsTool.CallState phase = new RunYaxunitTestsTool.CallState();
+            long budgetMs = 2_000L;
+
+            long startedAt = System.currentTimeMillis();
+            String pending = RunYaxunitTestsTool.awaitPreparedOrPending(prepKey, req,
+                new PreLaunchResult[1], System.currentTimeMillis() + budgetMs, phase);
+            long elapsedMs = System.currentTimeMillis() - startedAt;
+
+            assertNotNull("an unfinished preparation must answer with Pending, never nothing",
+                pending);
+            assertTrue("Pending must be a Pending", pending.contains("**Pending:**")); //$NON-NLS-1$
+            assertTrue("the wait must end on the CALL's deadline, not the 25s preparation budget: "
+                + "waited " + elapsedMs + "ms",
+                elapsedMs < LaunchLifecycleUtils.PRELAUNCH_BUDGET_MS);
+            assertTrue("the wait must not end before the caller's own window either: waited "
+                + elapsedMs + "ms", elapsedMs >= budgetMs - 250L);
+            assertTrue("the Pending must name the LIVE preparation phase with the SAME namespaced "
+                + "label the description and guide enumerate — a caller matching on "
+                + "`prep:db-update` must not have to know some Pendings drop the prefix",
+                pending.contains("prep:" + LaunchLifecycleUtils.PHASE_DB_UPDATE));
+            assertEquals("the call phase must track the preparation's live stage",
+                "prep:" + LaunchLifecycleUtils.PHASE_DB_UPDATE, phase.label());
+        }
+        finally
+        {
+            LaunchLifecycleUtils.PREP_INFLIGHT.remove(prepKey);
+        }
+    }
+
+    @Test
+    public void testARunningPreparationIsNeverEvictedAndDuplicated()
+    {
+        // A preparation is expired ONLY once it has finished. Discarding a RUNNING one would
+        // schedule a second job that can merely queue behind the per-infobase monitor the first
+        // one holds — and a caller polling a legitimately long recompute (the guide calls forty
+        // minutes normal) would stack up one more on every retry.
+        PrepInFlight running = new PrepInFlight(System.currentTimeMillis() - (60L * 60L * 1000L));
+        // "Running" is what production observes: a carrier still in the scheduler.
+        org.eclipse.core.runtime.jobs.Job live =
+            new org.eclipse.core.runtime.jobs.Job("still-running-preparation") //$NON-NLS-1$
+            {
+                @Override
+                protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+                {
+                    return org.eclipse.core.runtime.Status.OK_STATUS;
+                }
+            };
+        try
+        {
+            live.schedule(10 * 60 * 1000L);
+            running.trackScheduledJob(live);
+            assertFalse("an hour-old preparation that is still running must NOT be replaced",
+                running.isExpired());
+
+            live.cancel();
+            running.done = true;
+            assertTrue("once finished, an old entry may be discarded so the next call starts fresh",
+                running.isExpired());
+        }
+        finally
+        {
+            live.cancel();
+        }
+
+        PrepInFlight fresh = new PrepInFlight(System.currentTimeMillis());
+        fresh.done = true;
+        assertFalse("a just-finished entry is still fetchable and must not be discarded yet",
+            fresh.isExpired());
+    }
+
+    @Test
+    public void testWorkThatNeverStartedIsReportedAsAnErrorNotAsPending()
+    {
+        // BoundedJob distinguishes "still running" from "never left the scheduler". Reporting the
+        // second as Pending would be a lie in the one sentence the caller uses to decide whether
+        // to wait: nothing was launched, so there is nothing to wait for.
+        String message = RunYaxunitTestsTool.buildStalledPendingMessage("spawn", 12);
+        assertTrue("the still-running case stays a Pending", message.contains("**Pending:**")); //$NON-NLS-1$
+        assertTrue("and says the work was not cancelled",
+            message.contains("nothing was cancelled")); //$NON-NLS-1$
+        // The never-ran case is a separate branch in runBounded; its wording is pinned by the
+        // e2e/description contract, and the distinction itself is what this asserts.
+        assertFalse("the still-running message must not claim the work never started",
+            message.contains("did not start")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResultFinishedAfterThePendingStaysFetchable()
+    {
+        // The backstop stops WAITING for the worker, it does not stop the worker. A worker that
+        // finishes afterwards runs the normal success path, which consumes the pending-fetch
+        // marker and hands the report to a holder nobody reads. Without the re-arm the finished
+        // report is unreachable: the next identical call sees no active launch and no pending
+        // fetch, starts a fresh run, and wipes the report directory on the way — the opposite of
+        // "call again to pick up where you left off".
+        String runKey = "ratchet-357-late-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            // The run armed its marker before polling, then the success path consumed it.
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            state.consumeResultFor(runKey);
+            assertFalse("the success path consumes the marker",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+
+            // The backstop answered first: the caller already holds a Pending.
+            assertTrue("the backstop must win the answer when the worker has not published yet",
+                state.claimAnswer());
+
+            // ...and only now does the worker come back with a real report.
+            assertFalse("a worker that lost the race must not claim the answer",
+                state.publishResult());
+            assertTrue("a result finished after the Pending must stay fetchable by the next call",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testADeliveredResultDoesNotLeaveAMarkerBehind()
+    {
+        // The ordinary case must be untouched: when the caller IS listening, the worker owns the
+        // answer and the consumed marker stays consumed. Re-arming here would make the next
+        // identical call serve the same report again instead of re-running the tests.
+        String runKey = "ratchet-357-ontime-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            state.consumeResultFor(runKey);
+
+            assertTrue("the worker must own the answer when it finishes in time",
+                state.publishResult());
+            assertFalse("a delivered result must not be left marked as undelivered",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            assertFalse("the backstop must not answer after the worker already did",
+                state.claimAnswer());
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testNoMarkerIsInventedForACallThatNeverReachedARun()
+    {
+        // A backstop that fires during resolve or preparation consumed no marker, because there
+        // was no run behind the key yet. Re-arming there would let the next call serve a report
+        // left over from an EARLIER run as if it were this one's — a false success, worse than
+        // the lost report the re-arm exists to prevent.
+        String runKey = "ratchet-357-norun-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            assertTrue(state.claimAnswer());
+            assertFalse(state.publishResult());
+            assertFalse("a call that never consumed a marker must not arm one",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testAPendingFetchThatFoundNoReportReleasesOwnership() throws Exception
+    {
+        // Drives the REAL fall-through in tryDeliverPendingResult (empty report directory, so
+        // findJunitXml returns nothing) rather than the helper it calls — a test that only
+        // exercised releaseConsumed() directly would still pass if the call site were deleted.
+        //
+        // The marker this call consumed referred to no report. If ownership survived that, the
+        // call would go on to start a FRESH run and could later re-arm the key on the strength of
+        // a report that never existed — by which time the key belongs to that fresh run, whose
+        // result another caller may already have delivered.
+        String runKey = "ratchet-357-noreport-" + System.nanoTime(); //$NON-NLS-1$
+        java.nio.file.Path emptyDir = java.nio.file.Files.createTempDirectory("yaxunit-ratchet"); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+
+            String delivered = new RunYaxunitTestsTool().tryDeliverPendingResult(runKey, emptyDir,
+                "TestConfiguration", "TestConfiguration.SomeApp", state); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertNull("an empty report directory must fall through to a fresh run", delivered);
+            assertFalse("the consumed marker referred to nothing, so ownership must be released",
+                state.consumed(runKey));
+
+            // ...and the proof that it matters: a later loss must NOT resurrect the key.
+            assertTrue(state.claimAnswer());
+            assertFalse(state.publishResult());
+            assertFalse("a call holding no result must not re-arm the key",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+            java.nio.file.Files.deleteIfExists(emptyDir);
+        }
+    }
+
+    @Test
+    public void testACallThatLostTheRaceForTheMarkerDoesNotResurrectIt()
+    {
+        // Two calls poll the SAME launch: A timed out and is still inside its read, B is
+        // listening and delivers the report, consuming the shared marker. When A finally
+        // finishes it must NOT put the marker back — its remove was a no-op, the result was
+        // already handed over, and resurrecting it would serve the same report twice and
+        // suppress a genuine re-run.
+        String runKey = "ratchet-357-loser-" + System.nanoTime(); //$NON-NLS-1$
+        try
+        {
+            RunYaxunitTestsTool.armUndeliveredResult(runKey);
+            RunYaxunitTestsTool.CallState a = new RunYaxunitTestsTool.CallState();
+            RunYaxunitTestsTool.CallState b = new RunYaxunitTestsTool.CallState();
+
+            b.consumeResultFor(runKey);                 // B took it and delivered
+            assertTrue("B owns the consumed result", b.consumed(runKey));
+            assertTrue(b.publishResult());
+
+            a.consumeResultFor(runKey);                 // A's remove finds nothing left
+            assertFalse("A must not claim a result it never took", a.consumed(runKey));
+            assertTrue("A's caller gave up", a.claimAnswer());
+            assertFalse(a.publishResult());
+
+            assertFalse("a delivered result must not be resurrected by the loser",
+                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+        }
+        finally
+        {
+            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+        }
+    }
+
+    @Test
+    public void testTheAnswerIsOwnedByExactlyOneSide()
+    {
+        // Both sides settle through the same compare-and-set, so the result can never be both
+        // returned and reported as still pending.
+        RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+        assertTrue("first claim wins", state.publishResult());
+        assertFalse("second claim loses", state.claimAnswer());
+        assertFalse("and stays lost", state.publishResult());
+    }
+
+    @Test
+    public void testTheSchedulerHandsTheJobToTheEntry() throws Exception
+    {
+        // Pins the CALL SITE, not the setter: `PrepInFlight.isExpired` can only tell a queued
+        // preparation from an abandoned one if something gives it the job. A test that called
+        // trackScheduledJob itself would happily survive deleting the hand-over, which is the
+        // vacuum pin this PR has already been caught by once.
+        //
+        // A null launch manager makes the body finish immediately with an error, so the real
+        // scheduling site is exercised without EDT services.
+        RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+            "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, ExternalInfobaseChangesPolicy.DEFAULT, "handover-ratchet"); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+
+        RunYaxunitTestsTool.schedulePrepJob(entry, req, new PreLaunchResult[1]);
+
+        // THE assertion: the entry must know its carrier. An entry whose job runs to completion
+        // behaves identically with and without the hand-over — only the abandoned case depends
+        // on it — so asserting the hand-over itself is the only thing that notices its removal.
+        assertTrue("the scheduling site must hand the job to the entry, or a preparation "
+            + "cancelled before it ran can never be told apart from one still queued",
+            entry.hasTrackedCarrier());
+
+        assertTrue("the scheduled body must still run to completion",
+            entry.latch.await(30, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue("and complete the entry", entry.done);
+    }
+
+    @Test
+    public void testPrepPhaseLabelNamespacesTheBackgroundStage()
+    {
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+        entry.phase = LaunchLifecycleUtils.PHASE_RECOMPUTE;
+        assertEquals("prep:" + LaunchLifecycleUtils.PHASE_RECOMPUTE,
+            RunYaxunitTestsTool.prepPhaseLabel(entry));
+        entry.phase = LaunchLifecycleUtils.PHASE_TERMINATE;
+        assertEquals("prep:" + LaunchLifecycleUtils.PHASE_TERMINATE,
+            RunYaxunitTestsTool.prepPhaseLabel(entry));
+        assertEquals("a missing entry must still name a phase, never null",
+            "prep:" + LaunchLifecycleUtils.PHASE_RECOMPUTE,
+            RunYaxunitTestsTool.prepPhaseLabel(null));
+    }
+
+    @Test
+    public void testStalledPendingNamesThePhaseAndSaysTheWorkIsStillRunning()
+    {
+        String message = RunYaxunitTestsTool.buildStalledPendingMessage("prep:recompute", 47);
+        assertTrue("the message replacing the transport error must be a Pending",
+            message.contains("**Pending:**")); //$NON-NLS-1$
+        assertTrue("it must name the phase — that is the whole information the bare timeout lacked",
+            message.contains("prep:recompute")); //$NON-NLS-1$
+        assertTrue("it must report how long the call waited", message.contains("47s")); //$NON-NLS-1$
+        assertTrue("it must say the work was NOT cancelled",
+            message.contains("nothing was cancelled")); //$NON-NLS-1$
+        assertTrue("it must tell the caller how to keep waiting",
+            message.contains("same arguments")); //$NON-NLS-1$
+        assertTrue("it must name the one case where retrying is pointless",
+            message.contains("modal dialog")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPrepJobBodyDoesNotStampAPhaseTheChainNeverReached()
+    {
+        // The phase used to be stamped by this body — "recompute" before the chain and
+        // "db-update" AFTER it returned — so every Pending said "recompute" whatever the server
+        // was doing, and "db-update" only ever appeared once there was nothing left to wait for.
+        // A null launch manager makes the chain fail before any stage runs; the phase must
+        // therefore still be the first stage, never the last one.
+        RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+            "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, ExternalInfobaseChangesPolicy.DEFAULT, "phase-ratchet"); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+
+        RunYaxunitTestsTool.runPrepJobBody(entry, req, new PreLaunchResult[1]);
+
+        assertNotNull("a null launch manager must surface a prep error", entry.error);
+        assertEquals("a chain that never started a stage must not advertise the LAST one",
+            LaunchLifecycleUtils.PHASE_TERMINATE, entry.phase);
+    }
+
+    @Test
+    public void testGuideDocumentsThePreFlightOrderAndTheStuckPhaseSignal()
+    {
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must spell out the pre-flight order the issue asked for",
+            guide.contains("get_applications") && guide.contains("update_database")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must state the clamped whole-call window",
+            guide.contains("45")); //$NON-NLS-1$
+        assertTrue("guide must list the phases a Pending can report",
+            guide.contains("prep:recompute") && guide.contains("prep:db-update")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must teach that an ADVANCING phase proves progress",
+            guide.contains("phase that ADVANCES")); //$NON-NLS-1$
+        assertTrue("guide must NOT claim a stalled phase proves a block — it cannot tell the two "
+            + "apart, and saying otherwise is a claim wider than the code",
+            guide.contains("when a phase stops advancing, look at EDT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDocsDoNotClaimUpdateBeforeLaunchTrueIsDialogFree()
+    {
+        // The old wording said dialogs "may appear and block" only under updateBeforeLaunch=false,
+        // which reads as a guarantee for true — and true is exactly what ended in a blocking
+        // dialog in #357. Both surfaces must now say what the code can actually promise.
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must state that true does not make dialogs impossible",
+            guide.contains("Dialogs are not impossible")); //$NON-NLS-1$
+        String schema = new RunYaxunitTestsTool().getInputSchema();
+        assertTrue("the updateBeforeLaunch schema text must not promise more than the code does",
+            schema.contains("unlikely, NOT impossible")); //$NON-NLS-1$
     }
 
     // ============ #230 — the async prep body brackets the auth-dialog suppressor ============
