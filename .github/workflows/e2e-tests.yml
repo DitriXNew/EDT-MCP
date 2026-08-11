@@ -1,15 +1,20 @@
 name: E2E Tests (reusable)
 
 # REUSABLE workflow (on: workflow_call) — invoked by the thin caller workflow
-# e2e-2026.2.yml (parameterized by EDT version so it stays ready for a future matrix),
-# which gives the gate its OWN status badge. Black-box e2e gate on a STOCK
-# GitHub-hosted runner (ubuntu-latest):
+# e2e-2026.2.yml (parameterized by EDT version), which gives the gate its OWN status
+# badge. Black-box e2e gate on a STOCK GitHub-hosted runner (ubuntu-latest):
 # no docker image, no self-hosted runner. The `build` job builds the plugin; the `e2e`
 # job boots a headless EDT (inlined setup, numbered steps 1/8…8/8 — each phase is a
 # separate line in the Actions UI so you can see what is cached vs what runs),
 # force-starts the MCP server (EDT_MCP_AUTO_START), imports the TestConfiguration
 # fixtures into an empty workspace (EDT_MCP_IMPORT_PROJECTS), then runs the suite
 # against the local :8765.
+#
+# The `e2e` job is a SHARD MATRIX (issue #385): each matrix job is a full independent
+# runner (own checkout, EDT install, workspace, git fixture) that runs one --shard I/N
+# slice of the suite, cutting the ~60-min serial gate to ~17 min wall-clock. Stock
+# ubuntu-latest runners give that isolation for free. The `report` job merges the
+# per-shard JUnit reports into ONE "E2E Test Results" check.
 #
 # Scope: skips the live-infobase round-trip (requires_live_infobase) by default, so
 # it needs NO licensed 1C platform — EDT indexes the project model without one. The
@@ -114,8 +119,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write
-      pull-requests: write
+    # Shard the suite across independent runners for wall-clock: each matrix job gets its
+    # OWN runner, checkout, EDT install, workspace and git fixture, so nothing is shared and
+    # the reset_fixture serialisation only has to hold WITHIN a shard (see issue #385). The
+    # split is by TEST, not by file (run_all.py --shard I/N), so the one heavy tool
+    # (modify_metadata ≈ 40% of the run) is spread across shards rather than pinning one.
+    # fail-fast: false so a red shard does not cancel the others — we want every shard's
+    # report, and the merge job (report) stitches them into one check.
+    #
+    # Denominator N is `${{ strategy.job-total }}` (the matrix size), so changing the shard
+    # count is a one-line edit to this list — nothing else references the number.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     # The EDT setup below is INLINED (instead of the ./.github/actions/setup-edt
     # composite) so each phase shows as its own step in the Actions UI — you can see at
     # a glance which steps are cached/skipped vs which run. These env values mirror the
@@ -403,7 +420,8 @@ jobs:
         run: |
           python -u tests/e2e/run_all.py \
             --project TestConfiguration \
-            --junit-xml tests/e2e/e2e-results.xml
+            --shard ${{ matrix.shard }}/${{ strategy.job-total }} \
+            --junit-xml tests/e2e/e2e-results-shard${{ matrix.shard }}.xml
 
       # Coverage: dump the in-memory JaCoCo data out of the still-running EDT JVM (the
       # agent is in tcpserver mode), then upload it for the Coverage workflow to merge
@@ -413,18 +431,21 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
+          # Per-shard inner filename: coverage.yml downloads every e2e-jacoco-exec-* artifact
+          # with merge-multiple, which flattens them into one dir — identical inner names would
+          # overwrite each other and only one shard's coverage would survive the merge.
           java -jar "$JACOCO_CLI" dump \
             --address 127.0.0.1 --port 6300 \
-            --destfile "$RUNNER_TEMP/e2e-jacoco.exec" \
+            --destfile "$RUNNER_TEMP/e2e-jacoco-shard${{ matrix.shard }}.exec" \
             || echo "[coverage] jacoco dump failed (agent unreachable / EDT not up)"
-          ls -la "$RUNNER_TEMP/e2e-jacoco.exec" 2>/dev/null || echo "[coverage] no e2e exec produced"
+          ls -la "$RUNNER_TEMP/e2e-jacoco-shard${{ matrix.shard }}.exec" 2>/dev/null || echo "[coverage] no e2e exec produced"
 
       - name: "Coverage · upload e2e JaCoCo exec"
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-jacoco-exec-${{ inputs.edt }}
-          path: ${{ runner.temp }}/e2e-jacoco.exec
+          name: e2e-jacoco-exec-${{ inputs.edt }}-shard${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-jacoco-shard${{ matrix.shard }}.exec
           if-no-files-found: warn
 
       - name: Dump EDT IDE log (the real boot/index log — separate from this console)
@@ -441,30 +462,54 @@ jobs:
             echo "(no EDT IDE log at $LOG)"
           fi
 
-      - name: Publish E2E Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always()
-        continue-on-error: true
-        with:
-          check_name: "E2E Test Results (EDT ${{ inputs.edt }})"
-          files: tests/e2e/e2e-results.xml
-
+      # NB: no per-shard "Publish E2E Test Results" here — a shard only ran a SLICE of the
+      # suite, so publishing per shard would post N partial checks. Each shard uploads its
+      # JUnit XML as an artifact; the `report` job below downloads all of them and publishes
+      # ONE merged "E2E Test Results" check.
       - name: Upload test report
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: e2e-test-results-${{ inputs.edt }}
-          path: tests/e2e/e2e-results.xml
+          name: e2e-test-results-${{ inputs.edt }}-shard${{ matrix.shard }}
+          path: tests/e2e/e2e-results-shard${{ matrix.shard }}.xml
           if-no-files-found: ignore
 
       - name: Upload EDT log
         if: ${{ always() && env.edt_log != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-edt-log-${{ inputs.edt }}
+          name: e2e-edt-log-${{ inputs.edt }}-shard${{ matrix.shard }}
           path: ${{ env.edt_log }}
           if-no-files-found: ignore
 
       - name: Stop EDT
         if: always()
         run: kill "${edt_pid:-0}" 2>/dev/null || true
+
+  # Merge the per-shard JUnit reports into ONE "E2E Test Results" check. Runs after every
+  # shard (if: always() so it still stitches together whatever ran when a shard failed).
+  # The `e2e` matrix job's own conclusion still gates the workflow — a red shard fails the
+  # workflow (and so blocks the coverage.yml workflow_run, which requires success) — this
+  # job only owns the single-check presentation, never the pass/fail verdict.
+  report:
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+    steps:
+      - name: Download all shard test reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-test-results-${{ inputs.edt }}-shard*
+          path: e2e-reports
+          merge-multiple: true
+
+      - name: Publish E2E Test Results (merged across shards)
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        continue-on-error: true
+        with:
+          check_name: "E2E Test Results (EDT ${{ inputs.edt }})"
+          files: e2e-reports/**/*.xml

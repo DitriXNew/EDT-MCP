@@ -41,7 +41,7 @@ tests/e2e/
 - **`tools/test_<tool>.py`** — one file per MCP tool. It contains the test functions for that one tool: the happy path(s) **and** the negative matrix. Because each agent owns one file, there are **no merge conflicts** when many agents work in parallel.
 - **`run_all.py`** — discovers every `@e2e_test` function, runs them **one at a time** (see §3 — execution is serial), resets the fixture before each, and emits a `--junit-xml` report.
 
-**Golden rule of parallelism:** writing the test files can be parallelized across agents. **Running** them cannot — every test mutates the same `TestConfiguration` project and the same git working tree, so the orchestrator runs them serially with a hard reset between each.
+**Golden rule of parallelism:** writing the test files can be parallelized across agents. **Running** them cannot be parallelized *within one workspace* — every test mutates the same `TestConfiguration` project and the same git working tree, so the orchestrator runs them serially with a hard reset between each. Parallelism comes from running MULTIPLE workspaces: CI shards the suite across independent runners (`--shard I/N`, §8), each with its own EDT + git fixture, and each shard still runs its slice serially.
 
 ---
 
@@ -234,7 +234,7 @@ The suite requires the **live server up** on `:8765` with `TestConfiguration` lo
 python tests/e2e/run_all.py --project TestConfiguration --junit-xml tests/e2e/e2e-results.xml
 ```
 
-- Execution is **serial** (see §3). Do not try to parallelize the run.
+- Execution is **serial WITHIN a workspace** (see §3). Do not try to parallelize a single run. To parallelize across CI, shard: `--shard I/N` runs shard I of N (1-based) — a deterministic disjoint slice split BY TEST (a stride over tests sorted by tool+name, so the heavy `modify_metadata` spreads across shards, not by file). Applied after `--filter`. N independent runners with N workspaces cover the suite; `e2e-tests.yml` runs a 4-shard matrix and merges the reports into one check.
 - The run **mutates** `TestConfiguration` and reverts it; on a clean checkout that is expected. The final state must be clean.
 - The existing `.github/workflows/e2e-tests.yml` invokes the runner against a running server; keep its CLI flags (`--host/--port/--project/--junit-xml`) stable.
 - **No new dependencies** — Python **stdlib only** (`urllib`, `json`, `subprocess` for git, `re`). Do not add pip packages. (Research-backed: the official MCP SDK's in-memory transport doesn't fit a server that lives inside EDT; the hand-rolled client is kept spec-conformant instead — initialize + notifications/initialized handshake, Mcp-Session-Id + MCP-Protocol-Version headers, robust SSE.)

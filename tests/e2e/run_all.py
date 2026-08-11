@@ -3,13 +3,22 @@
 EDT-MCP e2e orchestrator.
 
 Discovers every @e2e_test in tests/e2e/tools/test_*.py and runs them SERIALLY
-(all tests mutate the same TestConfiguration + git tree, so they cannot run in
-parallel). Resets the fixture before EVERY test, enforces a clean final state,
-and emits a JUnit XML report. See SKILL.md.
+(all tests mutate the same TestConfiguration + git tree, so within ONE workspace
+they cannot run in parallel). Resets the fixture before EVERY test, enforces a
+clean final state, and emits a JUnit XML report. See SKILL.md.
+
+Parallelism across MULTIPLE workspaces is done by sharding: `--shard I/N` runs
+only shard I of N (1-based). Each shard is a disjoint slice of the whole test
+list, so N shards on N independent runners (each with its own EDT + git fixture)
+cover the suite with no shared state. Sharding is BY TEST, not by file: the slice
+is a stride over the tests sorted by (tool, name), so a single heavy tool
+(modify_metadata is ~40% of the run) is spread across shards instead of pinning
+one shard to its total. See issue #385.
 
 Usage:
     python tests/e2e/run_all.py [--host H] [--port P] [--project NAME]
                                 [--junit-xml PATH] [--filter SUBSTR]
+                                [--shard I/N]
 
 Python stdlib only.
 """
@@ -31,6 +40,10 @@ def parse_args():
     ap.add_argument("--project", default=os.environ.get("MCP_PROJECT", "TestConfiguration"))
     ap.add_argument("--junit-xml", dest="junit", default=None)
     ap.add_argument("--filter", default=None, help="substring filter on test name or tool")
+    ap.add_argument("--shard", default=None,
+                    help="run only shard I of N as 'I/N' (1-based, e.g. 2/4). The suite is split "
+                         "deterministically by TEST (a stride over tests sorted by tool+name), so a "
+                         "single heavy tool is spread across shards. Applied AFTER --filter.")
     ap.add_argument("--test-timeout", type=float,
                     default=float(os.environ.get("MCP_TEST_TIMEOUT", "3600")),
                     help="per-test wall-clock timeout in seconds (default 3600). Must exceed the "
@@ -44,6 +57,33 @@ def parse_args():
                          "must never do: it FAILS the test and SKIPS all the rest. No auto-relaunch "
                          "- restart EDT and re-run.")
     return ap.parse_args()
+
+
+def parse_shard(spec):
+    """Parse a '--shard I/N' spec into (index, total) with 1 <= index <= total.
+
+    Raises SystemExit with an actionable message on a malformed spec, so a typo in the
+    CI matrix fails the job loudly instead of silently running the whole suite (or none).
+    """
+    parts = spec.split("/")
+    if len(parts) != 2:
+        raise SystemExit("--shard must be 'I/N' (e.g. 2/4), got %r" % spec)
+    try:
+        index, total = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise SystemExit("--shard I/N must be integers (e.g. 2/4), got %r" % spec)
+    if total < 1 or index < 1 or index > total:
+        raise SystemExit("--shard I/N requires 1 <= I <= N (got %r)" % spec)
+    return index, total
+
+
+def select_shard(tests, index, total):
+    """Deterministic 1-based shard: the stride tests[index-1::total] over tests sorted by
+    (tool, name). A stride (not a contiguous chunk) spreads a heavy tool — whose tests are
+    adjacent once sorted — evenly across shards, so no shard is pinned to one tool's total.
+    Order within a shard does not matter: the run resets the fixture before every test."""
+    ordered = sorted(tests, key=lambda t: (t["tool"], t["name"]))
+    return ordered[index - 1::total]
 
 
 def write_junit(results, path, final_clean, cleanup_failed=False):
@@ -215,7 +255,15 @@ def main():
     if args.filter:
         tests = [t for t in tests if args.filter in t["name"] or args.filter in t["tool"]]
 
-    print("EDT-MCP e2e: %d test(s) against %s, project=%s" % (len(tests), harness.MCP_URL, harness.PROJECT))
+    shard_note = ""
+    if args.shard:
+        index, total = parse_shard(args.shard)
+        selected = len(tests)
+        tests = select_shard(tests, index, total)
+        shard_note = " [shard %d/%d: %d of %d test(s)]" % (index, total, len(tests), selected)
+
+    print("EDT-MCP e2e: %d test(s) against %s, project=%s%s"
+          % (len(tests), harness.MCP_URL, harness.PROJECT, shard_note))
     harness.wait_for_server()
     harness.initialize()     # proper MCP handshake (captures Mcp-Session-Id if issued)
     if not harness.wait_for_project_ready():
