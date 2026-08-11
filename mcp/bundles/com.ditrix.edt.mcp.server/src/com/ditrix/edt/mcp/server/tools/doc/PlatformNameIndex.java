@@ -189,7 +189,7 @@ final class PlatformNameIndex
             {
                 break;
             }
-            if (resolvable == null || resolvable.test(candidate))
+            if (accepts(candidate))
             {
                 kept.add(candidate);
             }
@@ -242,6 +242,28 @@ final class PlatformNameIndex
             sb.append('\n').append(hint).append('\n');
         }
         return sb.toString();
+    }
+
+    /**
+     * Whether one candidate survives the resolvability check. A candidate that THROWS is simply
+     * dropped: the verifier resolves arbitrary provider entries sampled next to the query, and one
+     * malformed or version-incompatible description among them must cost that name its place in the
+     * list - not abort the whole answer and turn every miss into a failed request.
+     */
+    private boolean accepts(String candidate)
+    {
+        if (resolvable == null)
+        {
+            return true;
+        }
+        try
+        {
+            return resolvable.test(candidate);
+        }
+        catch (RuntimeException | LinkageError e) // NOSONAR one bad entry must not sink the banner
+        {
+            return false;
+        }
     }
 
     /**

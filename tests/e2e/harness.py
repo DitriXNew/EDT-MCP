@@ -360,7 +360,7 @@ def call(tool, arguments):
     while True:
         result = Result(_post("tools/call", {"name": tool, "arguments": arguments}))
         if not _is_transient_building(result) or time.time() >= deadline:
-            _record_call(tool)
+            _record_call(tool, result.is_error)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
@@ -386,17 +386,36 @@ DEEP_MUTATION_TOOLS = frozenset({
     "clean_project", "create_project", "delete_project",
 })
 
+# Tools that change the BM model. A SUCCESSFUL call to any of them forfeits the shortcut
+# outright, whatever the later evidence says.
+#
+# Because the evidence has a blind spot, and this closes it: a metadata write can succeed
+# with persisted=false — the transaction changed the in-memory model while the fixture stays
+# git-clean — and a NESTED change (an attribute added to an existing catalog) leaves the
+# top-object inventory identical. Both probes then report "pristine" while the next test
+# inherits an in-memory child. A refusal changes nothing, so negative tests — the ones the
+# shortcut is actually for — still qualify.
+MODEL_MUTATION_TOOLS = frozenset({
+    "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
+}) | DEEP_MUTATION_TOOLS
+
 _CALLED_TOOLS = set()
+_MUTATED = False
 _BASELINE_INVENTORY = None
 
 
-def _record_call(tool):
+def _record_call(tool, is_error):
+    global _MUTATED
     _CALLED_TOOLS.add(tool)
+    if not is_error and tool in MODEL_MUTATION_TOOLS:
+        _MUTATED = True
 
 
 def begin_test_calls():
-    """Start recording which tools a test invokes (the orchestrator calls this per test)."""
+    """Start recording what a test invokes (the orchestrator calls this per test)."""
+    global _MUTATED
     _CALLED_TOOLS.clear()
+    _MUTATED = False
 
 
 def _top_object_inventory():
@@ -404,9 +423,16 @@ def _top_object_inventory():
 
     One call. It sees exactly the mutations a git-clean tree can still hide: an object
     created, deleted or renamed IN MEMORY without reaching disk. Returns None when it cannot
-    be read, which callers must treat as "no evidence" (and therefore reset in full)."""
+    be read, which callers must treat as "no evidence" (and therefore reset in full).
+
+    A TIMEOUT is not "no evidence" and must not be swallowed: E2ECallTimeout means the request
+    may STILL BE RUNNING server-side and it arms the global latch, so absorbing it here would
+    let the run continue and pin the latched failure on the next innocent test - or start a git
+    reset while EDT is still writing. It propagates, like every other probe's."""
     try:
         r = call("get_metadata_objects", {"projectName": PROJECT, "limit": 1000})
+    except E2ECallTimeout:
+        raise
     except Exception:
         return None
     if r.is_error or not (r.text or "").strip():
@@ -434,12 +460,14 @@ def model_is_pristine():
     modify_metadata::test_subsystem_content_reject_subsystem_member. reset_model settles for
     the same reason before it reverts, and the settle is the cheap half of it - the expensive
     half is the clean_project this shortcut is trying to avoid."""
-    if _BASELINE_INVENTORY is None:
+    if _BASELINE_INVENTORY is None or _MUTATED:
         return False
     if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
         return False
     try:
         wait_for_project_ready()
+    except E2ECallTimeout:
+        raise
     except Exception:
         return False
     if all_fixtures_status().strip():

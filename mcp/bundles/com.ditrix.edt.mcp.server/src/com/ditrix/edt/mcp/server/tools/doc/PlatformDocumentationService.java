@@ -342,13 +342,18 @@ public class PlatformDocumentationService
         {
             return true;
         }
-        return documentedTypeDescription(provider, desc) != null;
+        return !documentedTypeDescriptions(provider, desc).isEmpty();
     }
 
     /**
-     * The description of the generic type that documents a TYPE SET - the one
+     * The descriptions of the generic types that document a TYPE SET - the ones
      * {@link #containedTypeName} names, looked UP in the provider so the set is advertised only when
      * its target is really there.
+     *
+     * <p>A LIST, in declaration order, because {@code containsType} is a comma-separated field:
+     * returning only the first registered candidate would report a set as undocumented whenever
+     * that one fails to resolve while a later one would have. Callers that only need a yes/no take
+     * the emptiness; the caller that renders takes the first that actually RESOLVES.
      *
      * <p>Checking the name is non-blank is not enough: it is the platform's own table, and a version
      * that renamed or dropped a generic type would have the set listed as available and then fail on
@@ -359,16 +364,17 @@ public class PlatformDocumentationService
      *
      * @param provider the provider the description came from
      * @param desc the type-set description
-     * @return the target description, or {@code null} when the set documents nothing
+     * @return the target descriptions in declaration order, empty when the set documents nothing
      */
-    private static IEObjectDescription documentedTypeDescription(IEObjectProvider provider,
+    private static List<IEObjectDescription> documentedTypeDescriptions(IEObjectProvider provider,
         IEObjectDescription desc)
     {
         String contains = containedTypeName(provider, desc);
         if (contains == null)
         {
-            return null;
+            return List.of();
         }
+        List<IEObjectDescription> targets = new ArrayList<>();
         for (String candidate : contains.split(",")) //$NON-NLS-1$
         {
             String trimmed = candidate.trim();
@@ -379,10 +385,10 @@ public class PlatformDocumentationService
             IEObjectDescription target = provider.getEObjectDescription(trimmed);
             if (target != null && !McorePackage.Literals.TYPE_SET.equals(target.getEClass()))
             {
-                return target;
+                targets.add(target);
             }
         }
-        return null;
+        return targets;
     }
 
     /**
@@ -463,13 +469,18 @@ public class PlatformDocumentationService
         {
             return new DocumentedType(direct, null, null);
         }
-        IEObjectDescription target = documentedTypeDescription(provider, desc);
-        Type resolved = target != null ? resolveDescriptionAsType(target) : null;
-        if (resolved == null)
+        // Every candidate gets a turn: the first REGISTERED one is not necessarily the first that
+        // resolves, and stopping at it would report a set as undocumented while a later candidate
+        // would have answered.
+        for (IEObjectDescription target : documentedTypeDescriptions(provider, desc))
         {
-            return null;
+            Type resolved = resolveDescriptionAsType(target);
+            if (resolved != null)
+            {
+                return new DocumentedType(resolved, typeSetLabel(provider, desc, matchedName), matchedName);
+            }
         }
-        return new DocumentedType(resolved, typeSetLabel(provider, desc, matchedName), matchedName);
+        return null;
     }
 
     /**
