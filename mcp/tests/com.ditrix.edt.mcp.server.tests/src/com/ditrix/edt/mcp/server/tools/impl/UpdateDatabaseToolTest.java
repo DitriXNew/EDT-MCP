@@ -217,7 +217,7 @@ public class UpdateDatabaseToolTest
         }
     }
 
-    /** Mirrors the type-name-only detection branch of {@code describeInternalInfoHint}. */
+    /** Mirrors the type-name detection branch of {@code describeInternalInfoHint}. */
     private static class ConfigurationLoadException extends RuntimeException
     {
         private static final long serialVersionUID = 1L;
@@ -225,6 +225,11 @@ public class UpdateDatabaseToolTest
         ConfigurationLoadException(String message)
         {
             super(message);
+        }
+
+        ConfigurationLoadException(String message, Throwable cause)
+        {
+            super(message, cause);
         }
     }
 
@@ -268,15 +273,40 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
-    public void testInternalInfoHintMatchesConfigurationLoadExceptionTypeName()
+    public void testConfigurationLoadFailureWithoutMarkerDoesNotClaimInternalInfo()
     {
-        // The type-name branch: matches even when the message itself carries no marker text.
+        // Issue #382: a load can fail for a reason that has nothing to do with InternalInfo (there,
+        // a form attribute written without its view/edit blocks, reported as an XDTO property
+        // mismatch). Answering the type name alone with "the InternalInfo node is missing" asserts a
+        // cause that is not there and points at a workaround that cannot help.
         ApplicationException e = new ApplicationException("Load failed", //$NON-NLS-1$
-            new ConfigurationLoadException("generic load failure")); //$NON-NLS-1$
+            new ConfigurationLoadException(
+                "XDTO exception. Property and data element mismatch: Property: 'Type'")); //$NON-NLS-1$
 
         String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
 
-        assertFalse("hint must match on the ConfigurationLoadException type name", hint.isEmpty()); //$NON-NLS-1$
+        assertFalse("a configuration load failure must still be explained", hint.isEmpty()); //$NON-NLS-1$
+        assertFalse("must NOT claim the InternalInfo node is missing", //$NON-NLS-1$
+            hint.contains("InternalInfo")); //$NON-NLS-1$
+        assertFalse("must NOT push the CLI workaround for an unrelated failure", //$NON-NLS-1$
+            hint.contains("LoadConfigFromFiles")); //$NON-NLS-1$
+        assertTrue("must surface the platform's own message instead of inventing a cause", //$NON-NLS-1$
+            hint.contains("Property: 'Type'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInternalInfoMarkerBeneathGenericLoadExceptionStillWins()
+    {
+        // The marker pass runs BEFORE the type-name fallback, so a generic outer load exception
+        // cannot mask a real InternalInfo failure deeper in the chain.
+        ApplicationException e = new ApplicationException("Load failed", //$NON-NLS-1$
+            new ConfigurationLoadException("generic load failure", //$NON-NLS-1$
+                new RuntimeException("InternalInfo node is missing for object Configuration"))); //$NON-NLS-1$
+
+        String hint = UpdateDatabaseTool.describeInternalInfoHint(e);
+
+        assertTrue("the deeper InternalInfo marker must win over the generic wrapper", //$NON-NLS-1$
+            hint.contains("LoadConfigFromFiles")); //$NON-NLS-1$
     }
 
     @Test

@@ -624,40 +624,85 @@ public class UpdateDatabaseTool implements IMcpTool
      * rejected because the {@code InternalInfo} node is missing (Russian EDT message:
      * "Отсутствует внутренняя информация (узел InternalInfo) для объекта Configuration"). This is
      * an EDT-side failure, not something the MCP call causes — the EDT GUI's "Update database
-     * configuration" fails the same way on the same project. Detection walks the WHOLE cause
-     * chain (this exception plus every {@link Throwable#getCause()} below it, depth-capped at
-     * {@link #MAX_CAUSE_CHAIN_DEPTH} to guard against a cycle) looking for a
-     * {@code ConfigurationLoadException} type name or a message containing the language-independent
-     * marker {@code InternalInfo}. Empty when the failure does not match; when it matches, the
-     * caller suppresses {@link #describeAuthHint} (see {@link #buildApplicationErrorResult}) because
-     * this failure has nothing to do with credentials. Exposed (package-private) so the matching
-     * can be unit-tested directly.
+     * configuration" fails the same way on the same project.
+     * <p>
+     * Detection is MARKER-FIRST (issue #382): the whole chain is searched for the {@code InternalInfo}
+     * marker before anything else, and only a chain without it falls back to reporting a
+     * {@code ConfigurationLoadException} GENERICALLY — surfacing the platform's own message and
+     * asserting no cause. The previous single pass treated the exception TYPE as proof of the
+     * InternalInfo limitation, so every unrelated load failure (a malformed form attribute, for one)
+     * was answered with a cause that was not there and a workaround that could not help.
+     * <p>
+     * Each pass walks the WHOLE cause chain (this exception plus every {@link Throwable#getCause()}
+     * below it, depth-capped at {@link #MAX_CAUSE_CHAIN_DEPTH} to guard against a cycle). Empty when
+     * the failure is neither; when either matches, the caller suppresses {@link #describeAuthHint}
+     * (see {@link #buildApplicationErrorResult}) because a configuration-load failure has nothing to
+     * do with credentials either way. Exposed (package-private) so the matching can be unit-tested
+     * directly.
      *
      * @param e the application exception
-     * @return the InternalInfo hint, or an empty string
+     * @return the InternalInfo hint, the generic configuration-load hint, or an empty string
      */
     static String describeInternalInfoHint(ApplicationException e)
+    {
+        // TWO passes, and the marker pass goes FIRST. The InternalInfo limitation is identified by its
+        // MARKER, never by the exception type alone: a configuration load can fail for entirely
+        // different reasons (a malformed form attribute, say - issue #382), and answering every
+        // ConfigurationLoadException with "the InternalInfo node is missing" states a cause that is not
+        // there and sends the caller to a workaround that cannot help. Searching the whole chain for
+        // the marker before falling back also stops a generic outer load exception from masking a real
+        // InternalInfo failure deeper down.
+        Throwable marked = findInChain(e, current -> String.valueOf(current.getMessage())
+            .contains("InternalInfo")); //$NON-NLS-1$
+        if (marked != null)
+        {
+            return " The platform rejected the configuration XML EDT generated for the load " //$NON-NLS-1$
+                + "(the InternalInfo node is missing). This is an EDT-side pipeline limitation " //$NON-NLS-1$
+                + "for this project - the EDT GUI 'Update database configuration' fails the same " //$NON-NLS-1$
+                + "way; it is not caused by the MCP call. Workarounds: update via the platform " //$NON-NLS-1$
+                + "CLI (export_configuration_to_xml, then 1cv8 DESIGNER /LoadConfigFromFiles " //$NON-NLS-1$
+                + "<dir> /UpdateDBCfg), or try a newer EDT release."; //$NON-NLS-1$
+        }
+        Throwable loadFailure = findInChain(e,
+            current -> current.getClass().getSimpleName().contains("ConfigurationLoadException")); //$NON-NLS-1$
+        if (loadFailure != null)
+        {
+            // No cause is asserted here - only what the platform itself reported, plus where to look.
+            String reported = loadFailure.getMessage();
+            // Nothing is asserted about WHAT failed - only what the platform itself reported, and
+            // where to look next. The platform's message may name an object, only a property, or
+            // nothing at all, so promising that it "names the offending object" would be another
+            // invented certainty of exactly the kind this method was fixed to stop making (#382).
+            return " The platform rejected the configuration XML EDT generated for the load" //$NON-NLS-1$
+                + (reported == null || reported.isEmpty() ? "." : ": " + reported) //$NON-NLS-1$ //$NON-NLS-2$
+                + " The load stops at the first thing it cannot read. Use get_project_errors for" //$NON-NLS-1$
+                + " validation markers, and get_metadata_details on whatever the message above" //$NON-NLS-1$
+                + " points at."; //$NON-NLS-1$
+        }
+        return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * The first throwable in {@code e}'s cause chain matching {@code test}, or {@code null}. Walks at
+     * most {@link #MAX_CAUSE_CHAIN_DEPTH} hops, guarding against a cyclical chain.
+     *
+     * @param e the exception to walk from (inclusive)
+     * @param test the predicate
+     * @return the matching throwable, or {@code null} when none matches
+     */
+    private static Throwable findInChain(Throwable e, java.util.function.Predicate<Throwable> test)
     {
         Throwable current = e;
         int depth = 0;
         while (current != null && depth < MAX_CAUSE_CHAIN_DEPTH)
         {
-            String typeName = current.getClass().getSimpleName();
-            String message = String.valueOf(current.getMessage());
-            boolean isConfigLoadFailure = typeName.contains("ConfigurationLoadException") //$NON-NLS-1$
-                || message.contains("InternalInfo"); //$NON-NLS-1$
-            if (isConfigLoadFailure)
+            if (test.test(current))
             {
-                return " The platform rejected the configuration XML EDT generated for the load " //$NON-NLS-1$
-                    + "(the InternalInfo node is missing). This is an EDT-side pipeline limitation " //$NON-NLS-1$
-                    + "for this project - the EDT GUI 'Update database configuration' fails the same " //$NON-NLS-1$
-                    + "way; it is not caused by the MCP call. Workarounds: update via the platform " //$NON-NLS-1$
-                    + "CLI (export_configuration_to_xml, then 1cv8 DESIGNER /LoadConfigFromFiles " //$NON-NLS-1$
-                    + "<dir> /UpdateDBCfg), or try a newer EDT release."; //$NON-NLS-1$
+                return current;
             }
             current = current.getCause();
             depth++;
         }
-        return ""; //$NON-NLS-1$
+        return null;
     }
 }

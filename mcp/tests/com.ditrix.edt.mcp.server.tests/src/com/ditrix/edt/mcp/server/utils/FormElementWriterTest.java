@@ -1883,6 +1883,92 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCreateAttributeWritesViewAndEditDefaults()
+    {
+        // Issue #382: an attribute written without view/edit makes the whole configuration
+        // unloadable - the platform's XDTO reader rejects the generated Form.xml. Every GUI-created
+        // attribute carries <view><common>true</common></view> and the same for <edit>.
+        EObject form = newForm();
+
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Flag", null, null, //$NON-NLS-1$
+            null, null, false, null));
+
+        EObject attribute = FormElementWriter.findFormAttribute(form, "Flag"); //$NON-NLS-1$
+        assertNotNull(attribute);
+        assertAdjustableBooleanIsCommon(attribute, "view"); //$NON-NLS-1$
+        assertAdjustableBooleanIsCommon(attribute, "edit"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateColumnWritesViewAndEditDefaults()
+    {
+        // view/edit are declared on AbstractFormAttribute, so a COLUMN needs them exactly as much as
+        // an attribute does - the same one helper serves both (issue #382).
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows"); //$NON-NLS-1$
+        assertNotNull(rows);
+
+        assertNull(FormElementWriter.createMember(form, Kind.COLUMN, "Price", "Rows", null, //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+
+        EObject column = findColumn(rows, "Price"); //$NON-NLS-1$
+        assertNotNull("the column must exist", column); //$NON-NLS-1$
+        assertAdjustableBooleanIsCommon(column, "view"); //$NON-NLS-1$
+        assertAdjustableBooleanIsCommon(column, "edit"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSettingAnAdjustableBooleanKeepsItsForOverrides()
+    {
+        // modify_metadata turns the flag off by rewriting `common` on the EXISTING object. Replacing
+        // the object instead would silently discard the sibling `for` list - the per-role overrides
+        // the designer stores next to it - turning a flag edit into a quiet loss of data (issue #382).
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.ATTRIBUTE, "Flag", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject attribute = FormElementWriter.findFormAttribute(form, "Flag"); //$NON-NLS-1$
+        EObject adjustable = (EObject)attribute.eGet(feature(attribute, "view")); //$NON-NLS-1$
+        assertNotNull(adjustable);
+        @SuppressWarnings("unchecked")
+        List<EObject> overrides = (List<EObject>)adjustable.eGet(feature(adjustable, "for")); //$NON-NLS-1$
+        overrides.add(MdClassFactory.eINSTANCE.createForRoleType());
+        assertEquals(1, overrides.size());
+
+        assertTrue(FormElementWriter.setAdjustableBooleanFeature(attribute, "view", false)); //$NON-NLS-1$
+
+        EObject after = (EObject)attribute.eGet(feature(attribute, "view")); //$NON-NLS-1$
+        assertSame("the contained object must be REUSED, not replaced", adjustable, after); //$NON-NLS-1$
+        assertEquals(Boolean.FALSE, after.eGet(feature(after, "common"))); //$NON-NLS-1$
+        assertEquals("the per-role overrides must survive the flag edit", 1, //$NON-NLS-1$
+            ((List<?>)after.eGet(feature(after, "for"))).size()); //$NON-NLS-1$
+    }
+
+    /** Asserts that {@code owner}'s {@code featureName} holds an AdjustableBoolean with common=true. */
+    private static void assertAdjustableBooleanIsCommon(EObject owner, String featureName)
+    {
+        Object value = owner.eGet(feature(owner, featureName));
+        assertTrue(featureName + " must be an AdjustableBoolean object, was: " + value, //$NON-NLS-1$
+            value instanceof EObject);
+        EObject adjustable = (EObject)value;
+        assertEquals(featureName + ".common must be true", Boolean.TRUE, //$NON-NLS-1$
+            adjustable.eGet(feature(adjustable, "common"))); //$NON-NLS-1$
+    }
+
+    /** The named column of a collection attribute, or {@code null}. */
+    private static EObject findColumn(EObject attribute, String name)
+    {
+        for (Object column : (List<?>)attribute.eGet(feature(attribute, "columns"))) //$NON-NLS-1$
+        {
+            EObject c = (EObject)column;
+            if (name.equals(c.eGet(feature(c, "name")))) //$NON-NLS-1$
+            {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    @Test
     public void testCreateAttributeAssignsUniqueIdsInAttributeNamespace()
     {
         EObject form = newForm();
@@ -2996,9 +3082,12 @@ public class FormElementWriterTest
             EEnum editMode =
                 newEnum(f, "TableFieldEditMode", "Directly", "Enter", "EnterOnInput"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
-            EClass adjustableBoolean = f.createEClass();
-            adjustableBoolean.setName("AdjustableBoolean"); //$NON-NLS-1$
-            addBoolean(f, adjustableBoolean, "common"); //$NON-NLS-1$
+            // The REAL mdclass AdjustableBoolean, not a synthetic look-alike: the form metamodel's
+            // view / edit / userVisible / use references all target this very EClass, and the
+            // property introspector recognizes them BY THAT TYPE. A synthetic stand-in named
+            // "AdjustableBoolean" would diverge from production exactly where the recognition
+            // happens, so the fixture points at the genuine type (issue #382).
+            EClass adjustableBoolean = MdClassPackage.Literals.ADJUSTABLE_BOOLEAN;
 
             // The extInfo family: an abstract base plus the concrete classes the writer resolves by
             // name (group ext-infos, the input-field ext-info and the tooltip's label ext-info).
@@ -3171,20 +3260,29 @@ public class FormElementWriterTest
             abstractFormAttribute.setAbstract(true);
             addInt(f, abstractFormAttribute, "id"); //$NON-NLS-1$
             addString(f, abstractFormAttribute, "name"); //$NON-NLS-1$
+            // view/edit (each an AdjustableBoolean - "use") are declared HERE, on the abstract
+            // supertype, exactly as the EDT metamodel declares them - so BOTH FormAttribute and
+            // FormAttributeColumn inherit them. Declaring them on the concrete FormAttribute instead
+            // left the synthetic column WITHOUT the features, which made the reflective writer a
+            // silent no-op there and let a broken column default pass green (issue #382).
+            abstractFormAttribute.getEStructuralFeatures().add(
+                containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
+            abstractFormAttribute.getEStructuralFeatures().add(
+                containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
+            // view/edit (each an AdjustableBoolean - "use") are declared HERE, on the abstract
+            // supertype, exactly as the EDT metamodel declares them - so BOTH FormAttribute and
+            // FormAttributeColumn inherit them. Declaring them on the concrete FormAttribute instead
+            // left the synthetic column without the features, which made the reflective writer a
+            // silent no-op on columns and would let a broken column default pass green (issue #382).
 
             formAttribute = f.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$
             formAttribute.getESuperTypes().add(abstractFormAttribute);
-            // The seed (issue #208) sets these on the main Object attribute: main/savedData booleans and
-            // the presentation flags view/edit (each an AdjustableBoolean - "use"). Declare them so the
-            // headless write logic can be exercised and the test can read them back (an absent feature
-            // would make the reflective writer a no-op and the eGet(null) read throw).
+            // The seed (issue #208) sets these on the main Object attribute: main/savedData booleans.
+            // Declare them so the headless write logic can be exercised and the test can read them back
+            // (an absent feature would make the reflective writer a no-op and the eGet(null) read throw).
             addBoolean(f, formAttribute, "main"); //$NON-NLS-1$
             addBoolean(f, formAttribute, "savedData"); //$NON-NLS-1$
-            formAttribute.getEStructuralFeatures().add(
-                containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
-            formAttribute.getEStructuralFeatures().add(
-                containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
             // A collection attribute's value type + its COLUMNS (issue #295): the writer reads both
             // reflectively, so a headless test can exercise the collection paths (a table bound to a
             // ValueTable attribute, a field bound to one of its columns). 'types' is NON-containment,
@@ -3276,7 +3374,9 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(fieldType);
             pkg.getEClassifiers().add(horizontalAlign);
             pkg.getEClassifiers().add(editMode);
-            pkg.getEClassifiers().add(adjustableBoolean);
+            // adjustableBoolean is deliberately NOT added: it is the REAL mdclass EClass, and
+            // EClassifier containment is single-parent - adding it here would REPARENT it out of
+            // MdClassPackage for the whole JVM, corrupting the metamodel for every later test.
             pkg.getEClassifiers().add(extInfoBase);
             pkg.getEClassifiers().add(usualGroupExtInfo);
             pkg.getEClassifiers().add(popupGroupExtInfo);

@@ -20,8 +20,10 @@ Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc, ..
 
 import os
 import uuid
+import xml.etree.ElementTree as ET
 
 from harness import (
+    E2ESkip,
     call,
     assert_ok,
     assert_error,
@@ -505,6 +507,199 @@ def test_modify_form_field_title_visible_readonly():
         assert f in applied, "%s must be in applied: %r" % (f, r.structured)
     poll_diff_contains("Modified field title",
                        ctx="the field title must land in the form's .form on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_attribute_view_and_edit_are_assignable():
+    # Issue #382: view/edit were not assignable at all, so an attribute created without them
+    # (every attribute created before the create-side fix) could not be repaired through MCP -
+    # and the configuration stayed unloadable. The wire value is a plain boolean addressing the
+    # nested <common> flag.
+    _seed_form_attribute("MFViewEditAttr")
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute.MFViewEditAttr"
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": False}, {"name": "edit", "value": False}],
+    })
+    assert_ok(r, "set view/edit on a form attribute")
+    applied = r.structured.get("applied") or []
+    assert "view" in applied and "edit" in applied, \
+        "both flags must be reported applied: %r" % (r.structured,)
+    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form",
+                       "<common>false</common>",
+                       ctx="the cleared flag must land in the form's .form on disk")
+
+    back = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": True}]})
+    assert_ok(back, "set view back to true")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_attribute_view_rejects_a_non_boolean():
+    _seed_form_attribute("MFViewBadAttr")
+    snap = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.MFViewBadAttr",
+        "properties": [{"name": "view", "value": "maybe"}]})
+    e = assert_error(r, "a non-boolean view value must be refused")
+    assert_error_quality(e, names=["maybe", "view"], suggests=["true or false"])
+    assert_tree_unchanged(snap, ctx="a refused flag change must not touch the disk")
+
+
+def _form_attribute_block(form_xml, name):
+    """The <attributes> element named `name` from a Form.form document, or None."""
+    root = ET.fromstring(form_xml)
+    for attributes in root.iter("attributes"):
+        child = attributes.find("name")
+        if child is not None and child.text == name:
+            return attributes
+    return None
+
+
+def _view_role_overrides(block):
+    """The role FQNs of the per-role <for> overrides under an attribute's <view>; [] when none.
+
+    An AdjustableBoolean is a `common` flag PLUS a `for` list of ForRoleType entries (role +
+    value). The wire boolean addresses `common` only, so this reads the half nothing on the
+    surface writes - and the half a careless applier drops without a word."""
+    view = None if block is None else block.find("view")
+    if view is None:
+        return []
+    roles = []
+    for entry in view.findall("for"):
+        role = entry.find("role")
+        if role is not None and role.text:
+            roles.append(role.text.strip())
+    return roles
+
+
+def _plant_view_role_override(attr, role_fqn):
+    """Write a per-role override into `attr`'s <view> straight onto the fixture on disk.
+
+    NO tool authors a ForRoleType entry: `view`/`edit` take a plain boolean and it addresses
+    `common`, and nothing else in the surface writes an AdjustableBoolean's `for` list. So the
+    override is planted on disk - the same supported pattern
+    test_xdto_namespace_change_cascades_into_referencing_package uses to plant its referencing
+    package - and the caller brings it into the MODEL with clean_project, the deterministic
+    re-import (a Windows stand's auto-refresh is an accident, not a mechanism).
+
+    The file is read and written with newline='' so its CRLF endings survive untouched."""
+    full = os.path.join(PROJECT_DIR, _ITEM_FORM)
+    with open(full, encoding="utf-8", newline="") as f:
+        text = f.read()
+    anchor = "<name>%s</name>" % attr
+    if anchor not in text:
+        raise AssertionError("setup failed: %s is not in %s yet" % (attr, _ITEM_FORM))
+    start = text.index(anchor)
+    end = text.index("</attributes>", start)
+    block = text[start:end]
+    if "</view>" not in block:
+        raise AssertionError("setup failed: %s carries no <view> block to extend" % attr)
+    override = "<for><value>true</value><role>%s</role></for>" % role_fqn
+    patched = text[:start] + block.replace("</view>", override + "</view>", 1) + text[end:]
+    with open(full, "w", encoding="utf-8", newline="") as f:
+        f.write(patched)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_attribute_view_flip_preserves_per_role_overrides():
+    """Issue #382: `view` is a CONTAINED AdjustableBoolean - a `common` flag PLUS a `for` list of
+    per-role overrides. Setting the flag must rewrite `common` on the object that is already
+    there; a plain eSet would put a fresh object in its place and take the overrides with it.
+    That apply branch is unreachable from a unit test, so this is the only thing pinning it.
+
+    The override has to be planted on disk (see _plant_view_role_override) because no tool
+    authors one. If the platform does not round-trip the planted entry then this stand cannot
+    seed the scenario at all, so the test SKIPS rather than reporting a failure it never
+    observed - and that check runs BEFORE the flag flip, so it can never mask the bug under
+    test."""
+    role = "E2EViewForRole"
+    role_fqn = "Role." + role
+    attr = "MFForRoleAttr"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": role_fqn})
+    assert_ok(r, "seed the role the override points at")
+    poll_diff_contains(role, ctx="the seeded role must be on disk before the re-import")
+    _seed_form_attribute(attr)
+    poll_disk_contains(_ITEM_FORM, "<name>%s</name>" % attr,
+                       ctx="the seeded attribute must be on disk before it is patched")
+
+    _plant_view_role_override(attr, role_fqn)
+    wait_for_project_ready()
+    r = call("clean_project", {"projectName": PROJECT})
+    assert_ok(r, "clean_project re-imports the planted per-role override from disk")
+    wait_for_project_ready()
+
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    # Force a fresh export FROM THE MODEL through a property that has nothing to do with the
+    # adjustable flags. What comes back says whether the model really holds the planted
+    # override: without this probe a missing <for> after the flip could mean either "the
+    # applier dropped it" or "it was never imported", and those need opposite reactions.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "type",
+                        "value": {"types": [{"kind": "Number", "precision": 10, "scale": 2}]}}]})
+    assert_ok(r, "re-export the form from the model through an unrelated property")
+    poll_disk_contains(_ITEM_FORM, "precision",
+                       ctx="the type change must re-export the form")
+    if role_fqn not in _view_role_overrides(_form_attribute_block(read_disk(_ITEM_FORM), attr)):
+        raise E2ESkip(
+            "the planted per-role <for> override on %s did not survive the import/export round "
+            "trip, so this stand cannot seed one and the preservation guarantee cannot be "
+            "judged here; the structural half is still covered by "
+            "test_form_attribute_view_flip_rewrites_the_flag_in_place" % attr)
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": False}]})
+    assert_ok(r, "clear view on an attribute carrying a per-role override")
+    poll_disk_contains(_ITEM_FORM, "<common>false</common>",
+                       ctx="the cleared flag must land in the form's .form on disk")
+    block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
+    assert block is not None, "the attribute must still be in Form.form"
+    view = block.find("view")
+    assert view is not None, "<view> must survive the flip as a structured block"
+    common = view.find("common")
+    assert common is not None and common.text == "false", \
+        "<view> must carry <common>false</common>, got %r" % (
+            None if common is None else common.text)
+    assert role_fqn in _view_role_overrides(block), \
+        "the per-role override must survive the flag flip - a plain eSet would have replaced " \
+        "the AdjustableBoolean and taken it along; <view> now holds %r" % (
+            _view_role_overrides(block),)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_attribute_view_flip_rewrites_the_flag_in_place():
+    """The structural half of the same guarantee, needing no role fixture: flipping `view` must
+    rewrite the <common> INSIDE the existing <view> element. A replacement (or a write of a bare
+    boolean into the slot) shows up here as a <view> that is no longer a block with a <common>
+    child, and the untouched sibling <edit> pins that only the addressed flag moved."""
+    attr = "MFViewInPlaceAttr"
+    _seed_form_attribute(attr)
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "properties": [{"name": "view", "value": False}]})
+    assert_ok(r, "clear view on a form attribute")
+    poll_disk_contains(_ITEM_FORM, "<common>false</common>",
+                       ctx="the cleared flag must land in the form's .form on disk")
+    block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
+    assert block is not None, "the attribute must be in Form.form"
+    view = block.find("view")
+    assert view is not None, "<view> must still be an element, not removed"
+    common = view.find("common")
+    assert common is not None and common.text == "false", \
+        "<common> must be rewritten in place to false, got %r" % (
+            None if common is None else common.text)
+    assert not (view.text or "").strip(), \
+        "<view> must stay a structured block, not a bare boolean: %r" % view.text
+    edit = block.find("edit")
+    edit_common = None if edit is None else edit.find("common")
+    assert edit_common is not None and edit_common.text == "true", \
+        "the sibling <edit> must be untouched, got %r" % (
+            None if edit_common is None else edit_common.text)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
