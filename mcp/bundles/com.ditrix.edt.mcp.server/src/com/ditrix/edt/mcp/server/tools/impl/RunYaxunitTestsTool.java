@@ -1822,7 +1822,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * {@link PreLaunchResult} in {@code resultHolder[0]} and always counts down the
      * entry's latch — identical to the inline body it replaces.
      */
-    private static void schedulePrepJob(PrepInFlight entry, PrepRequest req,
+    static void schedulePrepJob(PrepInFlight entry, PrepRequest req, // NOSONAR package-private so the hand-over ratchet can drive the real scheduling site
             PreLaunchResult[] resultHolder)
     {
         final PrepInFlight jobEntry = entry;
@@ -1835,7 +1835,17 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
         };
         prepJob.setPriority(Job.INTERACTIVE);
-        prepJob.schedule();
+        try
+        {
+            prepJob.schedule();
+        }
+        finally
+        {
+            // In a finally, and never skipped: the entry needs the job to tell "still queued"
+            // from "gone without running". A schedule() that threw produces exactly the second
+            // case, and an entry that cannot report it is one nothing will ever replace.
+            entry.trackScheduledJob(prepJob);
+        }
     }
 
     /**

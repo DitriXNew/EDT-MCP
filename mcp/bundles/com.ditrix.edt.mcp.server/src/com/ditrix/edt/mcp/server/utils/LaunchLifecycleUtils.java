@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
@@ -163,9 +164,74 @@ public final class LaunchLifecycleUtils
          */
         public final AtomicBoolean started = new AtomicBoolean(false);
 
+        /**
+         * The job carrying this preparation, once it has been handed over; {@code null} until
+         * then. Read only through {@link #isCarrierAlive()} — its liveness is what tells a
+         * waiting entry apart from an abandoned one.
+         */
+        private volatile Job carrier;
+
         public PrepInFlight(long startedAtMs)
         {
             this.startedAtMs = startedAtMs;
+        }
+
+        /**
+         * Hands over the job that carries this preparation, so the entry can observe whether the
+         * work is still going to happen.
+         *
+         * <p>Called from a {@code finally} around {@code schedule()}: a schedule that THREW must
+         * still hand the job over, because that entry is exactly the kind nothing will ever
+         * complete, and it has to be replaceable.
+         *
+         * @param scheduledJob the job that was (or was meant to be) scheduled
+         */
+        public void trackScheduledJob(Job scheduledJob)
+        {
+            this.carrier = scheduledJob;
+        }
+
+        /**
+         * Whether this entry has been told which job carries it.
+         *
+         * <p>Observability for the hand-over itself, which is otherwise invisible: an entry
+         * whose job always completes behaves identically with and without it, so only the
+         * abandoned case — the one that made entries immortal — depends on it. Something has to
+         * be able to assert the hand-over happened at all, or deleting it would go unnoticed.
+         *
+         * @return {@code true} once {@link #trackScheduledJob(Job)} has been called
+         */
+        public boolean hasTrackedCarrier()
+        {
+            return carrier != null;
+        }
+
+        /**
+         * Whether the work behind this entry is still going to happen.
+         *
+         * <p>A job that is queued, sleeping or running is alive. A job that has left the
+         * scheduler is not — whether it ran to completion, was cancelled before it started, or
+         * never got scheduled at all.
+         */
+        private boolean isCarrierAlive()
+        {
+            Job job = carrier;
+            if (job == null)
+            {
+                // Not handed over yet: either nobody has scheduled it (the creating thread is
+                // about to) or we are inside the window between schedule() and the hand-over.
+                // Both mean the work is about to run — unless the body already finished, in
+                // which case the entry is a completed one and ages out below.
+                //
+                // This is the ONE state the carrier cannot report on, so it is the one place a
+                // clock is still needed: the hand-over follows the scheduling CAS within
+                // microseconds, so an entry that STILL has no carrier a whole expiry window
+                // later never got one — the thread that claimed the scheduling died before it
+                // could build the job. Without this bound that entry would be immortal exactly
+                // like the cancelled-while-queued one, just by a rarer route.
+                return !done && System.currentTimeMillis() - startedAtMs <= INFLIGHT_EXPIRY_MS;
+            }
+            return job.getState() != Job.NONE;
         }
 
         /** Elapsed whole seconds since the job started. */
@@ -175,21 +241,36 @@ public final class LaunchLifecycleUtils
         }
 
         /**
-         * {@code true} when this entry may be discarded and replaced by a fresh preparation:
-         * it has FINISHED and is older than {@link #INFLIGHT_EXPIRY_MS}.
+         * {@code true} when this entry may be discarded and replaced by a fresh preparation.
          *
-         * <p>Age alone is not the question. The body that owns an entry completes it in a
-         * {@code finally} — even an {@link Error} escaping the preparation counts the latch
-         * down — so an entry that is not {@code done} means the work is genuinely still
-         * running. Replacing it would schedule a SECOND preparation that can only queue behind
-         * the per-infobase monitor the first one holds, and a caller polling a legitimately
-         * long recompute (minutes to an hour on a large configuration) would keep stacking
-         * them up. Waiting is the correct answer there, and the caller's own deadline — not
-         * this expiry — is what keeps the CALL bounded (#357).
+         * <p>ONE rule: an entry is replaceable once <b>nothing more will come of waiting on
+         * it</b>. Whether that is so is read off the carrying job, not guessed from the clock:
+         * <ul>
+         *   <li>the job is queued, sleeping or running — the work is in flight, so waiting is
+         *       the correct answer and replacing it would only stack a second preparation
+         *       behind the per-infobase monitor the first one holds (#357);</li>
+         *   <li>the job has left the scheduler without completing — cancelled while it was
+         *       still queued, or never scheduled because {@code schedule()} threw — so the
+         *       entry will NEVER complete and is replaceable at once;</li>
+         *   <li>the job has left the scheduler having completed — the result is worth keeping
+         *       for {@link #INFLIGHT_EXPIRY_MS} so a returning caller can still collect it,
+         *       and after that the entry ages out.</li>
+         * </ul>
+         *
+         * <p>Age alone was wrong because it evicted honest long-running preparations. Requiring
+         * {@code done} was wrong the other way: a job cancelled before it ran has neither
+         * {@code done} nor a live carrier, so it fell between the two and became IMMORTAL —
+         * every later call for that project and application saw "already started", scheduled no
+         * replacement, and returned Pending forever. The carrier's own state is the single
+         * signal that separates all three cases.
          */
         public boolean isExpired()
         {
-            return done && System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
+            if (isCarrierAlive())
+            {
+                return false;
+            }
+            return !done || System.currentTimeMillis() - startedAtMs > INFLIGHT_EXPIRY_MS;
         }
     }
 

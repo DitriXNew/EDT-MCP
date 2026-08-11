@@ -520,12 +520,33 @@ public class RunYaxunitTestsToolTest
         // one holds — and a caller polling a legitimately long recompute (the guide calls forty
         // minutes normal) would stack up one more on every retry.
         PrepInFlight running = new PrepInFlight(System.currentTimeMillis() - (60L * 60L * 1000L));
-        assertFalse("an hour-old preparation that is still running must NOT be replaced",
-            running.isExpired());
+        // "Running" is what production observes: a carrier still in the scheduler.
+        org.eclipse.core.runtime.jobs.Job live =
+            new org.eclipse.core.runtime.jobs.Job("still-running-preparation") //$NON-NLS-1$
+            {
+                @Override
+                protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+                {
+                    return org.eclipse.core.runtime.Status.OK_STATUS;
+                }
+            };
+        try
+        {
+            live.schedule(10 * 60 * 1000L);
+            running.trackScheduledJob(live);
+            assertFalse("an hour-old preparation that is still running must NOT be replaced",
+                running.isExpired());
 
-        running.done = true;
-        assertTrue("once finished, an old entry may be discarded so the next call starts fresh",
-            running.isExpired());
+            live.cancel();
+            running.done = true;
+            assertTrue("once finished, an old entry may be discarded so the next call starts fresh",
+                running.isExpired());
+        }
+        finally
+        {
+            live.cancel();
+        }
 
         PrepInFlight fresh = new PrepInFlight(System.currentTimeMillis());
         fresh.done = true;
@@ -712,6 +733,35 @@ public class RunYaxunitTestsToolTest
         assertTrue("first claim wins", state.publishResult());
         assertFalse("second claim loses", state.claimAnswer());
         assertFalse("and stays lost", state.publishResult());
+    }
+
+    @Test
+    public void testTheSchedulerHandsTheJobToTheEntry() throws Exception
+    {
+        // Pins the CALL SITE, not the setter: `PrepInFlight.isExpired` can only tell a queued
+        // preparation from an abandoned one if something gives it the job. A test that called
+        // trackScheduledJob itself would happily survive deleting the hand-over, which is the
+        // vacuum pin this PR has already been caught by once.
+        //
+        // A null launch manager makes the body finish immediately with an error, so the real
+        // scheduling site is exercised without EDT services.
+        RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+            "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, ExternalInfobaseChangesPolicy.DEFAULT, "handover-ratchet"); //$NON-NLS-1$
+        PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
+
+        RunYaxunitTestsTool.schedulePrepJob(entry, req, new PreLaunchResult[1]);
+
+        // THE assertion: the entry must know its carrier. An entry whose job runs to completion
+        // behaves identically with and without the hand-over — only the abandoned case depends
+        // on it — so asserting the hand-over itself is the only thing that notices its removal.
+        assertTrue("the scheduling site must hand the job to the entry, or a preparation "
+            + "cancelled before it ran can never be told apart from one still queued",
+            entry.hasTrackedCarrier());
+
+        assertTrue("the scheduled body must still run to completion",
+            entry.latch.await(30, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue("and complete the entry", entry.done);
     }
 
     @Test
