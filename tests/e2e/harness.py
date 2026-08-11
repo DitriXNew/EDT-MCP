@@ -465,7 +465,12 @@ def model_is_pristine():
     if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
         return False
     try:
-        wait_for_project_ready()
+        # Its VERDICT matters, not just that it ran: it returns False on timeout, meaning EDT is
+        # still building. The whole reason to settle here is that a pending async export would
+        # otherwise land after the git/inventory snapshots and leak into a later test - so a
+        # settle that did not finish is exactly the case where the evidence must not be trusted.
+        if not wait_for_project_ready():
+            return False
     except E2ECallTimeout:
         raise
     except Exception:

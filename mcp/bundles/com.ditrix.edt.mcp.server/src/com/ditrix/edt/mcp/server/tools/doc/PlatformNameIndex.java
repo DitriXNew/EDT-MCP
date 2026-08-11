@@ -36,11 +36,19 @@ final class PlatformNameIndex
     private static final int SAMPLE_LIMIT = 30;
 
     /**
-     * How many candidates are held back for the printed list. More than {@link #SAMPLE_LIMIT},
+     * How many candidates are kept for the printed list. Far more than {@link #SAMPLE_LIMIT},
      * because a candidate that fails the resolvability check at render time is dropped and the list
-     * has to stay full.
+     * has to stay full - and a run of failures at the head of the scan must not be able to exhaust
+     * the pool while thousands of good names sit behind it. Names are short strings; holding them
+     * costs nothing next to the resolution that {@link #VERIFY_ATTEMPT_LIMIT} actually bounds.
      */
-    private static final int CANDIDATE_LIMIT = SAMPLE_LIMIT * 4;
+    private static final int CANDIDATE_LIMIT = 2000;
+
+    /**
+     * How many candidates may be RESOLVED while filling the printed list. This, not the pool size,
+     * is the real cost bound: each attempt loads a platform resource.
+     */
+    private static final int VERIFY_ATTEMPT_LIMIT = SAMPLE_LIMIT * 4;
 
     /** How many "did you mean" candidates the banner offers. */
     private static final int SUGGESTION_LIMIT = 8;
@@ -183,12 +191,14 @@ final class PlatformNameIndex
     private List<String> verified(List<String> candidates, int limit)
     {
         List<String> kept = new ArrayList<>();
+        int attempts = 0;
         for (String candidate : candidates)
         {
-            if (kept.size() >= limit)
+            if (kept.size() >= limit || attempts >= VERIFY_ATTEMPT_LIMIT)
             {
                 break;
             }
+            attempts++;
             if (accepts(candidate))
             {
                 kept.add(candidate);
@@ -219,10 +229,26 @@ final class PlatformNameIndex
             sb.append("Did you mean: ").append(String.join(", ", suggestions)).append("?\n\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
 
-        List<String> listed = verified(samples, SAMPLE_LIMIT);
-        if (total == 0 || listed.isEmpty())
+        if (total == 0)
         {
             sb.append("(no ").append(itemsLabel).append(" found - provider may be empty)\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            return sb.toString();
+        }
+
+        List<String> listed = verified(samples, SAMPLE_LIMIT);
+        if (listed.isEmpty())
+        {
+            // The provider is NOT empty - it published `total` names - but not one of the ones
+            // tried could be resolved. Saying "may be empty" here would be a false diagnosis, and
+            // dropping the hint would leave the caller with no next step at the moment it needs one
+            // most. State what actually happened and still point somewhere.
+            sb.append("(").append(total).append(" ").append(itemsLabel) //$NON-NLS-1$
+                .append(" are published, but none of the ones checked could be resolved - the " //$NON-NLS-1$
+                    + "platform model may not be fully loaded yet)\n"); //$NON-NLS-1$
+            if (hint != null && !hint.isEmpty())
+            {
+                sb.append('\n').append(hint).append('\n');
+            }
             return sb.toString();
         }
 

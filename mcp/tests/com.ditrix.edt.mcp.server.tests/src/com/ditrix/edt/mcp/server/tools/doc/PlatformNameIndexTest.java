@@ -171,6 +171,44 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testAGoodNameBehindABlockOfBadOnesStillGetsListed()
+    {
+        // The pool must not be exhausted by a run of failures at the HEAD of the scan: the provider
+        // hands names out in its own order, and a hundred unresolvable ones in front used to bury
+        // every usable name behind them.
+        PlatformNameIndex index = new PlatformNameIndex("Nope", n -> !n.startsWith("Broken")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 100; i++)
+        {
+            index.accept("BrokenType" + i); //$NON-NLS-1$
+        }
+        index.accept("Array"); //$NON-NLS-1$
+        String banner = index.buildNotFoundBanner("Type not found: ", "Nope", "types", "hint"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertTrue("a resolvable name behind the bad block must still be listed", //$NON-NLS-1$
+            banner.contains("- Array")); //$NON-NLS-1$
+        assertFalse(banner.contains("- BrokenType0")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExhaustedSampleIsNotReportedAsAnEmptyProvider()
+    {
+        // "provider may be empty" is a specific diagnosis and it would be FALSE here: the provider
+        // published names, they just did not resolve. And the hint - the caller's next step - must
+        // survive precisely in the case where it is needed most.
+        PlatformNameIndex index = new PlatformNameIndex("Nope", n -> false); //$NON-NLS-1$
+        index.accept("Array"); //$NON-NLS-1$
+        index.accept("ValueTable"); //$NON-NLS-1$
+        String banner = index.buildNotFoundBanner("Type not found: ", "Nope", "types", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Use get_metadata_details for a configuration object."); //$NON-NLS-1$
+
+        assertFalse("the provider is not empty - it published 2 names", //$NON-NLS-1$
+            banner.contains("provider may be empty")); //$NON-NLS-1$
+        assertTrue(banner.contains("2 types are published")); //$NON-NLS-1$
+        assertTrue("the next step must survive", //$NON-NLS-1$
+            banner.contains("Use get_metadata_details for a configuration object.")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testBlankNamesAreIgnored()
     {
         PlatformNameIndex index = new PlatformNameIndex("Array"); //$NON-NLS-1$

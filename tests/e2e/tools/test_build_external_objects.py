@@ -184,7 +184,11 @@ def _ensure_absent(name, verify=False):
     deadline = time.time() + 60
     while time.time() < deadline:
         listed = call("list_projects", {})
-        if name not in (listed.text or ""):
+        # POSITIVE evidence only. An errored or empty listing does not say "the project is gone",
+        # it says "we could not look" — and accepting that as proof walks straight into the reuse
+        # path this verification exists to prevent.
+        readable = (not listed.is_error) and bool((listed.text or "").strip())
+        if readable and name not in listed.text:
             return
         time.sleep(1)
         call("delete_project", {"projectName": name, "deleteContent": True, "confirm": True})
