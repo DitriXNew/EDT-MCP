@@ -513,8 +513,12 @@ jobs:
       checks: write
       pull-requests: write
     steps:
+      # continue-on-error so that "no artifact matched the pattern" reaches the counting step
+      # below, which says WHICH reports are missing, instead of dying in the action with a generic
+      # "unable to find any artifacts". The shard jobs are the gate; this job only reports.
       - name: Download every shard's report
         uses: actions/download-artifact@v8
+        continue-on-error: true
         with:
           pattern: e2e-test-results-${{ inputs.edt }}-*
           path: shard-reports
