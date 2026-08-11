@@ -529,6 +529,14 @@ jobs:
         run: |
           # A missing shard report is not a pass. It means a runner died before writing one, and
           # the combined check would then quietly describe a fraction of the suite.
+          #
+          # The directory is CREATED first, not assumed. When every shard dies the download step
+          # fails - which its continue-on-error explicitly permits - and may never create its
+          # destination; the count then reaches zero correctly, but the redirect below has nowhere
+          # to write, dies under -e, and the synthetic failing report never appears. The worst case
+          # is exactly the one where the red check matters most, so nothing on that path may assume
+          # a previous step succeeded.
+          mkdir -p shard-reports
           ls -la shard-reports || true
           # Counted with nullglob, NOT `ls *.xml | wc -l`. GitHub runs `shell: bash` as
           # `bash -eo pipefail`, so with zero reports the ls fails, pipefail propagates it out of
