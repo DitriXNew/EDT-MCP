@@ -265,11 +265,22 @@ final class PlatformNameIndex
         // Strided by the ATTEMPT budget, not by how many names are offered. Those are different
         // numbers and using the wrong one silently defeats the spread: with SUGGESTION_LIMIT the
         // stride over a 201-name bucket is 26, so the first pass visits 8 entries and the good name
-        // at the tail is reached only after ~150 attempts - past VERIFY_ATTEMPT_LIMIT, never tried.
-        // The stride has to be sized so ONE pass spans the pool within the attempts available.
-        List<String> strong = new ArrayList<>(strided(prefixHits, VERIFY_ATTEMPT_LIMIT));
-        strong.addAll(strided(otherHits, VERIFY_ATTEMPT_LIMIT));
-        List<String> best = verified(strong, SUGGESTION_LIMIT);
+        // at the tail is reached only after ~150 attempts - past the budget, never tried. The
+        // stride has to be sized so ONE pass spans the pool within the attempts available.
+        //
+        // And each strong bucket gets its OWN half of the budget rather than sharing one. Ranked
+        // first does not mean entitled to everything: 120 unresolvable prefix matches would
+        // otherwise consume the whole allowance and a query like `CatalogObject.Currencies` would
+        // lose the base-type hint sitting in otherHits - the single most useful suggestion this
+        // banner has, dropped because unrelated broken names happened to sort ahead of it. The
+        // total stays what it was; only its division changed.
+        int share = Math.max(1, VERIFY_ATTEMPT_LIMIT / 2);
+        List<String> best =
+            new ArrayList<>(verified(strided(prefixHits, share), SUGGESTION_LIMIT, share));
+        if (best.size() < SUGGESTION_LIMIT)
+        {
+            best.addAll(verified(strided(otherHits, share), SUGGESTION_LIMIT - best.size(), share));
+        }
         return best.isEmpty()
             ? verified(strided(typoHits, VERIFY_ATTEMPT_LIMIT), SUGGESTION_LIMIT) : best;
     }
@@ -331,11 +342,26 @@ final class PlatformNameIndex
 
     private List<String> verified(List<String> candidates, int limit)
     {
+        return verified(candidates, limit, VERIFY_ATTEMPT_LIMIT);
+    }
+
+    /**
+     * As {@link #verified(List, int)}, with an explicit ceiling on the RESOLUTIONS this pass may
+     * spend. Separate from {@code limit}, which counts results: a caller that verifies two ranked
+     * pools in turn has to be able to stop the first from eating the allowance the second needs.
+     *
+     * @param candidates the names to check, best first
+     * @param limit how many verified names to collect
+     * @param attemptLimit how many resolutions this pass may attempt
+     * @return the names that passed, in the order given
+     */
+    private List<String> verified(List<String> candidates, int limit, int attemptLimit)
+    {
         List<String> kept = new ArrayList<>();
         int attempts = 0;
         for (String candidate : candidates)
         {
-            if (kept.size() >= limit || attempts >= VERIFY_ATTEMPT_LIMIT)
+            if (kept.size() >= limit || attempts >= attemptLimit)
             {
                 break;
             }

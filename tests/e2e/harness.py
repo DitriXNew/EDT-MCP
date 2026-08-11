@@ -511,6 +511,10 @@ DEEP_MUTATION_TOOLS = frozenset({
 MODEL_MUTATION_TOOLS = frozenset({
     "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
     "apply_quick_fix", "build_external_objects",
+    # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection, so
+    # no marker in this repository's sources can reveal them. The ratchet pins them by name for
+    # exactly that reason - see _REFLECTIVE_WRITERS in test_mutation_set_ratchet.py.
+    "generate_translation_strings", "translate_configuration",
 }) | DEEP_MUTATION_TOOLS
 
 _CALLED_TOOLS = set()

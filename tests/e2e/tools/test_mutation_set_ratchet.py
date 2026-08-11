@@ -60,6 +60,16 @@ _WRITE_MARKERS = (
 # Each tool publishes its wire name as a NAME constant; that is the string the harness sees.
 _NAME_RE = re.compile(r'String\s+NAME\s*=\s*"([a-z_0-9]+)"')
 
+# Writers the markers above CANNOT see, and never will: these call LanguageTool through reflection
+# (`Method.invoke` on `com.e1c.langtool...`), so the write happens in code this repository does not
+# contain. No amount of scanning our own sources reveals it.
+#
+# That is a real limit of the scan, so it is written down and CHECKED rather than left as a gap
+# somebody has to remember. The list is hand-maintained by necessity - but a hand-maintained list
+# that a test asserts is a different thing from one that only exists in a reviewer's memory, which
+# is what let apply_quick_fix and build_external_objects slip through in the first place.
+_REFLECTIVE_WRITERS = ("generate_translation_strings", "translate_configuration")
+
 
 def _write_tools():
     """(tool name, java file) for every tool declaring itself a metadata writer."""
@@ -108,6 +118,36 @@ def test_every_metadata_write_tool_is_a_known_mutation():
               "being cleaned up on top of - neither happens while the set does not know the "
               "tool. Add it to MODEL_MUTATION_TOOLS (or to DEEP_MUTATION_TOOLS if merely CALLING "
               "it, refused or not, can move the model)." % "; ".join(missing))
+
+
+@e2e_test(tool="_mutation_set_ratchet", kind="read")
+def test_writers_that_delegate_through_reflection_are_still_classified():
+    """The scan's blind spot, pinned so it cannot widen unnoticed.
+
+    A tool that hands the write to a third party through reflection leaves no marker in these
+    sources. It is still a writer: if such a request dies in flight, the server may be mid-write
+    while the next test resets the fixture. The names therefore have to be carried by hand - and
+    this test is what stops "by hand" from meaning "until someone forgets"."""
+    missing = [name for name in _REFLECTIVE_WRITERS if name not in MODEL_MUTATION_TOOLS]
+    if missing:
+        _fail("these tools write through reflection (LanguageTool), so no source marker can reveal "
+              "them, and they are missing from harness.MODEL_MUTATION_TOOLS: %s. They must be "
+              "listed by name - the scan cannot find them for you." % ", ".join(missing))
+
+    # And they must really exist under the names claimed: a renamed tool would leave this list
+    # pinning a ghost while the real writer went unclassified again.
+    published = set()
+    for entry in os.listdir(_TOOLS_IMPL_DIR):
+        if entry.endswith("Tool.java"):
+            with open(os.path.join(_TOOLS_IMPL_DIR, entry), encoding="utf-8") as f:
+                match = _NAME_RE.search(f.read())
+            if match:
+                published.add(match.group(1))
+    ghosts = [name for name in _REFLECTIVE_WRITERS if name not in published]
+    if ghosts:
+        _fail("no tool publishes these names any more: %s. The reflective-writer list is pinning "
+              "something that no longer exists, so it is no longer protecting anything - update it "
+              "to whatever the tool is called now." % ", ".join(ghosts))
 
 
 @e2e_test(tool="_mutation_set_ratchet", kind="read")

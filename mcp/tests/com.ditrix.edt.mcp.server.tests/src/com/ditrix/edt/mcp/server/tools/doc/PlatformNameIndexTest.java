@@ -361,6 +361,26 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testABrokenPrefixBucketDoesNotStarveTheSubstringBucket()
+    {
+        // Ranked first is not entitled to everything. A wall of unresolvable prefix matches used to
+        // consume the whole verification allowance, and the base-type hint in the substring bucket
+        // - the single most useful suggestion this banner can give a qualified query - never got a
+        // resolution attempt at all.
+        PlatformNameIndex index = new PlatformNameIndex(
+            "CatalogObject.Currencies", "CatalogObject"::equals); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 300; i++)
+        {
+            // Start with the query, so they land in the STRONG prefix bucket, and never resolve.
+            index.accept("CatalogObject.CurrenciesBroken" + i); //$NON-NLS-1$
+        }
+        index.accept("CatalogObject"); // the base type the query qualifies - resolves //$NON-NLS-1$
+
+        assertTrue("the base-type hint must survive a prefix bucket full of broken names", //$NON-NLS-1$
+            index.suggestions().contains("CatalogObject")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testASaturatedPrefixBucketStillReachesAResolvablePrefixMatch()
     {
         // The prefix bucket is the STRONGEST one, so a caller whose correction is a prefix match
