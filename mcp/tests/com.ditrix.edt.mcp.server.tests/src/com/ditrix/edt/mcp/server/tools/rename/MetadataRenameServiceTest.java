@@ -276,9 +276,12 @@ public class MetadataRenameServiceTest
     {
         EObject form = newForm();
 
+        // PriceField, not Price: Price is an ATTRIBUTE in this fixture, and the item-tree lookup the
+        // old code used would not have found it either - the assertion would have passed against the
+        // very bug it is named for. It has to name something that really is in the item tree.
         assertNull("a command may take a name a FIELD bears - separate namespaces", //$NON-NLS-1$
             duplicateNameRefusal(form, ref("Catalog.Catalog.Form.ItemForm.Command.Run"), //$NON-NLS-1$
-                "Price")); //$NON-NLS-1$
+                "PriceField")); //$NON-NLS-1$
         assertNotNull("but a name another COMMAND already bears must be refused", //$NON-NLS-1$
             duplicateNameRefusal(form, ref("Catalog.Catalog.Form.ItemForm.Command.Run"), //$NON-NLS-1$
                 "Print")); //$NON-NLS-1$

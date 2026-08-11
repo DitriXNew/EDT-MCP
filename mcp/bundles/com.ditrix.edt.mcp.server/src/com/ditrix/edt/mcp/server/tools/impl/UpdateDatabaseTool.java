@@ -673,11 +673,17 @@ public class UpdateDatabaseTool implements IMcpTool
             // where to look next. The platform's message may name an object, only a property, or
             // nothing at all, so promising that it "names the offending object" would be another
             // invented certainty of exactly the kind this method was fixed to stop making (#382).
+            boolean hasMessage = reported != null && !reported.isEmpty();
             return " The platform rejected the configuration XML EDT generated for the load" //$NON-NLS-1$
-                + (reported == null || reported.isEmpty() ? "." : ": " + reported) //$NON-NLS-1$ //$NON-NLS-2$
-                + " The load stops at the first thing it cannot read. Use get_project_errors for" //$NON-NLS-1$
-                + " validation markers, and get_metadata_details on whatever the message above" //$NON-NLS-1$
-                + " points at."; //$NON-NLS-1$
+                + (hasMessage ? ": " + reported : ".") //$NON-NLS-1$ //$NON-NLS-2$
+                + " The load stops at the first thing it cannot read." //$NON-NLS-1$
+                // Only point at the platform's message when there IS one - the exception can carry
+                // none, and telling the caller to inspect "whatever the message names" would then
+                // send them after nothing.
+                + (hasMessage ? " Use get_project_errors for validation markers, and" //$NON-NLS-1$
+                    + " get_metadata_details on whatever the message above points at." //$NON-NLS-1$
+                    : " The platform reported no detail; use get_project_errors for validation" //$NON-NLS-1$
+                        + " markers on the project."); //$NON-NLS-1$
         }
         return ""; //$NON-NLS-1$
     }
