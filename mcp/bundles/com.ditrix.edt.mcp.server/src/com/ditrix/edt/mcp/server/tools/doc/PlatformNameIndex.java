@@ -266,6 +266,49 @@ final class PlatformNameIndex
      * exact promise the list makes. {@link #accept} already refuses such names, so this is the
      * backstop on the choke point where the promise is actually made, for any future feed.
      */
+    /**
+     * The sample pool reordered so that a bounded number of attempts SPANS it, instead of walking
+     * its head.
+     *
+     * <p>{@link #VERIFY_ATTEMPT_LIMIT} is a real cost bound - each attempt loads a platform resource
+     * on the UI thread - so it cannot simply be raised to "however many the pool holds": that is
+     * thousands of loads for one error message. But taking the candidates in provider order spends
+     * the whole budget on the first {@code VERIFY_ATTEMPT_LIMIT} entries, and unresolvable entries
+     * arrive CLUSTERED - one malformed package, one version-incompatible group, all published
+     * together. A single such block at the head then hides every good name behind it and the banner
+     * reports that nothing checked could be resolved, while thousands of usable names sat unvisited.
+     *
+     * <p>Striding by {@code ceil(pool / budget)} makes the FIRST pass visit about {@code budget}
+     * entries spread across the entire pool, so the search is never confined to the head and no
+     * contiguous block can monopolise it. The later offsets fill in the gaps if the budget allows.
+     * Exactly the same number of attempts; only their placement changes.
+     *
+     * <p>Order is meaningless for this list - it is a sample of what is available - so scattering it
+     * costs nothing. It is applied ONLY to the sample: in {@link #suggestions()} the order IS the
+     * ranking (best guess first), and scattering that would be a downgrade.
+     *
+     * @param pool the candidates, in the order the provider published them
+     * @param budget how many of them may actually be resolved
+     * @return the same names, ordered so a budget-sized prefix spans the pool
+     */
+    private static List<String> strided(List<String> pool, int budget)
+    {
+        int stride = (pool.size() + Math.max(1, budget) - 1) / Math.max(1, budget);
+        if (stride <= 1)
+        {
+            return pool;
+        }
+        List<String> spread = new ArrayList<>(pool.size());
+        for (int offset = 0; offset < stride; offset++)
+        {
+            for (int i = offset; i < pool.size(); i += stride)
+            {
+                spread.add(pool.get(i));
+            }
+        }
+        return spread;
+    }
+
     private List<String> verified(List<String> candidates, int limit)
     {
         List<String> kept = new ArrayList<>();
@@ -317,7 +360,7 @@ final class PlatformNameIndex
             return sb.toString();
         }
 
-        List<String> listed = verified(samples, SAMPLE_LIMIT);
+        List<String> listed = verified(strided(samples, VERIFY_ATTEMPT_LIMIT), SAMPLE_LIMIT);
         if (listed.isEmpty())
         {
             // The provider is NOT empty - it published `total` names - but not one of the ones

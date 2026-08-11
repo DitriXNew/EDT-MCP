@@ -220,6 +220,52 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testABadBlockLONGERThanTheAttemptBudgetStillDoesNotBuryTheGoodNames()
+    {
+        // The previous test stopped SHORT of the real boundary: 100 bad names against an attempt
+        // budget of 120 never tested what happens when the block outlasts the budget itself. It
+        // does happen - unresolvable entries arrive clustered, one broken package at a time - and
+        // walking the pool head-first then spends every attempt inside the block while thousands of
+        // usable names sit behind it, unvisited, under a banner claiming nothing resolved.
+        //
+        // The budget stays (each attempt loads a platform resource on the UI thread); what changed
+        // is that the attempts are SPREAD across the pool instead of being consumed by its head.
+        PlatformNameIndex index = new PlatformNameIndex("Nope", n -> !n.startsWith("Broken")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 400; i++)
+        {
+            index.accept("BrokenType" + i); //$NON-NLS-1$
+        }
+        for (int i = 0; i < 50; i++)
+        {
+            index.accept("GoodType" + i); //$NON-NLS-1$
+        }
+        String banner = index.buildNotFoundBanner("Type not found: ", "Nope", "types", "hint"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertTrue("a bad block longer than the attempt budget must not hide what is behind it", //$NON-NLS-1$
+            banner.contains("- GoodType")); //$NON-NLS-1$
+        assertFalse("and no unresolvable name may be advertised even so", //$NON-NLS-1$
+            banner.contains("- BrokenType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheBudgetSpansThePoolRightAtItsBoundary()
+    {
+        // The exact shape called out in review: one more candidate than the budget can check, with
+        // the only resolvable name last. Head-first ordering misses it by one; a strided pass visits
+        // the whole range and finds it.
+        PlatformNameIndex index = new PlatformNameIndex("Nope", "Array"::equals); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 120; i++)
+        {
+            index.accept("BrokenType" + i); //$NON-NLS-1$
+        }
+        index.accept("Array"); //$NON-NLS-1$
+        String banner = index.buildNotFoundBanner("Type not found: ", "Nope", "types", "hint"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertTrue("the one resolvable name sits past the budget and must still be found", //$NON-NLS-1$
+            banner.contains("- Array")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnExhaustedSampleIsNotReportedAsAnEmptyProvider()
     {
         // "provider may be empty" is a specific diagnosis and it would be FALSE here: the provider
