@@ -28,10 +28,26 @@ It is guarded by a two-phase workflow (mirroring delete_metadata):
 
 After changing metadata/configuration, to push those changes into the running infobase so a launched client sees them. Typically: edit metadata -> `update_database` -> launch/restart the client.
 
-## Targeting (choose ONE)
+## Targeting
 
-1. **`launchConfigurationName`** (preferred) — exact runtime-client config name from `list_configurations`. It fixes the project + applicationId pair for you, so you cannot mismatch them. Must be a runtime-client config (not an Attach config).
-2. **`projectName` + `applicationId`** — used only when `launchConfigurationName` is omitted. Get `applicationId` from `get_applications`. Both are required in this mode.
+1. **`launchConfigurationName`** (preferred) — exact runtime-client config name from `list_configurations`. The project and the applicationId are read off the configuration, so a configuration that is bound to an application cannot be mismatched. Must be a runtime-client config (not an Attach config).
+2. **`projectName` + `applicationId`** — used when `launchConfigurationName` is omitted. Get `applicationId` from `get_applications`. Both are required in this mode.
+
+`projectName` is always taken from the configuration when one is named. `applicationId` is too — unless the configuration has no application binding, and then the section below applies.
+
+### A launch configuration with no application binding
+
+A runtime-client configuration can be created without being bound to an application (its `applicationId` attribute is empty) — the same case the launch tools cover by falling back to the project's default application. Here the fallback is deliberately narrower, because this call WRITES to a database and cannot be undone:
+
+- the project has **exactly one** application → that application is the target, and it is the same one `run_yaxunit_tests` / `debug_launch` would have used for this configuration;
+- the project has **several** → the call is REFUSED and lists the candidates. Pick one and re-call with `projectName` + `applicationId`; updating the wrong database is not something this tool will guess at;
+- the project has **none of its own** → refused. For an extension project the applications belong to its base configuration project, and `update_database` must target THAT project (an application id is only resolvable through the project that owns it).
+
+If you pass `launchConfigurationName` **and** an explicit `applicationId`, the configuration's own binding still wins when it has one; your value is used only when the configuration has none (instead of falling back to the project).
+
+### The `applicationId` from `list_configurations` is not always an application id
+
+`list_configurations` reports `applicationId: "launch:<name>"` (or `"attach:<name>"`) for a configuration whose application binding is absent or unreadable — a launch identifier for debug tracking, minted from the configuration name. It is **not** an application id and `update_database` cannot resolve it ("Application not found"). Use the entry's `name` as `launchConfigurationName` (runtime-client configs only — an Attach config is rejected by type), or take a real id from `get_applications`. If targeting by name then reports that the configuration *could not be read*, one of its attributes is unreadable — do NOT conclude the binding is absent: repair or recreate the configuration in EDT, or target the update with `projectName` + a real `applicationId`.
 
 ## Parameter details
 

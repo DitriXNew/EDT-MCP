@@ -30,8 +30,11 @@ import com.ditrix.edt.mcp.server.Activator;
  * <p>Covers two families:
  * <ul>
  *   <li>Runtime client configs ({@link #LAUNCH_CONFIG_TYPE_ID}) — launch a new
- *       1cv8c client and attach the debugger to it. Carry both
- *       {@link #ATTR_PROJECT_NAME} and {@link #ATTR_APPLICATION_ID}.</li>
+ *       1cv8c client and attach the debugger to it. Carry {@link #ATTR_PROJECT_NAME},
+ *       and {@link #ATTR_APPLICATION_ID} when they were bound to an application —
+ *       one created without that binding has the attribute EMPTY, which is why the
+ *       tools that consume it must decide what an empty value means rather than
+ *       assume it cannot happen.</li>
  *   <li>Attach configs ({@link #TYPE_REMOTE_RUNTIME}, {@link #TYPE_LOCAL_RUNTIME})
  *       — attach to an already-running 1C:Enterprise debug server (ragent/rphost).
  *       These carry {@link #ATTR_PROJECT_NAME} but typically no
@@ -153,7 +156,10 @@ public final class LaunchConfigUtils
     /**
      * Returns a non-null, stable identifier for any EDT debug launch.
      *
-     * <p>For runtime-client launches this is the real {@code ATTR_APPLICATION_ID}.
+     * <p>For runtime-client launches this is the real {@code ATTR_APPLICATION_ID} when it is
+     * set and readable. The read is lenient (see {@link #readAttribute}), so a binding that
+     * exists but cannot be read falls into the synthetic branch below exactly like an absent
+     * one — a caller that must tell the two apart has to read the attribute itself.
      * For Attach launches, {@code ATTR_APPLICATION_ID} may be absent; in that case
      * we fall back to {@code attach:<configName>} — stable across calls for the
      * same EDT launch configuration, and addressable via {@code debug_status}.
@@ -192,20 +198,29 @@ public final class LaunchConfigUtils
     }
 
     /**
-     * Returns {@code true} if the given applicationId is a synthetic id this plugin
-     * minted rather than a real 1C {@code ATTR_APPLICATION_ID}: {@code attach:…} /
-     * {@code launch:…} (minted by {@link #getApplicationIdFor(ILaunchConfiguration)})
-     * or {@code ServerApplication.…} (minted by {@link DebugServerTargetSupport} for
-     * 1C debug-server targets). Synthetic ids are addressable for debug tracking but
-     * cannot be resolved through {@link com.e1c.g5.dt.applications.IApplicationManager}.
+     * Returns {@code true} if the given applicationId carries a prefix this plugin also
+     * mints itself rather than reading it from a real 1C {@code ATTR_APPLICATION_ID}:
+     * {@code attach:…} / {@code launch:…} (minted by
+     * {@link #getApplicationIdFor(ILaunchConfiguration)}) or {@code ServerApplication.…}
+     * (minted by {@link DebugServerTargetSupport} for 1C debug-server targets). All three
+     * are addressable for debug tracking; this predicate exists so a preflight can SKIP
+     * the {@link com.e1c.g5.dt.applications.IApplicationManager} lookup for them.
      * <p>
-     * This is THE single authority for the synthetic-prefix classification — every
-     * minted prefix must be known here, or a preflight that feeds an id into
-     * {@code IApplicationManager} fails with "Application not found" for a perfectly
-     * trackable session.
+     * This is THE single authority for that skip classification — every minted prefix must
+     * be known here, or a preflight that feeds an id into {@code IApplicationManager} fails
+     * with "Application not found" for a perfectly trackable session.
+     * <p>
+     * <b>It is NOT a "this is not a real application id" test.</b> The two {@code :}-forms
+     * never resolve through {@code IApplicationManager}, but {@code ServerApplication.} is
+     * the literal prefix REAL 1C standalone-server applications carry in their own
+     * {@link com.e1c.g5.dt.applications.IApplication#getId()} — the minted debug-server ids
+     * mirror that form on purpose (see {@link DebugServerTargetSupport#SERVER_APP_ID_PREFIX}).
+     * A diagnosis that tells the caller "this is not an application id" must therefore test
+     * the two prefixes explicitly instead of calling this method, or it will mis-describe a
+     * genuine — merely missing or stale — standalone-server application.
      *
      * @param applicationId the id to test (may be {@code null})
-     * @return {@code true} if the id starts with a synthetic prefix
+     * @return {@code true} if the id starts with one of the three prefixes above
      */
     public static boolean isSyntheticApplicationId(String applicationId)
     {

@@ -278,7 +278,7 @@ public class DebugLaunchTool implements IMcpTool
             // and keys on ATTR_PROJECT_NAME + (ATTR_APPLICATION_ID else default app).
             // Our findActiveTarget/findActiveLaunch guards above scan ILaunchManager
             // and key on getApplicationIdFor() — so a UI-started ("Debug As") session,
-            // or a config without a persisted ATTR_APPLICATION_ID (we mint a synthetic
+            // or a config with no readable ATTR_APPLICATION_ID (we mint a synthetic
             // launch:<name> the delegate never uses), slips past them and the unattended
             // call then hangs on the human modal. This supplements them with the
             // delegate's own set + key.
@@ -614,9 +614,12 @@ public class DebugLaunchTool implements IMcpTool
      * They are minted by
      * {@link LaunchConfigUtils#getApplicationIdFor(ILaunchConfiguration)} (or, for
      * the {@code ServerApplication.} form, by
-     * {@code DebugServerTargetSupport}) for sessions WITHOUT a persisted
-     * {@code ATTR_APPLICATION_ID} and cannot be
-     * resolved through {@link IApplicationManager}: feeding one into
+     * {@code DebugServerTargetSupport}) for sessions with no readable
+     * {@code ATTR_APPLICATION_ID}. The two {@code :}-forms cannot be
+     * resolved through {@link IApplicationManager} at all; the
+     * {@code ServerApplication.} form mirrors the id REAL standalone-server
+     * applications carry, and is skipped for the separate reason spelled out
+     * below. Feeding one of the {@code :}-forms into
      * {@code updateApplicationIfNeeded} fails with "Application not found:
      * launch:&lt;name&gt;" and would refuse a perfectly launchable configuration.
      * (The original guard knew only the {@code attach:} prefix, so introducing the

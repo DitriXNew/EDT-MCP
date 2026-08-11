@@ -6,11 +6,13 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.debug.core.DebugPlugin;
@@ -61,6 +63,12 @@ public class UpdateDatabaseTool implements IMcpTool
      * guarding against a cyclical cause chain.
      */
     private static final int MAX_CAUSE_CHAIN_DEPTH = 10;
+
+    /**
+     * Cap on how many applications an ambiguity refusal spells out before it defers to
+     * {@code get_applications} for the rest.
+     */
+    private static final int MAX_LISTED_CANDIDATES = 10;
 
     @Override
     public String getName()
@@ -168,7 +176,9 @@ public class UpdateDatabaseTool implements IMcpTool
             return argError;
         }
 
-        // Resolve via launch config if name is given — it fixes the project + applicationId pair.
+        // Resolve via launch config if name is given — it fixes the project, and the
+        // applicationId too when the configuration is actually bound to an application
+        // (see effectiveApplicationId for the unbound case).
         if (hasName)
         {
             ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
@@ -182,22 +192,13 @@ public class UpdateDatabaseTool implements IMcpTool
                 return ToolResult.error("Launch configuration not found: '" + configName //$NON-NLS-1$
                     + "'. Use list_configurations to see what's available.").toJson(); //$NON-NLS-1$
             }
-            if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(cfg)))
+            LaunchTarget target = resolveLaunchConfigTarget(cfg, applicationId);
+            if (target.errorJson != null)
             {
-                return ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
-                    + "' is not a runtime-client config — update_database requires one.").toJson(); //$NON-NLS-1$
+                return target.errorJson;
             }
-            String cfgProject = LaunchConfigUtils.readAttribute(cfg,
-                LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            String cfgAppId = LaunchConfigUtils.readAttribute(cfg,
-                LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
-            if (cfgProject.isEmpty() || cfgAppId.isEmpty())
-            {
-                return ToolResult.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
-                    + "' has no project or applicationId attribute — cannot derive update target.").toJson(); //$NON-NLS-1$
-            }
-            projectName = cfgProject;
-            applicationId = cfgAppId;
+            projectName = target.projectName;
+            applicationId = target.applicationId;
         }
 
         // Refuse only the transient BUILDING state; a missing/closed project falls through
@@ -208,8 +209,313 @@ public class UpdateDatabaseTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
+        if (applicationId == null || applicationId.isEmpty())
+        {
+            // Only reachable through the launch-configuration branch: validateDirectArguments
+            // makes applicationId mandatory in the projectName+applicationId mode. Runs AFTER
+            // the BUILDING gate on purpose — enumerating the applications of a project that is
+            // mid-build can observe an incomplete list, and the "exactly one" decision below
+            // is only as trustworthy as that list. Guarded like updateDatabase's own body: an
+            // unchecked failure from the platform must come back as this tool's JSON error, not
+            // escape execute() (the protocol handler treats that as a contract violation).
+            try
+            {
+                ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
+                if (!mr.ok())
+                {
+                    return mr.errorJson();
+                }
+                ApplicationFallback fallback =
+                    resolveSoleApplicationId(mr.project(), mr.manager(), projectName, configName);
+                if (fallback.errorJson != null)
+                {
+                    return fallback.errorJson;
+                }
+                applicationId = fallback.applicationId;
+            }
+            catch (Exception e)
+            {
+                Activator.logError("Error deriving the update target for launch configuration " //$NON-NLS-1$
+                    + configName, e);
+                return ToolResult.error("Could not derive the update target of launch " //$NON-NLS-1$
+                    + "configuration '" + configName + "': " + e //$NON-NLS-1$ //$NON-NLS-2$
+                    + ". Pass projectName + applicationId explicitly (get_applications lists the " //$NON-NLS-1$
+                    + "application ids).").toJson(); //$NON-NLS-1$
+            }
+        }
+
         return updateDatabase(projectName, applicationId, fullUpdate, confirm,
             terminateRunningClients, externalChanges);
+    }
+
+    /**
+     * Resolves the project + application pair a named runtime-client launch configuration
+     * addresses, or the actionable refusal that replaces it.
+     *
+     * <p>Split out of {@code execute} so the whole named-configuration decision — the type gate,
+     * the attribute read, the missing-project refusal and the
+     * {@link #effectiveApplicationId} merge — is reachable from a unit test with a mocked
+     * {@link ILaunchConfiguration}; only the launch-manager lookup that produced {@code cfg}
+     * stays behind the live platform.
+     *
+     * <p>The two attributes are read DIRECTLY rather than through
+     * {@link LaunchConfigUtils#readAttribute}: that helper maps a read failure onto the default
+     * value, and an empty applicationId no longer means "refuse" — it now unlocks the
+     * project-derived fallback. An attribute this tool FAILED to read must not be mistaken for
+     * one the configuration does not have, or an unreadable binding would silently become a
+     * write to whatever the project resolves to.
+     *
+     * @param cfg the resolved launch configuration (never {@code null})
+     * @param requestedApplicationId the caller's {@code applicationId} argument (may be
+     *            {@code null}/empty)
+     * @return the target pair, or an error JSON; the application id is empty when it must still
+     *         be derived from the project
+     */
+    static LaunchTarget resolveLaunchConfigTarget(ILaunchConfiguration cfg,
+            String requestedApplicationId)
+    {
+        if (!LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID.equals(LaunchConfigUtils.getConfigTypeId(cfg)))
+        {
+            return LaunchTarget.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' is not a runtime-client config — update_database requires one."); //$NON-NLS-1$
+        }
+        String cfgProject;
+        String cfgAppId;
+        try
+        {
+            cfgProject = cfg.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+            cfgAppId = cfg.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Error reading attributes of launch configuration " //$NON-NLS-1$
+                + cfg.getName(), e);
+            return LaunchTarget.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' could not be read: " + e.getMessage() //$NON-NLS-1$
+                + ". Fix or recreate it in EDT, or target the update directly with projectName " //$NON-NLS-1$
+                + "+ applicationId (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
+        if (cfgProject.isEmpty())
+        {
+            return LaunchTarget.error("Launch configuration '" + cfg.getName() //$NON-NLS-1$
+                + "' has no project attribute — cannot derive update target. Bind it to a " //$NON-NLS-1$
+                + "project in EDT, or target the update directly with projectName + " //$NON-NLS-1$
+                + "applicationId (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
+        return LaunchTarget.of(cfgProject, effectiveApplicationId(cfgAppId, requestedApplicationId));
+    }
+
+    /**
+     * Outcome of {@link #resolveLaunchConfigTarget}: either the {@link #projectName} +
+     * {@link #applicationId} pair (the id may be empty — the project still has to supply it) or
+     * an {@link #errorJson} to return verbatim. Never both.
+     */
+    static final class LaunchTarget
+    {
+        final String projectName;
+        final String applicationId;
+        final String errorJson;
+
+        private LaunchTarget(String projectName, String applicationId, String errorJson)
+        {
+            this.projectName = projectName;
+            this.applicationId = applicationId;
+            this.errorJson = errorJson;
+        }
+
+        static LaunchTarget of(String projectName, String applicationId)
+        {
+            return new LaunchTarget(projectName, applicationId, null);
+        }
+
+        static LaunchTarget error(String message)
+        {
+            return new LaunchTarget(null, null, ToolResult.error(message).toJson());
+        }
+    }
+
+    /**
+     * Chooses the application id to update with when the target came from a launch configuration.
+     *
+     * <p>A configuration WITH a binding fixes the pair, as it always did: its own id wins over
+     * anything the caller passed. A configuration WITHOUT one used to be an outright refusal;
+     * now an explicitly supplied id is used instead (the caller named the target themselves —
+     * there is nothing to guess), and only a genuinely unspecified target falls through to
+     * {@link #resolveSoleApplicationId}. Mirrors {@code RunYaxunitTestsTool.deriveLaunchContext},
+     * which likewise substitutes the configuration's attribute only into an EMPTY value.
+     *
+     * @param configApplicationId the configuration's own attribute, empty when it is unbound
+     * @param requestedApplicationId the caller's {@code applicationId} argument (may be
+     *            {@code null}/empty)
+     * @return the id to update with, or an empty string when it must be derived from the project
+     */
+    static String effectiveApplicationId(String configApplicationId, String requestedApplicationId)
+    {
+        if (configApplicationId != null && !configApplicationId.isEmpty())
+        {
+            return configApplicationId;
+        }
+        return requestedApplicationId == null ? "" : requestedApplicationId; //$NON-NLS-1$
+    }
+
+    /**
+     * Derives the update target for a runtime-client launch configuration that carries no
+     * {@code ATTR_APPLICATION_ID} binding — the case {@code run_yaxunit_tests} and
+     * {@code debug_launch} already survive (they fall back to the project's default
+     * application through {@link LaunchLifecycleUtils#resolveDefaultApplicationId}) and this
+     * tool used to refuse outright.
+     *
+     * <p><b>The fallback is deliberately narrower than the launch tools'.</b> A launch that
+     * guesses the wrong application starts the wrong client — annoying, visible, undone by
+     * closing it; the alternative there is EDT's blocking "Update infobase before launch?"
+     * modal, which hangs an unattended call. This call WRITES to an infobase and cannot be
+     * undone, so it only substitutes when the answer is unambiguous: the project must have
+     * <b>exactly one</b> application. Anything else is refused with the candidates named, so
+     * the caller (not this code) chooses which database gets updated.
+     *
+     * <p>The target is the one enumerated application — the list the "exactly one" decision was
+     * actually made on — and {@link LaunchLifecycleUtils#resolveDefaultApplicationId} is then run
+     * as a CROSS-CHECK, so an app-less configuration provably resolves to the same infobase here
+     * as under the launch tools. When the project has exactly one application EDT's own
+     * {@code getDefaultApplication} returns that application (it clears a stale stored default
+     * and then falls through to "one application → that one"), so the two agree and the check is
+     * silent; that also makes a disagreement mean the enumeration and the resolver disagree about
+     * the project — the one situation in which picking either could update a database nobody
+     * named, so it is refused instead. Absence of a recorded default is NOT a disagreement: the
+     * single enumerated application is then the answer. The check is kept even though a stable
+     * EDT cannot produce it: this bundle is compiled against one EDT version and runs on later
+     * ones, and failing closed is the cheap side of that bet.
+     *
+     * <p>Side-effect-free with respect to the infobase and the project sources: it reads the
+     * application list and asks for the default application (which can make EDT drop a stale
+     * default-application preference, exactly as {@code get_applications} already does).
+     *
+     * @param project the resolved project (never {@code null})
+     * @param appManager the resolved application manager (never {@code null})
+     * @param projectName the project name to name in error messages
+     * @param configName the launch configuration name to name in error messages
+     * @return the resolved application id, or an actionable error JSON
+     */
+    static ApplicationFallback resolveSoleApplicationId(IProject project,
+            IApplicationManager appManager, String projectName, String configName)
+    {
+        List<IApplication> applications;
+        try
+        {
+            applications = appManager.getApplications(project);
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error listing applications of project " + projectName, e); //$NON-NLS-1$
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and the applications of project '" + projectName + "' could not be listed: " //$NON-NLS-1$ //$NON-NLS-2$
+                + e.getMessage() + ". The project may still be indexing — retry in a moment, or " //$NON-NLS-1$
+                + "pass projectName + applicationId explicitly (get_applications lists the " //$NON-NLS-1$
+                + "application ids)."); //$NON-NLS-1$
+        }
+        if (applications == null || applications.isEmpty())
+        {
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and project '" + projectName + "' has no applications of its own — nothing to " //$NON-NLS-1$ //$NON-NLS-2$
+                + "update. Bind the configuration to an application in EDT, or create an infobase " //$NON-NLS-1$
+                + "for the project. Use get_applications to see which project owns the " //$NON-NLS-1$
+                + "applications: for an extension project they belong to its base configuration " //$NON-NLS-1$
+                + "project, and update_database must then target THAT project."); //$NON-NLS-1$
+        }
+        if (applications.size() > 1)
+        {
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and project '" + projectName + "' has " + applications.size() //$NON-NLS-1$ //$NON-NLS-2$
+                + " applications, so the target is ambiguous — refusing to guess which database " //$NON-NLS-1$
+                + "to update: " + describeCandidates(applications) //$NON-NLS-1$
+                + ". Re-call with projectName='" + projectName //$NON-NLS-1$
+                + "' and one of those applicationId values (get_applications lists them)."); //$NON-NLS-1$
+        }
+        IApplication only = applications.get(0);
+        String onlyId = only == null ? null : only.getId();
+        if (onlyId == null || onlyId.trim().isEmpty())
+        {
+            // A target is only a target if it can be named: forwarding a blank id would reach
+            // the application lookup as if the caller had asked for nothing.
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and the single application of project '" + projectName //$NON-NLS-1$
+                + "' reports no id — nothing to target. Pass projectName + applicationId " //$NON-NLS-1$
+                + "explicitly (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
+        String resolved = LaunchLifecycleUtils.resolveDefaultApplicationId(project, "", appManager); //$NON-NLS-1$
+        if (resolved != null && !resolved.isEmpty() && !resolved.equals(onlyId))
+        {
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and project '" + projectName + "' reports a single application '" //$NON-NLS-1$ //$NON-NLS-2$
+                + onlyId + "' but a different default application '" + resolved //$NON-NLS-1$
+                + "' — refusing to guess which database to update. Re-call with projectName='" //$NON-NLS-1$
+                + projectName + "' and an explicit applicationId (get_applications lists them)."); //$NON-NLS-1$
+        }
+        return ApplicationFallback.of(onlyId);
+    }
+
+    /**
+     * The shared opening of every "the configuration carries no application binding" refusal
+     * (unlistable, none, several, unnameable, disagreeing), so all five state the same fact in
+     * the same words.
+     */
+    private static String noBindingPrefix(String configName)
+    {
+        return "Launch configuration '" + configName //$NON-NLS-1$
+            + "' has no applicationId attribute "; //$NON-NLS-1$
+    }
+
+    /**
+     * Renders the ambiguous applications as {@code id ('name')}, capped at
+     * {@link #MAX_LISTED_CANDIDATES} so a project with many infobases cannot turn one refusal
+     * into an unreadable wall; the tail names {@code get_applications} for the full list.
+     */
+    private static String describeCandidates(List<IApplication> applications)
+    {
+        StringBuilder sb = new StringBuilder();
+        int shown = Math.min(applications.size(), MAX_LISTED_CANDIDATES);
+        for (int i = 0; i < shown; i++)
+        {
+            if (i > 0)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            IApplication app = applications.get(i);
+            sb.append(app.getId()).append(" ('").append(app.getName()).append("')"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (applications.size() > shown)
+        {
+            sb.append(" and ").append(applications.size() - shown) //$NON-NLS-1$
+                .append(" more (get_applications lists them all)"); //$NON-NLS-1$
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Outcome of {@link #resolveSoleApplicationId}: exactly one of {@link #applicationId} (the
+     * derived target) and {@link #errorJson} (a ready {@code ToolResult.error} payload to
+     * return verbatim) is non-{@code null}.
+     */
+    static final class ApplicationFallback
+    {
+        final String applicationId;
+        final String errorJson;
+
+        private ApplicationFallback(String applicationId, String errorJson)
+        {
+            this.applicationId = applicationId;
+            this.errorJson = errorJson;
+        }
+
+        static ApplicationFallback of(String applicationId)
+        {
+            return new ApplicationFallback(applicationId, null);
+        }
+
+        static ApplicationFallback error(String message)
+        {
+            return new ApplicationFallback(null, ToolResult.error(message).toJson());
+        }
     }
 
     /**
@@ -301,8 +607,9 @@ public class UpdateDatabaseTool implements IMcpTool
             Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
             if (!appOpt.isPresent())
             {
-                return ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
-                        ". Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
+                return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
+                        + "." + describeLaunchIdentifierHint(applicationId) //$NON-NLS-1$
+                        + " Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
             }
             
             IApplication application = appOpt.get();
@@ -454,6 +761,73 @@ public class UpdateDatabaseTool implements IMcpTool
             }
             return errorResult.toJson();
         }
+    }
+
+    /**
+     * The sentence appended to "Application not found" when the rejected value is one of the two
+     * {@code :}-prefixed identifiers {@code list_configurations} publishes under its
+     * {@code applicationId} key for a configuration whose application binding is absent or
+     * unreadable
+     * ({@code launch:<configName>} / {@code attach:<configName>}, minted by
+     * {@link LaunchConfigUtils#getApplicationIdFor}). Carrying that value straight into this tool
+     * is the natural mistake the key invites, and the bare "not found" hides it: the value is not
+     * an application id at all, so no amount of re-reading {@code get_applications} explains it.
+     *
+     * <p>The two forms get DIFFERENT advice because only one of them has a usable route:
+     * {@code launch:} names a configuration that may be the runtime-client config this tool
+     * accepts, so it points at {@code launchConfigurationName}; {@code attach:} names an Attach
+     * (debug-server) configuration, which {@code update_database} rejects by type, so pointing
+     * there would send the caller into a second refusal.
+     *
+     * <p>The classification is made from the STRING alone — no configuration is looked up — so
+     * the wording claims only that the value has the FORM of such an identifier. A value that
+     * merely looks like one (a stale id, a hand-typed string) must not be described as something
+     * {@code list_configurations} actually reported.
+     *
+     * <p>Deliberately tests the two prefixes rather than calling
+     * {@link LaunchConfigUtils#isSyntheticApplicationId}: that predicate also matches
+     * {@code ServerApplication.}, which is the prefix REAL 1C standalone-server applications carry
+     * in their own id — using it would tell a caller whose server application is merely missing or
+     * stale that they had not passed an application id at all. Exposed (package-private) so the
+     * classification can be unit-tested directly.
+     *
+     * @param applicationId the id that failed to resolve (may be {@code null})
+     * @return the leading-space diagnosis, or an empty string when the value is not one of the
+     *         two prefixed forms (or carries no configuration name after the prefix)
+     */
+    static String describeLaunchIdentifierHint(String applicationId)
+    {
+        if (applicationId == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        if (applicationId.startsWith(LaunchConfigUtils.LAUNCH_APP_ID_PREFIX))
+        {
+            String configName =
+                applicationId.substring(LaunchConfigUtils.LAUNCH_APP_ID_PREFIX.length());
+            if (configName.isEmpty())
+            {
+                return ""; //$NON-NLS-1$
+            }
+            return " That value has the form of the identifier list_configurations reports for a " //$NON-NLS-1$
+                + "launch configuration whose application binding is absent or unreadable, so it " //$NON-NLS-1$
+                + "is not an application id. If '" + configName + "' is a runtime-client " //$NON-NLS-1$ //$NON-NLS-2$
+                + "configuration, pass it as launchConfigurationName instead."; //$NON-NLS-1$
+        }
+        if (applicationId.startsWith(LaunchConfigUtils.ATTACH_APP_ID_PREFIX))
+        {
+            String configName =
+                applicationId.substring(LaunchConfigUtils.ATTACH_APP_ID_PREFIX.length());
+            if (configName.isEmpty())
+            {
+                return ""; //$NON-NLS-1$
+            }
+            return " That value has the form of the identifier list_configurations reports for an " //$NON-NLS-1$
+                + "Attach (debug-server) configuration ('" + configName + "'), so it is not an " //$NON-NLS-1$ //$NON-NLS-2$
+                + "application id — and update_database requires a runtime-client configuration, " //$NON-NLS-1$
+                + "which an Attach configuration is not."; //$NON-NLS-1$
+        }
+        return ""; //$NON-NLS-1$
     }
 
     /**
