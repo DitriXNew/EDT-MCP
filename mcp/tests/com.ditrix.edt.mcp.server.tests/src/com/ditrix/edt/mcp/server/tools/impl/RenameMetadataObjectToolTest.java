@@ -306,6 +306,67 @@ public class RenameMetadataObjectToolTest
     }
 
     /**
+     * A timeout's recovery advice has to name a tool that can actually SHOW the target. It used to
+     * say {@code get_metadata_objects} for everything, and that tool enumerates top-level metadata
+     * COLLECTIONS: a managed-form element is in none of them (issue #381), and a MEMBER is not a
+     * collection entry either. At the moment the caller must decide whether the old or the new name
+     * now exists - right after a cascade that may have half-applied - being pointed at a listing
+     * that cannot contain the target is what turns into a repeat of a destructive call.
+     * <p>
+     * All three target shapes are asserted, in both directions. Pinning only the form case would be
+     * satisfied by advice switched over wholesale; pinning only the presence of the right tool name
+     * would be satisfied by advice that pointed it at the wrong place.
+     */
+    @Test
+    public void testTimeoutAdviceNamesAnInspectorThatCanSeeTheTarget() throws Exception
+    {
+        String formError = timeoutErrorFor("Catalog.Products.Form.ItemForm.Field.Price"); //$NON-NLS-1$
+        assertTrue("a form element is not in any metadata collection, so the advice must send " //$NON-NLS-1$
+            + "the caller to the form's own structure: " + formError, //$NON-NLS-1$
+            formError.contains("get_metadata_details on its form")); //$NON-NLS-1$
+
+        String memberError = timeoutErrorFor("Document.SalesOrder.Attribute.Amount"); //$NON-NLS-1$
+        assertTrue("a member is not a collection entry either, so it must be pointed at its " //$NON-NLS-1$
+            + "owner: " + memberError, memberError.contains("on its owner for a member")); //$NON-NLS-1$
+
+        String objectError = timeoutErrorFor("Catalog.Products"); //$NON-NLS-1$
+        assertTrue("a top object is answered by the same details tool: " + objectError, //$NON-NLS-1$
+            objectError.contains("get_metadata_details")); //$NON-NLS-1$
+
+        for (String error : new String[] {formError, memberError, objectError})
+        {
+            assertFalse("no branch may send the caller to the collection listing, which cannot " //$NON-NLS-1$
+                + "show a form element, a member, or a top object of an unlisted type: " + error, //$NON-NLS-1$
+                error.contains("get_metadata_objects")); //$NON-NLS-1$
+        }
+    }
+
+    /** The same wedged-rename timeout as the tests above, for an arbitrary target FQN. */
+    private static String timeoutErrorFor(String objectFqn) throws Exception
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch started = new CountDownLatch(1);
+        try
+        {
+            String error = RenameMetadataObjectTool.runRenameBounded(objectFqn, "Goods", //$NON-NLS-1$
+                true, SHORT_TIMEOUT_MS, progress -> {
+                    progress.enter(RenameProgress.Phase.PREPARING);
+                    started.countDown();
+                    awaitQuietly(release);
+                    return WEDGED_PAYLOAD;
+                });
+            assertTrue("the action must have started for its message to be judged", //$NON-NLS-1$
+                started.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
+            assertNotNull("a missed deadline must produce an error payload", error); //$NON-NLS-1$
+            return error;
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    /**
      * The counterpart of the test above: a timeout while the refactoring was still being BUILT must
      * NOT claim the model may be half renamed. One message for both phases would either scare a
      * caller whose configuration is untouched or, far worse, reassure one whose configuration is not.

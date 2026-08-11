@@ -667,7 +667,6 @@ public class UpdateDatabaseTool implements IMcpTool
             current -> current.getClass().getSimpleName().contains("ConfigurationLoadException")); //$NON-NLS-1$
         if (loadFailure != null)
         {
-            // No cause is asserted here - only what the platform itself reported, plus where to look.
             String reported = loadFailure.getMessage();
             // Nothing is asserted about WHAT failed - only what the platform itself reported, and
             // where to look next. The platform's message may name an object, only a property, or

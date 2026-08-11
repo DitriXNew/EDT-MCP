@@ -22,6 +22,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.rename.MetadataRenameService;
 import com.ditrix.edt.mcp.server.tools.rename.RenameProgress;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 
 /**
@@ -207,6 +209,17 @@ public class RenameMetadataObjectTool implements IMcpTool
             return err;
         }
 
+        // Whether the new name is even an identifier is decided HERE, among the other argument
+        // guards - before the settle below. It costs nothing, depends on no project state, and the
+        // answer cannot change by waiting; behind the settle it would either be delayed by up to a
+        // minute or replaced entirely by a BUILDING refusal, sending the caller off to retry a call
+        // that was malformed to begin with. The predicate is the service's, not a second copy.
+        String badName = MetadataRenameService.invalidNewNameError(newName);
+        if (badName != null)
+        {
+            return ToolResult.error(badName).toJson();
+        }
+
         // A cascade rename rewrites every reference to the object across BSL, forms and
         // metadata. If the project's derived data (the reference index) is still building,
         // the refactoring resolves an INCOMPLETE set of references: it would rename the
@@ -320,7 +333,8 @@ public class RenameMetadataObjectTool implements IMcpTool
             return notStartedError(objectFqn, newName, timeoutMs);
         case INTERRUPTED:
             return ToolResult.error("The rename of '" + objectFqn + "' was interrupted while " //$NON-NLS-1$ //$NON-NLS-2$
-                + "waiting for it. " + stateAdvice(confirm, progress.getPhase())).toJson(); //$NON-NLS-1$
+                + "waiting for it. " + stateAdvice(confirm, progress.getPhase(), //$NON-NLS-1$
+                    inspectorFor(objectFqn))).toJson();
         case NOT_RUN:
             return ToolResult.error("The rename of '" + objectFqn + "' was cancelled before it " //$NON-NLS-1$ //$NON-NLS-2$
                 + "started, so nothing was renamed. Retry; if it keeps happening, EDT is shutting " //$NON-NLS-1$
@@ -333,7 +347,8 @@ public class RenameMetadataObjectTool implements IMcpTool
             // means answering an agent with silence about a model it may have changed.
             return ToolResult.error("The rename of '" + objectFqn + "' ended in an unrecognised " //$NON-NLS-1$ //$NON-NLS-2$
                 + "state (" + result.getOutcome() + "), so whether it applied is unknown. Check " //$NON-NLS-1$ //$NON-NLS-2$
-                + "the object's name with get_metadata_objects before retrying.").toJson(); //$NON-NLS-1$
+                + "the target's name with " + inspectorFor(objectFqn) //$NON-NLS-1$
+                + " before retrying.").toJson(); //$NON-NLS-1$
         }
 
         Throwable failure = result.getFailure();
@@ -398,7 +413,35 @@ public class RenameMetadataObjectTool implements IMcpTool
 
         return ToolResult.error("Renaming '" + objectFqn + "' to '" + newName + "' did not finish " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "within " + seconds + (seconds == 1 ? " second" : " seconds") + ". " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + stateAdvice(confirm, phase) + " " + lever).toJson(); //$NON-NLS-1$
+            + stateAdvice(confirm, phase, inspectorFor(objectFqn)) + " " + lever).toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * How the caller should check, after a timeout, whether the old or the new name is the one that
+     * now exists - phrased for what the FQN actually addresses.
+     * <p>
+     * It used to say {@code get_metadata_objects} for everything, and that is wrong for most of
+     * this tool's targets: that tool enumerates top-level metadata COLLECTIONS, and it has
+     * collectors for sixteen of them. A managed-form element is in none (it lives on the form's
+     * content model), a MEMBER is not a collection entry either, and even a top object of an
+     * unlisted type is invisible to it. At the one moment the caller most needs a straight answer -
+     * after a cascade that may have half-applied - being sent to a listing that cannot contain the
+     * target either way is what turns into a repeat of a destructive call.
+     * <p>
+     * {@code get_metadata_details} is the one that answers for every target, which is why both
+     * branches name it; only WHERE to point it differs. The FORM/mdclass question is put to
+     * {@link FormElementWriter#parse}, the same parser the service dispatches on, so the advice and
+     * the branch that will actually run cannot disagree about what counts as a form address
+     * (issue #381).
+     *
+     * @param objectFqn the rename target as the caller wrote it
+     * @return the inspector phrase to embed in the advice
+     */
+    private static String inspectorFor(String objectFqn)
+    {
+        return FormElementWriter.parse(MetadataTypeUtils.normalizeFqn(objectFqn)) != null
+            ? "get_metadata_details on its form" //$NON-NLS-1$
+            : "get_metadata_details on it (on its owner for a member)"; //$NON-NLS-1$
     }
 
     /**
@@ -411,9 +454,10 @@ public class RenameMetadataObjectTool implements IMcpTool
      *
      * @param confirm whether this call was allowed to apply anything at all
      * @param phase the last phase the rename reported entering
+     * @param inspector the tool that can actually show this target - see {@link #inspectorFor}
      * @return the state sentence, ending in a full stop
      */
-    private static String stateAdvice(boolean confirm, RenameProgress.Phase phase)
+    private static String stateAdvice(boolean confirm, RenameProgress.Phase phase, String inspector)
     {
         if (!confirm)
         {
@@ -430,28 +474,28 @@ public class RenameMetadataObjectTool implements IMcpTool
             // here, so this phase means the work IS running and waiting on the UI thread.
             return "The rename was still waiting for EDT's UI thread - something else is holding " //$NON-NLS-1$
                 + "it - so nothing was renamed yet. It is not cancelled and may still apply once " //$NON-NLS-1$
-                + "that thread frees up: check the object's name with get_metadata_objects " //$NON-NLS-1$
-                + "before retrying."; //$NON-NLS-1$
+                + "that thread frees up: check the target's name with " + inspector //$NON-NLS-1$
+                + " before retrying."; //$NON-NLS-1$
         case AWAITING_CONSENT:
             return "The rename was at the destructive-operation consent gate, so nothing had been " //$NON-NLS-1$
                 + "rewritten - but an answer arriving later still starts it. Set " //$NON-NLS-1$
-                + "EDT_MCP_DESTRUCTIVE_CONSENT=allow for unattended use, and check the object's " //$NON-NLS-1$
-                + "name with get_metadata_objects before retrying."; //$NON-NLS-1$
+                + "EDT_MCP_DESTRUCTIVE_CONSENT=allow for unattended use, and check the target's " //$NON-NLS-1$
+                + "name with " + inspector + " before retrying."; //$NON-NLS-1$ //$NON-NLS-2$
         case APPLYING:
             return "The rename had passed the consent gate into its apply phase, so the " //$NON-NLS-1$
                 + "configuration may be PARTIALLY renamed - do not treat it as unchanged. Inspect " //$NON-NLS-1$
-                + "it with get_metadata_objects / get_project_errors, and use clean_project to " //$NON-NLS-1$
+                + "it with " + inspector + " / get_project_errors, and use clean_project to " //$NON-NLS-1$ //$NON-NLS-2$
                 + "reload the model from disk (or revert in version control) before renaming again."; //$NON-NLS-1$
         case APPLIED:
             return "The apply phase had finished, so the rename is in the model except for any " //$NON-NLS-1$
                 + "change point that failed or was skipped - the report that would have listed " //$NON-NLS-1$
-                + "those is what was lost. Confirm with get_metadata_objects / get_project_errors " //$NON-NLS-1$
+                + "those is what was lost. Confirm with " + inspector + " / get_project_errors " //$NON-NLS-1$ //$NON-NLS-2$
                 + "rather than repeating the rename."; //$NON-NLS-1$
         case PREPARING:
         default:
             return "EDT had not got past building the refactoring, so the cascade had not started " //$NON-NLS-1$
                 + "rewriting the model - but it is not cancelled and may still apply. Check the " //$NON-NLS-1$
-                + "object's name with get_metadata_objects before retrying."; //$NON-NLS-1$
+                + "target's name with " + inspector + " before retrying."; //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 

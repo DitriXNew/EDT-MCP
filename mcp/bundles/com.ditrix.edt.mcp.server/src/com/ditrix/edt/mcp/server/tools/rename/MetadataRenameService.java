@@ -26,6 +26,7 @@ import org.osgi.framework.Bundle;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.bsl.model.Method;
 import com._1c.g5.v8.dt.bsl.model.Module;
+import com._1c.g5.v8.dt.common.StringUtils;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.mcore.NamedElement;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
@@ -125,6 +126,15 @@ public class MetadataRenameService
         // picked the work up" from "the work started" for a caller that gave up on its deadline.
         progress.enter(RenameProgress.Phase.PREPARING);
 
+        // ONE point of judgment for BOTH branches, and it runs before anything is resolved: an
+        // identifier is an identifier whether the target lives in the mdclass tree or on a form, so
+        // the rule cannot sit inside one of the two paths.
+        String badName = invalidNewNameError(newName);
+        if (badName != null)
+        {
+            return ToolResult.error(badName).toJson();
+        }
+
         // Resolve the project and its configuration
         ProjectContext.ConfigurationResult resolved = ProjectContext.resolveConfiguration(projectName);
         if (!resolved.ok())
@@ -197,6 +207,45 @@ public class MetadataRenameService
     }
 
     /**
+     * The refusal for a {@code newName} that is not a legal 1C identifier, or {@code null} when it
+     * is one. Applies to EVERY rename target - top object, member, form element - because the rule
+     * belongs to the identifier, not to where it is stored.
+     * <p>
+     * The verdict is the PLATFORM'S OWN, {@link StringUtils#isValidName(String)}: a non-empty string
+     * whose first code point is alphabetic or {@code '_'} and whose remaining code points are
+     * alphabetic, decimal digits or {@code '_'} (Cyrillic included - it asks
+     * {@code Character.isAlphabetic}, not an ASCII range; read off its bytecode, not guessed).
+     * Deferring to it rather than writing another rule is the whole point: an invented predicate
+     * would refuse names the platform accepts, and a false refusal on a legal rename is worse than
+     * the miss it was meant to prevent. Note what it therefore does NOT judge - length, for one:
+     * an over-long name is a validation MARKER for the platform to raise, not grounds for this tool
+     * to refuse a rename.
+     * <p>
+     * Without this an agent could rename an element to something like {@code Bad.Name}: the write
+     * itself succeeds, but the result is addressable by no FQN (the dot is the FQN separator) and
+     * the form module it cascades into no longer parses. The old name is gone by then, so the
+     * damage is not undoable through this tool.
+     * <p>
+     * PUBLIC because the tool adapter calls the SAME predicate before it drains the derived-data
+     * pipeline: a malformed name is a deterministic argument error and answering it should not cost
+     * a settle wait (or be masked by a BUILDING refusal). The check stays here as well, so the
+     * domain guarantee does not depend on which adapter reached it.
+     *
+     * @param newName the requested new name
+     * @return the refusal message, or {@code null} when the name is a legal identifier
+     */
+    public static String invalidNewNameError(String newName)
+    {
+        if (newName != null && StringUtils.isValidName(newName))
+        {
+            return null;
+        }
+        return "'" + newName + "' is not a valid 1C name. A name must start with a letter or " //$NON-NLS-1$ //$NON-NLS-2$
+            + "underscore and contain only letters, digits and underscores - no dots, spaces or " //$NON-NLS-1$
+            + "punctuation (Cyrillic letters are allowed). Pass only the new NAME here, not an FQN."; //$NON-NLS-1$
+    }
+
+    /**
      * Renames a FORM element (attribute / attribute column / command / field / button / group /
      * decoration / table) addressed by a form FQN, through EDT's OWN
      * {@link IFormRefactoringService} - the exact twin of the mdclass path's
@@ -207,14 +256,18 @@ public class MetadataRenameService
      * <p>
      * Using EDT's refactoring rather than a hand-written name write is what makes the cascade real:
      * it carries the form's internal references and the {@code Items.<Name>} / {@code Элементы.<Имя>}
-     * occurrences in the form module, exactly as the designer's own rename does. String literals
+     * occurrences in the form module, exactly as the designer's own rename does - and, as a side
+     * effect that is EDT's and not ours, it refreshes the element's derived title. String literals
      * holding an element name are deliberately NOT rewritten - that was the issue author's explicit
      * scope call (issue #381).
      * <p>
      * The refactoring is BUILT inside a BM READ transaction (the form element only exists as a live
      * EObject there) but PERFORMED outside it: {@code IRefactoring.perform()} opens its own batch
      * session and write transaction, exactly as the mdclass path does, and nothing is force-exported
-     * by hand. No transaction-bound EObject escapes the read - only the old name and the refactoring.
+     * by hand. What THIS method carries out of the read is a plain {@code String} old name; the
+     * refactoring itself is EDT's object and may hold model elements of its own - the mdclass branch
+     * hands the identical kind of object to the identical preview and apply code, so nothing here is
+     * a new exposure, but the claim is stated as it is rather than as "nothing escapes".
      *
      * @param project the EDT project
      * @param config the project's configuration

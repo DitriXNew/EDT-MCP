@@ -3269,11 +3269,6 @@ public class FormElementWriterTest
                 containment(f, "view", adjustableBoolean, false)); //$NON-NLS-1$
             abstractFormAttribute.getEStructuralFeatures().add(
                 containment(f, "edit", adjustableBoolean, false)); //$NON-NLS-1$
-            // view/edit (each an AdjustableBoolean - "use") are declared HERE, on the abstract
-            // supertype, exactly as the EDT metamodel declares them - so BOTH FormAttribute and
-            // FormAttributeColumn inherit them. Declaring them on the concrete FormAttribute instead
-            // left the synthetic column without the features, which made the reflective writer a
-            // silent no-op on columns and would let a broken column default pass green (issue #382).
 
             formAttribute = f.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$

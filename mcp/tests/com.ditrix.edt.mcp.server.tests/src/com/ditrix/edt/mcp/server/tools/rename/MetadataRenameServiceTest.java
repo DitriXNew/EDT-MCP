@@ -28,12 +28,14 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
 
 /**
- * Tests the REFUSALS the managed-form branch of {@link MetadataRenameService} makes before it
- * opens a transaction (issue #381): an event-handler address, a bare column address, a
+ * Tests the REFUSALS {@link MetadataRenameService} makes before it opens a transaction: a new name
+ * that is not a legal identifier (refused for EVERY target, form or mdclass alike) and, for the
+ * managed-form branch (issue #381), an event-handler address, a bare column address, a
  * designer-owned auto child addressed directly, and a target name a sibling already bears.
  * <p>
- * Reached by REFLECTION on three private statics - {@code formRenameIneligibility},
- * {@code designerChildRefusal} and {@code duplicateNameRefusal}. Their only public entry
+ * Reached by REFLECTION on four private statics - {@code invalidNewNameError},
+ * {@code formRenameIneligibility}, {@code designerChildRefusal} and
+ * {@code duplicateNameRefusal}. Their only public entry
  * ({@code rename}) needs a live EDT project, an {@code IFormRefactoringService} and a BM
  * transaction, none of which exist headlessly, and production shape is not bent for testability -
  * so no test seam was added. The cost is stated rather than hidden: RENAMING one of those methods
@@ -347,6 +349,62 @@ public class MetadataRenameServiceTest
             ref("Catalog.Catalog.Form.ItemForm.Field.Price"), "DiscountField")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ==================== the new name must be a legal identifier ====================
+    //
+    // The verdict is the PLATFORM'S own predicate (StringUtils.isValidName), reached through the
+    // service's one shared entry - so these tests MEASURE what the platform accepts instead of
+    // restating a rule we invented. The acceptance half matters most: a false refusal on a legal
+    // name is worse than the miss it was meant to prevent.
+
+    /** Cyrillic 'Tovar' - a perfectly legal 1C name, and the reason the rule cannot be ASCII-only. */
+    private static final String RU_TOVAR = fromCp(0x0422, 0x043e, 0x0432, 0x0430, 0x0440);
+
+    /**
+     * A dot in the new name is the damaging case: the write succeeds, but the result is addressable
+     * by no FQN (the dot IS the FQN separator) and the cascade rewrites the form module into
+     * something that no longer parses. The old name is gone by then, so this cannot be undone
+     * through the tool - which is why it has to be refused BEFORE the cascade, not reported after.
+     */
+    @Test
+    public void testANewNameWithADotIsRefused() throws Exception
+    {
+        String refusal = invalidNewNameError("Bad.Name"); //$NON-NLS-1$
+        assertNotNull("a dotted new name must be refused", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must quote the bad value: " + refusal, //$NON-NLS-1$
+            refusal.contains("Bad.Name")); //$NON-NLS-1$
+        assertTrue("and say what a name may contain: " + refusal, //$NON-NLS-1$
+            refusal.contains("letters, digits and underscores")); //$NON-NLS-1$
+    }
+
+    /** The other malformed shapes the platform predicate rejects. */
+    @Test
+    public void testTheOtherIllegalNewNamesAreRefused() throws Exception
+    {
+        for (String bad : new String[] {"1Price", "Bad Name", "", "Price-2", "Price!", " Price"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        {
+            assertNotNull("'" + bad + "' is not a legal 1C name and must be refused", //$NON-NLS-1$ //$NON-NLS-2$
+                invalidNewNameError(bad));
+        }
+        assertNotNull("a missing new name must be refused, not thrown on", //$NON-NLS-1$
+            invalidNewNameError(null));
+    }
+
+    /**
+     * The half that keeps the check from being a blanket refusal - and the half that measures the
+     * platform predicate rather than assuming it. A CYRILLIC name is legal 1C (the predicate asks
+     * Character.isLetter, not an ASCII range): a rule written by hand against [A-Za-z] would pass
+     * every assertion above and reject half the configurations in the country.
+     */
+    @Test
+    public void testLegalNewNamesAreNotRefused() throws Exception
+    {
+        for (String good : new String[] {"Price", "_Price", "Price2", "P", "_", RU_TOVAR}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            assertNull("'" + good + "' is a legal 1C name and must be accepted", //$NON-NLS-1$ //$NON-NLS-2$
+                invalidNewNameError(good));
+        }
+    }
+
     // ==================== shared assertions ====================
 
     /** Every handler address must reach the SAME refusal, whatever shape carried it. */
@@ -403,6 +461,14 @@ public class MetadataRenameServiceTest
             "formRenameIneligibility", FormMemberRef.class); //$NON-NLS-1$
         method.setAccessible(true);
         return (String)method.invoke(null, ref);
+    }
+
+    private static String invalidNewNameError(String newName) throws Exception
+    {
+        Method method =
+            MetadataRenameService.class.getDeclaredMethod("invalidNewNameError", String.class); //$NON-NLS-1$
+        method.setAccessible(true);
+        return (String)method.invoke(null, newName);
     }
 
     private static String designerChildRefusal(EObject member, FormMemberRef ref) throws Exception

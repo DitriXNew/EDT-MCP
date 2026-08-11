@@ -19,11 +19,11 @@ Fixture: Catalog.Catalog (attribute "Attribute"), CommonModule.Error/OK/Calc, ..
 """
 
 import os
+import time
 import uuid
 import xml.etree.ElementTree as ET
 
 from harness import (
-    E2ESkip,
     call,
     assert_ok,
     assert_error,
@@ -525,14 +525,17 @@ def test_form_attribute_view_and_edit_are_assignable():
     applied = r.structured.get("applied") or []
     assert "view" in applied and "edit" in applied, \
         "both flags must be reported applied: %r" % (r.structured,)
-    poll_disk_contains("src/Catalogs/Catalog/Forms/ItemForm/Form.form",
-                       "<common>false</common>",
-                       ctx="the cleared flag must land in the form's .form on disk")
+    _poll_attribute_flag("MFViewEditAttr", "view", None,
+                         ctx="the cleared view flag must land in the form's .form on disk")
+    _poll_attribute_flag("MFViewEditAttr", "edit", None,
+                         ctx="the cleared edit flag must land in the form's .form on disk")
 
     back = call("modify_metadata", {
         "projectName": PROJECT, "fqn": fqn,
         "properties": [{"name": "view", "value": True}]})
     assert_ok(back, "set view back to true")
+    _poll_attribute_flag("MFViewEditAttr", "view", "true",
+                         ctx="setting the flag back on must land on disk too")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -556,6 +559,42 @@ def _form_attribute_block(form_xml, name):
         if child is not None and child.text == name:
             return attributes
     return None
+
+
+def _attribute_flag_common(attr, flag):
+    """The `common` value an attribute's AdjustableBoolean flag has ON DISK, as a string.
+
+    Returns None when the flag object is there but carries no `common` child - which is what a
+    CLEARED flag looks like. EMF omits a feature sitting at its DEFAULT, and
+    AdjustableBoolean.common defaults to false, so `view = false` serializes as an EMPTY
+    `<view/>`; the literal `<common>false</common>` is a string the writer never emits (measured
+    on the stand, not assumed). Raises when the attribute or the flag element is missing at all -
+    those are different failures and must not read as "cleared".
+    """
+    block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
+    if block is None:
+        raise AssertionError("attribute %s is not in %s" % (attr, _ITEM_FORM))
+    element = block.find(flag)
+    if element is None:
+        raise AssertionError("attribute %s carries no <%s> element at all" % (attr, flag))
+    common = element.find("common")
+    return None if common is None else common.text
+
+
+def _poll_attribute_flag(attr, flag, want, timeout=20, ctx=""):
+    """Poll until an attribute's flag reads `want` on disk (None = cleared, i.e. an empty element)."""
+    deadline = time.time() + timeout
+    last = "<never read>"
+    while time.time() < deadline:
+        try:
+            last = _attribute_flag_common(attr, flag)
+            if last == want:
+                return
+        except AssertionError as e:
+            last = str(e)
+        time.sleep(0.5)
+    raise AssertionError("expected %s.<%s> to hold common=%r [%s]; it holds %r"
+                         % (attr, flag, want, ctx, last))
 
 
 def _view_role_overrides(block):
@@ -611,9 +650,10 @@ def test_form_attribute_view_flip_preserves_per_role_overrides():
     That apply branch is unreachable from a unit test, so this is the only thing pinning it.
 
     The override has to be planted on disk (see _plant_view_role_override) because no tool
-    authors one. If the platform does not round-trip the planted entry then this stand cannot
-    seed the scenario at all, so the test SKIPS rather than reporting a failure it never
-    observed - and that check runs BEFORE the flag flip, so it can never mask the bug under
+    authors one. That the platform round-trips the planted entry through clean_project and back
+    out again was MEASURED on the stand, not assumed, so a failure to seed is reported as a
+    failure - a skip here would be indistinguishable from a test that checks nothing. The seed
+    is verified BEFORE the flag flip, so its diagnosis can never be confused with the bug under
     test."""
     role = "E2EViewForRole"
     role_fqn = "Role." + role
@@ -643,27 +683,22 @@ def test_form_attribute_view_flip_preserves_per_role_overrides():
     assert_ok(r, "re-export the form from the model through an unrelated property")
     poll_disk_contains(_ITEM_FORM, "precision",
                        ctx="the type change must re-export the form")
-    if role_fqn not in _view_role_overrides(_form_attribute_block(read_disk(_ITEM_FORM), attr)):
-        raise E2ESkip(
-            "the planted per-role <for> override on %s did not survive the import/export round "
-            "trip, so this stand cannot seed one and the preservation guarantee cannot be "
-            "judged here; the structural half is still covered by "
-            "test_form_attribute_view_flip_rewrites_the_flag_in_place" % attr)
+    seeded = _view_role_overrides(_form_attribute_block(read_disk(_ITEM_FORM), attr))
+    assert role_fqn in seeded, (
+        "setup failed: the planted per-role <for> override on %s did not survive the "
+        "import/export round trip, so the flag flip below would have nothing to preserve and "
+        "would pass vacuously; <view> holds %r" % (attr, seeded))
 
     r = call("modify_metadata", {
         "projectName": PROJECT, "fqn": fqn,
         "properties": [{"name": "view", "value": False}]})
     assert_ok(r, "clear view on an attribute carrying a per-role override")
-    poll_disk_contains(_ITEM_FORM, "<common>false</common>",
-                       ctx="the cleared flag must land in the form's .form on disk")
+    _poll_attribute_flag(attr, "view", None,
+                         ctx="the cleared flag must land in the form's .form on disk")
     block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
     assert block is not None, "the attribute must still be in Form.form"
     view = block.find("view")
     assert view is not None, "<view> must survive the flip as a structured block"
-    common = view.find("common")
-    assert common is not None and common.text == "false", \
-        "<view> must carry <common>false</common>, got %r" % (
-            None if common is None else common.text)
     assert role_fqn in _view_role_overrides(block), \
         "the per-role override must survive the flag flip - a plain eSet would have replaced " \
         "the AdjustableBoolean and taken it along; <view> now holds %r" % (
@@ -672,34 +707,45 @@ def test_form_attribute_view_flip_preserves_per_role_overrides():
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_attribute_view_flip_rewrites_the_flag_in_place():
-    """The structural half of the same guarantee, needing no role fixture: flipping `view` must
-    rewrite the <common> INSIDE the existing <view> element. A replacement (or a write of a bare
-    boolean into the slot) shows up here as a <view> that is no longer a block with a <common>
-    child, and the untouched sibling <edit> pins that only the addressed flag moved."""
+    """The structural half of the same guarantee, needing no role fixture: the flag stays a
+    NESTED object across both polarities, and only the addressed one moves.
+
+    `view` must remain an ELEMENT the whole way - a write of a bare boolean into the slot would
+    show up as `<view>false</view>` - and the untouched sibling `<edit>` pins that clearing one
+    flag did not disturb the other. Turning it back ON matters as much as clearing it: that is
+    the branch that REUSES the object already in the slot, and it is the same branch the
+    per-role-override test proves keeps the `for` list.
+
+    On disk a cleared flag is an EMPTY `<view/>`, never `<common>false</common>`: EMF omits a
+    feature sitting at its default and `common` defaults to false (measured on the stand)."""
     attr = "MFViewInPlaceAttr"
     _seed_form_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    assert _attribute_flag_common(attr, "view") == "true", \
+        "a newly created attribute must start with view set (issue #382)"
+
     r = call("modify_metadata", {
-        "projectName": PROJECT,
-        "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr,
+        "projectName": PROJECT, "fqn": fqn,
         "properties": [{"name": "view", "value": False}]})
     assert_ok(r, "clear view on a form attribute")
-    poll_disk_contains(_ITEM_FORM, "<common>false</common>",
-                       ctx="the cleared flag must land in the form's .form on disk")
+    _poll_attribute_flag(attr, "view", None,
+                         ctx="the cleared flag must land in the form's .form on disk")
     block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
-    assert block is not None, "the attribute must be in Form.form"
     view = block.find("view")
-    assert view is not None, "<view> must still be an element, not removed"
-    common = view.find("common")
-    assert common is not None and common.text == "false", \
-        "<common> must be rewritten in place to false, got %r" % (
-            None if common is None else common.text)
     assert not (view.text or "").strip(), \
-        "<view> must stay a structured block, not a bare boolean: %r" % view.text
+        "<view> must stay a structured element, not a bare boolean: %r" % view.text
     edit = block.find("edit")
     edit_common = None if edit is None else edit.find("common")
     assert edit_common is not None and edit_common.text == "true", \
         "the sibling <edit> must be untouched, got %r" % (
             None if edit_common is None else edit_common.text)
+
+    back = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": True}]})
+    assert_ok(back, "set view back on")
+    _poll_attribute_flag(attr, "view", "true",
+                         ctx="the reuse branch must be able to set the flag back on")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
