@@ -1081,7 +1081,14 @@ def _revert_and_clean(project, revert):
             # place that can stop the run before the next test reads a model it is still writing.
             raise
         except Exception:
-            pass
+            # Best-effort - UNLESS this failure already stopped the run. A clean_project that dies
+            # in flight arms the global latch inside call(), and looping on from a latched harness
+            # is pointless: the next request is refused anyway. It is refused IMMEDIATELY, so this
+            # costs no wall clock either way - what it costs is the diagnosis, because the abort
+            # then gets attributed to whichever call trips over the latch next instead of to the
+            # one that actually died. Re-raise and keep the cause attached to its effect.
+            if calls_aborted():
+                raise
     return (False, clean_attempts, settle_failures)
 
 
