@@ -541,7 +541,21 @@ jobs:
           EXPECTED=$(echo '${{ inputs.shards }}' | tr -d '[] ' | tr ',' '\n' | grep -c .)
           echo "shard reports: $COUNT of $EXPECTED expected"
           if [ "$COUNT" -lt "$EXPECTED" ]; then
-            echo "::warning::only $COUNT of $EXPECTED shard reports arrived; the combined result below covers less than the whole suite"
+            echo "::warning::only $COUNT of $EXPECTED shard reports arrived; the combined result covers less than the whole suite"
+            # A warning is not enough. The publisher would take the surviving subset and put a
+            # GREEN check under the gate's own name - "E2E Test Results" saying pass while a
+            # quarter of the suite never reported. The matrix job going red is a different
+            # signal in a different place, and anything reading THIS check by name would be
+            # misled. So the shortfall enters the report as a failing case and the check goes
+            # red for the reason it actually is.
+            {
+              echo '<?xml version="1.0" encoding="UTF-8"?>'
+              echo '<testsuite name="edt-mcp-e2e-shards" tests="1" failures="1">'
+              echo "  <testcase name=\"shards::all_reported\"><failure>only $COUNT of $EXPECTED"
+              echo "  shard reports arrived - a shard died before writing one, so these results"
+              echo "  describe part of the suite, not all of it</failure></testcase>"
+              echo '</testsuite>'
+            } > shard-reports/zz-missing-shards.xml
           fi
 
       - name: Publish E2E Test Results

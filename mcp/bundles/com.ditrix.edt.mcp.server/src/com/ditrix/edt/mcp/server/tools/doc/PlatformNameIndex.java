@@ -54,8 +54,16 @@ final class PlatformNameIndex
     /** How many "did you mean" candidates the banner offers. */
     private static final int SUGGESTION_LIMIT = 8;
 
-    /** How many candidates each suggestion bucket holds, so filtering still leaves a full list. */
-    private static final int SUGGESTION_CANDIDATE_LIMIT = SUGGESTION_LIMIT * 3;
+    /**
+     * How many candidates each suggestion bucket holds. Generous on purpose, and for the same
+     * reason {@link #CANDIDATE_LIMIT} is: the pool size is not the cost. At its old value of three
+     * times the offered count, a run of unresolvable names sharing the query's prefix filled the
+     * bucket outright, and the resolvable prefix match behind them was never even KEPT -
+     * {@code suggestions()} was then left holding 24 entries that all failed verification, with no
+     * way to reach the good one. Names are short strings; what actually costs anything is
+     * {@link #VERIFY_ATTEMPT_LIMIT}, which bounds the RESOLUTIONS however many were retained.
+     */
+    private static final int SUGGESTION_CANDIDATE_LIMIT = SUGGESTION_LIMIT * 64;
 
     /** How many single-character edits a name may be from the query and still be offered. */
     private static final int MAX_TYPO_DISTANCE = 2;
@@ -248,10 +256,22 @@ final class PlatformNameIndex
         // ValueTabelBroken in the provider, and the resolvable ValueTable never gets offered - the
         // banner drops its "Did you mean" exactly where a misspelling needed one. The second pass
         // costs a verification round only when the first produced nothing at all.
-        List<String> strong = new ArrayList<>(prefixHits);
-        strong.addAll(otherHits);
+        // Each bucket is strided SEPARATELY and only then concatenated, so the ranking survives:
+        // every prefix match still precedes every substring match, while inside a bucket the
+        // attempts spread across it instead of piling onto its head. Order WITHIN a bucket carries
+        // no meaning (it is provider order), so spreading costs nothing - and it is what stops a
+        // contiguous run of unresolvable names from consuming the whole verification budget.
+        //
+        // Strided by the ATTEMPT budget, not by how many names are offered. Those are different
+        // numbers and using the wrong one silently defeats the spread: with SUGGESTION_LIMIT the
+        // stride over a 201-name bucket is 26, so the first pass visits 8 entries and the good name
+        // at the tail is reached only after ~150 attempts - past VERIFY_ATTEMPT_LIMIT, never tried.
+        // The stride has to be sized so ONE pass spans the pool within the attempts available.
+        List<String> strong = new ArrayList<>(strided(prefixHits, VERIFY_ATTEMPT_LIMIT));
+        strong.addAll(strided(otherHits, VERIFY_ATTEMPT_LIMIT));
         List<String> best = verified(strong, SUGGESTION_LIMIT);
-        return best.isEmpty() ? verified(typoHits, SUGGESTION_LIMIT) : best;
+        return best.isEmpty()
+            ? verified(strided(typoHits, VERIFY_ATTEMPT_LIMIT), SUGGESTION_LIMIT) : best;
     }
 
     /**

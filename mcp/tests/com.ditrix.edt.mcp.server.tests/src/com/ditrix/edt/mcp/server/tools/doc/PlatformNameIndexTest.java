@@ -361,6 +361,26 @@ public class PlatformNameIndexTest
     }
 
     @Test
+    public void testASaturatedPrefixBucketStillReachesAResolvablePrefixMatch()
+    {
+        // The prefix bucket is the STRONGEST one, so a caller whose correction is a prefix match
+        // should get it. Capped at three times the offered count, a run of unresolvable names
+        // sharing the query's prefix filled the bucket outright and the good prefix match behind
+        // them was never kept - verification then rejected all 24 retained entries and the typo
+        // fallback could not help, because a prefix match never lands in the typo bucket.
+        PlatformNameIndex index =
+            new PlatformNameIndex("ValueTab", "ValueTable"::equals); //$NON-NLS-1$ //$NON-NLS-2$
+        for (int i = 0; i < 200; i++)
+        {
+            index.accept("ValueTabBroken" + i); // all match by prefix, none resolve //$NON-NLS-1$
+        }
+        index.accept("ValueTable"); // matches by prefix too, and is the only one that resolves //$NON-NLS-1$
+
+        assertTrue("a resolvable prefix match behind a saturated bucket must still be offered", //$NON-NLS-1$
+            index.suggestions().contains("ValueTable")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAnUnprintableNameDoesNotSuppressTheRealSuggestion()
     {
         // Refusing such a name only at render time is not enough. Matching the query by prefix, it
