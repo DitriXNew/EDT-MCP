@@ -40,6 +40,7 @@ from harness import (
     poll_disk_contains,
     read_disk,
     tree_snapshot,
+    settle_or_fail,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -64,6 +65,13 @@ def _list_catalogs():
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_confirm_deletes_top_object_gone_from_model_and_disk():
+    # Settle first, for the reason the disk assertions below make visible. This test failed once on
+    # a CI runner whose derived-data queue was badly backed up (the very next test then spent 2222s
+    # never reaching ready): the model read-back passed and the object's own .mdo was gone, but the
+    # Configuration.mdo rewrite had not landed inside poll_disk_lacks's 10s. That is the export
+    # queued behind other work, not a delete that failed - so drain the queue before starting,
+    # rather than widen the poll and call a backlog "normal".
+    settle_or_fail("this delete (its Configuration.mdo export is asserted within 10s)")
     assert_contains(_list_commonmodules(), "Calc", "baseline: CommonModule.Calc must exist")
 
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": "CommonModule.Calc", "confirm": True})

@@ -87,6 +87,7 @@ Each tier proves a different layer. A green lower tier does NOT prove the higher
 - **No drive-by "tidy everything" edits.** The refactor proceeds one topic at a time.
 - **Destructive actions** (metadata rename/delete, `update_database`, `delete_project`) — only on an explicit request.
 - **Commits are local by default** — don't push autonomously; on the default branch, branch first. Review every commit before making it.
+- **Validating a PR = answering its comments, not just its code.** Every review comment and review thread gets a REPLY saying what was done (or why it was declined) — silence reads as "ignored". A thread whose point is actually fixed in the branch is then RESOLVED; a thread you disagreed with, deferred, or only partly addressed stays OPEN with the reason stated, so the author decides. Never resolve a thread you did not act on, and never resolve one by pushing a commit without replying. `gh pr view <n> --json reviews,comments` and `gh api .../pulls/<n>/comments` list them; a thread is resolved through `gh api graphql` (`resolveReviewThread`), which needs the thread id from a `reviewThreads` query — `gh pr` alone cannot resolve.
 
 ---
 

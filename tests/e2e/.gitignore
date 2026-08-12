@@ -1,5 +1,7 @@
 # e2e run artifacts (debug output, not source of truth)
 tools_list.actual.json
 e2e-results.xml
+# One report per shard when the run is split across runners (--shard I/N).
+e2e-results-*.xml
 _*.log
 __pycache__/

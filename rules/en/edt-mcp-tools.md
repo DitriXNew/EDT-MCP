@@ -92,7 +92,7 @@ In the settings UI some tools have configurable limit defaults (applied when the
 | Tool | Purpose | When to use |
 |---|---|---|
 | `get_content_assist` | Completions at a code position (types, methods) | When working at a specific BSL position |
-| `get_platform_documentation` | Platform documentation (types, methods, properties, constructors) | When in doubt about a 1C platform signature |
+| `get_platform_documentation` | Platform documentation (types, methods, properties, constructors). A metadata TYPE SET (`CatalogObject`, `CatalogRef`, `DocumentObject`, `EnumRef`, ...) gives the API every catalog / document / register object shares | When in doubt about a 1C platform signature |
 | `get_metadata_objects` | List of configuration objects with filters `metadataType`, `nameFilter`, `limit` (default 100, max 1000), `language` | Object overview; **always** use a filter |
 | `get_metadata_details` | Detailed object properties by FQN array (`objectFqns: [...]`); FQNs may address members (e.g. `Catalog.Products.Attribute.Weight`). With `assignable: true` returns the assignable-property schema (per property: value kind, current value, allowed enum literals) | After finding the objects you need; use `assignable: true` to discover what `modify_metadata` can set and to what values |
 | `list_subsystems` | Subsystem tree (flat table, recursive by default) | Getting familiar with the configuration structure |
