@@ -101,7 +101,7 @@ public final class DisableRequest
         return indices;
     }
 
-    /** The tokens that were not numbers, already made safe to echo. Immutable. */
+    /** The tokens that were not numbers, already rendered safe to echo. Immutable. */
     public List<String> unparsedTokens()
     {
         return unparsedTokens;
@@ -115,8 +115,9 @@ public final class DisableRequest
 
     /**
      * Makes a caller-supplied token safe to put back into the report: the token is echoed into the
-     * YAML front matter AND into a Markdown sentence, and an unbounded one would let the request
-     * dictate the size of the answer.
+     * YAML front matter AND into a Markdown sentence, so anything that cannot be printed as itself is
+     * escaped rather than dropped, and an unbounded one would let the request dictate the size of the
+     * answer.
      * <p>
      * Walks CODE POINTS rather than {@code char}s: cutting a string at a fixed number of UTF-16 units
      * can split a surrogate pair and put an unpaired surrogate - which is not legal YAML content - into
@@ -134,7 +135,7 @@ public final class DisableRequest
                 return sb.append("...").toString(); //$NON-NLS-1$
             }
             int codePoint = token.codePointAt(i);
-            sb.appendCodePoint(isEchoSafe(codePoint) ? codePoint : '?');
+            appendEchoable(sb, codePoint);
             kept++;
             i += Character.charCount(codePoint);
         }
@@ -142,27 +143,87 @@ public final class DisableRequest
     }
 
     /**
-     * Whether a code point may be echoed back as itself. Everything legible is - Cyrillic included,
-     * since a mistyped 1C identifier is a likely thing to find here and mangling it would hide what
-     * the caller actually typed. Refused are the ones that would break the containers this text goes
-     * into: control characters and non-characters (illegal in YAML), unpaired surrogates, and the
-     * backtick that would close the Markdown code span the prose wraps the token in.
+     * Appends one code point in a form that cannot affect the structure of the documents it lands in:
+     * as itself when it is printable, and otherwise as a literal escape sequence - a backslash, the
+     * letter u, and hex digits, nothing else.
      * <p>
-     * FORMAT characters are refused too, and not because they break a container - they do not. They are
-     * INVISIBLE and they change how the text around them is displayed: a U+202E in an echoed token
-     * reverses the reading order of the rest of the line, so the sentence explaining what went wrong
-     * can be made to read as something else entirely (the "Trojan Source" trick). Since this whole
-     * value exists to be read back by the caller - increasingly an agent that acts on it - a character
-     * that rewrites its neighbours is exactly what "safe to echo" has to exclude. That category also
-     * covers the zero-width joiners and the soft hyphen, none of which belongs in a change-point index.
+     * This is where the safety lives, and it is deliberately NOT a rule about which characters are
+     * forbidden. That rule was tried and it failed six times in a row: ISO controls, then non-characters,
+     * then surrogates, then the backtick, then the FORMAT category, then the line/paragraph separators -
+     * and the last two arrived AFTER the rule had been generalised to whole Unicode categories. A
+     * denylist is a bet that the set of dangerous characters is closed, and Unicode keeps that set open;
+     * every round found the next member. Escaping ends the argument, because there is nothing left to
+     * forbid: whatever arrives is rendered as ASCII the containers cannot misread.
+     * <p>
+     * It also serves the point of the whole feature. A dropped character told the caller nothing about
+     * what they had actually sent; an escape naming the exact code point tells them, which is the
+     * point of #401.
      */
-    private static boolean isEchoSafe(int codePoint)
+    private static void appendEchoable(StringBuilder sb, int codePoint)
     {
-        int type = Character.getType(codePoint);
-        return !Character.isISOControl(codePoint)
-            && type != Character.FORMAT
-            && type != Character.SURROGATE
-            && (codePoint & 0xFFFE) != 0xFFFE
-            && codePoint != '`';
+        if (isPrintableAsItself(codePoint))
+        {
+            sb.appendCodePoint(codePoint);
+        }
+        else if (codePoint <= 0xFFFF)
+        {
+            sb.append(String.format("\\u%04X", Integer.valueOf(codePoint))); //$NON-NLS-1$
+        }
+        else
+        {
+            sb.append(String.format("\\U%08X", Integer.valueOf(codePoint))); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Whether a code point can stand for itself in the report. Everything legible can - Cyrillic,
+     * diacritics, CJK, emoji, punctuation - because a mistyped 1C identifier is exactly what lands here
+     * and escaping it would hide the thing the report exists to show. What cannot: anything outside the
+     * legible categories (controls, formats, separators, surrogates, unassigned and private-use code
+     * points), and the backtick, which would close the Markdown code span the prose wraps the token in.
+     * <p>
+     * Stated as an ALLOW-list on purpose. Not because a denylist could not be written correctly today,
+     * but because it would have to be rewritten every time Unicode grows a new way to be invisible -
+     * and the record above shows how that goes. Being wrong here is now merely ugly, not dangerous:
+     * a code point wrongly judged unprintable comes out as an escape sequence instead of itself.
+     */
+    private static boolean isPrintableAsItself(int codePoint)
+    {
+        if (codePoint == '`')
+        {
+            return false;
+        }
+        if (codePoint == ' ')
+        {
+            return true;
+        }
+        switch (Character.getType(codePoint))
+        {
+        case Character.UPPERCASE_LETTER:
+        case Character.LOWERCASE_LETTER:
+        case Character.TITLECASE_LETTER:
+        case Character.MODIFIER_LETTER:
+        case Character.OTHER_LETTER:
+        case Character.NON_SPACING_MARK:
+        case Character.COMBINING_SPACING_MARK:
+        case Character.ENCLOSING_MARK:
+        case Character.DECIMAL_DIGIT_NUMBER:
+        case Character.LETTER_NUMBER:
+        case Character.OTHER_NUMBER:
+        case Character.CONNECTOR_PUNCTUATION:
+        case Character.DASH_PUNCTUATION:
+        case Character.START_PUNCTUATION:
+        case Character.END_PUNCTUATION:
+        case Character.INITIAL_QUOTE_PUNCTUATION:
+        case Character.FINAL_QUOTE_PUNCTUATION:
+        case Character.OTHER_PUNCTUATION:
+        case Character.MATH_SYMBOL:
+        case Character.CURRENCY_SYMBOL:
+        case Character.MODIFIER_SYMBOL:
+        case Character.OTHER_SYMBOL:
+            return true;
+        default:
+            return false;
+        }
     }
 }

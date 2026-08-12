@@ -350,17 +350,18 @@ public class MetadataRenameDisableIndicesTest
     }
 
     /**
-     * The token is echoed back into the report's YAML front matter, so it must not be able to carry
-     * control characters into it, nor let the request decide how long the answer is.
+     * The token is echoed back into the report's YAML front matter, so a control character comes back
+     * as an escape rather than as itself, and the request does not get to decide how long the answer
+     * is.
      */
     @Test
-    public void testEchoedTokensAreBoundedAndStrippedOfControlCharacters()
+    public void testEchoedTokensAreBoundedAndControlCharactersEscaped()
     {
         DisableRequest parsed = request("a\u0007b," + "x".repeat(80)); //$NON-NLS-1$ //$NON-NLS-2$
 
         List<String> tokens = parsed.unparsedTokens();
         assertEquals(2, tokens.size());
-        assertEquals("a?b", tokens.get(0)); //$NON-NLS-1$
+        assertEquals("a\\u0007b", tokens.get(0)); //$NON-NLS-1$
         assertTrue("a long token must be truncated, not echoed whole", //$NON-NLS-1$
             tokens.get(1).length() < 80);
         assertTrue(tokens.get(1).endsWith("...")); //$NON-NLS-1$
@@ -407,9 +408,11 @@ public class MetadataRenameDisableIndicesTest
         DisableRequest parsed = request("\u0007"); //$NON-NLS-1$
 
         assertEquals(1, parsed.unparsedTokens().size());
-        assertEquals("?", parsed.unparsedTokens().get(0)); //$NON-NLS-1$
+        assertEquals("\\u0007", parsed.unparsedTokens().get(0)); //$NON-NLS-1$
         String report = renderExecutedReport(newOutcome(parsed), List.of(), List.of());
-        assertTrue(report.contains("unparsedTokens: [\"?\"]")); //$NON-NLS-1$
+        // The backslash is doubled by the YAML quoting on top, so the scalar reads back as the
+        // literal text \u0007 - which is what the caller should see.
+        assertTrue(report.contains("unparsedTokens: [\"\\\\u0007\"]")); //$NON-NLS-1$
     }
 
     /**
@@ -449,39 +452,105 @@ public class MetadataRenameDisableIndicesTest
     }
 
     /**
-     * A bidi override is INVISIBLE and reorders what follows it, so an echoed one can make the sentence
-     * that explains the mistake read as something else - the "Trojan Source" trick, against a report an
-     * agent acts on. Neither the YAML nor the code span defends against that: the character breaks no
-     * container, it rewrites its neighbours. So it is refused at the parse, like every FORMAT character
-     * (zero-width joiners and the soft hyphen included - none of them is a change-point index).
+     * Everything that is not legible is ESCAPED rather than printed, and the reasons differ - which is
+     * exactly why the render does not enumerate them. A line separator splits the YAML front
+     * matter and the prose; a bidi override is invisible and reverses the reading order of what follows,
+     * so the sentence explaining the mistake can be made to read as something else (the "Trojan Source"
+     * trick, against a report an agent acts on); a zero-width or a non-character breaks the container or
+     * is simply illegal in it.
+     * <p>
+     * Two of these arrived one review round apart, each as "also reject THIS one". The list stopped
+     * being extended at that point: the render now names what may be printed - letters, marks, digits,
+     * punctuation, symbols, and the plain space - so the members below are escaped by DEFAULT, together
+     * with the ones nobody has reported yet (a no-break space, a private-use code point, an unassigned
+     * one). That is the difference between a guard that is patched and a guard that is closed.
      */
     @Test
-    public void testInvisibleFormatCharactersAreNotEchoedBack()
+    public void testNothingButLegibleCharactersIsPrintedAsItself()
     {
         // Built from code points, never pasted: an invisible character in the source of the test that
         // guards against invisible characters is unreviewable, and raw non-ASCII literals are the
         // corruption risk the repo escapes for anyway.
-        String rtlOverride = String.valueOf((char)0x202E); // RIGHT-TO-LEFT OVERRIDE
-        String zeroWidthSpace = String.valueOf((char)0x200B);
-        String softHyphen = String.valueOf((char)0x00AD);
+        int[] refused = {
+            0x2028, // LINE SEPARATOR - splits the YAML scalar and the Markdown sentence
+            0x2029, // PARAGRAPH SEPARATOR
+            0x202E, // RIGHT-TO-LEFT OVERRIDE - reorders the text after it
+            0x202A, // LEFT-TO-RIGHT EMBEDDING
+            0x2066, // LEFT-TO-RIGHT ISOLATE
+            0x200B, // ZERO WIDTH SPACE
+            0x00AD, // SOFT HYPHEN
+            0xFEFF, // BOM / ZERO WIDTH NO-BREAK SPACE
+            0x0007, // BEL
+            0x00A0, // NO-BREAK SPACE - invisible, and never reported: caught by the allow-list
+            0xE000, // private use
+            0x0378, // unassigned
+            0x0060, // backtick - would close the Markdown code span the prose renders the token in
+        };
 
-        String echoed = request(rtlOverride + "a" + zeroWidthSpace + "b" + softHyphen) //$NON-NLS-1$ //$NON-NLS-2$
-            .unparsedTokens().get(0);
+        for (int codePoint : refused)
+        {
+            String token = "a" + new String(Character.toChars(codePoint)) + "b"; //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(String.format("U+%04X must be escaped, not printed", codePoint), //$NON-NLS-1$
+                String.format("a\\u%04Xb", codePoint), request(token).unparsedTokens().get(0)); //$NON-NLS-1$
+        }
+    }
 
-        assertEquals("?a?b?", echoed); //$NON-NLS-1$
-        // One category rejects the whole family, so the guard cannot be outgrown by the next member:
-        // embeddings and isolates go the same way as the override above.
-        String lrEmbedding = String.valueOf((char)0x202A);
-        String isolate = String.valueOf((char)0x2066);
-        String byteOrderMark = String.valueOf((char)0xFEFF);
-        assertEquals("???", request(lrEmbedding + isolate + byteOrderMark).unparsedTokens().get(0)); //$NON-NLS-1$
+    /**
+     * The property the whole escape exists for, asserted ONCE over the finished report instead of
+     * case by case: nothing in what we render can break the YAML front matter or the Markdown. Stated
+     * this way it cannot be outgrown - a character nobody has thought of yet either prints as itself
+     * (and is therefore legible) or comes out as an escape sequence; there is no third outcome to miss.
+     * <p>
+     * This is the assertion that would have caught all six rounds of this at once.
+     */
+    @Test
+    public void testNoRenderedCharacterCanBreakTheReportStructure() throws Exception
+    {
+        StringBuilder nasty = new StringBuilder();
+        for (int codePoint : new int[] {0x2028, 0x2029, 0x202E, 0x2066, 0x200B, 0x00AD, 0xFEFF,
+            0x0007, 0x00A0, 0xE000, 0x0378, 0x0060, 0x0022, 0x005C, 0x000A, 0x000D})
+        {
+            nasty.append(Character.toChars(codePoint));
+        }
+        String report = renderExecutedReport(newOutcome(request("x" + nasty)), //$NON-NLS-1$
+            List.of("TestConfiguration"), List.of("boom")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        report.codePoints().forEach(codePoint -> {
+            if (codePoint == '\n')
+            {
+                return; // the report's OWN line breaks, the only structure it is allowed to create
+            }
+            assertTrue(String.format(
+                "U+%04X reached the rendered report and can break its structure", codePoint), //$NON-NLS-1$
+                isPrintable(codePoint));
+        });
+    }
+
+    /**
+     * The reverse side, and the one that stops a safety fix from being paid for with an unreadable
+     * report: legible text must come out AS ITSELF, never escaped. A false escape costs more here than
+     * a tolerated oddity - this field is where a mistyped 1C identifier lands, and an escaped form is
+     * not a name anyone recognises.
+     */
+    @Test
+    public void testLegibleTextIsNeverEscaped() throws Exception
+    {
+        String cyrillic = "Справочник"; //$NON-NLS-1$
+        String emoji = new String(Character.toChars(0x1F600));
+
+        String report = renderExecutedReport(newOutcome(request(cyrillic + emoji)), //$NON-NLS-1$
+            List.of(), List.of());
+
+        assertTrue("legible text must be echoed as itself, not as an escape: " + report, //$NON-NLS-1$
+            report.contains(cyrillic + emoji));
+        assertFalse("nothing legible may be escaped", report.contains("\\u04")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
      * The other half of that boundary, and the reason it is drawn by CATEGORY rather than by a wider
      * "reject anything unusual": a false refusal costs more than a tolerated oddity, and this field is
      * where a mistyped identifier lands. Cyrillic, diacritics - combining ones included - punctuation
-     * and non-Latin scripts must all come back as themselves; only the INVISIBLE is refused.
+     * and non-Latin scripts must all come back as themselves; only the INVISIBLE is escaped.
      * <p>
      * Pinned because the natural next edit is to widen the predicate, and nothing else would notice.
      */
@@ -495,8 +564,15 @@ public class MetadataRenameDisableIndicesTest
         String combining = "e" + (char)0x0301; // e + COMBINING ACUTE ACCENT (category Mn) //$NON-NLS-1$
         String punctuation = "«—…»"; // guillemets, em dash, ellipsis //$NON-NLS-1$
         String cjk = "中"; //$NON-NLS-1$
+        String emoji = new String(Character.toChars(0x1F600)); // category So
+        // The shapes an allow-list is most likely to swallow by accident: a plain space, and the
+        // characters the report itself has to escape rather than refuse.
+        String withSpace = "a b"; //$NON-NLS-1$
+        String quoteAndBackslash = "a\"b\\c"; //$NON-NLS-1$
+        String currencyAndMath = "€+"; //$NON-NLS-1$
 
-        for (String token : List.of(cyrillic, precomposed, combining, punctuation, cjk))
+        for (String token : List.of(cyrillic, precomposed, combining, punctuation, cjk, emoji,
+            withSpace, quoteAndBackslash, currencyAndMath))
         {
             assertEquals("a legible token must be echoed as itself: " + token, //$NON-NLS-1$
                 token, request(token).unparsedTokens().get(0));
@@ -506,7 +582,7 @@ public class MetadataRenameDisableIndicesTest
     /**
      * The token is echoed into a Markdown sentence as well as into YAML. Rendered as a bare value it
      * closed the sequence's own opening bracket: {@code x](http://evil)} turned the caller's typo into
-     * a link. The prose renders code spans instead, and the backtick that could close one is stripped.
+     * a link. The prose renders code spans instead, and the backtick that could close one is escaped.
      */
     @Test
     public void testATokenCannotInjectMarkdownIntoTheProse() throws Exception
@@ -575,6 +651,48 @@ public class MetadataRenameDisableIndicesTest
         assertEquals(2, request("1,\t,2").indices().size()); //$NON-NLS-1$
         // ...but a control character that is NOT whitespace is a token and is reported.
         assertEquals(1, request("\u0007").unparsedTokens().size()); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a code point may appear literally in a rendered report. Mirrors the production predicate
+     * deliberately rather than calling it: the test states the PROPERTY it wants ("nothing here can
+     * break the structure"), so that a change loosening the production rule shows up as a failure here
+     * instead of being silently agreed with.
+     */
+    private static boolean isPrintable(int codePoint)
+    {
+        if (codePoint == ' ')
+        {
+            return true;
+        }
+        switch (Character.getType(codePoint))
+        {
+        case Character.UPPERCASE_LETTER:
+        case Character.LOWERCASE_LETTER:
+        case Character.TITLECASE_LETTER:
+        case Character.MODIFIER_LETTER:
+        case Character.OTHER_LETTER:
+        case Character.NON_SPACING_MARK:
+        case Character.COMBINING_SPACING_MARK:
+        case Character.ENCLOSING_MARK:
+        case Character.DECIMAL_DIGIT_NUMBER:
+        case Character.LETTER_NUMBER:
+        case Character.OTHER_NUMBER:
+        case Character.CONNECTOR_PUNCTUATION:
+        case Character.DASH_PUNCTUATION:
+        case Character.START_PUNCTUATION:
+        case Character.END_PUNCTUATION:
+        case Character.INITIAL_QUOTE_PUNCTUATION:
+        case Character.FINAL_QUOTE_PUNCTUATION:
+        case Character.OTHER_PUNCTUATION:
+        case Character.MATH_SYMBOL:
+        case Character.CURRENCY_SYMBOL:
+        case Character.MODIFIER_SYMBOL:
+        case Character.OTHER_SYMBOL:
+            return true;
+        default:
+            return false;
+        }
     }
 
     // ==================== helpers ====================
