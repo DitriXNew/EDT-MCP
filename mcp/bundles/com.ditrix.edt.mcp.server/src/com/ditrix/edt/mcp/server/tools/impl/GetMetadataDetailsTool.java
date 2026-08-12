@@ -95,9 +95,12 @@ public class GetMetadataDetailsTool implements IMcpTool
                "ChartOfCalculationTypes also renders its 'Predefined items' table, and a single " + //$NON-NLS-1$
                "predefined-item FQN ('<Owner>.X.Predefined.ItemName') renders that one item; a " + //$NON-NLS-1$
                "ScheduledJob or CommonModule adds a type-specific Properties table. Pass " + //$NON-NLS-1$
-               "'assignable: true' to discover which properties modify_metadata will accept on the " + //$NON-NLS-1$
-               "node, with their allowed values. Sections and the role matrix are capped and " + //$NON-NLS-1$
-               "pageable, so request fewer FQNs to keep the response small. " + //$NON-NLS-1$
+               "'assignable: true' on an OBJECT or an mdclass / form MEMBER to discover which " + //$NON-NLS-1$
+               "properties modify_metadata will accept there, with their allowed values; that mode " + //$NON-NLS-1$
+               "does NOT resolve a predefined item (its settable surface is FIXED and owner-specific " + //$NON-NLS-1$
+               "- see the guide) and never renders a form event HANDLER (read the form's own FQN for " + //$NON-NLS-1$
+               "those). Every reflected section is capped, so request fewer FQNs to keep the response " + //$NON-NLS-1$
+               "small; only the non-full role matrix can be paged, with 'roleObjectOffset'. " + //$NON-NLS-1$
                "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
 
