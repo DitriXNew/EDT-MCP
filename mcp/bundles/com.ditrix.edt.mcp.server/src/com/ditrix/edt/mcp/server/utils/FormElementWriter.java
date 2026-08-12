@@ -2781,6 +2781,144 @@ public final class FormElementWriter
         return extInfo;
     }
 
+    // ---- the form-attribute <extInfo> that its VALUE TYPE decides -------------------------------
+    //
+    // Nine platform value types do not stand alone on a form attribute: each pairs with a concrete
+    // FormAttributeExtInfo whose absence leaves the attribute half-built (issue #369). The pairing
+    // below is a faithful copy of the platform's own ExtInfoManagementService.createAttributeExtInfo,
+    // keyed by EClass NAME so this bundle still needs no compile-time form-model dependency.
+
+    /** The {@code ValueListExtInfo} classifier - the only pairing that also seeds a nested type. */
+    private static final String ECLASS_VALUE_LIST_EXT_INFO = "ValueListExtInfo"; //$NON-NLS-1$
+
+    /** {@code ValueListExtInfo}'s own type feature: the type of the list's ITEMS. */
+    private static final String FEATURE_ITEM_VALUE_TYPE = "itemValueType"; //$NON-NLS-1$
+
+    /**
+     * A form attribute's value-type CATEGORY &rarr; the concrete {@code FormAttributeExtInfo} classifier
+     * the platform pairs with it, copied from {@code ExtInfoManagementService.createAttributeExtInfo}.
+     * A category not listed here takes NO ext-info (a String / reference / composite attribute), which
+     * is why the sync CLEARS a stale one rather than leaving it: the platform does the same.
+     */
+    private static final Map<String, String> ATTRIBUTE_EXT_INFO_BY_TYPE_CATEGORY =
+        buildAttributeExtInfoMap();
+
+    private static Map<String, String> buildAttributeExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("DynamicList", ECLASS_DYNAMIC_LIST_EXT_INFO); //$NON-NLS-1$
+        m.put("ValueList", ECLASS_VALUE_LIST_EXT_INFO); //$NON-NLS-1$
+        m.put("Planner", "PlannerExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SpreadsheetDocument", "SpreadsheetDocumentExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Chart", "ChartExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Dendrogram", "DendrogramExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GanttChart", "GanttChartExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GeographicalSchema", "GeographicalSchemaExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The platform TYPE is spelled GraphicalSchema, its ext-info EClass GraphicalScheme. Not a
+        // typo on either side - the two spellings really do differ in the platform model.
+        m.put("GraphicalSchema", "GraphicalSchemeExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return Collections.unmodifiableMap(m);
+    }
+
+    /**
+     * Brings the form attribute's {@code <extInfo>} in line with the value type it now carries - the
+     * step that turns a bare {@code valueType} set into the attribute the designer would have written
+     * (issue #369). Mirrors {@code ExtInfoManagementService.setExtInfo(tx, attribute, type, version)}:
+     * a SINGLE-typed attribute whose type category is one of the nine gets that category's ext-info,
+     * anything else gets none, and an ext-info of the wrong EClass is replaced (a composite or
+     * re-typed attribute must not keep the previous type's ext-info).
+     *
+     * <p>Only the ext-info OBJECT is written. The platform additionally attaches a nested BM top object
+     * for seven of the nine (the Chart / GanttChart / Dendrogram / Planner / SpreadsheetDocument /
+     * GeographicalSchema / GraphicalScheme the ext-info points at), but that object is BM-only: the
+     * designer's own {@code .form} serializes those ext-infos EMPTY (verified against production
+     * configurations), and EDT materializes the nested object lazily when the element is first edited.
+     * Writing it here would add nothing to the file and would need four more model factories.</p>
+     *
+     * <p>A {@code FormAttributeColumn} carries a {@code valueType} but no {@code extInfo} feature, so
+     * it is a no-op there - the caller may pass any form member.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier is created from)
+     * @param attribute the form member whose value type has just been set, re-fetched inside the tx
+     * @return the EClass name of the ext-info now on the attribute, or {@code null} when it carries none
+     */
+    public static String syncAttributeExtInfo(EObject formModel, EObject attribute)
+    {
+        EStructuralFeature extInfoFeature = attribute.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
+        {
+            return null;
+        }
+        String classifier = ATTRIBUTE_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(attribute));
+        EObject current = singleReference(attribute, FEATURE_EXT_INFO);
+        if (classifier == null)
+        {
+            if (current != null)
+            {
+                attribute.eSet(extInfoFeature, null);
+            }
+            return null;
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created = replaceExtInfoClassifier(formModel, attribute, extInfoFeature, classifier);
+        if (created == null)
+        {
+            return null;
+        }
+        if (ECLASS_VALUE_LIST_EXT_INFO.equals(classifier))
+        {
+            // The designer writes <itemValueType/> - an EMPTY TypeDescription, i.e. "items of any
+            // type". Seeding it keeps the file byte-shaped like a designer-authored one and gives
+            // modify_metadata a live holder to set the item type on later.
+            ensureEmptyTypeDescription(created);
+        }
+        return created.eClass().getName();
+    }
+
+    /**
+     * The English type CATEGORY of a SINGLE-typed member's value type (the name up to the first dot,
+     * e.g. {@code CatalogRef} of {@code CatalogRef.Goods}), or {@code null} when the member declares no
+     * type or more than one. Single-typed is the platform's own precondition: a composite attribute
+     * takes no ext-info ({@code createAttributeExtInfo} returns null unless {@code types.size() == 1}).
+     * The name is read through {@link McoreUtil#getTypeName}, which answers the ENGLISH name for a
+     * platform PROXY as well as for a resolved type - so an attribute typed with the Russian spelling
+     * classifies identically.
+     */
+    private static String singleValueTypeCategory(EObject member)
+    {
+        EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (feature == null || !(member.eGet(feature) instanceof EObject))
+        {
+            return null;
+        }
+        List<EObject> types = referenceList((EObject)member.eGet(feature), "types"); //$NON-NLS-1$
+        if (types.size() != 1 || !(types.get(0) instanceof TypeItem))
+        {
+            return null;
+        }
+        String name = McoreUtil.getTypeName((TypeItem)types.get(0));
+        if (name == null || name.isEmpty())
+        {
+            return null;
+        }
+        int dot = name.indexOf('.');
+        return dot < 0 ? name : name.substring(0, dot);
+    }
+
+    /** Gives {@code holder}'s {@code itemValueType} a fresh empty {@code TypeDescription} if it has none. */
+    private static void ensureEmptyTypeDescription(EObject holder)
+    {
+        EStructuralFeature feature = holder.eClass().getEStructuralFeature(FEATURE_ITEM_VALUE_TYPE);
+        if (!(feature instanceof EReference) || holder.eGet(feature) instanceof EObject)
+        {
+            return;
+        }
+        holder.eSet(feature, McoreFactory.eINSTANCE.createTypeDescription());
+    }
+
     /**
      * Resolves {@code mainTableFqn} to its {@code DbViewDef} and sets it as the dynamic list's
      * {@code mainTable} reference, appending {@code "mainTable"} to {@code applied}. Throws a
@@ -4129,7 +4267,9 @@ public final class FormElementWriter
     private static void setExtInfoClassifier(EObject formModel, EObject item, String classifier)
     {
         EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
-        if (!(feature instanceof EReference))
+        // A null classifier means "this type pairs with no extInfo" (a ContextMenu / AutoCommandBar /
+        // Navigator group): leave the slot alone rather than resolving a classifier called null.
+        if (classifier == null || !(feature instanceof EReference))
         {
             return;
         }
@@ -4212,19 +4352,176 @@ public final class FormElementWriter
     }
 
     /**
-     * The concrete extInfo classifier NAME for an element whose {@code extInfo} slot is EMPTY, or
-     * {@code null} when it cannot be derived without an instance. Generalizes
-     * {@link #groupExtInfoClassifierFor}: a {@code FormGroup}'s concrete extInfo matches its
-     * {@code type} literal (defaulting to a {@code UsualGroup} when the type is unset). Other kinds
-     * already carry their extInfo from creation, so the reuse branch of {@link #resolveExtInfoEClass}
-     * covers them and this returns {@code null} for them.
+     * The concrete extInfo classifier NAME a form ITEM's current {@code type} literal implies, or
+     * {@code null} when the item's kind has no {@code type}-driven pairing (a Table, whose extInfo
+     * follows its dataPath) or its type pairs with no extInfo at all (a ContextMenu / AutoCommandBar /
+     * Navigator / ... group, and a {@code None} field).
+     *
+     * <p>THE single source of the item pairing, faithful to the platform's own
+     * {@code ExtInfoManagementService.createFieldExtInfo / createDecorationExtInfo / createGroupExtInfo
+     * / createAdditionExtInfo}. It answers two questions at once: which class to CREATE for an empty
+     * slot ({@link #resolveExtInfoEClass}), and which class a live instance must be REPLACED by when
+     * the type changed under it ({@link #syncItemExtInfo}).</p>
      */
     private static String extInfoClassifierNameFor(EObject element)
     {
-        if (ECLASS_FORM_GROUP.equals(element.eClass().getName()))
+        String eClassName = element.eClass().getName();
+        String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
+        if (ECLASS_FORM_GROUP.equals(eClassName))
         {
-            String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
+            // An unset type still means UsualGroup - the platform's own default group shape.
             return groupExtInfoClassifierFor(typeLiteral != null ? typeLiteral : TYPE_LITERAL_USUAL_GROUP);
+        }
+        if (ECLASS_FORM_FIELD.equals(eClassName))
+        {
+            return FIELD_EXT_INFO_BY_TYPE.get(typeLiteral);
+        }
+        if (ECLASS_DECORATION.equals(eClassName))
+        {
+            return DECORATION_EXT_INFO_BY_TYPE.get(typeLiteral);
+        }
+        if (ECLASS_ADDITION.equals(eClassName))
+        {
+            return ADDITION_EXT_INFO_BY_TYPE.get(typeLiteral);
+        }
+        return null;
+    }
+
+    /** {@code ManagedFormFieldType} literal &rarr; its {@code FieldExtInfo} classifier. */
+    private static final Map<String, String> FIELD_EXT_INFO_BY_TYPE = buildFieldExtInfoMap();
+
+    private static Map<String, String> buildFieldExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("InputField", ECLASS_INPUT_FIELD_EXT_INFO); //$NON-NLS-1$
+        m.put("LabelField", "LabelFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CheckBoxField", "CheckBoxFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CalendarField", "CalendarFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ChartField", "ChartFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("DendrogramField", "DendrogramFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("FormattedDocumentField", "FormattedDocFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GanttChartField", "GanttChartFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The four pairings whose two sides are NOT the same word. Each is the platform's, verbatim.
+        m.put("GeographicalSchemaField", "GeographicalMapFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GraphicalSchemaField", "FlowchartFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("HTMLDocumentField", "HtmlFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PictureField", "ImageFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ProgressBarField", "ProgressBarFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("RadioButtonField", "RadioButtonsFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SpreadsheetDocumentField", "SpreadSheetDocFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TextDocumentField", "TextDocFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TrackBarField", "TrackBarFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PlannerField", "PlannerFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PeriodField", "PeriodFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PDFDocumentField", "PDFDocumentFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // 'None' is deliberately absent: the platform's switch has no case for it either, so a
+        // type-less field carries no extInfo.
+        return Collections.unmodifiableMap(m);
+    }
+
+    /** {@code ManagedFormDecorationType} literal &rarr; its {@code DecorationExtInfo} classifier. */
+    private static final Map<String, String> DECORATION_EXT_INFO_BY_TYPE = Collections.unmodifiableMap(
+        decorationExtInfoMap());
+
+    private static Map<String, String> decorationExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put(TYPE_LITERAL_LABEL, ECLASS_LABEL_DECORATION_EXT_INFO);
+        m.put("Picture", "PictureDecorationExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return m;
+    }
+
+    /** {@code ManagedFormAdditionType} literal &rarr; its {@code AdditionExtInfo} classifier. */
+    private static final Map<String, String> ADDITION_EXT_INFO_BY_TYPE = Collections.unmodifiableMap(
+        additionExtInfoMap());
+
+    private static Map<String, String> additionExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("SearchStringAddition", "SearchStringAdditionExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ViewStatusAddition", "ViewStatusAdditionExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SearchControlAddition", "SearchControlAdditionExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return m;
+    }
+
+    /**
+     * Brings a form ITEM's {@code <extInfo>} in line with the {@code type} it now carries - the item
+     * twin of {@link #syncAttributeExtInfo}, mirroring the platform's
+     * {@code ExtInfoManagementService.setExtInfo(item, type, version)}. A {@code type} is a
+     * CLASSIFIER, not a cosmetic flag: a Picture decoration needs a {@code PictureDecorationExtInfo}, a
+     * CheckBoxField a {@code CheckBoxFieldExtInfo}. Leaving the previous type's ext-info behind is the
+     * silent inconsistency this closes - the item read back as its new type while its nested holder
+     * still described the old one, and every extInfo property then resolved against the wrong EClass.
+     *
+     * <p>Three outcomes, exactly as the platform has them: the paired class is CREATED when the slot is
+     * empty, REPLACED when a live instance is of another class, and CLEARED when the new type pairs
+     * with none (a ContextMenu / AutoCommandBar / Navigator / RowActionsPanel /
+     * SelectedItemsActionsPanel group). Unlike {@link #ensureExtInfo} - which never clobbers, because
+     * its callers only mean to reach INTO the holder - this one is authoritative about the class,
+     * because the type just changed.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier comes from)
+     * @param item the form item whose {@code type} has just been set, re-fetched inside the tx
+     * @return the EClass name of the ext-info now on the item, or {@code null} when it carries none
+     */
+    public static String syncItemExtInfo(EObject formModel, EObject item)
+    {
+        EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(feature instanceof EReference) || feature.isMany())
+        {
+            return null;
+        }
+        String classifier = extInfoClassifierNameFor(item);
+        EObject current = singleReference(item, FEATURE_EXT_INFO);
+        if (classifier == null)
+        {
+            // A kind with no type-driven pairing (a Table) must keep what it has; a TYPE that pairs
+            // with none must lose it. Only the latter has a type literal to have decided that.
+            if (current != null && enumLiteralOf(item, FEATURE_TYPE) != null)
+            {
+                item.eSet(feature, null);
+                return null;
+            }
+            return current == null ? null : current.eClass().getName();
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created = replaceExtInfoClassifier(formModel, item, feature, classifier);
+        return created == null ? null : created.eClass().getName();
+    }
+
+    /**
+     * Swaps {@code element}'s {@code extInfo} to a fresh instance of {@code classifier}, and never
+     * leaves the PREVIOUS type's holder behind.
+     *
+     * <p>{@link #setExtInfoClassifier} is best-effort: on a platform version whose form EPackage does
+     * not know the classifier it does nothing at all. Reading the slot back after it would then answer
+     * the STALE ext-info - the one describing the type the element no longer has - and the caller would
+     * report that class as if it were the new pairing, persisting a value-type/ext-info mismatch under
+     * a success. So the result is VERIFIED against the requested classifier, and a slot that could not
+     * be re-created is CLEARED: no ext-info is what the platform itself produces for a pairing it
+     * cannot make, and it is the only answer here that does not lie.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier comes from)
+     * @param element the form member whose ext-info is being re-paired
+     * @param extInfoFeature the member's resolved single-valued {@code extInfo} reference
+     * @param classifier the concrete ext-info EClass name the new type pairs with (never {@code null})
+     * @return the fresh ext-info of {@code classifier}, or {@code null} when it could not be created
+     */
+    private static EObject replaceExtInfoClassifier(EObject formModel, EObject element,
+        EStructuralFeature extInfoFeature, String classifier)
+    {
+        setExtInfoClassifier(formModel, element, classifier);
+        EObject created = singleReference(element, FEATURE_EXT_INFO);
+        if (created != null && classifier.equals(created.eClass().getName()))
+        {
+            return created;
+        }
+        if (created != null)
+        {
+            element.eSet(extInfoFeature, null);
         }
         return null;
     }
@@ -4874,7 +5171,16 @@ public final class FormElementWriter
         return TYPE_LITERAL_USUAL_GROUP;
     }
 
-    /** The concrete extInfo EClass name matching a group type literal (FormObjectFactory's pairs). */
+    /**
+     * The concrete extInfo EClass name matching a group type literal (FormObjectFactory's pairs), or
+     * {@code null} for the five group types the platform pairs with NO extInfo at all - ContextMenu,
+     * AutoCommandBar, Navigator, RowActionsPanel, SelectedItemsActionsPanel ({@code
+     * ExtInfoManagementService.createGroupExtInfo} has no case for them). They must answer null rather
+     * than fall into the UsualGroup default: {@link #syncItemExtInfo} would otherwise hand a
+     * ContextMenu a {@code UsualGroupExtInfo} it must not carry.
+     * <p>UsualGroup stays the default for an UNSET / unrecognized literal - a group with no type is a
+     * usual group, which is what the create path relies on.
+     */
     private static String groupExtInfoClassifierFor(String groupTypeLiteral)
     {
         switch (groupTypeLiteral)
@@ -4891,6 +5197,12 @@ public final class FormElementWriter
                 return "CommandBarExtInfo"; //$NON-NLS-1$
             case TYPE_LITERAL_BUTTON_GROUP:
                 return "ButtonGroupExtInfo"; //$NON-NLS-1$
+            case "ContextMenu": //$NON-NLS-1$
+            case "AutoCommandBar": //$NON-NLS-1$
+            case "Navigator": //$NON-NLS-1$
+            case "RowActionsPanel": //$NON-NLS-1$
+            case "SelectedItemsActionsPanel": //$NON-NLS-1$
+                return null;
             default:
                 return ECLASS_USUAL_GROUP_EXT_INFO;
         }

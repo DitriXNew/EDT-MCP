@@ -3806,6 +3806,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
                     applied.add(hc.change.featureName());
+                    if (syncExtInfoAfter(hc, formModel, member))
+                    {
+                        applied.add("extInfo"); //$NON-NLS-1$
+                    }
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -4208,8 +4212,47 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Rejects a form-member modify that UNSAFELY combines a classifier {@code type} change (a group's /
-     * field's / decoration's {@code type} decides which concrete {@code <extInfo>} EClass applies) with a
+     * Re-pairs a form member's nested {@code <extInfo>} with the classifier the change just set, in the
+     * SAME transaction, so the member is never persisted half-built (issue #369). Two classifiers do
+     * this, and only these two:
+     * <ul>
+     * <li>a form ATTRIBUTE's {@code valueType} - a {@code ValueList} needs a {@code ValueListExtInfo},
+     * a {@code SpreadsheetDocument} a {@code SpreadsheetDocumentExtInfo}, ... ({@link
+     * FormElementWriter#syncAttributeExtInfo});</li>
+     * <li>a form ITEM's {@code type} - a {@code Picture} decoration needs a
+     * {@code PictureDecorationExtInfo}, a {@code CheckBoxField} a {@code CheckBoxFieldExtInfo}, ...
+     * ({@link FormElementWriter#syncItemExtInfo}).</li>
+     * </ul>
+     * A change that lands ON the extInfo is never a classifier change (it is a property INSIDE the
+     * holder), and {@link #formTypeExtInfoComboError} has already refused mixing the two in one call.
+     * Both syncs no-op for a member with no {@code extInfo} feature (an attribute COLUMN, a Button).
+     *
+     * @param hc the change that was just applied
+     * @param formModel the editable content form
+     * @param member the form member the change landed on
+     * @return {@code true} when an extInfo is now attached (so the caller can report it as applied)
+     */
+    private static boolean syncExtInfoAfter(HolderChange hc, EObject formModel, EObject member)
+    {
+        if (hc.onExtInfo)
+        {
+            return false;
+        }
+        if (hc.change.isTypeChange())
+        {
+            return FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
+        }
+        if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
+        {
+            return FormElementWriter.syncItemExtInfo(formModel, member) != null;
+        }
+        return false;
+    }
+
+    /**
+     * Rejects a form-member modify that UNSAFELY combines a classifier change - a group's / field's /
+     * decoration's {@code type}, or an ATTRIBUTE's {@code valueType}, each of which decides which
+     * concrete {@code <extInfo>} EClass applies - with a
      * property that lives on that nested {@code <extInfo>}, in the SAME call. The extInfo props are
      * classified / validated against the PRE-change type's extInfo EClass (in {@link #resolveFormHolder}),
      * so applying both in one transaction is order-dependent and unsafe:
@@ -4217,14 +4260,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * <li>{@code type} first &rarr; {@link FormElementWriter#ensureExtInfo} creates the NEW type's extInfo
      * EClass and the extInfo {@code eSet} throws {@link IllegalArgumentException} on a feature the new
      * EClass lacks (surfaced as an opaque "Failed to modify form member");</li>
-     * <li>the extInfo prop first &rarr; a stale-typed extInfo is force-exported onto a now-differently
-     * typed element (a silent inconsistency EDT serialization rejects).</li>
+     * <li>the extInfo prop first &rarr; the re-pairing replaces the holder it was just written to, so the
+     * property is DISCARDED while still being reported as applied (and, before the re-pairing existed, a
+     * stale-typed extInfo was force-exported onto a now-differently typed element - a silent
+     * inconsistency EDT serialization rejects).</li>
      * </ul>
      * The {@code type} change must be a SEPARATE call so the extInfo is re-resolved against the new type.
      * Detection is fully reflective (the direct-vs-extInfo routing from {@link #resolveFormHolder} plus the
-     * normalized property name) - a form attribute's {@code type} is normalized to {@code valueType} and so
-     * never counts here, and an mdclass object has no extInfo so this is a no-op. Package-visible so it is
-     * unit-testable headlessly. Returns a ready JSON error to reject, or {@code null} when the batch is safe.
+     * normalized property name); an mdclass object has no extInfo so this is a no-op there.
+     * Package-visible so it is unit-testable headlessly. Returns a ready JSON error to reject, or
+     * {@code null} when the batch is safe.
      */
     static String formTypeExtInfoComboError(EObject member, List<JsonObject> properties)
     {
@@ -4241,18 +4286,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 hasExtInfoChange = true;
             }
-            else if ("type".equalsIgnoreCase(name)) //$NON-NLS-1$
+            else if ("type".equalsIgnoreCase(name) || PROP_VALUE_TYPE.equalsIgnoreCase(name)) //$NON-NLS-1$
             {
+                // BOTH spellings, because a form ATTRIBUTE has no `type` feature: normalizeFormProperty
+                // has already rewritten its `type` to `valueType` by the time this reads the name, and a
+                // guard that only knew the enum spelling let the attribute case straight through
+                // (issue #369 review). A value type decides the ext-info exactly as an item's enum does.
                 hasDirectTypeChange = true;
             }
         }
         if (hasDirectTypeChange && hasExtInfoChange)
         {
-            return ToolResult.error("Changing a form group's 'type' cannot be combined with a layout " //$NON-NLS-1$
-                + "property that lives on its <extInfo> (e.g. 'group' / 'united' / 'showLeftMargin' / " //$NON-NLS-1$
-                + "'throughAlign' / 'currentRowUse' / 'representation') in the same call, because the " //$NON-NLS-1$
-                + "'type' decides which extInfo applies. Change the 'type' first, then set the layout " //$NON-NLS-1$
-                + "properties in a separate call.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("Changing a form member's 'type' cannot be combined with a " //$NON-NLS-1$
+                + "property that lives on its <extInfo> in the same call, because the 'type' decides " //$NON-NLS-1$
+                + "which extInfo applies: on an ITEM that is a layout property (e.g. 'group' / " //$NON-NLS-1$
+                + "'united' / 'showLeftMargin' / 'throughAlign' / 'currentRowUse' / 'representation'), " //$NON-NLS-1$
+                + "on an ATTRIBUTE a type-specific one (e.g. a ValueList's 'itemValueType'). Change " //$NON-NLS-1$
+                + "the 'type' first, then set the extInfo properties in a separate call.").toJson(); //$NON-NLS-1$
         }
         return null;
     }
