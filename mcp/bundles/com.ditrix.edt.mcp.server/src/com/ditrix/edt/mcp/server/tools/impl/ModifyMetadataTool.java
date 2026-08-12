@@ -3850,6 +3850,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
                     applied.add(hc.change.featureName());
+                    if (syncExtInfoAfter(hc, formModel, member))
+                    {
+                        applied.add("extInfo"); //$NON-NLS-1$
+                    }
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -4249,6 +4253,44 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             changes.add(prepareFormMemberChange(config, version, member, prop, normReport));
         }
         return changes;
+    }
+
+    /**
+     * Re-pairs a form member's nested {@code <extInfo>} with the classifier the change just set, in the
+     * SAME transaction, so the member is never persisted half-built (issue #369). Two classifiers do
+     * this, and only these two:
+     * <ul>
+     * <li>a form ATTRIBUTE's {@code valueType} - a {@code ValueList} needs a {@code ValueListExtInfo},
+     * a {@code SpreadsheetDocument} a {@code SpreadsheetDocumentExtInfo}, ... ({@link
+     * FormElementWriter#syncAttributeExtInfo});</li>
+     * <li>a form ITEM's {@code type} - a {@code Picture} decoration needs a
+     * {@code PictureDecorationExtInfo}, a {@code CheckBoxField} a {@code CheckBoxFieldExtInfo}, ...
+     * ({@link FormElementWriter#syncItemExtInfo}).</li>
+     * </ul>
+     * A change that lands ON the extInfo is never a classifier change (it is a property INSIDE the
+     * holder), and {@link #formTypeExtInfoComboError} has already refused mixing the two in one call.
+     * Both syncs no-op for a member with no {@code extInfo} feature (an attribute COLUMN, a Button).
+     *
+     * @param hc the change that was just applied
+     * @param formModel the editable content form
+     * @param member the form member the change landed on
+     * @return {@code true} when an extInfo is now attached (so the caller can report it as applied)
+     */
+    private static boolean syncExtInfoAfter(HolderChange hc, EObject formModel, EObject member)
+    {
+        if (hc.onExtInfo)
+        {
+            return false;
+        }
+        if (hc.change.isTypeChange())
+        {
+            return FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
+        }
+        if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
+        {
+            return FormElementWriter.syncItemExtInfo(formModel, member) != null;
+        }
+        return false;
     }
 
     /**

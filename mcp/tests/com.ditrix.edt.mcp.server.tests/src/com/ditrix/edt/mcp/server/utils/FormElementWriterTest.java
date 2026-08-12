@@ -39,6 +39,9 @@ import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.eclipse.emf.ecore.util.EcoreEList;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -4797,6 +4800,546 @@ public class FormElementWriterTest
             reference.setDerived(derived);
             reference.setTransient(isTransient);
             reference.setVolatile(true);
+            return reference;
+        }
+    }
+
+    // ============ the form-attribute <extInfo> its VALUE TYPE decides (issue #369) ============
+    //
+    // Nine platform value types pair with a concrete FormAttributeExtInfo. Setting the value type
+    // without it leaves the attribute half-built - which is exactly what "ValueList is not created"
+    // looked like from the outside. The matrix below walks EVERY one of the nine, so a category
+    // added to (or mis-spelled in) the writer's map cannot pass unnoticed.
+
+    /** Every value-type category that pairs with an ext-info, and the EClass it must produce. */
+    private static final String[][] EXT_INFO_MATRIX = {
+        {"DynamicList", "DynamicListExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ValueList", "ValueListExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Planner", "PlannerExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"SpreadsheetDocument", "SpreadsheetDocumentExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Chart", "ChartExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Dendrogram", "DendrogramExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GanttChart", "GanttChartExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GeographicalSchema", "GeographicalSchemaExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        // The platform TYPE says Schema, its ext-info EClass says Scheme. Pinned because a
+        // "corrected" spelling on either side silently produces an attribute with no ext-info.
+        {"GraphicalSchema", "GraphicalSchemeExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    @Test
+    public void testEveryExtInfoBearingValueTypeGetsItsExtInfo()
+    {
+        for (String[] pair : EXT_INFO_MATRIX)
+        {
+            AttrModel model = new AttrModel();
+            setValueType(model.attribute, pair[0]);
+
+            String applied = FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+            assertEquals("value type " + pair[0], pair[1], applied); //$NON-NLS-1$
+            EObject extInfo = (EObject)model.attribute.eGet(feature(model.attribute, "extInfo")); //$NON-NLS-1$
+            assertNotNull("value type " + pair[0] + " must carry an extInfo", extInfo); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(pair[1], extInfo.eClass().getName());
+        }
+    }
+
+    @Test
+    public void testValueListAlsoGetsTheEmptyItemValueType()
+    {
+        // The designer writes <itemValueType/> - an EMPTY TypeDescription, i.e. "items of any type".
+        // Production .form files carry it, so an MCP-authored ValueList must too.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+        EObject extInfo = (EObject)model.attribute.eGet(feature(model.attribute, "extInfo")); //$NON-NLS-1$
+        Object itemValueType = extInfo.eGet(feature(extInfo, "itemValueType")); //$NON-NLS-1$
+        assertTrue("a ValueList's itemValueType must be a TypeDescription, not left unset", //$NON-NLS-1$
+            itemValueType instanceof TypeDescription);
+        assertTrue("and it must be EMPTY (any item type), like the designer's", //$NON-NLS-1$
+            ((TypeDescription)itemValueType).getTypes().isEmpty());
+    }
+
+    @Test
+    public void testAPlainValueTypeGetsNoExtInfo()
+    {
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "String"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRetypingAwayFromAnExtInfoTypeCLEARSTheStaleExtInfo()
+    {
+        // Keeping the previous type's ext-info is a silent inconsistency EDT serialization rejects;
+        // the platform's own setExtInfo clears it, so this does too.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+        assertNotNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+
+        setValueType(model.attribute, "String"); //$NON-NLS-1$
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull("a stale ValueListExtInfo must not survive a retype to String", //$NON-NLS-1$
+            model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRetypingBetweenExtInfoTypesREPLACESTheExtInfo()
+    {
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+        setValueType(model.attribute, "Chart"); //$NON-NLS-1$
+        assertEquals("ChartExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertEquals("ChartExtInfo", ((EObject)model.attribute.eGet( //$NON-NLS-1$
+            feature(model.attribute, "extInfo"))).eClass().getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResyncingTheSameValueTypeKeepsTheSAMEExtInfoInstance()
+    {
+        // Re-creating it on every write would drop whatever the ext-info already holds (a dynamic
+        // list's query text lives there), so an unchanged category must be a no-op.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+        Object first = model.attribute.eGet(feature(model.attribute, "extInfo")); //$NON-NLS-1$
+
+        FormElementWriter.syncAttributeExtInfo(model.form, model.attribute);
+
+        assertSame(first, model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACompositeValueTypeGetsNoExtInfo()
+    {
+        // The platform's precondition is types.size() == 1: a composite attribute takes none.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAReferenceValueTypeIsClassifiedByItsCATEGORY()
+    {
+        // CatalogRef.Goods -> category CatalogRef, which pairs with nothing. The category (the name
+        // up to the first dot) is what the platform switches on, not the whole name.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "CatalogRef.Goods"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+    }
+
+    @Test
+    public void testAnAttributeCOLUMNIsANoOp()
+    {
+        // A FormAttributeColumn carries a valueType but no extInfo feature - the form metamodel puts
+        // extInfo on FormAttribute only. The sync must tolerate that, not fail on it.
+        AttrModel model = new AttrModel();
+        setValueType(model.column, "ValueList"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.column));
+    }
+
+    @Test
+    public void testAnUnknownExtInfoClassifierLeavesTheAttributeAlone()
+    {
+        // A form EPackage that does not know the classifier (an older platform) must degrade to
+        // "no ext-info", the way the platform itself does for an unknown category - never throw.
+        AttrModel model = new AttrModel(false);
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    // ============ the form-ITEM <extInfo> its TYPE decides (issue #369) ============
+    //
+    // A form item's `type` is a CLASSIFIER: it decides which concrete extInfo EClass applies. Setting
+    // it without re-pairing the extInfo left the item reading back as its new type while its nested
+    // holder still described the old one - a Picture decoration carrying a LabelDecorationExtInfo.
+    // The matrices below walk every literal of all four typed item kinds.
+
+    /** Every ManagedFormFieldType literal that pairs with an extInfo, and the EClass it produces. */
+    private static final String[][] FIELD_EXT_INFO_MATRIX = {
+        {"InputField", "InputFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"LabelField", "LabelFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"CheckBoxField", "CheckBoxFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"CalendarField", "CalendarFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ChartField", "ChartFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"DendrogramField", "DendrogramFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"FormattedDocumentField", "FormattedDocFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GanttChartField", "GanttChartFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        // The four pairings whose two sides are different words - each is the platform's own, and a
+        // "corrected" spelling on either side silently produces a field with no extInfo.
+        {"GeographicalSchemaField", "GeographicalMapFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"GraphicalSchemaField", "FlowchartFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"HTMLDocumentField", "HtmlFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PictureField", "ImageFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ProgressBarField", "ProgressBarFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"RadioButtonField", "RadioButtonsFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"SpreadsheetDocumentField", "SpreadSheetDocFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"TextDocumentField", "TextDocFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"TrackBarField", "TrackBarFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PlannerField", "PlannerFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PeriodField", "PeriodFieldExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"PDFDocumentField", "PDFDocumentFieldExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** Every ManagedFormGroupType literal; a null second slot means "pairs with no extInfo". */
+    private static final String[][] GROUP_EXT_INFO_MATRIX = {
+        {"UsualGroup", "UsualGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Pages", "PagesGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Page", "PageGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"CommandBar", "CommandBarExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ButtonGroup", "ButtonGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Popup", "PopupGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ColumnGroup", "ColumnGroupExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        // The five the platform's createGroupExtInfo has no case for.
+        {"ContextMenu", null}, //$NON-NLS-1$
+        {"AutoCommandBar", null}, //$NON-NLS-1$
+        {"Navigator", null}, //$NON-NLS-1$
+        {"RowActionsPanel", null}, //$NON-NLS-1$
+        {"SelectedItemsActionsPanel", null}}; //$NON-NLS-1$
+
+    private static final String[][] DECORATION_EXT_INFO_MATRIX = {
+        {"Label", "LabelDecorationExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"Picture", "PictureDecorationExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    private static final String[][] ADDITION_EXT_INFO_MATRIX = {
+        {"SearchStringAddition", "SearchStringAdditionExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"ViewStatusAddition", "ViewStatusAdditionExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
+        {"SearchControlAddition", "SearchControlAdditionExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    @Test
+    public void testEveryFieldTypeGetsItsExtInfo()
+    {
+        assertItemMatrix("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryGroupTypeGetsItsExtInfoOrNone()
+    {
+        assertItemMatrix(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
+    }
+
+    @Test
+    public void testEveryDecorationTypeGetsItsExtInfo()
+    {
+        assertItemMatrix("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryAdditionTypeGetsItsExtInfo()
+    {
+        assertItemMatrix("Addition", ADDITION_EXT_INFO_MATRIX); //$NON-NLS-1$
+    }
+
+    /** Sets each literal on a fresh item of {@code eClassName} and checks the extInfo it produces. */
+    private static void assertItemMatrix(String eClassName, String[][] matrix)
+    {
+        for (String[] pair : matrix)
+        {
+            ItemModel model = new ItemModel(eClassName, matrix);
+            model.setType(pair[0]);
+
+            String applied = FormElementWriter.syncItemExtInfo(model.form, model.item);
+
+            assertEquals(eClassName + " type " + pair[0], pair[1], applied); //$NON-NLS-1$
+            EObject extInfo = (EObject)model.item.eGet(feature(model.item, "extInfo")); //$NON-NLS-1$
+            if (pair[1] == null)
+            {
+                assertNull(eClassName + " type " + pair[0] + " pairs with no extInfo", extInfo); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            else
+            {
+                assertNotNull(eClassName + " type " + pair[0], extInfo); //$NON-NLS-1$
+                assertEquals(pair[1], extInfo.eClass().getName());
+            }
+        }
+    }
+
+    @Test
+    public void testChangingAnItemTypeREPLACESTheStaleExtInfo()
+    {
+        // The bug this closes: a Picture decoration kept the LabelDecorationExtInfo it was created
+        // with, so every extInfo property then resolved against the wrong EClass.
+        ItemModel model = new ItemModel("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.setType("Label"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+
+        model.setType("Picture"); //$NON-NLS-1$
+        assertEquals("PictureDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertEquals("PictureDecorationExtInfo", ((EObject)model.item.eGet( //$NON-NLS-1$
+            feature(model.item, "extInfo"))).eClass().getName()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testChangingToATypeThatPairsWithNoExtInfoCLEARSIt()
+    {
+        ItemModel model = new ItemModel(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
+        model.setType("UsualGroup"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        assertNotNull(model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+
+        model.setType("ContextMenu"); //$NON-NLS-1$
+        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNull("a ContextMenu must not keep the UsualGroupExtInfo", //$NON-NLS-1$
+            model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResyncingTheSameItemTypeKeepsTheSAMEExtInfoInstance()
+    {
+        // Re-creating it would reset the layout properties already set on the holder.
+        ItemModel model = new ItemModel(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
+        model.setType("Pages"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        Object first = model.item.eGet(feature(model.item, "extInfo")); //$NON-NLS-1$
+
+        FormElementWriter.syncItemExtInfo(model.form, model.item);
+
+        assertSame(first, model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnItemKindWithNoTypeDrivenPairingKeepsItsExtInfo()
+    {
+        // A Table's extInfo follows its dataPath, not a `type` (it has none), so the sync must leave
+        // it alone - clearing it would drop a dynamic list table's DynamicListTableExtInfo.
+        ItemModel model = new ItemModel("Table", DECORATION_EXT_INFO_MATRIX, false); //$NON-NLS-1$
+        model.item.eSet(feature(model.item, "extInfo"), //$NON-NLS-1$
+            model.extInfoClass("LabelDecorationExtInfo")); //$NON-NLS-1$
+
+        assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNotNull("a Table's extInfo must survive an item sync", //$NON-NLS-1$
+            model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
+    /** The form-model EClass name of a group - shared by the group matrix tests. */
+    private static final String ITEM_ECLASS_GROUP = "FormGroup"; //$NON-NLS-1$
+
+    /**
+     * A form-shaped dynamic model holding ONE typed item: a Form whose EPackage owns the item's
+     * ext-info classifiers, and the item itself with (optionally) a {@code type} EEnum + an
+     * {@code extInfo} reference.
+     */
+    private static final class ItemModel
+    {
+        final EObject form;
+        final EObject item;
+        private final EPackage pkg;
+
+        ItemModel(String itemEClassName, String[][] matrix)
+        {
+            this(itemEClassName, matrix, true);
+        }
+
+        ItemModel(String itemEClassName, String[][] matrix, boolean withType)
+        {
+            EcoreFactory f = EcoreFactory.eINSTANCE;
+            pkg = f.createEPackage();
+            pkg.setName("formitem"); //$NON-NLS-1$
+            pkg.setNsPrefix("formitem"); //$NON-NLS-1$
+            pkg.setNsURI("http://ditrix.com/test/formlike-item"); //$NON-NLS-1$
+
+            EClass extInfoBase = f.createEClass();
+            extInfoBase.setName("ExtInfo"); //$NON-NLS-1$
+            extInfoBase.setAbstract(true);
+            pkg.getEClassifiers().add(extInfoBase);
+            for (String[] pair : matrix)
+            {
+                if (pair[1] == null || pkg.getEClassifier(pair[1]) != null)
+                {
+                    continue;
+                }
+                EClass extInfo = f.createEClass();
+                extInfo.setName(pair[1]);
+                extInfo.getESuperTypes().add(extInfoBase);
+                pkg.getEClassifiers().add(extInfo);
+            }
+            // The group matrix's "no extInfo" literals still need the UsualGroup class to exist, so
+            // the CLEAR case is reached by the mapping and not by a missing classifier.
+            if (pkg.getEClassifier("LabelDecorationExtInfo") == null) //$NON-NLS-1$
+            {
+                EClass extInfo = f.createEClass();
+                extInfo.setName("LabelDecorationExtInfo"); //$NON-NLS-1$
+                extInfo.getESuperTypes().add(extInfoBase);
+                pkg.getEClassifiers().add(extInfo);
+            }
+
+            EClass itemClass = f.createEClass();
+            itemClass.setName(itemEClassName);
+            if (withType)
+            {
+                EEnum typeEnum = f.createEEnum();
+                typeEnum.setName(itemEClassName + "Type"); //$NON-NLS-1$
+                int value = 0;
+                for (String[] pair : matrix)
+                {
+                    EEnumLiteral literal = f.createEEnumLiteral();
+                    literal.setName(pair[0]);
+                    literal.setLiteral(pair[0]);
+                    literal.setValue(value++);
+                    typeEnum.getELiterals().add(literal);
+                }
+                pkg.getEClassifiers().add(typeEnum);
+                EAttribute type = f.createEAttribute();
+                type.setName("type"); //$NON-NLS-1$
+                type.setEType(typeEnum);
+                itemClass.getEStructuralFeatures().add(type);
+            }
+            EReference extInfoRef = f.createEReference();
+            extInfoRef.setName("extInfo"); //$NON-NLS-1$
+            extInfoRef.setEType(extInfoBase);
+            extInfoRef.setContainment(true);
+            extInfoRef.setUpperBound(1);
+            itemClass.getEStructuralFeatures().add(extInfoRef);
+            pkg.getEClassifiers().add(itemClass);
+
+            EClass formClass = f.createEClass();
+            formClass.setName("Form"); //$NON-NLS-1$
+            EReference items = f.createEReference();
+            items.setName("items"); //$NON-NLS-1$
+            items.setEType(itemClass);
+            items.setContainment(true);
+            items.setUpperBound(-1);
+            formClass.getEStructuralFeatures().add(items);
+            pkg.getEClassifiers().add(formClass);
+
+            form = new DynamicEObjectImpl(formClass);
+            item = new DynamicEObjectImpl(itemClass);
+            addTo(form, "items", item); //$NON-NLS-1$
+        }
+
+        void setType(String literal)
+        {
+            EStructuralFeature type = feature(item, "type"); //$NON-NLS-1$
+            item.eSet(type, ((EEnum)type.getEType()).getEEnumLiteral(literal).getInstance());
+        }
+
+        EObject extInfoClass(String name)
+        {
+            EClass eClass = (EClass)pkg.getEClassifier(name);
+            return pkg.getEFactoryInstance().create(eClass);
+        }
+    }
+
+    /** Gives {@code member} a real mcore {@code TypeDescription} carrying one {@code Type} per name. */
+    private static void setValueType(EObject member, String... typeNames)
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String typeName : typeNames)
+        {
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            td.getTypes().add(type);
+        }
+        member.eSet(feature(member, "valueType"), td); //$NON-NLS-1$
+    }
+
+    /**
+     * A form-shaped dynamic model with exactly what the ext-info sync reads: a Form whose EPackage
+     * owns the concrete ext-info classifiers, a FormAttribute with {@code valueType} + {@code extInfo},
+     * and a FormAttributeColumn with {@code valueType} only.
+     */
+    private static final class AttrModel
+    {
+        final EObject form;
+        final EObject attribute;
+        final EObject column;
+
+        AttrModel()
+        {
+            this(true);
+        }
+
+        AttrModel(boolean withExtInfoClassifiers)
+        {
+            EcoreFactory f = EcoreFactory.eINSTANCE;
+            EPackage pkg = f.createEPackage();
+            pkg.setName("formattr"); //$NON-NLS-1$
+            pkg.setNsPrefix("formattr"); //$NON-NLS-1$
+            pkg.setNsURI("http://ditrix.com/test/formlike-attr"); //$NON-NLS-1$
+
+            EClass extInfoBase = f.createEClass();
+            extInfoBase.setName("FormAttributeExtInfo"); //$NON-NLS-1$
+            extInfoBase.setAbstract(true);
+            pkg.getEClassifiers().add(extInfoBase);
+
+            if (withExtInfoClassifiers)
+            {
+                for (String[] pair : EXT_INFO_MATRIX)
+                {
+                    EClass extInfo = f.createEClass();
+                    extInfo.setName(pair[1]);
+                    extInfo.getESuperTypes().add(extInfoBase);
+                    if ("ValueListExtInfo".equals(pair[1])) //$NON-NLS-1$
+                    {
+                        extInfo.getEStructuralFeatures().add(
+                            singleRef(f, "itemValueType", EcorePackage.Literals.EOBJECT)); //$NON-NLS-1$
+                    }
+                    pkg.getEClassifiers().add(extInfo);
+                }
+            }
+
+            EClass abstractAttribute = f.createEClass();
+            abstractAttribute.setName("AbstractFormAttribute"); //$NON-NLS-1$
+            abstractAttribute.setAbstract(true);
+            abstractAttribute.getEStructuralFeatures().add(
+                singleRef(f, "valueType", EcorePackage.Literals.EOBJECT)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(abstractAttribute);
+
+            EClass attributeClass = f.createEClass();
+            attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+            attributeClass.getESuperTypes().add(abstractAttribute);
+            attributeClass.getEStructuralFeatures().add(singleRef(f, "extInfo", extInfoBase)); //$NON-NLS-1$
+            pkg.getEClassifiers().add(attributeClass);
+
+            EClass columnClass = f.createEClass();
+            columnClass.setName("FormAttributeColumn"); //$NON-NLS-1$
+            columnClass.getESuperTypes().add(abstractAttribute);
+            pkg.getEClassifiers().add(columnClass);
+
+            EClass formClass = f.createEClass();
+            formClass.setName("Form"); //$NON-NLS-1$
+            formClass.getEStructuralFeatures().add(containment(f, "attributes", //$NON-NLS-1$
+                abstractAttribute, true));
+            pkg.getEClassifiers().add(formClass);
+
+            form = new DynamicEObjectImpl(formClass);
+            attribute = new DynamicEObjectImpl(attributeClass);
+            column = new DynamicEObjectImpl(columnClass);
+            addTo(form, "attributes", attribute); //$NON-NLS-1$
+            addTo(form, "attributes", column); //$NON-NLS-1$
+        }
+
+        private static EReference singleRef(EcoreFactory f, String featureName, EClass type)
+        {
+            EReference reference = f.createEReference();
+            reference.setName(featureName);
+            reference.setEType(type);
+            reference.setContainment(true);
+            reference.setUpperBound(1);
+            return reference;
+        }
+
+        private static EReference containment(EcoreFactory f, String featureName, EClass type,
+            boolean many)
+        {
+            EReference reference = f.createEReference();
+            reference.setName(featureName);
+            reference.setEType(type);
+            reference.setContainment(true);
+            reference.setUpperBound(many ? -1 : 1);
             return reference;
         }
     }
