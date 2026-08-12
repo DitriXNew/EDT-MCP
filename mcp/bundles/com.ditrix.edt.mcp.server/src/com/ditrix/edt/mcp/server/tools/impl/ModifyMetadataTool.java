@@ -286,77 +286,33 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Set properties of a metadata node (object or member, including a FORM member - item / " //$NON-NLS-1$
-            + "attribute / command) addressed by a 1C full-name FQN, as " //$NON-NLS-1$
-            + "properties=[{name, value, language?}]. Each property is validated (it must be " //$NON-NLS-1$
-            + "assignable, and an enum value must be one of the allowed literals) with an actionable " //$NON-NLS-1$
-            + "error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for " //$NON-NLS-1$
-            + "the form's command bar, or the form name for the form root) and/or 'position' " //$NON-NLS-1$
-            + "('first'/'last'/'before:<name>'/'after:<name>'/index) " //$NON-NLS-1$
-            + "properties. REBIND a form event handler's procedure with a 'procedure' property on a " //$NON-NLS-1$
-            + "Handler FQN, or re-point a Button at a different form command with a 'command' property. " //$NON-NLS-1$
-            + "Set a StyleItem's value with a 'value' property: a Color " //$NON-NLS-1$
-            + "{value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font " //$NON-NLS-1$
-            + "{value:{font:{faceName:'Arial',height:12,bold:true}}}. " //$NON-NLS-1$
-            + "Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' " //$NON-NLS-1$
-            + "property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this " //$NON-NLS-1$
-            + "turns the attribute into a DynamicList and lets EDT auto-fill the available fields from " //$NON-NLS-1$
-            + "the query (no manual XML; output a column with create_metadata Field dataPath " //$NON-NLS-1$
-            + "'List.<field>'). " //$NON-NLS-1$
-            + "For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' " //$NON-NLS-1$
-            + "(per-object right VALUES + optional per-field RLS restriction conditions), 'templates' " //$NON-NLS-1$
-            + "(RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role " //$NON-NLS-1$
-            + "booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. " //$NON-NLS-1$
-            + "Edit a structured membership LIST with 'content' instead of 'properties', dispatched by " //$NON-NLS-1$
-            + "the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's " //$NON-NLS-1$
-            + "content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a " //$NON-NLS-1$
-            + "DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content " //$NON-NLS-1$
-            + "objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). " //$NON-NLS-1$
-            + "'content'=[{op?:'add'|'remove' " //$NON-NLS-1$
-            + "(default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or " //$NON-NLS-1$
-            + "removes one by its metadata FQN; a CommonAttribute entry takes 'use' " //$NON-NLS-1$
-            + "('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and " //$NON-NLS-1$
-            + "a Catalog owner / Document register record / Subsystem content object is a plain " //$NON-NLS-1$
-            + "reference (no flag). " //$NON-NLS-1$
-            + "AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' " //$NON-NLS-1$
-            + "payload instead of 'properties' on a template FQN (a common template " //$NON-NLS-1$
-            + "'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): " //$NON-NLS-1$
-            + "'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, " //$NON-NLS-1$
-            + "wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, " //$NON-NLS-1$
-            + "toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the " //$NON-NLS-1$
-            + "cells (text or a print-time parameter) with formatting, merged ranges, named areas and " //$NON-NLS-1$
-            + "column / row sizes into the template's spreadsheet content; render the result with " //$NON-NLS-1$
-            + "get_template_screenshot. " //$NON-NLS-1$
-            + "AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of " //$NON-NLS-1$
-            + "'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], " //$NON-NLS-1$
-            + "dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, " //$NON-NLS-1$
-            + "dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the " //$NON-NLS-1$
-            + "report's main schema (query data sets + fields + schema parameters), creating the DCS if " //$NON-NLS-1$
-            + "the report has none. " //$NON-NLS-1$
-            + "Edit an XDTO package MEMBER through 'properties' on its own FQN " //$NON-NLS-1$
-            + "('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or " //$NON-NLS-1$
-            + "'...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / " //$NON-NLS-1$
-            + "'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD " //$NON-NLS-1$
-            + "type name, the EXACT name of an ObjectType already in the same package, or " //$NON-NLS-1$
-            + "{nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties " //$NON-NLS-1$
-            + "only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' " //$NON-NLS-1$
-            + "(string). " //$NON-NLS-1$
-            + "Set a PREDEFINED item's properties with 'properties' on its own FQN " //$NON-NLS-1$
-            + "('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, " //$NON-NLS-1$
-            + "ChartOfAccounts or ChartOfCalculationTypes): description / code on every owner, " //$NON-NLS-1$
-            + "isFolder on a Catalog / ChartOfCharacteristicTypes only (folder->item with existing " //$NON-NLS-1$
-            + "children is refused), plus owner-specific properties - " //$NON-NLS-1$
-            + "'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; a " //$NON-NLS-1$
-            + "JSON null clears it) on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' " //$NON-NLS-1$
-            + "/ 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / " //$NON-NLS-1$
-            + "'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see " //$NON-NLS-1$
-            + "the guide for which apply to each owner) - the documented set, no assignable-schema " //$NON-NLS-1$
-            + "round-trip needed. 'parent' is CREATE-time only: moving an item to a different folder " //$NON-NLS-1$
-            + "(or an account under a different parent account) is refused here - delete and " //$NON-NLS-1$
-            + "re-create it with the new 'parent'. " //$NON-NLS-1$
-            + "For other nodes, discover assignable properties + allowed values with " //$NON-NLS-1$
-            + "get_metadata_details(assignable:true). To rename, use rename_metadata_object. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('modify_metadata')."; //$NON-NLS-1$
+        return "Set properties of a metadata node - an object, a member, or a FORM member (item / " //$NON-NLS-1$
+            + "attribute / command / handler) - addressed by a 1C full-name FQN, as " //$NON-NLS-1$
+            + "properties=[{name, value, language?}]. Each property is validated against what the " //$NON-NLS-1$
+            + "node actually accepts (it must be assignable, and an enum value must be one of the " //$NON-NLS-1$
+            + "allowed literals) with an actionable error; discover the assignable properties and " //$NON-NLS-1$
+            + "their allowed values with get_metadata_details(assignable:true). " //$NON-NLS-1$
+            + "This is ALSO the only tool for several node-specific payloads, each REPLACING " //$NON-NLS-1$
+            + "'properties' and selected by the FQN's kind: 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
+            + "on a ROLE FQN ('Role.Name') - access rights, RLS restrictions and RLS templates " //$NON-NLS-1$
+            + "(read the current matrix with get_metadata_details on the Role FQN); 'dcs' on a " //$NON-NLS-1$
+            + "REPORT FQN ('Report.<Name>') - the Data Composition Schema (СКД / .dcs): query data " //$NON-NLS-1$
+            + "sets, fields and schema parameters; 'template' on a SpreadsheetDocument TEMPLATE FQN " //$NON-NLS-1$
+            + "('CommonTemplate.<Name>' or '<Type>.<Owner>.Template.<Name>') - a print form / макет's " //$NON-NLS-1$
+            + "cells, merged ranges, named areas and column / row sizes (render it with " //$NON-NLS-1$
+            + "get_template_screenshot); 'content' on a COMMON ATTRIBUTE ('CommonAttribute.Name', " //$NON-NLS-1$
+            + "per-owner 'use'), an EXCHANGE PLAN ('ExchangePlan.Name', per-entry 'autoRecord'), a " //$NON-NLS-1$
+            + "CATALOG ('Catalog.Name', owners), a DOCUMENT ('Document.Name', register records / " //$NON-NLS-1$
+            + "движения) or a SUBSYSTEM ('Subsystem.Name', content objects) FQN - the structured " //$NON-NLS-1$
+            + "membership list, added or removed one member at a time. " //$NON-NLS-1$
+            + "Through 'properties' it also moves / reorders a FORM ITEM ('parent' / 'position'), " //$NON-NLS-1$
+            + "REBINDS a form event handler's procedure ('procedure' on a Handler FQN), re-points a " //$NON-NLS-1$
+            + "Button at another form command ('command'), sets a StyleItem's 'value' (a color " //$NON-NLS-1$
+            + "{color:{red,green,blue}} or a font {font:{faceName,height,bold}}), turns a form list " //$NON-NLS-1$
+            + "FORM ATTRIBUTE into a dynamic list with a custom query ('queryText'), and edits XDTO " //$NON-NLS-1$
+            + "package MEMBERS and PREDEFINED items on their own FQNs. " //$NON-NLS-1$
+            + "To rename, use rename_metadata_object. The payload SHAPES are deliberately not in this " //$NON-NLS-1$
+            + "description: call get_tool_guide('modify_metadata') before your first call."; //$NON-NLS-1$
     }
 
     @Override

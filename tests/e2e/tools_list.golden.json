@@ -31,27 +31,21 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "'adopted' or 'alreadyAdopted'",
           "type": "string"
         },
         "extensionProject": {
-          "description": "The extension the object was adopted into",
           "type": "string"
         },
         "fqn": {
-          "description": "FQN of the adopted object in the extension",
           "type": "string"
         },
         "objectBelonging": {
-          "description": "ADOPTED (the object is now an adopted copy)",
           "type": "string"
         },
         "persisted": {
-          "description": "Whether the change was exported to disk",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -105,23 +99,18 @@
     "outputSchema": {
       "properties": {
         "appliedVariant": {
-          "description": "Description of the fix variant that was applied.",
           "type": "string"
         },
         "checkId": {
-          "description": "The marker's check id.",
           "type": "string"
         },
         "location": {
-          "description": "Where the fix was applied (module:line or object).",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable summary.",
           "type": "string"
         },
         "success": {
-          "description": "True when the fix was applied.",
           "type": "boolean"
         }
       },
@@ -167,38 +156,30 @@
     "outputSchema": {
       "properties": {
         "built": {
-          "description": "Count of objects built successfully.",
           "type": "integer"
         },
         "failed": {
-          "description": "Count of objects that failed to build.",
           "type": "integer"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "outputDir": {
-          "description": "Absolute output directory the files were written to.",
           "type": "string"
         },
         "outsideWorkspace": {
-          "description": "Present and true when outputDir is outside the EDT workspace (a warning, not a failure).",
           "type": "boolean"
         },
         "project": {
-          "description": "Target EDT external-object project name.",
           "type": "string"
         },
         "results": {
-          "description": "Per-object results: {name, success, path (on success), error (on failure)}.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "success": {
-          "description": "true only when every requested object was built; false when any object failed.",
           "type": "boolean"
         }
       },
@@ -233,22 +214,18 @@
     "outputSchema": {
       "properties": {
         "message": {
-          "description": "Human-readable completion message",
           "type": "string"
         },
         "projects": {
-          "description": "Names of the projects that were cleaned",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "projectsCleaned": {
-          "description": "Number of projects that were cleaned",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -302,31 +279,24 @@
     "outputSchema": {
       "properties": {
         "bound": {
-          "description": "Branch-infobase binding read-back: {infobases: [...], defaultInfobase}. Present only when applicationId was given and the binding succeeded.",
           "type": "object"
         },
         "branch": {
-          "description": "The new branch's short name.",
           "type": "string"
         },
         "checkedOut": {
-          "description": "Whether the branch ended up checked out. False when checkout was not requested, or was requested but did not complete cleanly (see message).",
           "type": "boolean"
         },
         "created": {
-          "description": "Always true on a non-error result.",
           "type": "boolean"
         },
         "message": {
-          "description": "Present only when checkout or the infobase binding did not fully succeed: a short warning. The branch itself was still created (success stays true).",
           "type": "string"
         },
         "startPoint": {
-          "description": "The start point actually used ('HEAD' when none was given).",
           "type": "string"
         },
         "success": {
-          "description": "Whether the branch was created",
           "type": "boolean"
         }
       },
@@ -408,50 +378,39 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "'created' (mode=create) or 'registered' (mode=register).",
           "type": "string"
         },
         "applicationId": {
-          "description": "ID of the newly created application (for chaining into update_database).",
           "type": "string"
         },
         "applicationKind": {
-          "description": "'infobase' or 'standaloneServer' — the kind of application created.",
           "type": "string"
         },
         "applications": {
-          "description": "Applications bound to the project after creation (same shape as get_applications).",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "infobaseFile": {
-          "description": "Path of the created infobase directory.",
           "type": "string"
         },
         "infobaseName": {
-          "description": "Display name of the created infobase.",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "port": {
-          "description": "applicationKind='standaloneServer' only: the ACTUAL web port the server was published on (parsed from webUrl; EDT auto-allocates it). Absent if webUrl could not be resolved.",
           "type": "integer"
         },
         "project": {
-          "description": "Name of the configuration project.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "webUrl": {
-          "description": "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing. Best-effort: absent if EDT could not resolve the URL (the server is still created).",
           "type": "string"
         }
       },
@@ -501,35 +460,27 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Always 'created' on success.",
           "type": "string"
         },
         "applicationId": {
-          "description": "Application ID stored in the config (real IApplicationManager id).",
           "type": "string"
         },
         "clientType": {
-          "description": "Client kind: thin, thick, or web.",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "name": {
-          "description": "Exact name of the created launch configuration.",
           "type": "string"
         },
         "project": {
-          "description": "Project the configuration targets.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "type": {
-          "description": "Launch configuration type id.",
           "type": "string"
         }
       },
@@ -639,84 +590,66 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "'created' on success",
           "type": "string"
         },
         "applied": {
-          "description": "Names of the optional attributes actually applied (XDTO package member create only)",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "callType": {
-          "description": "Extension event call type written (Before/After/Instead), when an extension event handler (form:EventHandlerExtension) was created",
           "type": "string"
         },
         "commonModuleKind": {
-          "description": "Resolved CommonModule kind, when a CommonModule was created",
           "type": "string"
         },
         "fqn": {
-          "description": "Normalized full-name FQN of the created node",
           "type": "string"
         },
         "generateContent": {
-          "description": "Whether the new form was seeded with the main Object attribute (form-object create only)",
           "type": "boolean"
         },
         "kind": {
-          "description": "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')",
           "type": "string"
         },
         "language": {
-          "description": "Language code the localized value (synonym, or a form element's title) was written under",
           "type": "string"
         },
         "localeUnusedInConfiguration": {
-          "description": "Set when the value was written under a language the configuration itself does not use (its own synonym has no text for that language). NOT an error - the language IS declared, so the value will display - but a prompt to ASK the user whether translating into it is really wanted: it may be a single-language build, or a language this configuration does not support yet",
           "type": "boolean"
         },
         "localesMissing": {
-          "description": "Language codes the configuration USES (its own synonym is filled in for them) that still have NO value for the localized property just written; present only when a localized value was written. A declared language the configuration does not use is not reported - a multilingual configuration worked on in a single-language branch must not nag about the others",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "message": {
-          "description": "Human-readable confirmation message",
           "type": "string"
         },
         "name": {
-          "description": "Programmatic name of the created node",
           "type": "string"
         },
         "normalized": {
-          "description": "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "persisted": {
-          "description": "Whether the change was exported to disk",
           "type": "boolean"
         },
         "setAsDefault": {
-          "description": "Whether the new form was registered as the owner's default object form (form-object create only)",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the node was created",
           "type": "boolean"
         },
         "synonym": {
-          "description": "Display name written, when a synonym property was provided",
           "type": "string"
         },
         "targetNamespace": {
-          "description": "XDTO namespace written, when an XDTOPackage was created",
           "type": "string"
         }
       },
@@ -816,63 +749,48 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "'created' on success",
           "type": "string"
         },
         "baseProject": {
-          "description": "Name of the base configuration project it extends (extension only, conditional)",
           "type": "string"
         },
         "codestyle": {
-          "description": "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}",
           "type": "object"
         },
         "message": {
-          "description": "Human-readable confirmation message",
           "type": "string"
         },
         "name": {
-          "description": "Configuration name (configuration/extension) or the supplied identifier (externalObjects).",
           "type": "string"
         },
         "prefix": {
-          "description": "NamePrefix applied (extension only, conditional)",
           "type": "string"
         },
         "project": {
-          "description": "EDT workspace project name of the created project (round-trip key for sibling tools)",
           "type": "string"
         },
         "projectKind": {
-          "description": "Kind of project created: configuration, extension, or externalObjects",
           "type": "string"
         },
         "purpose": {
-          "description": "ConfigurationExtensionPurpose value applied (extension only, conditional)",
           "type": "string"
         },
         "scriptVariant": {
-          "description": "ScriptVariant applied or inherited",
           "type": "string"
         },
         "scriptVariantNote": {
-          "description": "Present only when a requested scriptVariant could not be applied (externalObjects).",
           "type": "string"
         },
         "state": {
-          "description": "'ready' when lifecycle STARTED was reached, 'created' otherwise",
           "type": "string"
         },
         "success": {
-          "description": "Whether the project was created",
           "type": "boolean"
         },
         "synonymNote": {
-          "description": "Present only when the synonym could not be applied (no resolvable language code).",
           "type": "string"
         },
         "version": {
-          "description": "Platform version string used for project creation",
           "type": "string"
         }
       },
@@ -923,43 +841,33 @@
     "outputSchema": {
       "properties": {
         "alreadyRunning": {
-          "description": "True if a matching session was already alive; re-launch skipped",
           "type": "boolean"
         },
         "applicationId": {
-          "description": "Application id of the launched configuration",
           "type": "string"
         },
         "attach": {
-          "description": "True if this is an Attach (server-side debug) configuration",
           "type": "boolean"
         },
         "configurationType": {
-          "description": "Launch configuration type id",
           "type": "string"
         },
         "launchConfiguration": {
-          "description": "Name of the launched/running launch configuration",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable status message",
           "type": "string"
         },
         "mode": {
-          "description": "Launch mode of the session (e.g. debug, run)",
           "type": "string"
         },
         "project": {
-          "description": "EDT project name associated with the launch",
           "type": "string"
         },
         "status": {
-          "description": "\"launching\" when the launch was dispatched asynchronously and is still starting; absent on the alreadyRunning short-circuit. Poll debug_status for readiness.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -990,40 +898,33 @@
     "outputSchema": {
       "properties": {
         "count": {
-          "description": "Number of active debug launches returned",
           "type": "integer"
         },
         "debugServerTargetCount": {
-          "description": "Number of debug-server targets returned",
           "type": "integer"
         },
         "debugServerTargets": {
-          "description": "1C debug-server targets (server-side / EDT-UI sessions) with real suspend state",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "launches": {
-          "description": "Active debug launches with state and frame info",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "recentLaunchFailures": {
-          "description": "Failures of asynchronous (fire-and-forget) launches from the last hour, which the debug_launch call itself could not report because it had already returned: {launchConfiguration, applicationId, message, ageSeconds}. Filtered by applicationId like the launches above (strictly: call without it to see failures whose application could not be resolved). Includes an external-changes conflict the configured externalInfobaseChanges policy declined to resolve while EDT updated the infobase inside the launch.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "registry": {
-          "description": "Debug session registry snapshot counters",
           "type": "object"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -1128,43 +1029,33 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Either 'preview' (nothing changed) or 'deleted' (removed).",
           "type": "string"
         },
         "applicationId": {
-          "description": "Application ID that was removed.",
           "type": "string"
         },
         "applicationKind": {
-          "description": "'infobase' or 'standaloneServer' — the kind of application removed (standalone-server deletions only).",
           "type": "string"
         },
         "confirmationRequired": {
-          "description": "true on a preview (no change made); absent/false once deleted.",
           "type": "boolean"
         },
         "databaseFilesDeleted": {
-          "description": "Whether the database files on disk were actually deleted (only when deleteDatabaseFiles=true; false otherwise or if the directory could not be removed).",
           "type": "boolean"
         },
         "deleteRegistration": {
-          "description": "Whether the EDT registry entry was (or would be) removed: the global infobases-list entry for a file infobase, or the infobases.yaml registry entry for a standalone server.",
           "type": "boolean"
         },
         "infobaseName": {
-          "description": "Display name of the removed infobase.",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "project": {
-          "description": "Name of the configuration project.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -1201,31 +1092,24 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Either 'preview' (nothing changed) or 'deleted' (removed).",
           "type": "string"
         },
         "confirmationRequired": {
-          "description": "true on a preview (no change made); absent/false once deleted.",
           "type": "boolean"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "name": {
-          "description": "Name of the targeted launch configuration.",
           "type": "string"
         },
         "project": {
-          "description": "Project the configuration targets (if known).",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "type": {
-          "description": "Launch configuration type id (if known).",
           "type": "string"
         }
       },
@@ -1241,7 +1125,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / '...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item '<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / ChartOfAccounts / ChartOfCalculationTypes) addressed by a 1C full-name FQN. Two-phase: call without confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). A top-level object - and equally an mdclass MEMBER of one (attribute / tabular section / dimension / resource / enum value) - goes through EDT's md-refactoring, which CASCADES the cleanup of references in BSL code, forms and other metadata; when a reference cannot be auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed - pass force=true to delete anyway and leave those references dangling. A PREDEFINED item is checked for incoming references the same way. An owned FORM object, a FORM member and an XDTO package member are removed from their own container instead: nothing blocks them (force is ignored), and no CROSS-object cascade runs - a reference from elsewhere (a field's dataPath, a Property whose type points at the deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details. Only the owner's OWN pointers are cleaned: deleting an owned form clears the default-form settings that named it. Full parameters and examples: call get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a FORM object 'Type.Object.Form.Name', a FORM member (item / attribute / command / handler), an XDTO package member ('XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>'), or a PREDEFINED item '<Owner>.X.Predefined.ItemName'. TWO-PHASE: call WITHOUT confirm to preview what would be removed, then confirm=true to apply (deletion is hard to reverse). A top object - and equally an mdclass MEMBER of one - goes through EDT's md-refactoring, which CASCADES the cleanup of references in BSL code, forms and other metadata; when a reference cannot be auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed - pass force=true to delete anyway and leave those references dangling. A PREDEFINED item is checked for incoming references the same way. An owned FORM object, a FORM member and an XDTO package member are removed from their own container instead: nothing blocks them (force is ignored), and no CROSS-object cascade runs - a reference from elsewhere (a field's dataPath, a Property whose type points at the deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details. Only the owner's own pointers are cleaned: deleting an owned form clears the default-form settings that named it. Full parameters and examples: call get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -1271,60 +1155,48 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Either 'preview', 'executed' or 'blocked'",
           "type": "string"
         },
         "affectedReferences": {
-          "description": "Deprecated alias of blockingReferences (the same list), kept for one release for wire compatibility",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "affectedReferencesCount": {
-          "description": "Deprecated alias of blockingReferencesCount (the same count), kept for one release for wire compatibility",
           "type": "integer"
         },
         "blocking": {
-          "description": "Whether the listed blockingReferences BLOCK the delete (the refactoring cannot auto-clean them; a confirm=true delete is refused unless force=true)",
           "type": "boolean"
         },
         "blockingReferences": {
-          "description": "Incoming references the refactoring cannot auto-clean: listed in the preview, the reason a delete is refused (action='blocked'), or left dangling when force=true (action='executed')",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "blockingReferencesCount": {
-          "description": "Count of blocking references",
           "type": "integer"
         },
         "forced": {
-          "description": "Whether the delete was forced past blocking references",
           "type": "boolean"
         },
         "fqn": {
-          "description": "FQN of the node targeted for deletion",
           "type": "string"
         },
         "items": {
-          "description": "Metadata items the deletion would remove (preview)",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "message": {
-          "description": "Human-readable description of the result",
           "type": "string"
         },
         "refactoringTitle": {
-          "description": "Title of the delete refactoring (preview)",
           "type": "string"
         },
         "success": {
-          "description": "Whether the request succeeded",
           "type": "boolean"
         }
       },
@@ -1365,27 +1237,21 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Either 'preview' (nothing changed) or 'deleted' (removed).",
           "type": "string"
         },
         "confirmationRequired": {
-          "description": "true on a preview (no change made); absent/false once deleted.",
           "type": "boolean"
         },
         "deleteContent": {
-          "description": "Whether disk files were (or would be) deleted too.",
           "type": "boolean"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "project": {
-          "description": "Name of the targeted project.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -1425,44 +1291,36 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "'enabled' or 'disabled'",
           "type": "string"
         },
         "applied": {
-          "description": "Toolset ids the change was applied to",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "ignored": {
-          "description": "Requested ids that cannot be toggled (core)",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "invalid": {
-          "description": "Requested ids that are not valid toolsets",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "note": {
-          "description": "Human-readable next step",
           "type": "string"
         },
         "progressiveDisclosure": {
-          "description": "Whether progressive disclosure is currently on",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "visibleToolsets": {
-          "description": "Toolset ids visible in tools/list after the change",
           "items": {
             "type": "string"
           },
@@ -1503,23 +1361,18 @@
     "outputSchema": {
       "properties": {
         "fullLength": {
-          "description": "Full length of value before truncation",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "truncated": {
-          "description": "True when value was truncated to the max length",
           "type": "boolean"
         },
         "type": {
-          "description": "BSL reference type name of the evaluated value",
           "type": "string"
         },
         "value": {
-          "description": "String representation of the evaluated value (may be truncated)",
           "type": "string"
         }
       },
@@ -1561,19 +1414,15 @@
     "outputSchema": {
       "properties": {
         "fqn": {
-          "description": "The resolved CommonPicture FQN.",
           "type": "string"
         },
         "selected": {
-          "description": "Present only when 'variant' was requested and resolved: the chosen variant decoded to PNG - name, contentType ('image/png'), sizeBytes and pngBase64.",
           "type": "object"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "variants": {
-          "description": "All picture variants: each has name, dpi, theme, interfaceVariant, pictureDirection, template (boolean), glyphWidth, glyphHeight, contentType and sizeBytes. Nullable 1C enums are rendered as stable literals or '-'.",
           "items": {
             "type": "object"
           },
@@ -1721,34 +1570,27 @@
     "outputSchema": {
       "properties": {
         "applications": {
-          "description": "Applications with id, name, type and update state",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "count": {
-          "description": "Number of applications found",
           "type": "integer"
         },
         "defaultApplicationId": {
-          "description": "Id of the project's default application",
           "type": "string"
         },
         "inheritedFromProject": {
-          "description": "Base/parent project the applications are inherited from (present only for external-objects/extension projects whose applications come from their base project).",
           "type": "string"
         },
         "message": {
-          "description": "Informational message when no applications are found",
           "type": "string"
         },
         "project": {
-          "description": "EDT project name the applications belong to",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -1861,42 +1703,33 @@
     "outputSchema": {
       "properties": {
         "column": {
-          "description": "1-based column where proposals were computed",
           "type": "integer"
         },
         "file": {
-          "description": "Workspace-relative path of the module the proposals are for",
           "type": "string"
         },
         "filteredOut": {
-          "description": "Proposals removed by the contains filter",
           "type": "integer"
         },
         "line": {
-          "description": "1-based line where proposals were computed",
           "type": "integer"
         },
         "proposals": {
-          "description": "Proposals as { displayString[, documentation] }",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "returnedProposals": {
-          "description": "Count of proposals returned in this page",
           "type": "integer"
         },
         "skipped": {
-          "description": "Proposals consumed by the offset",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "totalProposals": {
-          "description": "Total proposals offered before any filter",
           "type": "integer"
         }
       },
@@ -2008,50 +1841,39 @@
     "outputSchema": {
       "properties": {
         "events": {
-          "description": "The page of events: {date, severity, severityPresentation, user, computer, application, event, comment, metadata, metadataUuid, session, data}.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "format": {
-          "description": "The detected log format (e.g. text-2.0).",
           "type": "string"
         },
         "infobaseType": {
-          "description": "How the log was located: FILE (resolved from the project), SERVER, or OVERRIDE (logDir).",
           "type": "string"
         },
         "limit": {
-          "description": "The effective page size (after clamping to [1, max]).",
           "type": "integer"
         },
         "matched": {
-          "description": "Total records matching the filters across scanned partitions.",
           "type": "integer"
         },
         "offset": {
-          "description": "The offset applied.",
           "type": "integer"
         },
         "resolvedLogDir": {
-          "description": "The 1Cv8Log directory that was actually read.",
           "type": "string"
         },
         "returned": {
-          "description": "Number of events returned on this page.",
           "type": "integer"
         },
         "scanned": {
-          "description": "Total records scanned before filtering.",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the read succeeded",
           "type": "boolean"
         },
         "truncated": {
-          "description": "True if the scan hit its cap and stopped early (matched/scanned are lower bounds).",
           "type": "boolean"
         }
       },
@@ -2224,42 +2046,33 @@
     "outputSchema": {
       "properties": {
         "bufferSize": {
-          "description": "The ring capacity (how many exchanges history retains).",
           "type": "integer"
         },
         "limit": {
-          "description": "The effective page size (after clamping to [1, max]).",
           "type": "integer"
         },
         "matched": {
-          "description": "Total records matching the filters (before the limit cap).",
           "type": "integer"
         },
         "recording": {
-          "description": "Whether recording is currently enabled.",
           "type": "boolean"
         },
         "records": {
-          "description": "The page of matched records, newest first: {timestampMs, method, tool, durationMs, status, requestChars, responseChars, (+ requestJson/responseJson when includeBodies)}.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "returned": {
-          "description": "Number of records returned on this page (after the limit cap).",
           "type": "integer"
         },
         "stats": {
-          "description": "The aggregated per-tool statistics for the filtered set (present only when includeStats): {summary, rows[], top3[]}.",
           "type": "object"
         },
         "success": {
-          "description": "Whether the read succeeded",
           "type": "boolean"
         },
         "totalRecorded": {
-          "description": "Total records currently retained in the ring.",
           "type": "integer"
         }
       },
@@ -2275,7 +2088,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; in full mode each section is capped so request fewer FQNs to keep the response small. A FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands). A ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties ('full: true' shows every object, otherwise only the non-default rows, the first 100 by default - page past them with 'roleObjectOffset' or use 'full: true'). In the default (non-full) view a ScheduledJob or CommonModule also renders a type-specific Properties table (e.g. methodName/schedule/use for a job; server/serverCall/global/returnValuesReuse for a module), and an InformationRegister's Dimensions additionally show their Indexing. A Catalog / ChartOfCharacteristicTypes / ChartOfAccounts / ChartOfCalculationTypes also renders its 'Predefined items' table (in both basic and full mode); a single predefined item FQN ('<Owner>.X.Predefined.ItemName') renders that one item's properties. Use this for the full properties of one named object; to list objects by type use get_metadata_objects. Full parameters and examples: call get_tool_guide('get_metadata_details').",
+    "description": "Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_objects to inspect a known object's attributes/forms/commands; to LIST objects by type use get_metadata_objects instead. The rendering is dispatched by the FQN's kind: a FORM FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE (items / attributes / commands); a ROLE FQN ('Role.FullAccess') renders that role's ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the role properties; a Catalog / ChartOfCharacteristicTypes / ChartOfAccounts / ChartOfCalculationTypes also renders its 'Predefined items' table, and a single predefined-item FQN ('<Owner>.X.Predefined.ItemName') renders that one item; a ScheduledJob or CommonModule adds a type-specific Properties table. Pass 'assignable: true' on an OBJECT or an mdclass / form MEMBER to discover which properties modify_metadata will accept there, with their allowed values; that mode does NOT resolve a predefined item (its settable surface is FIXED and owner-specific - see the guide) and never renders a form event HANDLER (read the form's own FQN for those). Every reflected section is capped, so request fewer FQNs to keep the response small; only the non-full role matrix can be paged, with 'roleObjectOffset'. Full parameters and examples: call get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "assignable": {
@@ -2518,22 +2331,18 @@
     "outputSchema": {
       "properties": {
         "structureCount": {
-          "description": "Number of records emitted",
           "type": "integer"
         },
         "structures": {
-          "description": "One record per outgoing qualified call, each with the collected literal keys",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "truncated": {
-          "description": "True when the record cap was hit",
           "type": "boolean"
         }
       },
@@ -2669,26 +2478,21 @@
     "outputSchema": {
       "properties": {
         "count": {
-          "description": "Number of result sets returned (0 or 1 — only the latest session)",
           "type": "integer"
         },
         "message": {
-          "description": "Informational note when no results are available",
           "type": "string"
         },
         "profilingActive": {
-          "description": "Whether profiling is currently active",
           "type": "boolean"
         },
         "results": {
-          "description": "Per-result sets: name, totalDurability, moduleCount and modules map of lines",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -2704,7 +2508,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address (e.g. 'Catalog.Products', 'Document.SalesOrder.Form.DocumentForm'); the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). A 'Fix registered' column flags rows whose CHECK TYPE has an official EDT auto-fix registered (not a promise this exact marker will produce an applicable fix - apply_quick_fix may still report none available for it); pass that row's Check code (+ Module path + Line) to apply_quick_fix to try applying it. Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
+    "description": "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address; the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). A 'Fix registered' column flags rows whose CHECK TYPE has an official EDT auto-fix registered (not a promise this exact marker will produce an applicable fix) - pass that row's Check code (+ Module path + Line) to apply_quick_fix to try applying it. Use this for the detailed marker list; for severity totals only call get_problem_summary. Full parameters and examples: call get_tool_guide('get_project_errors').",
     "inputSchema": {
       "properties": {
         "checkId": {
@@ -2777,51 +2581,39 @@
     "outputSchema": {
       "properties": {
         "authEnabled": {
-          "description": "Whether bearer-token authentication is enabled",
           "type": "boolean"
         },
         "checksFolderConfigured": {
-          "description": "Whether a checks folder path is configured",
           "type": "boolean"
         },
         "edtVersion": {
-          "description": "Detected 1C:EDT version",
           "type": "string"
         },
         "enabledTools": {
-          "description": "Number of tools currently enabled",
           "type": "integer"
         },
         "formRenderFlags": {
-          "description": "Form-render JVM flag states keyed by flag name",
           "type": "object"
         },
         "plainTextMode": {
-          "description": "Whether JSON responses are forced to plain text",
           "type": "boolean"
         },
         "pluginVersion": {
-          "description": "Version of the EDT-MCP plugin",
           "type": "string"
         },
         "port": {
-          "description": "TCP port the MCP server listens on",
           "type": "integer"
         },
         "protocolVersion": {
-          "description": "MCP protocol version implemented by the server",
           "type": "string"
         },
         "running": {
-          "description": "Whether the MCP server is currently running",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "totalTools": {
-          "description": "Total number of registered tools",
           "type": "integer"
         }
       },
@@ -3032,15 +2824,12 @@
     "outputSchema": {
       "properties": {
         "count": {
-          "description": "Number of variables returned",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "variables": {
-          "description": "Variables in the frame or expanded node, with name/value/type",
           "items": {
             "type": "object"
           },
@@ -3144,18 +2933,15 @@
     "outputSchema": {
       "properties": {
         "breakpoints": {
-          "description": "List of active line breakpoints",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "count": {
-          "description": "Number of breakpoints returned",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -3225,18 +3011,15 @@
     "outputSchema": {
       "properties": {
         "configurations": {
-          "description": "Matching launch configurations with their state.",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "count": {
-          "description": "Number of configurations returned.",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -3402,23 +3185,18 @@
     "outputSchema": {
       "properties": {
         "count": {
-          "description": "Number of toolsets",
           "type": "integer"
         },
         "note": {
-          "description": "Human-readable guidance for the current disclosure mode",
           "type": "string"
         },
         "progressiveDisclosure": {
-          "description": "Whether progressive disclosure is currently on",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "toolsets": {
-          "description": "The toolsets (id, title, description, tools, toolCount, visible, core)",
           "items": {
             "type": "object"
           },
@@ -3437,7 +3215,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error. Move/reorder a FORM ITEM with the 'parent' (a group name, 'AutoCommandBar' for the form's command bar, or the form name for the form root) and/or 'position' ('first'/'last'/'before:<name>'/'after:<name>'/index) properties. REBIND a form event handler's procedure with a 'procedure' property on a Handler FQN, or re-point a Button at a different form command with a 'command' property. Set a StyleItem's value with a 'value' property: a Color {value:{color:{red:255,green:0,blue:0}}} (or {color:'auto'}) or a Font {value:{font:{faceName:'Arial',height:12,bold:true}}}. Give a form list FORM ATTRIBUTE a custom dynamic-list query with a 'queryText' property (and 'customQuery' true/false, plus an optional 'mainTable' object FQN): this turns the attribute into a DynamicList and lets EDT auto-fill the available fields from the query (no manual XML; output a column with create_metadata Field dataPath 'List.<field>'). For a ROLE FQN ('Role.Name'), set access rights instead of 'properties': 'rights' (per-object right VALUES + optional per-field RLS restriction conditions), 'templates' (RLS restriction templates: add/edit/delete) and 'roleProperties' (the three role booleans). Read a role's rights matrix with get_metadata_details on the Role FQN. Edit a structured membership LIST with 'content' instead of 'properties', dispatched by the FQN's kind: a COMMON ATTRIBUTE's owners ('CommonAttribute.Name'), an EXCHANGE PLAN's content objects ('ExchangePlan.Name'), a CATALOG's owners ('Catalog.Name'), a DOCUMENT's register records / движения ('Document.Name') or a SUBSYSTEM's content objects ('Subsystem.Name', including a nested 'Subsystem.Parent.Subsystem.Child'). 'content'=[{op?:'add'|'remove' (default add), metadata:'Catalog.X', use?, autoRecord?}] adds a member (idempotent) or removes one by its metadata FQN; a CommonAttribute entry takes 'use' ('Use'|'DontUse'|'Auto'), an ExchangePlan entry takes 'autoRecord' ('Allow'|'Deny'), and a Catalog owner / Document register record / Subsystem content object is a plain reference (no flag). AUTHOR a SpreadsheetDocument (print form / макет) TEMPLATE's content with a 'template' payload instead of 'properties' on a template FQN (a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>'): 'template'={cells:[{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}], merges:[{fromRow, fromCol, toRow, toCol}], areas:[{name, fromRow, fromCol, toRow, toCol}], columnWidths:[{col, width}], rowHeights:[{row, height}]} writes the cells (text or a print-time parameter) with formatting, merged ranges, named areas and column / row sizes into the template's spreadsheet content; render the result with get_template_screenshot. AUTHOR a REPORT's Data Composition Schema (СКД / .dcs) with a 'dcs' payload instead of 'properties' on a Report FQN ('Report.<Name>'): 'dcs'={dataSources:[{name, type?}], dataSets:[{name, type:'query', query, dataSource?, autoFillFields?, fields:[{name?, dataPath, title?, role?}]}], parameters:[{name, valueType?, title?, use?}]} builds the report's main schema (query data sets + fields + schema parameters), creating the DCS if the report has none. Edit an XDTO package MEMBER through 'properties' on its own FQN ('XDTOPackage.<Package>.ObjectType.<Name>' or '...Property.<Name>' or '...ObjectType.<Type>.Property.<Name>'): an ObjectType takes the boolean flags 'open' / 'abstract' / 'mixed' / 'ordered' / 'sequenced'; a Property takes 'type' (a built-in XSD type name, the EXACT name of an ObjectType already in the same package, or {nsUri, name}), 'lowerBound' / 'upperBound' (integers, ObjectType-nested properties only), 'nillable' / 'fixed' (booleans, 'fixed'=true needs a 'default') and 'default' (string). Set a PREDEFINED item's properties with 'properties' on its own FQN ('<Owner>.X.Predefined.ItemName' on a Catalog, ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes): description / code on every owner, isFolder on a Catalog / ChartOfCharacteristicTypes only (folder->item with existing children is refused), plus owner-specific properties - 'valueType' (alias 'type'; same {types:[...]} shape as an mdclass attribute's 'type'; a JSON null clears it) on a ChartOfCharacteristicTypes item; 'accountType' / 'offBalance' / 'order' / 'accountingFlags' / 'extDimensionTypes' on a ChartOfAccounts item; 'base' / 'displaced' / 'leading' / 'actionPeriodIsBase' on a ChartOfCalculationTypes item (see the guide for which apply to each owner) - the documented set, no assignable-schema round-trip needed. 'parent' is CREATE-time only: moving an item to a different folder (or an account under a different parent account) is refused here - delete and re-create it with the new 'parent'. For other nodes, discover assignable properties + allowed values with get_metadata_details(assignable:true). To rename, use rename_metadata_object. Full parameters and examples: call get_tool_guide('modify_metadata').",
+    "description": "Set properties of a metadata node - an object, a member, or a FORM member (item / attribute / command / handler) - addressed by a 1C full-name FQN, as properties=[{name, value, language?}]. Each property is validated against what the node actually accepts (it must be assignable, and an enum value must be one of the allowed literals) with an actionable error; discover the assignable properties and their allowed values with get_metadata_details(assignable:true). This is ALSO the only tool for several node-specific payloads, each REPLACING 'properties' and selected by the FQN's kind: 'rights' / 'templates' / 'roleProperties' on a ROLE FQN ('Role.Name') - access rights, RLS restrictions and RLS templates (read the current matrix with get_metadata_details on the Role FQN); 'dcs' on a REPORT FQN ('Report.<Name>') - the Data Composition Schema (СКД / .dcs): query data sets, fields and schema parameters; 'template' on a SpreadsheetDocument TEMPLATE FQN ('CommonTemplate.<Name>' or '<Type>.<Owner>.Template.<Name>') - a print form / макет's cells, merged ranges, named areas and column / row sizes (render it with get_template_screenshot); 'content' on a COMMON ATTRIBUTE ('CommonAttribute.Name', per-owner 'use'), an EXCHANGE PLAN ('ExchangePlan.Name', per-entry 'autoRecord'), a CATALOG ('Catalog.Name', owners), a DOCUMENT ('Document.Name', register records / движения) or a SUBSYSTEM ('Subsystem.Name', content objects) FQN - the structured membership list, added or removed one member at a time. Through 'properties' it also moves / reorders a FORM ITEM ('parent' / 'position'), REBINDS a form event handler's procedure ('procedure' on a Handler FQN), re-points a Button at another form command ('command'), sets a StyleItem's 'value' (a color {color:{red,green,blue}} or a font {font:{faceName,height,bold}}), turns a form list FORM ATTRIBUTE into a dynamic list with a custom query ('queryText'), and edits XDTO package MEMBERS and PREDEFINED items on their own FQNs. To rename, use rename_metadata_object. The payload SHAPES are deliberately not in this description: call get_tool_guide('modify_metadata') before your first call.",
     "inputSchema": {
       "properties": {
         "content": {
@@ -3503,75 +3281,60 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "'modified' on success",
           "type": "string"
         },
         "applied": {
-          "description": "Names of the properties that were set (for a Role rights change this is instead an object {rights, templates, roleProperties} with the applied counts)",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "content": {
-          "description": "For a membership-list content change: the counts object. A CommonAttribute / ExchangePlan change reports {added, updated, removed} (members attached / had their per-entry flag - 'use' / 'autoRecord' - updated / detached); a Catalog owners / Document register records / Subsystem content change (a plain reference list, no per-entry flag) reports {added, removed}",
           "type": "object"
         },
         "dcs": {
-          "description": "For a DCS (Report Data Composition Schema) content change: the applied counts object {dataSources, dataSets, fields, parameters}",
           "type": "object"
         },
         "destination": {
-          "description": "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. \"group 'Main' at index 1\"",
           "type": "string"
         },
         "fqn": {
-          "description": "Normalized FQN of the modified node",
           "type": "string"
         },
         "language": {
-          "description": "Language code a localized property was written under; present only when this call wrote localized properties under exactly ONE code",
           "type": "string"
         },
         "localeUnusedInConfiguration": {
-          "description": "Set when a value was written under a language the configuration itself does not use (its own synonym has no text for that language). NOT an error - the language IS declared, so the value will display - but a prompt to ASK the user whether translating into it is really wanted: it may be a single-language build, or a language this configuration does not support yet",
           "type": "boolean"
         },
         "localesMissing": {
-          "description": "Language codes the configuration USES - the ones its OWN synonym is filled in for - that still have NO value for at least one of the localized properties just written (empty when every such language is translated); present only when a localized property was written. A declared language the configuration itself does not use is NOT reported: a multilingual configuration worked on in a single-language branch must not nag about the others",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "localesStale": {
-          "description": "Language codes whose value this call did NOT write while it REPLACED the text of the same property in another language - they still carry the PREVIOUS text, so they now describe the old state (rename the synonym in 'en' and the 'fr' one keeps the old name). Reported for every DECLARED language that carries text - unlike 'localesMissing', which asks whether the configuration USES the language, because text that already exists is not work being demanded of anyone: it is there, and this call just made it wrong. Decided per PROPERTY, so a language written into that same property by this call is not listed. Absent when there are none",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "message": {
-          "description": "Human-readable confirmation message",
           "type": "string"
         },
         "normalized": {
-          "description": "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "persisted": {
-          "description": "Whether the change was exported to disk",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the properties were set",
           "type": "boolean"
         },
         "template": {
-          "description": "For a template content change: the applied counts object {cells, merges, areas, columnWidths, rowHeights}",
           "type": "object"
         }
       },
@@ -3685,11 +3448,9 @@
     "outputSchema": {
       "properties": {
         "removed": {
-          "description": "True if a matching breakpoint was found and removed",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -3772,27 +3533,21 @@
     "outputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application id of the resumed debug target",
           "type": "string"
         },
         "autoResolved": {
-          "description": "Whether the lone active session was auto-resolved",
           "type": "boolean"
         },
         "resumed": {
-          "description": "Whether the thread or target was resumed",
           "type": "boolean"
         },
         "scope": {
-          "description": "Resume scope: 'thread' or 'target'",
           "type": "string"
         },
         "serverTarget": {
-          "description": "True if resolved via the 1C debug-server target bridge",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -3808,7 +3563,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS any unsaved in-memory model edits. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk (missingBefore), and force-exports that missing subset so the files are restored (fullExport=true re-exports every object instead - requires overwriteDiskEdits=true to confirm, as it overwrites on-disk edits). Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (unresolved proxies shown by get_project_errors as md-reference-intergrity 'lost reference' warnings that block update_database / XML import) are REPORTED by default (danglingFound + danglingDetails); set cleanDanglingReferences=true to REMOVE them - destructive: rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').",
+    "description": "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS any unsaved in-memory model edits. Walks EVERY top metadata object of the configuration (all kinds), reports the objects whose .mdo is missing on disk, and force-exports that missing subset so the files are restored. Fixes 'object file does not exist' failures from update_database / XML import caused by an accumulated desync. Dangling/orphaned references in Configuration.mdo (the md-reference-intergrity 'lost reference' warnings get_project_errors shows, which block update_database / XML import) are REPORTED by default. Two opt-in modes are destructive: re-exporting EVERY object instead of the missing subset overwrites on-disk edits, and REMOVING the dangling references rewrites Configuration.mdo. Full parameters and examples: call get_tool_guide('resync_to_disk').",
     "inputSchema": {
       "properties": {
         "cleanDanglingReferences": {
@@ -3841,87 +3596,69 @@
     "outputSchema": {
       "properties": {
         "cleanDanglingReferences": {
-          "description": "Whether dangling-reference removal was requested",
           "type": "boolean"
         },
         "danglingDetails": {
-          "description": "All dangling entries found: [{field, lostFqn, position}]",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "danglingFound": {
-          "description": "Dangling (unresolved-proxy) references detected in Configuration.mdo",
           "type": "integer"
         },
         "danglingRemoved": {
-          "description": "Removed dangling entries: [{field, lostFqn, position}]",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "danglingRemovedCount": {
-          "description": "Dangling references actually removed (0 in report-only mode)",
           "type": "integer"
         },
         "danglingWarning": {
-          "description": "Set when the dangling scan/cleanup could not complete cleanly",
           "type": "string"
         },
         "fullExport": {
-          "description": "Whether a full export of every top object was requested",
           "type": "boolean"
         },
         "message": {
-          "description": "Human-readable summary of the outcome",
           "type": "string"
         },
         "missingBefore": {
-          "description": "FQNs that were missing on disk before the export",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "missingBeforeCount": {
-          "description": "Top objects that had no .mdo on disk before the export",
           "type": "integer"
         },
         "objectsExported": {
-          "description": "Number of top objects whose .mdo was (re)written - the missing subset by default, every object when fullExport=true",
           "type": "integer"
         },
         "projectName": {
-          "description": "The project that was re-synchronized",
           "type": "string"
         },
         "revalidate": {
-          "description": "Whether a post-export revalidation was requested",
           "type": "boolean"
         },
         "revalidateWarning": {
-          "description": "Set when the optional post-export revalidation failed",
           "type": "string"
         },
         "stillMissing": {
-          "description": "FQNs still missing on disk after the export",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "stillMissingCount": {
-          "description": "Top objects still missing on disk after the export",
           "type": "integer"
         },
         "success": {
-          "description": "Whether the export succeeded",
           "type": "boolean"
         },
         "totalTopObjects": {
-          "description": "Total metadata top objects walked in the BM model",
           "type": "integer"
         }
       },
@@ -4138,23 +3875,18 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "The action performed: 'attach' or 'detach'.",
           "type": "string"
         },
         "applicationId": {
-          "description": "The target application id.",
           "type": "string"
         },
         "bound": {
-          "description": "Read-back of the branch context after the change: {infobases: [...], defaultInfobase}. Proves the base is now bound (attach) or gone (detach).",
           "type": "object"
         },
         "branch": {
-          "description": "The branch context that was changed.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the binding change succeeded",
           "type": "boolean"
         }
       },
@@ -4199,35 +3931,27 @@
     "outputSchema": {
       "properties": {
         "breakpointId": {
-          "description": "Eclipse marker id of the created breakpoint (-1 if none)",
           "type": "integer"
         },
         "degraded": {
-          "description": "True when only a marker-only breakpoint could be created",
           "type": "boolean"
         },
         "lineNumber": {
-          "description": "1-based line number where the breakpoint was set",
           "type": "integer"
         },
         "module": {
-          "description": "Legacy alias echo of the module identifier",
           "type": "string"
         },
         "modulePath": {
-          "description": "Module identifier as supplied (EDT path or absolute path)",
           "type": "string"
         },
         "resolvedFile": {
-          "description": "Workspace-relative path of the resolved .bsl file",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "warning": {
-          "description": "Warning text when the breakpoint is degraded/marker-only",
           "type": "string"
         }
       },
@@ -4282,39 +4006,30 @@
     "outputSchema": {
       "properties": {
         "access": {
-          "description": "Stored access kind (INFOBASE or OS).",
           "type": "string"
         },
         "applicationId": {
-          "description": "Target application ID.",
           "type": "string"
         },
         "applicationName": {
-          "description": "Display name of the target application (falls back to the application ID).",
           "type": "string"
         },
         "clientConfigured": {
-          "description": "True when THIS call also wrote the launched client's own authentication onto a launch configuration - only possible when the target was given as launchConfigurationName. False means this call did not configure the client (no configuration named, or the write failed); see message.",
           "type": "boolean"
         },
         "message": {
-          "description": "Human-readable status message.",
           "type": "string"
         },
         "passwordSet": {
-          "description": "True when a non-empty password was stored.",
           "type": "boolean"
         },
         "project": {
-          "description": "Target EDT project name.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the credentials were stored",
           "type": "boolean"
         },
         "user": {
-          "description": "Stored infobase user name.",
           "type": "string"
         }
       },
@@ -4364,19 +4079,15 @@
     "outputSchema": {
       "properties": {
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "type": {
-          "description": "BSL reference type name of the new value",
           "type": "string"
         },
         "value": {
-          "description": "The variable's new value after the set (may be truncated)",
           "type": "string"
         },
         "variableName": {
-          "description": "The variable that was set",
           "type": "string"
         }
       },
@@ -4409,23 +4120,18 @@
     "outputSchema": {
       "properties": {
         "active": {
-          "description": "Whether profiling is now active for this applicationId",
           "type": "boolean"
         },
         "applicationId": {
-          "description": "Application id of the profiled debug session",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable status and next-step guidance",
           "type": "string"
         },
         "started": {
-          "description": "True if this call started profiling, false if already active",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -4472,42 +4178,33 @@
     "outputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application id of the debug session",
           "type": "string"
         },
         "frames": {
-          "description": "Stack frames: frameIndex, frameRef, name, line, modulePath, project",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "hit": {
-          "description": "True if a suspend event was caught, false on timeout",
           "type": "boolean"
         },
         "reason": {
-          "description": "Reason when not hit (e.g. timeout)",
           "type": "string"
         },
         "serverTarget": {
-          "description": "True if stepping a 1C debug-server target",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "threadId": {
-          "description": "Id of the suspended thread",
           "type": "integer"
         },
         "threadName": {
-          "description": "Name of the suspended thread",
           "type": "string"
         },
         "topFrameRef": {
-          "description": "Stable ref of the top stack frame",
           "type": "integer"
         }
       },
@@ -4540,23 +4237,18 @@
     "outputSchema": {
       "properties": {
         "active": {
-          "description": "Whether profiling is still active after the call",
           "type": "boolean"
         },
         "applicationId": {
-          "description": "Application id the result refers to",
           "type": "string"
         },
         "message": {
-          "description": "Human-readable summary of the outcome",
           "type": "string"
         },
         "stopped": {
-          "description": "Whether profiling was actually toggled off",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         }
       },
@@ -4594,23 +4286,18 @@
     "outputSchema": {
       "properties": {
         "bindings": {
-          "description": "Best-effort application-binding read-back for the new branch context: {infobases: [...], defaultInfobase}. Absent when unavailable.",
           "type": "object"
         },
         "branch": {
-          "description": "The branch now checked out.",
           "type": "string"
         },
         "message": {
-          "description": "Present only when the post-checkout workspace refresh failed: a short warning noting the EDT model may be stale until a manual refresh. The switch itself still succeeded (success stays true).",
           "type": "string"
         },
         "previousBranch": {
-          "description": "The branch (or detached-HEAD commit) checked out BEFORE the switch.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the switch succeeded",
           "type": "boolean"
         }
       },
@@ -4747,51 +4434,39 @@
     "outputSchema": {
       "properties": {
         "action": {
-          "description": "Either 'preview' (nothing changed) or 'updated' (applied).",
           "type": "string"
         },
         "applicationId": {
-          "description": "Target application ID.",
           "type": "string"
         },
         "applicationName": {
-          "description": "Display name of the target application.",
           "type": "string"
         },
         "confirmationRequired": {
-          "description": "true on a preview (no infobase change made); absent/false once updated.",
           "type": "boolean"
         },
         "message": {
-          "description": "Human-readable status message for the update.",
           "type": "string"
         },
         "project": {
-          "description": "Target EDT project name.",
           "type": "string"
         },
         "stateAfter": {
-          "description": "Application update state after the update.",
           "type": "string"
         },
         "stateBefore": {
-          "description": "Application update state before the update.",
           "type": "string"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "terminatedClient": {
-          "description": "Present and true ONLY when an applied update (confirm=true) terminated a running client to free the infobase; absent otherwise (preview, opt-out, or no running client).",
           "type": "boolean"
         },
         "updateType": {
-          "description": "Update mode applied: FULL or INCREMENTAL.",
           "type": "string"
         },
         "willTerminateRunningClients": {
-          "description": "On a preview: whether confirm=true would first terminate a running client (reflects terminateRunningClients).",
           "type": "boolean"
         }
       },
@@ -4833,34 +4508,27 @@
     "outputSchema": {
       "properties": {
         "dcsMode": {
-          "description": "Whether DCS validation mode was used",
           "type": "boolean"
         },
         "errorCount": {
-          "description": "Number of ERROR-severity issues",
           "type": "integer"
         },
         "infoCount": {
-          "description": "Number of INFO-severity issues",
           "type": "integer"
         },
         "issues": {
-          "description": "Validation issues; each has severity, message, optional line/column/offset",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "valid": {
-          "description": "true when the query has zero issues",
           "type": "boolean"
         },
         "warningCount": {
-          "description": "Number of WARNING-severity issues",
           "type": "integer"
         }
       },
@@ -4926,46 +4594,36 @@
     "outputSchema": {
       "properties": {
         "applicationId": {
-          "description": "Application id of the debug session waited on",
           "type": "string"
         },
         "autoResolved": {
-          "description": "True if applicationId was auto-resolved",
           "type": "boolean"
         },
         "frames": {
-          "description": "Stack frames of the suspended thread (frameIndex, frameRef, name, line, modulePath, project)",
           "items": {
             "type": "object"
           },
           "type": "array"
         },
         "hit": {
-          "description": "True if a suspend was observed, false on timeout",
           "type": "boolean"
         },
         "reason": {
-          "description": "Reason when no suspend occurred (e.g. 'timeout')",
           "type": "string"
         },
         "serverTarget": {
-          "description": "True if resolved via the 1C debug-server target bridge",
           "type": "boolean"
         },
         "success": {
-          "description": "Whether the operation succeeded",
           "type": "boolean"
         },
         "threadId": {
-          "description": "Id of the suspended thread",
           "type": "integer"
         },
         "threadName": {
-          "description": "Name of the suspended thread",
           "type": "string"
         },
         "topFrameRef": {
-          "description": "Stable frame reference of the top stack frame",
           "type": "integer"
         }
       },

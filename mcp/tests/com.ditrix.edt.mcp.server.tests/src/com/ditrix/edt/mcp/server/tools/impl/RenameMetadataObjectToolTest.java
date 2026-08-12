@@ -141,14 +141,18 @@ public class RenameMetadataObjectToolTest
         assertTrue(result.contains("newName is required")); //$NON-NLS-1$
     }
 
-    // ============ Change-point numbering (A2: preview #index must equal execute index) ============
+    // ================= Change-point numbering: the EXECUTE side of the walk only =================
     //
-    // The preview assigns one #index per leaf change; on execute, disableIndices is
-    // applied by re-walking the change tree with the SAME numbering. walkLeafChanges
-    // is that single source of truth: composites are recursed but never counted, and
-    // every leaf gets exactly one sequential index in depth-first order. If this
-    // drifts, a previewed "skip #N" would disable a different change on execute
-    // (the A2 bug: preview expanded a leaf into N rows while execute counted it once).
+    // On execute, disableIndices is applied by walking the change tree with walkLeafChanges:
+    // composites are recursed but never counted, and every leaf gets exactly one sequential
+    // index in depth-first order. The tests below pin THAT walk, and nothing else.
+    //
+    // They do NOT prove the A2 contract (a preview #index maps back to the same leaf on
+    // execute): the preview mirrors this numbering in its own walk, and these tests never run
+    // it, so a preview-side drift passes right through them - which is exactly what happened
+    // in issue #388 (the preview's fallback row took a SECOND index for a leaf that had
+    // already taken one). The parity of the two walks is pinned where both are reachable:
+    // MetadataRenameNumberingParityTest#testPreviewAndExecuteNumberTheSameLeavesIdentically.
 
     @Test
     public void testWalkLeafChangesNumbersLeavesDepthFirst()

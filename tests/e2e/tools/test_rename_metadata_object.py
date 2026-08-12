@@ -67,6 +67,7 @@ from harness import (
     poll_disk_lacks,
     read_disk,
     settle_or_fail,
+    split_markdown_row,
     e2e_test,
     PROJECT,
 )
@@ -320,6 +321,152 @@ def test_cascade_rewrites_russian_named_module_reference_in_bsl():
                     "CascadeUser must now call the renamed module Вычислитель.Маркер()")
     assert_not_contains(src.text, "Вычисление",
                         "CascadeUser must retain no trace of the old Cyrillic module name Вычисление")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The two-phase INDEX HANDLE (disableIndices) — issue #388
+#
+# A preview "#N" is a CROSS-CALL HANDLE: preview numbers the change points in one
+# walk, and the confirm call re-derives the numbering in a SECOND, independent walk
+# to resolve disableIndices. If the two walks disagree, "skip #N" silently skips a
+# DIFFERENT change point than the caller was shown — a cascade over the whole
+# configuration, applied to the wrong place.
+#
+# The pair below is what makes that testable over the wire: the SAME call shape with
+# a DIFFERENT index must produce the OPPOSITE outcome. The reference is skipped when
+# its own previewed index is passed, and rewritten when the object-rename index is
+# passed instead. Neither can pass for the wrong reason — a server that ignored
+# disableIndices, applied it to everything, or shifted the numbering by one fails one
+# half of the pair.
+#
+# SCOPE, stated honestly: these are a CONTRACT guard, not a reproduction of #388. The
+# preview branch that took the second index (the fallback row) is not reachable on this
+# fixture — measured, 18 rename previews over both projects, 31 change points, zero
+# fallback rows — so this pair is GREEN on the pre-fix build too. What proves the fix is
+# the unit ratchet, MetadataRenameNumberingParityTest, which is mutation-checked.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _change_points(preview_text):
+    """Parse the preview's Change Points table into one dict per row.
+
+    Columns: # | Type | Description | Line | Col | Default | Skippable | Project | FQN.
+    Rows are identified by a numeric first cell, so the header and separator lines are
+    skipped. Cells go through the harness' split_markdown_row — a description may carry
+    an escaped '\\|', and a naive split on every pipe would shift every later column.
+    """
+    rows = []
+    for line in preview_text.splitlines():
+        cells = split_markdown_row(line)
+        if len(cells) < 9 or not cells[0].isdigit():
+            continue
+        rows.append({
+            "index": int(cells[0]), "type": cells[1], "description": cells[2],
+            "line": cells[3], "skippable": cells[6], "project": cells[7], "fqn": cells[8],
+        })
+    return rows
+
+
+def _cascade_preview_and_reference_index():
+    """Preview CommonModule.CascadeEn -> Reckoner; return (rows, index of the BSL ref row).
+
+    The fixture gives this rename exactly one SKIPPABLE change point — the reference
+    CascadeUser makes to CascadeEn — plus the (non-skippable) object rename itself.
+    """
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        # confirm omitted -> preview
+    })
+    assert_ok(r, "preview rename CommonModule.CascadeEn -> Reckoner")
+    rows = _change_points(r.text)
+    skippable = [row for row in rows if row["skippable"] == "yes" and row["type"] == "bslRef"]
+    if len(skippable) != 1:
+        raise AssertionError(
+            "fixture precondition: the CascadeEn rename must preview exactly one skippable "
+            "bslRef change point, got %d (rows=%r)" % (len(skippable), rows))
+    return rows, skippable[0]["index"]
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_disableindices_skips_the_change_point_shown_under_that_index():
+    _settle_before_rename()  # executes a real rename - see the helper
+    base = call("search_in_code", {"projectName": PROJECT,
+                                   "query": "CascadeEn.Marker", "outputMode": "files"})
+    assert_ok(base, "baseline search for CascadeEn.Marker")
+    assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
+                    "fixture precondition: CascadeUser references CascadeEn.Marker before the rename")
+
+    _rows, reference_index = _cascade_preview_and_reference_index()
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": str(reference_index),
+    })
+    assert_ok(r, "execute rename with disableIndices=%d" % reference_index)
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "1 change point(s) were skipped",
+                    "the executed report must account for the skipped change point")
+
+    # The object itself is renamed (that change point was NOT disabled)...
+    assert_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
+                    "the object rename change point was not disabled, so it must have applied")
+    # ...but the reference the caller skipped under #N is left ALONE. This is the
+    # assertion the numbering has to earn: if the confirm-side walk numbered the leaves
+    # differently, index #N would have landed on another change point and this reference
+    # would have been rewritten to Reckoner.Marker().
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser source after the partially-skipped rename")
+    assert_contains(src.text, "CascadeEn.Marker()",
+                    "the change point shown under #%d is the BSL reference, so skipping it must "
+                    "leave CascadeUser still calling CascadeEn.Marker()" % reference_index)
+    assert_not_contains(src.text, "Reckoner.Marker()",
+                        "the skipped reference must NOT have been rewritten")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_disableindices_for_another_index_leaves_the_bsl_reference_applied():
+    # The discrimination half of the pair. Same call, same fixture, but the index passed
+    # belongs to a DIFFERENT change point — the object rename itself, which the table marks
+    # Skippable=no — so the cascade must land in FULL, exactly as an undisabled rename does.
+    # Asserting the complete OPPOSITE state (old reference gone, new one present, object
+    # renamed) is what makes this a control: a weaker "the new reference exists" check would
+    # also pass on a run that duplicated the edit or skipped the object rename.
+    _settle_before_rename()  # executes a real rename - see the helper
+    rows, reference_index = _cascade_preview_and_reference_index()
+    required = [row["index"] for row in rows
+                if row["type"] == "rename" and row["skippable"] == "no"]
+    if len(required) != 1 or required[0] == reference_index:
+        raise AssertionError(
+            "fixture precondition: expected exactly one non-skippable rename row distinct "
+            "from the reference row #%d, got %r" % (reference_index, rows))
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": str(required[0]),
+    })
+    assert_ok(r, "execute rename with disableIndices=%d" % required[0])
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser source after disabling a different change point")
+    assert_contains(src.text, "Reckoner.Marker()",
+                    "disabling #%d must NOT have skipped the BSL reference — it is a different "
+                    "change point, so the reference must be rewritten" % required[0])
+    assert_not_contains(src.text, "CascadeEn",
+                        "the reference was not the skipped change point, so no trace of the old "
+                        "name may remain in CascadeUser")
+    # The object rename is NOT skippable, so it must have applied regardless of the request.
+    assert_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
+                    "the object must still be renamed")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

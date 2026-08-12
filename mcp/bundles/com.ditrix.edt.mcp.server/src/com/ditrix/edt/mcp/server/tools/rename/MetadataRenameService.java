@@ -1037,8 +1037,12 @@ public class MetadataRenameService
             return;
         }
 
+        // Reuse the index already taken at the top of this method - do NOT take a second one.
+        // Whatever a leaf renders, it consumes exactly ONE index; taking a fresh one here made
+        // the leaf consume two, shifting every later index away from walkLeafChanges() and
+        // pointing disableIndices at a different change point than the caller saw. (issue #388)
         ctx.result.add(new ChangePoint(
-            ctx.indexCounter[0]++, BSL_REF,
+            leafIndex, BSL_REF,
             change.getName(), ctx.optional, change.isEnabled(),
             CodeLocation.of(scan.fqn, scan.project)));
     }
@@ -2289,11 +2293,15 @@ public class MetadataRenameService
     /**
      * Walks the LTK change tree in canonical order, invoking {@code leafConsumer}
      * for every leaf (non-{@link CompositeChange}) change with its global index.
-     * Composites are recursed into but never assigned an index - this is the single
-     * source of truth for the change-point numbering. The preview side
-     * ({@link #collectFlatChanges}) MUST assign exactly one index per leaf in the
-     * same order, so that a preview {@code #index} maps back to the same leaf here
+     * Composites are recursed into but never assigned an index - this walk DEFINES
+     * the change-point numbering. The preview side ({@link #collectFlatChanges}) does
+     * not delegate to it: it MIRRORS it, and must assign exactly one index per leaf in
+     * the same order, so that a preview {@code #index} maps back to the same leaf here
      * when {@code disableIndices} is applied on execute. (card A2)
+     * <p>
+     * Because it is a mirror rather than a delegation, the two can drift silently - so
+     * the parity is pinned by a test that drives BOTH walks over the same synthetic
+     * change tree and compares them leaf by leaf (issue #388), not by this walk alone.
      * <p>
      * Public and static so the leaf numbering can be unit-tested headless.
      */
