@@ -417,6 +417,67 @@ def test_unknown_disable_index_is_not_counted_as_a_skip():
                     "the change point was NOT skipped, so the caller must have been rewritten")
 
 
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_required_disable_index_is_reported_as_applied_not_skipped():
+    # The second way a requested index produces no skip (issue #393): it names a change
+    # point the refactoring deems mandatory. The preview prints `Skippable: no` for it and
+    # the guide promises "required ones are always applied" — so the correct outcome is that
+    # nothing is skipped, and the report has to SAY so rather than echo the request.
+    #
+    # SCOPE, stated so this test is not mistaken for more than it is: on this fixture the only
+    # `Skippable: no` row is the core rename itself, which arrives as a PLAIN (non-native)
+    # refactoring item. So what this pins is the ACCOUNTING for a required index — the
+    # native-item guard from #393 has no live reproduction here (every native item on
+    # TestConfiguration reports isOptional()==true) and is constrained headlessly instead, by
+    # MetadataRenameDisableIndicesTest.testRequiredNativeItemKeepsItsLeavesEnabled.
+    _settle_before_rename()  # executes a real rename - see the helper
+    # Establish from the PREVIEW which index is the required one rather than hard-coding it:
+    # the assertion is about the contract, and reading the number from the same table the
+    # caller reads is what makes this a test of that contract.
+    preview = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": False,
+    })
+    assert_ok(preview, "preview rename CommonModule.CascadeEn")
+    required = [row.split("|")[1].strip()
+                for row in preview.text.splitlines()
+                if row.startswith("|") and len(row.split("|")) >= 9
+                and row.split("|")[1].strip().isdigit()
+                and row.split("|")[7].strip() == "no"]
+    if not required:
+        raise AssertionError(
+            "fixture precondition: the preview of CommonModule.CascadeEn must contain at least one "
+            "`Skippable: no` change point (the rename leaf itself); got:\n" + preview.text)
+
+    index = required[0]
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": index,
+    })
+    assert_ok(r, "execute rename asking to skip a REQUIRED change point")
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "disabledCount: 0",
+                    "a required change point cannot be skipped, so nothing was disabled")
+    assert_not_contains(r.text, "were skipped as requested",
+                        "the report must not claim a skip that the contract forbids")
+    assert_contains(r.text, "notSkippableIndices: [%s]" % index,
+                    "the requested-but-required index must be named in the report")
+    assert_contains(r.text, "could NOT be skipped and were left in the rename",
+                    "the report must say plainly that the change point stayed in the rename")
+    assert_contains(r.text, "errors: 0",
+                    "the rename itself must have succeeded, or the claim above is about nothing")
+
+    # The report's claim checked against the model: the required point really did go through.
+    after = _commonmodule_names(name_filter="Reckoner")
+    assert_contains(after, "| Reckoner ",
+                    "the required rename point was not skipped, so the new name must exist")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # The cascade bound (issue #365)
 #

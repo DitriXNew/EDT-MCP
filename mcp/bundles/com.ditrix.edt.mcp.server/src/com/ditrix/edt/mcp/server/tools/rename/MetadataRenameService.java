@@ -2275,9 +2275,8 @@ public class MetadataRenameService
 
     /**
      * Toggles the LTK change-tree flags for the requested {@code disableIndices} BEFORE the rename is
-     * performed: walks every refactoring item, disables the matching leaf changes
-     * (via {@link #applyDisableToChange}) and unchecks an optional native item whose leaves are all
-     * disabled.
+     * performed: walks every refactoring item, disables the matching leaf changes of the SKIPPABLE ones
+     * (via {@link #applyDisableToChange}) and unchecks an optional native item this request emptied.
      * Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT perform the
      * rename. Runs at the same point as before, under the same {@code !disableIndices.isEmpty()} guard.
      *
@@ -2306,6 +2305,13 @@ public class MetadataRenameService
      * same amount as the preview-side walk: native items disable their matching leaf changes when the item
      * is optional (and uncheck the item when this request disabled every leaf under it), while plain rename
      * items consume one index without ever being disabled.
+     * <p>
+     * A NON-optional native item consumes its indices exactly as before but keeps its leaves enabled: the
+     * preview footer and the guide both promise that only optional change points can be skipped and that
+     * "required ones are always applied", and before #393 that promise was enforced for plain items only -
+     * {@link #applyDisableToChange} was reached unconditionally, so a leaf under a REQUIRED native item was
+     * switched off just the same. The index is still consumed either way, because dropping it here is how
+     * preview and confirm numbering drift apart (#388).
      */
     private void applyDisableToItem(IRefactoringItem item, java.util.Set<Integer> disableIndices,
         int[] indexCounter, DisableOutcome outcome)
@@ -2317,9 +2323,17 @@ public class MetadataRenameService
             {
                 return;
             }
-            applyDisableToChange(nativeChange, disableIndices, indexCounter, outcome);
-            // If all leaf changes under this native item are disabled, uncheck the item itself
-            if (nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
+            int disabledBefore = outcome.disabledCount();
+            applyDisableToChange(nativeChange, disableIndices, indexCounter, nativeItem.isOptional(), outcome);
+            // Uncheck the item only when THIS request NAMED at least one skippable leaf under it. The
+            // walk visits EVERY item, so an optional item whose leaves were already all disabled - or
+            // whose change tree is empty, which isCompletelyDisabled() also reports as completely
+            // disabled - would otherwise be unchecked by a request that never mentioned any of its
+            // indices. Naming is the criterion rather than a state TRANSITION: asking to skip a leaf
+            // that was already off is still asking for this item, and the caller who named every leaf
+            // of an item means the item, whatever its leaves happened to be set to beforehand.
+            boolean requestedHere = outcome.disabledCount() > disabledBefore;
+            if (requestedHere && isCompletelyDisabled(nativeChange))
             {
                 nativeItem.setChecked(false);
             }
@@ -2430,18 +2444,31 @@ public class MetadataRenameService
     }
 
     /**
-     * Recursively walks the LTK change tree and calls setEnabled(false) on leaves
-     * whose global index is in the disableIndices set, recording each one so the executed
-     * report can state the REAL number of skipped change points (#394).
+     * Recursively walks the LTK change tree and calls setEnabled(false) on leaves whose global index is
+     * in the disableIndices set - but only when the owning item is {@code skippable}; a requested index
+     * under a non-skippable item is recorded and left ENABLED (#393).
+     * <p>
+     * Skippability is judged ONCE, by the caller, and passed in: the decision is a property of the ITEM,
+     * while the walk is over its leaves, so deciding it here (per leaf) would be re-deriving one answer in
+     * a place that cannot see it. The index is consumed by {@link #walkLeafChanges} itself, ahead of and
+     * independently of that decision, so no branch here can leave the counter behind the preview's (#388).
      */
     private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices,
-        int[] indexCounter, DisableOutcome outcome)
+        int[] indexCounter, boolean skippable, DisableOutcome outcome)
     {
         walkLeafChanges(change, indexCounter, (leaf, idx) -> {
-            if (disableIndices.contains(idx))
+            if (!disableIndices.contains(idx))
+            {
+                return;
+            }
+            if (skippable)
             {
                 leaf.setEnabled(false);
                 outcome.recordDisabled(idx);
+            }
+            else
+            {
+                outcome.recordNotSkippable(idx);
             }
         });
     }

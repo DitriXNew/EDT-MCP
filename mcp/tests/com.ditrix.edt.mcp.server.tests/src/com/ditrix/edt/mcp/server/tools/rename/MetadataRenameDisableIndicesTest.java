@@ -31,14 +31,16 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
 
 /**
- * Tests what the executed report claims about {@code disableIndices} (#394): the number it prints must
- * be the number of change points the request really left switched off, and every requested index that
- * did NOT produce a skip has to be accounted for rather than silently absorbed.
+ * Tests the {@code disableIndices} half of the {@code rename_metadata_object} contract: WHICH change
+ * points a requested index may switch off (#393) and WHAT the executed report then claims about it
+ * (#394).
  * <p>
  * Everything here is driven through {@code applyDisableIndices} - the method {@code performRename}
- * actually calls - rather than through the leaf walker underneath it, and the reporting assertions go
- * through the real {@code renderExecutedReport} on the outcome that real walk produced. A test that
- * poked the helpers directly would keep passing while the branch that uses them changed underneath.
+ * actually calls - rather than through the leaf walker underneath it. That is deliberate: the decision
+ * under test lives in the branch that chooses whether to disable a leaf, so a test that poked the
+ * walker directly would survive removing the guard entirely, and a guard whose removal no test notices
+ * is not a guard. The reporting assertions likewise go through the real
+ * {@code renderExecutedReport}, on the outcome the real walk produced.
  * <p>
  * Reached by REFLECTION: {@code applyDisableIndices} and {@code renderExecutedReport} are private, and
  * their only public entry ({@code rename}) needs a live EDT project, an {@code IMdRefactoringService}
@@ -46,15 +48,39 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
  * RENAMING either method breaks these tests with a {@code NoSuchMethodException} instead of a compile
  * error.
  * <p>
- * The refactoring items are Mockito doubles because {@code isOptional()} is an input no fixture varies
- * on demand. The change trees are bare LTK ({@link NullChange} / {@link CompositeChange}), the same
- * headless technique the numbering tests use.
+ * The refactoring items are Mockito doubles because {@code isOptional()} is exactly the input under
+ * test and no fixture reaches every combination of it: on {@code TestConfiguration} every NATIVE item
+ * arrives optional, so the required-native case - the one #393 is about - has no live reproduction at
+ * all and can only be exercised here. The change trees are bare LTK ({@link NullChange} /
+ * {@link CompositeChange}), the same headless technique the numbering tests use.
  */
 public class MetadataRenameDisableIndicesTest
 {
-    // ==================== #394: the report states the REAL number ====================
+    // ==================== #393: a required change point is never switched off ====================
 
-    /** The baseline the counting rests on: an optional change point really is switched off. */
+    /**
+     * The promise the preview footer and the guide both make - "required ones are always applied" -
+     * enforced for a NATIVE item. Before #393 {@code applyDisableToChange} was reached unconditionally
+     * and this leaf came back disabled; {@code isOptional()} guarded only the item's own checkbox.
+     */
+    @Test
+    public void testRequiredNativeItemKeepsItsLeavesEnabled() throws Exception
+    {
+        Change leaf = new NullChange("required-edit"); //$NON-NLS-1$
+        IRefactoringItem item = nativeItem(leaf, false);
+
+        Object outcome = applyDisableIndices(refactoring(item), indices(0));
+
+        assertTrue("a REQUIRED change point must stay enabled even when its index is requested", //$NON-NLS-1$
+            leaf.isEnabled());
+        assertEquals(0, disabledCount(outcome));
+        assertEquals("[0]", notSkippableIndices(outcome).toString()); //$NON-NLS-1$
+    }
+
+    /**
+     * The positive control for the test above: with the SAME shape and only {@code isOptional()}
+     * flipped, the leaf must go off. Without this, "never disable anything" would pass #393.
+     */
     @Test
     public void testOptionalNativeItemDisablesTheRequestedLeaf() throws Exception
     {
@@ -75,6 +101,31 @@ public class MetadataRenameDisableIndicesTest
      * {@code #2} must switch off THAT leaf, not the one an under-counting walk would land on.
      */
     @Test
+    public void testRequiredItemStillConsumesItsIndicesSoLaterOnesStayAligned() throws Exception
+    {
+        CompositeChange required = new CompositeChange("required"); //$NON-NLS-1$
+        Change requiredA = new NullChange("required-a"); //$NON-NLS-1$
+        Change requiredB = new NullChange("required-b"); //$NON-NLS-1$
+        required.add(requiredA);
+        required.add(requiredB);
+        Change optional = new NullChange("optional"); //$NON-NLS-1$
+
+        Object outcome = applyDisableIndices(
+            refactoring(nativeItem(required, false), nativeItem(optional, true)), indices(2));
+
+        assertFalse("index #2 must reach the leaf AFTER the required item's two leaves", //$NON-NLS-1$
+            optional.isEnabled());
+        assertTrue(requiredA.isEnabled());
+        assertTrue(requiredB.isEnabled());
+        assertEquals(1, disabledCount(outcome));
+    }
+
+    /**
+     * A plain (non-native) rename item owns no leaf {@link Change} to switch off, so it is not
+     * skippable whatever it reports for {@code isOptional()}. It already behaved that way; what is new
+     * is that asking for its index is now ACCOUNTED for instead of vanishing.
+     */
+    @Test
     public void testPlainItemIsReportedAsNotSkippable() throws Exception
     {
         Object outcome = applyDisableIndices(refactoring(mock(IRefactoringItem.class)), indices(0));
@@ -83,12 +134,66 @@ public class MetadataRenameDisableIndicesTest
         assertEquals("[0]", notSkippableIndices(outcome).toString()); //$NON-NLS-1$
     }
 
+    // ============ #393: an unrelated index must not silently drop a whole item ============
+
     /**
      * {@code applyDisableIndices} walks EVERY item, and an optional item whose leaves are already all
      * disabled looks "completely disabled" to the checkbox rule - so before this fix any request at all
      * unchecked it, including one that never named a single one of its indices. An empty change tree
      * counts as completely disabled too, which makes the same request drop an item that had nothing
      * disabled about it.
+     */
+    @Test
+    public void testUnrelatedIndexDoesNotUncheckAnAlreadyDisabledOptionalItem() throws Exception
+    {
+        Change leaf = new NullChange("already-off"); //$NON-NLS-1$
+        leaf.setEnabled(false);
+        INativeChangeRefactoringItem item = nativeItem(leaf, true);
+
+        applyDisableIndices(refactoring(item), indices(99));
+
+        verify(item, never()).setChecked(false);
+    }
+
+    /** The positive control: when the request DID empty the item, unchecking it is still right. */
+    @Test
+    public void testRequestThatDisablesEveryLeafStillUnchecksTheItem() throws Exception
+    {
+        Change leaf = new NullChange("last-one"); //$NON-NLS-1$
+        INativeChangeRefactoringItem item = nativeItem(leaf, true);
+
+        applyDisableIndices(refactoring(item), indices(0));
+
+        verify(item).setChecked(false);
+    }
+
+    /**
+     * The boundary between the two tests above: the leaf is already off AND the request names it. The
+     * criterion is that the request NAMED the leaf, not that the flag changed value, so this counts as
+     * a skip and the emptied item is unchecked - the caller who names every leaf of an item means the
+     * item, whatever those leaves happened to be set to beforehand. Pinned because the opposite reading
+     * ("only count a state transition") is the natural one to drift into, and it is silently different.
+     */
+    @Test
+    public void testNamingAnAlreadyDisabledLeafStillCountsAsASkip() throws Exception
+    {
+        Change leaf = new NullChange("already-off"); //$NON-NLS-1$
+        leaf.setEnabled(false);
+        INativeChangeRefactoringItem item = nativeItem(leaf, true);
+
+        Object outcome = applyDisableIndices(refactoring(item), indices(0));
+
+        assertEquals(1, disabledCount(outcome));
+        assertTrue(notSkippableIndices(outcome).isEmpty());
+        verify(item).setChecked(false);
+    }
+
+    // ==================== #394: the report states the REAL number ====================
+
+    /**
+     * The live reproduction from #394, headless: two change points exist, {@code #99} is requested, and
+     * the old report announced "disabledCount: 1" plus "1 change point(s) were skipped as requested"
+     * while nothing whatsoever had been skipped.
      */
     @Test
     public void testUnknownIndexIsNotCountedAsASkip() throws Exception
@@ -110,6 +215,43 @@ public class MetadataRenameDisableIndicesTest
      * point that cannot be skipped. The caller has to be able to tell "I protected it" from "it was
      * applied anyway", which is precisely what a bare count of the request cannot express.
      */
+    @Test
+    public void testRequiredIndexIsReportedAsAppliedNotSkipped() throws Exception
+    {
+        Change leaf = new NullChange("mandatory"); //$NON-NLS-1$
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, false)), indices(0));
+
+        String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
+
+        assertTrue(report.contains("disabledCount: 0")); //$NON-NLS-1$
+        assertTrue(report.contains("notSkippableIndices: [0]")); //$NON-NLS-1$
+        assertTrue(report.contains("could NOT be skipped and were left in the rename")); //$NON-NLS-1$
+        assertFalse(report.contains("were skipped as requested")); //$NON-NLS-1$
+    }
+
+    /**
+     * The report is written from what the DISABLE pass decided, and that runs before {@code perform()};
+     * so the mandatory-index note must not assert that the change point succeeded. A refactoring that
+     * fails is reported under {@code errors}, and the two must not contradict each other in one report.
+     */
+    @Test
+    public void testMandatoryNoteDoesNotClaimSuccessWhenTheRefactoringFailed() throws Exception
+    {
+        Change leaf = new NullChange("mandatory"); //$NON-NLS-1$
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, false)), indices(0));
+
+        String report = renderExecutedReport(outcome, List.of(), List.of("Rename: boom")); //$NON-NLS-1$
+
+        assertTrue(report.contains("errors: 1")); //$NON-NLS-1$
+        assertTrue(report.contains("notSkippableIndices: [0]")); //$NON-NLS-1$
+        // Case-insensitive on purpose: the claim is about the WORD, and pinning one casing would let
+        // the same overclaim back in as "applied" the moment someone rewrote the sentence.
+        assertFalse("the report must not claim the change point was applied - perform() had not run " //$NON-NLS-1$
+            + "when this was decided, and here it went on to fail", //$NON-NLS-1$
+            report.toLowerCase(java.util.Locale.ROOT).contains("applied")); //$NON-NLS-1$
+    }
+
+    /** A real skip still reports as one, and reports the COUNT rather than the request's size. */
     @Test
     public void testActualSkipsAreCountedAndIneffectiveOnesListedSeparately() throws Exception
     {
