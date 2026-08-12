@@ -20,8 +20,14 @@ half that was missing, and a `success: true` with no `<extInfo xsi:type="form:..
 exactly the half-built attribute this suite exists to refuse. The expected shapes were taken
 from a production ERP configuration authored by the designer.
 
-reset: kind="write-metadata" -> reset_model() after each test. Each seeding test uses a
-UNIQUE catalog name (a created top object is not guaranteed to be reverted).
+reset: kind="write-metadata" -> reset_model() after each test. No leg creates a TOP object:
+each hangs a uniquely-named form off the fixture catalog instead. That is deliberate — a new
+top object is registered in Configuration.mdo, and undoing THAT depends on EDT flushing its
+async export before the fixture revert, a race the harness documents as observed on EDT 2026.2.
+A form is owned by its catalog and indexed nowhere above it, so `git checkout` + `git clean -fd`
+put the tree back with nothing left to race. (It cost a red shard-4 to learn: three seeding legs
+landed ahead of resync_to_disk's full-export test, which then re-exported a Configuration.mdo
+that no longer matched the committed one.)
 """
 
 from harness import (
@@ -30,6 +36,7 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_contains,
+    assert_no_diff,
     poll_disk_contains,
     poll_disk_lacks,
     wait_for_project_ready,
@@ -124,18 +131,28 @@ RU_VALUE_LIST = "".join(chr(c) for c in (
     0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439))
 
 
+# The fixture catalog every leg hangs its form off. Deliberately NOT a catalog of our own:
+# creating a TOP object registers it in Configuration.mdo, and undoing that depends on EDT
+# flushing its async export before the fixture revert - a race the harness documents as observed
+# on EDT 2026.2. A form is owned by its catalog and appears in no top-level index, so the whole
+# blast radius is Catalog.mdo plus the form's own directory, both of which `git checkout` +
+# `git clean -fd` restore with nothing left to race.
+FIXTURE_CATALOG = "Catalog.Catalog"
+
+# The stored (mdclass) attribute the METADATA-target refusal is aimed at - the fixture's own, so
+# that leg creates nothing either.
+FIXTURE_STORED_ATTRIBUTE = FIXTURE_CATALOG + ".Attribute.Attribute"
+
+
 def _seed_form(suffix):
-    """Catalog + an empty item form. Returns (base, form_fqn, form_file)."""
-    base = "Catalog.E2EFormCorpus" + suffix
-    form = base + ".Form.ItemForm"
-    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": base}),
-              "seed catalog " + suffix)
-    wait_for_project_ready()
+    """An empty managed form on the fixture catalog. Returns (base, form_fqn, form_file)."""
+    form_name = "E2EFormCorpus" + suffix
+    form = FIXTURE_CATALOG + ".Form." + form_name
     assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form}),
-              "seed item form " + suffix)
+              "seed form " + suffix)
     wait_for_project_ready()
-    form_file = "src/Catalogs/E2EFormCorpus%s/Forms/ItemForm/Form.form" % suffix
-    return base, form, form_file
+    form_file = "src/Catalogs/Catalog/Forms/%s/Form.form" % form_name
+    return FIXTURE_CATALOG, form, form_file
 
 
 def _set_attribute_type(attr_fqn, kind):
@@ -292,19 +309,17 @@ def test_form_corpus_retype_clears_the_stale_ext_info():
 # ATTRIBUTE value types — the refusals that keep the widened vocabulary honest
 # ──────────────────────────────────────────────────────────────────────────────
 
-@e2e_test(tool="modify_metadata", kind="write-metadata")
+@e2e_test(tool="modify_metadata", kind="read")
 def test_form_corpus_form_only_type_refused_on_a_stored_attribute():
-    base, form, form_file = _seed_form("Stored")
-    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": base + ".Attribute.Stored"}),
-              "seed a stored catalog attribute")
-    wait_for_project_ready()
-
-    r = _set_attribute_type(base + ".Attribute.Stored", "ValueList")
+    # Aimed at the fixture's OWN stored attribute, and it is a pure refusal - the type never
+    # reaches the model, so this leg seeds nothing and mutates nothing.
+    r = _set_attribute_type(FIXTURE_STORED_ATTRIBUTE, "ValueList")
     err = assert_error(r, "a stored metadata attribute must refuse a form-only platform type")
     assert_error_quality(err, names=["ValueList"], suggests=["Form.FormName.Attribute"],
                          ctx="the stored-attribute refusal")
     assert "Unknown type kind" not in err, \
         "a RECOGNIZED type must not be reported as unknown (issue #369): %r" % (err,)
+    assert_no_diff("a refused retype must not touch the fixture")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
