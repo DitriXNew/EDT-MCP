@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -2104,9 +2107,10 @@ public class MetadataRenameService
         progress.enter(RenameProgress.Phase.APPLYING);
 
         // Apply disableIndices by traversing items and their native changes
+        DisableOutcome disableOutcome = new DisableOutcome(disableIndices);
         if (!disableIndices.isEmpty())
         {
-            applyDisableIndices(refactorings, disableIndices);
+            disableOutcome = applyDisableIndices(refactorings, disableIndices);
         }
 
         List<String> performed = new ArrayList<>();
@@ -2130,7 +2134,107 @@ public class MetadataRenameService
         // nothing is left to apply.
         progress.enter(RenameProgress.Phase.APPLIED);
 
-        return renderExecutedReport(objectFqn, newName, disableIndices, performed, errors);
+        return renderExecutedReport(objectFqn, newName, disableOutcome, performed, errors);
+    }
+
+    /**
+     * What each requested {@code disableIndices} entry actually did, so the executed report can state the
+     * REAL number of skipped change points instead of echoing the size of the request (#394).
+     * <p>
+     * Every index the confirm-side walk hands out is classified at most once - the counter issues each
+     * value exactly once - so the three buckets are disjoint by construction, and a single
+     * {@code index -> status} map keeps them that way rather than trusting three sets to stay exclusive.
+     * {@code UNKNOWN} is derived, not recorded: it is whatever the caller asked for that the walk never
+     * reached at all (out of range, or an index that no longer exists in the tree confirm rebuilt).
+     * <p>
+     * The counts describe the LTK flags this call set before {@code perform()} ran. A refactoring that
+     * then fails is reported separately, under {@code errors} - "disabled" here never means "the edit is
+     * proven to have been left alone on disk".
+     */
+    private static final class DisableOutcome
+    {
+        private enum Status
+        {
+            /**
+             * The index named a leaf under a skippable item, which is disabled once the pass is done.
+             * A leaf that ARRIVED disabled counts too - the caller asked for it and got it; the report
+             * describes the state the request produced, not how far the flag had to travel.
+             */
+            DISABLED,
+            /**
+             * The index named a real change point that cannot be skipped, so it stayed in the rename.
+             * Whether it then SUCCEEDED is a different question, answered by {@code performedCount} and
+             * {@code errors} - this pass runs before {@code perform()} and cannot know.
+             */
+            NOT_SKIPPABLE
+        }
+
+        private final SortedSet<Integer> requested;
+        private final TreeMap<Integer, Status> classified = new TreeMap<>();
+
+        DisableOutcome(Set<Integer> requested)
+        {
+            this.requested = new TreeSet<>(requested);
+        }
+
+        void recordDisabled(int index)
+        {
+            classified.put(index, Status.DISABLED);
+        }
+
+        void recordNotSkippable(int index)
+        {
+            classified.put(index, Status.NOT_SKIPPABLE);
+        }
+
+        /**
+         * How many change points this request left switched off - deliberately not "switched off",
+         * which would exclude a leaf that arrived disabled and was named anyway (see {@link #DISABLED}).
+         */
+        int disabledCount()
+        {
+            return countOf(Status.DISABLED);
+        }
+
+        /** Requested indices that named a change point the rename keeps regardless. */
+        SortedSet<Integer> notSkippableIndices()
+        {
+            return indicesOf(Status.NOT_SKIPPABLE);
+        }
+
+        /** Requested indices the walk never reached - nothing in the tree carries them. */
+        SortedSet<Integer> unknownIndices()
+        {
+            TreeSet<Integer> unknown = new TreeSet<>(requested);
+            unknown.removeAll(classified.keySet());
+            return unknown;
+        }
+
+        private int countOf(Status status)
+        {
+            int count = 0;
+            for (Status value : classified.values())
+            {
+                if (value == status)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private SortedSet<Integer> indicesOf(Status status)
+        {
+            TreeSet<Integer> result = new TreeSet<>();
+            for (Map.Entry<Integer, Status> entry : classified.entrySet())
+            {
+                if (entry.getValue() == status)
+                {
+                    result.add(entry.getKey());
+                }
+            }
+            return result;
+        }
     }
 
     /**
@@ -2171,15 +2275,18 @@ public class MetadataRenameService
 
     /**
      * Toggles the LTK change-tree flags for the requested {@code disableIndices} BEFORE the rename is
-     * performed: walks every refactoring item, disables the matching leaf changes (via
-     * {@link #applyDisableToChange}) and unchecks an optional native item whose leaves are all
-     * disabled. Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT
-     * perform the rename. Extracted verbatim from {@link #performRename} so it runs at the same point
-     * under the same {@code !disableIndices.isEmpty()} guard.
+     * performed: walks every refactoring item, disables the matching leaf changes
+     * (via {@link #applyDisableToChange}) and unchecks an optional native item whose leaves are all
+     * disabled.
+     * Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT perform the
+     * rename. Runs at the same point as before, under the same {@code !disableIndices.isEmpty()} guard.
+     *
+     * @return what each requested index actually did - the report states THAT, not the request (#394).
      */
-    private void applyDisableIndices(Collection<IRefactoring> refactorings,
+    private DisableOutcome applyDisableIndices(Collection<IRefactoring> refactorings,
         java.util.Set<Integer> disableIndices)
     {
+        DisableOutcome outcome = new DisableOutcome(disableIndices);
         int[] indexCounter = {0};
         for (IRefactoring refactoring : refactorings)
         {
@@ -2188,37 +2295,44 @@ public class MetadataRenameService
                 continue;
             for (IRefactoringItem item : items)
             {
-                applyDisableToItem(item, disableIndices, indexCounter);
+                applyDisableToItem(item, disableIndices, indexCounter, outcome);
             }
         }
+        return outcome;
     }
 
     /**
      * Applies {@code disableIndices} to a single refactoring item, advancing {@code indexCounter} by the
-     * same amount as the preview-side walk: native items disable their matching leaf changes (and uncheck
-     * the optional item when every leaf is disabled), while plain rename items consume one index. Extracted
-     * verbatim from {@link #applyDisableIndices} so it mutates the same in-memory state at the same point.
+     * same amount as the preview-side walk: native items disable their matching leaf changes when the item
+     * is optional (and uncheck the item when this request disabled every leaf under it), while plain rename
+     * items consume one index without ever being disabled.
      */
     private void applyDisableToItem(IRefactoringItem item, java.util.Set<Integer> disableIndices,
-        int[] indexCounter)
+        int[] indexCounter, DisableOutcome outcome)
     {
         if (item instanceof INativeChangeRefactoringItem nativeItem)
         {
             Change nativeChange = nativeItem.getNativeChange();
-            if (nativeChange != null)
+            if (nativeChange == null)
             {
-                applyDisableToChange(nativeChange, disableIndices, indexCounter);
+                return;
             }
+            applyDisableToChange(nativeChange, disableIndices, indexCounter, outcome);
             // If all leaf changes under this native item are disabled, uncheck the item itself
-            if (nativeChange != null && nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
+            if (nativeItem.isOptional() && isCompletelyDisabled(nativeChange))
             {
                 nativeItem.setChecked(false);
             }
         }
         else
         {
-            // Regular rename item — not skippable (non-optional), just advance index
-            indexCounter[0]++;
+            // Regular rename item - it owns no leaf Change to switch off, so it is not skippable
+            // whatever it reports for isOptional(); consume its index and say so if it was requested.
+            int index = indexCounter[0]++;
+            if (disableIndices.contains(index))
+            {
+                outcome.recordNotSkippable(index);
+            }
         }
     }
 
@@ -2228,14 +2342,24 @@ public class MetadataRenameService
      * note. Pure string building with no side effects; extracted verbatim from {@link #performRename}.
      */
     private static String renderExecutedReport(String objectFqn, String newName,
-        java.util.Set<Integer> disableIndices, List<String> performed, List<String> errors)
+        DisableOutcome disableOutcome, List<String> performed, List<String> errors)
     {
+        SortedSet<Integer> notSkippable = disableOutcome.notSkippableIndices();
+        SortedSet<Integer> unknown = disableOutcome.unknownIndices();
         StringBuilder sb = new StringBuilder();
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: executed\n"); //$NON-NLS-1$
         sb.append("objectFqn: ").append(objectFqn).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("newName: ").append(newName).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("disabledCount: ").append(disableIndices.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append("disabledCount: ").append(disableOutcome.disabledCount()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!notSkippable.isEmpty())
+        {
+            sb.append("notSkippableIndices: ").append(formatIndexList(notSkippable)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!unknown.isEmpty())
+        {
+            sb.append("unknownIndices: ").append(formatIndexList(unknown)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         sb.append("performedCount: ").append(performed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("errors: ").append(errors.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("---\n\n"); //$NON-NLS-1$
@@ -2263,25 +2387,61 @@ public class MetadataRenameService
             sb.append("\n"); //$NON-NLS-1$
         }
 
-        if (!disableIndices.isEmpty())
+        if (disableOutcome.disabledCount() > 0)
         {
-            sb.append("_").append(disableIndices.size()) //$NON-NLS-1$
+            sb.append("_").append(disableOutcome.disabledCount()) //$NON-NLS-1$
               .append(" change point(s) were skipped as requested._\n"); //$NON-NLS-1$
+        }
+        if (!notSkippable.isEmpty())
+        {
+            // Deliberately NOT "were applied": this is written from what the disable pass decided,
+            // which happens before perform() runs, so a refactoring that then fails would make an
+            // "applied" claim false while `errors` said otherwise in the same report. "Left in the
+            // rename" is true either way, and `performedCount`/`errors` remain the word on outcome.
+            sb.append("_Change point(s) ").append(formatIndexList(notSkippable)) //$NON-NLS-1$
+              .append(" could NOT be skipped and were left in the rename:") //$NON-NLS-1$
+              .append(" the refactoring deems them mandatory._\n"); //$NON-NLS-1$
+        }
+        if (!unknown.isEmpty())
+        {
+            sb.append("_Index(es) ").append(formatIndexList(unknown)) //$NON-NLS-1$
+              .append(" matched no change point and were ignored") //$NON-NLS-1$
+              .append(" - re-run the preview to get the current indices._\n"); //$NON-NLS-1$
         }
 
         return sb.toString();
     }
 
+    /** Renders a set of change-point indices as a YAML flow sequence, e.g. {@code [1, 99]}. */
+    private static String formatIndexList(SortedSet<Integer> indices)
+    {
+        StringBuilder sb = new StringBuilder("["); //$NON-NLS-1$
+        boolean first = true;
+        for (Integer index : indices)
+        {
+            if (!first)
+            {
+                sb.append(", "); //$NON-NLS-1$
+            }
+            sb.append(index);
+            first = false;
+        }
+        return sb.append("]").toString(); //$NON-NLS-1$
+    }
+
     /**
      * Recursively walks the LTK change tree and calls setEnabled(false) on leaves
-     * whose global index is in the disableIndices set.
+     * whose global index is in the disableIndices set, recording each one so the executed
+     * report can state the REAL number of skipped change points (#394).
      */
-    private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices, int[] indexCounter)
+    private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices,
+        int[] indexCounter, DisableOutcome outcome)
     {
         walkLeafChanges(change, indexCounter, (leaf, idx) -> {
             if (disableIndices.contains(idx))
             {
                 leaf.setEnabled(false);
+                outcome.recordDisabled(idx);
             }
         });
     }

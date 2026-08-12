@@ -372,6 +372,52 @@ def test_preview_for_catalog_does_not_mutate_catalog():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# What disableIndices ACTUALLY did (issue #394)
+#
+# The executed report used to print the SIZE OF THE REQUEST as `disabledCount`, so
+# "I asked to skip 1" and "1 was skipped" were the same sentence — and the tool said
+# it just as loudly when nothing had been skipped at all. It matters because the caller
+# is an agent deciding whether a change was left behind on purpose.
+#
+# The report now states the REAL number, and every requested index that produced no skip
+# comes back under `unknownIndices` / `notSkippableIndices`.
+#
+# CommonModule.CascadeEn is the target because its change set is tiny and fully known:
+# exactly two points, `#0` the bslRef in CascadeUser (Skippable: yes) and `#1` the
+# rename itself (Skippable: no).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_unknown_disable_index_is_not_counted_as_a_skip():
+    _settle_before_rename()  # executes a real rename - see the helper
+    # #99 does not exist (the target has 2 change points). Before #394 this printed
+    # "disabledCount: 1" and "1 change point(s) were skipped as requested" while the
+    # cascade applied in full — the report contradicted the disk.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": "99",
+    })
+    assert_ok(r, "execute rename with an out-of-range disableIndices")
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "disabledCount: 0",
+                    "nothing was skipped, so disabledCount must be 0 — not the size of the request")
+    assert_not_contains(r.text, "were skipped as requested",
+                        "the report must not claim a skip when no change point was switched off")
+    assert_contains(r.text, "unknownIndices: [99]",
+                    "an index that matched no change point must be reported, not swallowed")
+
+    # The report's claim is checked against the DISK: the cascade really did apply.
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser after a rename with an unknown disableIndices")
+    assert_contains(src.text, "Reckoner.Marker()",
+                    "the change point was NOT skipped, so the caller must have been rewritten")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # The cascade bound (issue #365)
 #
 # The rename runs on EDT's UI thread; nothing in that hand-off had an upper bound,
