@@ -421,9 +421,15 @@ jobs:
           # (measured: "Completed tools/call: rename_metadata_object in 301090ms, outcome=ok"
           # right after "Client connection lost: Broken pipe"). The tool now drains the
           # pipeline first, so that path should not be reached — but 300 sat EXACTLY on the
-          # boundary, which is why every collision cost a run. Keep the budget clear of it,
-          # and below the per-test timeout below.
-          MCP_CALL_TIMEOUT: "600"
+          # boundary, which is why every collision cost a run.
+          #
+          # Sharding (issue #385) makes the metadata-write lanes DENSE — back-to-back
+          # clean_project writes keep EDT's DD pipeline busy, so the heaviest renames take
+          # longer and their two happy-path tests now pass an explicit 900s tool `timeout`.
+          # This socket budget must sit ABOVE that so it doesn't cut the call first; 1200s
+          # clears the 900s tool bound and still stays under the per-test wall-clock cap
+          # (MCP_TEST_TIMEOUT, default 3600).
+          MCP_CALL_TIMEOUT: "1200"
           # Bound what reset_model may spend BEFORE and AFTER its clean_project. Left to default
           # it inherits E2E_PROJECT_READY_TIMEOUT (1200 above, sized for the COLD first index),
           # and reset_model can spend it twice per test - which alone exceeds the per-test cap and

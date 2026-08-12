@@ -112,6 +112,12 @@ def test_confirm_renames_common_module_and_readback_shows_new_name():
         "objectFqn": "CommonModule.Calc",
         "newName": "Compute",
         "confirm": True,
+        # Headroom above the 420s default (issue #385 / PR #390): this cascade (BSL + forms +
+        # metadata) is the heaviest rename, and on a sharded metadata-write lane EDT's DD
+        # pipeline is busier, so the apply can run past 420s and the tool would report "did not
+        # finish". 900s (< the 3600 max) lets a legitimately-slower run complete; a true hang
+        # still fails the per-test wall-clock timeout.
+        "timeout": 900,
     })
     assert_ok(r, "execute rename CommonModule.Calc -> Compute")
     # Execute-mode markers (performRename): YAML action + completion header.
@@ -146,6 +152,7 @@ def test_confirm_renames_catalog_and_readback_shows_new_name():
         "objectFqn": "Catalog.Catalog",
         "newName": "Goods",
         "confirm": True,
+        "timeout": 900,  # sharded-lane headroom above the 420s default (see CommonModule rename)
     })
     assert_ok(r, "execute rename Catalog.Catalog -> Goods")
     assert_contains(r.text, "action: executed", "execute mode must emit YAML action: executed")

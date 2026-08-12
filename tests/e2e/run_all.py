@@ -84,11 +84,19 @@ def parse_args():
 # is about). The spread is a stable hash of "tool::name" (zlib.crc32 — deterministic across
 # machines, unlike the salted built-in hash()), so it is balanced and every runner agrees
 # which lane a test is in. Order within a lane never matters: the fixture resets before each
-# test. Bump _METADATA_LANES for more parallelism (CI reads the names via --list-shards).
-# 4 lanes puts each metadata lane (~3560s of write-metadata / 4) level with the single cheap
-# read-action lane (~850s + the modify_metadata stragglers), so the slowest shard is ~17 min
-# — the balance point for this suite. Add lanes to go faster, at the cost of runner-minutes.
-_METADATA_LANES = 4
+# test. CI reads the names via --list-shards, so changing this count needs no workflow edit.
+#
+# Why 8 and not 4 (issue #385, PR #390 CI): each write-metadata test ends in reset_model()
+# (a clean_project → full derived-data recompute), and packing ~90 of them back-to-back on
+# one 2-core runner keeps EDT's DD pipeline perpetually busy — it never gets the idle gaps
+# the interleaved serial run gave it. rename_metadata_object must BLOCK that pipeline to run
+# its cascade; on a saturated pipeline the block/apply overran the tool's 420s bound and the
+# lane went red ("DD pipeline has running computations left during block attempt"). Halving
+# the per-lane load (~90 → ~45 write tests) keeps each runner's EDT far less saturated when
+# its rename tests (which sort LATE in the lane) run. More lanes = healthier EDT per lane, at
+# the cost of runner-minutes (each lane re-pays the ~3-min EDT install) — the wall-clock/
+# machine-time trade issue #385 already signed up for.
+_METADATA_LANES = 8
 
 READ_ACTION_LANE = "read-action"
 

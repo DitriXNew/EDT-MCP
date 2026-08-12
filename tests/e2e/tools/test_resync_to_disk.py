@@ -85,6 +85,7 @@ from harness import (
     assert_no_diff,
     e2e_test,
     wait_for_project_ready,
+    reset_model,
     PROJECT,
     PROJECT_DIR,
 )
@@ -174,17 +175,7 @@ def test_resync_in_sync_fixture_is_a_noop_and_does_not_mutate():
     assert_no_diff("default resync of an in-sync project must not change any tracked file")
 
 
-# kind="write-metadata" (NOT "action") on purpose: fullExport=true force-exports EVERY top
-# object model->disk, and that export is ASYNC (it can land AFTER the test body returns), so
-# the test needs the write-metadata teardown — reset_fixture()+reset_model() — to settle the
-# export and re-sync the model, exactly like test_apply_quick_fix's teardown. As an action it
-# got NO teardown: in a serial run the next write-metadata test's reset_model() masked the
-# residue, but once the suite is sharded by kind (issue #385) this test lands in the cheap
-# read-action lane with no such neighbour, and its residue desynced the very next default
-# resync (test_report_only) into exporting a phantom -> a dirty tree. On success it still
-# rewrites identical bytes (assert_no_diff holds); the honest kind is about the async WRITE,
-# not the net byte diff.
-@e2e_test(tool="resync_to_disk", kind="write-metadata")
+@e2e_test(tool="resync_to_disk", kind="action")
 def test_full_export_reexports_every_top_object():
     """fullExport=true opts back in to the export-everything refresh: every walked top
     object is force-exported (objectsExported == totalTopObjects > 0), the flag is
@@ -197,8 +188,19 @@ def test_full_export_reexports_every_top_object():
 
     Mutation thinking: a fullExport that silently stayed on the subset path would
     report objectsExported==0 here; an export that produced different bytes for an
-    unchanged model would fail assert_no_diff."""
-    wait_for_project_ready()  # a slow runner may still be recomputing after a prior test
+    unchanged model would fail assert_no_diff.
+
+    Precondition (via reset_model, adopted from #325): this is the ONLY resync test that
+    writes the WHOLE model back to disk, so it is the only one that exposes a prior test
+    whose model was left ahead of the committed disk (git resets the DISK, not EDT's
+    in-memory model). Under sharding this bites harder: in the read-action lane there are
+    no write-metadata neighbours whose reset_model() used to re-sync the model, so a leaked
+    change would be re-exported here — and, worse, propagate a phantom into the NEXT default
+    resync (test_report_only) as a dirty tree. clean_project re-imports the committed disk,
+    so we re-establish the in-sync precondition ourselves and the check is deterministic
+    regardless of the preceding test. A genuinely non-idempotent export for an in-sync model
+    would STILL fail assert_no_diff below."""
+    reset_model()  # guarantee the model matches the committed disk before the idempotency check
     r = call("resync_to_disk", {"projectName": PROJECT, "fullExport": True, "overwriteDiskEdits": True})
     assert_ok(r, "resync_to_disk fullExport=true overwriteDiskEdits=true")
 
