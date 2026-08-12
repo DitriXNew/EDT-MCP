@@ -436,6 +436,15 @@ jobs:
           # turns a legitimately slow cleanup into a reported hang. A post-write settle is not a
           # cold index; 600 is generous for it.
           E2E_MODEL_SETTLE_TIMEOUT: "600"
+          # Per-TEST wall-clock cap (run_all.py --test-timeout). It MUST sit ABOVE the worst
+          # legit call-and-reset chain, or the outer timer abandons a healthy slow test and
+          # SKIPS the rest of the shard. That chain grew when MCP_CALL_TIMEOUT went 600 → 1200:
+          # a heavy write-metadata test can now spend the call budget (up to 1200, or 900 for a
+          # rename) and then reset_model() — settle 600 + clean_project (up to 1200) + settle 600
+          # ≈ 2400 — which sums to ~3600, i.e. the OLD default cap exactly (no headroom). 5400
+          # restores the margin (covers the chain plus one clean_project retry) while still
+          # bounding a true hang. Raising the call budget without this is the gap Codex flagged.
+          MCP_TEST_TIMEOUT: "5400"
           # Unbuffer stdout: otherwise Python block-buffers in CI (stdout is a pipe), so
           # the readiness-wait countdown only appears when the process exits — which looks
           # like a hang during the (long) index wait. -u/PYTHONUNBUFFERED stream it live.
@@ -515,7 +524,7 @@ jobs:
   # workflow (and so blocks the coverage.yml workflow_run, which requires success) — this
   # job only owns the single-check presentation, never the pass/fail verdict.
   report:
-    needs: e2e
+    needs: [e2e, shards]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -528,6 +537,31 @@ jobs:
           pattern: e2e-test-results-${{ inputs.edt }}-*
           path: e2e-reports
           merge-multiple: true
+
+      # A shard whose runner dies before run_all.py writes JUnit (EDT never ready, setup
+      # cleanup failed) uploads nothing (if-no-files-found: ignore), so the merge below would
+      # otherwise show GREEN from the surviving shards while a whole shard silently produced no
+      # results. Synthesize a FAILING report for any expected lane whose XML is absent, so the
+      # merged check can never look green with a shard missing. The matrix job is red separately;
+      # this keeps the single presentation check honest too.
+      - name: Fail the merged check for any shard that produced no report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-reports
+          missing=0
+          for name in $(echo '${{ needs.shards.outputs.names }}' | jq -r '.[]'); do
+            if [ ! -f "e2e-reports/e2e-results-$name.xml" ]; then
+              echo "::error::E2E shard '$name' produced no JUnit report (runner aborted before writing results)."
+              missing=$((missing + 1))
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                "<testsuite name=\"edt-mcp-e2e-shard-$name\" tests=\"1\" failures=\"1\">" \
+                "  <testcase name=\"shard::$name::report_missing\" time=\"0.0\"><failure>Shard '$name' produced no JUnit report; its runner aborted before run_all.py wrote results (e.g. EDT never became ready). Counted as a failure so the merged check is not falsely green.</failure></testcase>" \
+                '</testsuite>' > "e2e-reports/e2e-results-$name-MISSING.xml"
+            fi
+          done
+          echo "shards with no report: $missing"
 
       - name: Publish E2E Test Results (merged across shards)
         uses: EnricoMi/publish-unit-test-result-action@v2
