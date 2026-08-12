@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.rename;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -17,7 +18,6 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -32,8 +32,10 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
 
 /**
  * Tests the {@code disableIndices} half of the {@code rename_metadata_object} contract: WHICH change
- * points a requested index may switch off (#393) and WHAT the executed report then claims about it
- * (#394).
+ * points a requested index may switch off (#393), WHAT the executed report then claims about it (#394 -
+ * the change points the request really left switched off, not the size of the request), and how the
+ * entries that produced no skip at all are accounted for: an index that matched nothing, an index
+ * naming a required point, or a token that never parsed as a number (#401).
  * <p>
  * Everything here is driven through {@code applyDisableIndices} - the method {@code performRename}
  * actually calls - rather than through the leaf walker underneath it. That is deliberate: the decision
@@ -69,7 +71,7 @@ public class MetadataRenameDisableIndicesTest
         Change leaf = new NullChange("required-edit"); //$NON-NLS-1$
         IRefactoringItem item = nativeItem(leaf, false);
 
-        Object outcome = applyDisableIndices(refactoring(item), indices(0));
+        Object outcome = applyDisableIndices(refactoring(item), request("0"));
 
         assertTrue("a REQUIRED change point must stay enabled even when its index is requested", //$NON-NLS-1$
             leaf.isEnabled());
@@ -87,7 +89,7 @@ public class MetadataRenameDisableIndicesTest
         Change leaf = new NullChange("optional-edit"); //$NON-NLS-1$
         IRefactoringItem item = nativeItem(leaf, true);
 
-        Object outcome = applyDisableIndices(refactoring(item), indices(0));
+        Object outcome = applyDisableIndices(refactoring(item), request("0"));
 
         assertFalse("an OPTIONAL change point must still be skippable", leaf.isEnabled()); //$NON-NLS-1$
         assertEquals(1, disabledCount(outcome));
@@ -111,7 +113,7 @@ public class MetadataRenameDisableIndicesTest
         Change optional = new NullChange("optional"); //$NON-NLS-1$
 
         Object outcome = applyDisableIndices(
-            refactoring(nativeItem(required, false), nativeItem(optional, true)), indices(2));
+            refactoring(nativeItem(required, false), nativeItem(optional, true)), request("2"));
 
         assertFalse("index #2 must reach the leaf AFTER the required item's two leaves", //$NON-NLS-1$
             optional.isEnabled());
@@ -128,7 +130,7 @@ public class MetadataRenameDisableIndicesTest
     @Test
     public void testPlainItemIsReportedAsNotSkippable() throws Exception
     {
-        Object outcome = applyDisableIndices(refactoring(mock(IRefactoringItem.class)), indices(0));
+        Object outcome = applyDisableIndices(refactoring(mock(IRefactoringItem.class)), request("0"));
 
         assertEquals(0, disabledCount(outcome));
         assertEquals("[0]", notSkippableIndices(outcome).toString()); //$NON-NLS-1$
@@ -150,7 +152,7 @@ public class MetadataRenameDisableIndicesTest
         leaf.setEnabled(false);
         INativeChangeRefactoringItem item = nativeItem(leaf, true);
 
-        applyDisableIndices(refactoring(item), indices(99));
+        applyDisableIndices(refactoring(item), request("99"));
 
         verify(item, never()).setChecked(false);
     }
@@ -162,7 +164,7 @@ public class MetadataRenameDisableIndicesTest
         Change leaf = new NullChange("last-one"); //$NON-NLS-1$
         INativeChangeRefactoringItem item = nativeItem(leaf, true);
 
-        applyDisableIndices(refactoring(item), indices(0));
+        applyDisableIndices(refactoring(item), request("0"));
 
         verify(item).setChecked(false);
     }
@@ -181,7 +183,7 @@ public class MetadataRenameDisableIndicesTest
         leaf.setEnabled(false);
         INativeChangeRefactoringItem item = nativeItem(leaf, true);
 
-        Object outcome = applyDisableIndices(refactoring(item), indices(0));
+        Object outcome = applyDisableIndices(refactoring(item), request("0"));
 
         assertEquals(1, disabledCount(outcome));
         assertTrue(notSkippableIndices(outcome).isEmpty());
@@ -199,7 +201,7 @@ public class MetadataRenameDisableIndicesTest
     public void testUnknownIndexIsNotCountedAsASkip() throws Exception
     {
         Change leaf = new NullChange("edit"); //$NON-NLS-1$
-        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, true)), indices(99));
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, true)), request("99"));
 
         String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
 
@@ -219,7 +221,7 @@ public class MetadataRenameDisableIndicesTest
     public void testRequiredIndexIsReportedAsAppliedNotSkipped() throws Exception
     {
         Change leaf = new NullChange("mandatory"); //$NON-NLS-1$
-        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, false)), indices(0));
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, false)), request("0"));
 
         String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
 
@@ -238,7 +240,7 @@ public class MetadataRenameDisableIndicesTest
     public void testMandatoryNoteDoesNotClaimSuccessWhenTheRefactoringFailed() throws Exception
     {
         Change leaf = new NullChange("mandatory"); //$NON-NLS-1$
-        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, false)), indices(0));
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, false)), request("0"));
 
         String report = renderExecutedReport(outcome, List.of(), List.of("Rename: boom")); //$NON-NLS-1$
 
@@ -262,7 +264,7 @@ public class MetadataRenameDisableIndicesTest
         root.add(second);
 
         // Three requested: #0 lands, #1 lands, #99 does not exist.
-        Object outcome = applyDisableIndices(refactoring(nativeItem(root, true)), indices(0, 1, 99));
+        Object outcome = applyDisableIndices(refactoring(nativeItem(root, true)), request("0,1,99"));
         String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
 
         assertFalse(first.isEnabled());
@@ -278,7 +280,7 @@ public class MetadataRenameDisableIndicesTest
     @Test
     public void testEmptyRequestRendersNoSkipSectionsAtAll() throws Exception
     {
-        Object outcome = newOutcome(Set.of());
+        Object outcome = newOutcome(request(null));
 
         String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
 
@@ -293,14 +295,254 @@ public class MetadataRenameDisableIndicesTest
     public void testIneffectiveIndicesRenderSortedAsAYamlSequence() throws Exception
     {
         Object outcome = applyDisableIndices(refactoring(nativeItem(new NullChange("x"), true)), //$NON-NLS-1$
-            indices(99, 7, 42));
+            request("99,7,42"));
 
         String report = renderExecutedReport(outcome, List.of(), List.of());
 
         assertTrue(report.contains("unknownIndices: [7, 42, 99]")); //$NON-NLS-1$
     }
 
+    // ============ #401: a token that never became an index is still accounted for ============
+
+    /**
+     * The sharpest statement of the gap, and the one that fails on the old behaviour: a call that asked
+     * to skip something must not answer IDENTICALLY to a call that asked for nothing. Before the tokens
+     * were carried through the parse, {@code disableIndices: "abc"} produced a report byte for byte
+     * equal to omitting the argument - the caller's request had left no trace anywhere.
+     */
+    @Test
+    public void testAnUnparsableRequestIsDistinguishableFromNoRequestAtAll() throws Exception
+    {
+        String askedForNothing = renderExecutedReport(newOutcome(request(null)),
+            List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
+        String askedWithGarbage = renderExecutedReport(newOutcome(request("abc")), //$NON-NLS-1$
+            List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
+
+        assertNotEquals("a request the tool could not parse must leave a trace in the report", //$NON-NLS-1$
+            askedForNothing, askedWithGarbage);
+        assertTrue(askedWithGarbage.contains("unparsedTokens: [\"abc\"]")); //$NON-NLS-1$
+        assertTrue(askedWithGarbage.contains("are not whole numbers and were ignored")); //$NON-NLS-1$
+    }
+
+    /** A stray token must not hide behind the indices that DID work. */
+    @Test
+    public void testUnparsedTokenIsReportedAlongsideASuccessfulSkip() throws Exception
+    {
+        Change leaf = new NullChange("edit"); //$NON-NLS-1$
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, true)), request("0,abc")); //$NON-NLS-1$
+
+        String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
+
+        assertFalse(leaf.isEnabled());
+        assertTrue(report.contains("disabledCount: 1")); //$NON-NLS-1$
+        assertTrue(report.contains("unparsedTokens: [\"abc\"]")); //$NON-NLS-1$
+    }
+
+    /** Separator noise is punctuation, not a typo'd index - reporting it would be noise. */
+    @Test
+    public void testEmptyEntriesAreNotReportedAsUnparsedTokens()
+    {
+        DisableRequest parsed = request("1,,2,"); //$NON-NLS-1$
+
+        assertEquals(Set.of(Integer.valueOf(1), Integer.valueOf(2)), parsed.indices());
+        assertTrue("a stray comma is formatting, not a token the caller meant", //$NON-NLS-1$
+            parsed.unparsedTokens().isEmpty());
+    }
+
+    /**
+     * The token is echoed back into the report's YAML front matter, so it must not be able to carry
+     * control characters into it, nor let the request decide how long the answer is.
+     */
+    @Test
+    public void testEchoedTokensAreBoundedAndStrippedOfControlCharacters()
+    {
+        DisableRequest parsed = request("a\u0007b," + "x".repeat(80)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<String> tokens = parsed.unparsedTokens();
+        assertEquals(2, tokens.size());
+        assertEquals("a?b", tokens.get(0)); //$NON-NLS-1$
+        assertTrue("a long token must be truncated, not echoed whole", //$NON-NLS-1$
+            tokens.get(1).length() < 80);
+        assertTrue(tokens.get(1).endsWith("...")); //$NON-NLS-1$
+    }
+
+    /**
+     * Many tokens are counted rather than all named - the request must not size the answer. The overflow
+     * is a SEPARATE key: a "(N total)" suffix after the closing bracket would make the front matter
+     * unparsable as YAML, which is the one part of this report meant to be read by machine.
+     */
+    @Test
+    public void testTokenListIsCappedAndTheOverflowIsItsOwnYamlKey() throws Exception
+    {
+        StringBuilder raw = new StringBuilder();
+        for (int i = 0; i < 30; i++)
+        {
+            raw.append(raw.length() == 0 ? "" : ",").append("t").append(i); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        String report = renderExecutedReport(newOutcome(request(raw.toString())), List.of(), List.of());
+
+        assertTrue(report.contains("unparsedTokenCount: 30")); //$NON-NLS-1$
+        // Exactly the first 20, not merely "fewer than all": a cap of 0 or 29 would satisfy a test
+        // that only checked the last one was missing.
+        assertTrue("the 20th token must still be named", report.contains("\"t19\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the 21st must not be", report.contains("\"t20\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(20, frontMatterValue(report, "unparsedTokens").split(",").length); //$NON-NLS-1$
+        assertTrue("the sequence must END at its bracket, with nothing trailing on the line", //$NON-NLS-1$
+            frontMatterValue(report, "unparsedTokens").endsWith("]")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String line : frontMatter(report).split("\n")) //$NON-NLS-1$
+        {
+            assertTrue("every front-matter line must stay a 'key: value' pair, got: " + line, //$NON-NLS-1$
+                line.matches("^[A-Za-z][A-Za-z0-9]*: .*$")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * A token made ONLY of control characters used to vanish: {@code trim()} strips every character
+     * <= U+0020, so it came back empty and was dropped as separator noise - the exact silence this is
+     * meant to end, surviving in the one shape nobody would think to try.
+     */
+    @Test
+    public void testATokenOfOnlyControlCharactersIsStillReported() throws Exception
+    {
+        DisableRequest parsed = request("\u0007"); //$NON-NLS-1$
+
+        assertEquals(1, parsed.unparsedTokens().size());
+        assertEquals("?", parsed.unparsedTokens().get(0)); //$NON-NLS-1$
+        String report = renderExecutedReport(newOutcome(parsed), List.of(), List.of());
+        assertTrue(report.contains("unparsedTokens: [\"?\"]")); //$NON-NLS-1$
+    }
+
+    /**
+     * Truncation counts CODE POINTS. Cutting at a fixed number of UTF-16 units can split a surrogate
+     * pair and leave an unpaired surrogate - not legal YAML content - in the report.
+     */
+    @Test
+    public void testAnAstralCharacterIsEchoedIntactRatherThanAsTwoReplacements()
+    {
+        String emoji = new String(Character.toChars(0x1F600));
+
+        String echoed = request("ab" + emoji).unparsedTokens().get(0); //$NON-NLS-1$
+
+        // A char-by-char walk sees the pair as two lone surrogates, neither of which is safe to echo,
+        // and hands back "ab??" - the caller's token unrecognisable in the report meant to identify it.
+        assertEquals("ab" + emoji, echoed); //$NON-NLS-1$
+
+        // And the pair must survive the CAP too: the astral character sits exactly ON the 40th code
+        // point, where a cut counting UTF-16 units instead would land between its halves.
+        String atTheCap = request("x".repeat(39) + emoji + "tail").unparsedTokens().get(0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("x".repeat(39) + emoji + "...", atTheCap); //$NON-NLS-1$ //$NON-NLS-2$
+        // And whatever survives, no HALF of a pair may: an unpaired surrogate is not legal YAML content.
+        for (int i = 0; i < echoed.length(); i++)
+        {
+            char c = echoed.charAt(i);
+            if (Character.isHighSurrogate(c))
+            {
+                assertTrue("a high surrogate must keep its low half, at " + i, //$NON-NLS-1$
+                    i + 1 < echoed.length() && Character.isLowSurrogate(echoed.charAt(i + 1)));
+            }
+            if (Character.isLowSurrogate(c))
+            {
+                assertTrue("a low surrogate must keep its high half, at " + i, //$NON-NLS-1$
+                    i > 0 && Character.isHighSurrogate(echoed.charAt(i - 1)));
+            }
+        }
+    }
+
+    /**
+     * The token is echoed into a Markdown sentence as well as into YAML. Rendered as a bare value it
+     * closed the sequence's own opening bracket: {@code x](http://evil)} turned the caller's typo into
+     * a link. The prose renders code spans instead, and the backtick that could close one is stripped.
+     */
+    @Test
+    public void testATokenCannotInjectMarkdownIntoTheProse() throws Exception
+    {
+        String report = renderExecutedReport(newOutcome(request("x](http://evil)`_")), //$NON-NLS-1$
+            List.of(), List.of());
+
+        String prose = report.substring(report.indexOf("_Entr(ies)")); //$NON-NLS-1$
+        assertTrue("the token must be inside a code span", prose.startsWith("_Entr(ies) `")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a backtick in the token would close that span", //$NON-NLS-1$
+            prose.substring(prose.indexOf('`') + 1, prose.indexOf("` in disableIndices")).contains("`")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A quoted token that LOOKS like a number stays distinguishable from a real index. */
+    @Test
+    public void testTokensAreQuotedSoTheyCannotBeReadAsIndices() throws Exception
+    {
+        String report = renderExecutedReport(newOutcome(request("1.5")), List.of(), List.of()); //$NON-NLS-1$
+
+        assertTrue(report.contains("unparsedTokens: [\"1.5\"]")); //$NON-NLS-1$
+        assertFalse(report.contains("unknownIndices")); //$NON-NLS-1$
+    }
+
+    /**
+     * The characters that would end a YAML double-quoted scalar early must come back escaped, and the
+     * ones that are merely unusual - Cyrillic, astral - must come back as themselves. Cyrillic matters
+     * here beyond tidiness: a mistyped 1C identifier is a likely thing to land in this field, and a
+     * sanitizer that mangled it would hide the very thing the report exists to show.
+     */
+    @Test
+    public void testYamlEscapingSurvivesQuotesBackslashesAndNonAsciiTokens() throws Exception
+    {
+        String cyrillic = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"; //$NON-NLS-1$
+        String emoji = new String(Character.toChars(0x1F600));
+
+        String report = renderExecutedReport(
+            newOutcome(request("a\"b|" + cyrillic + "|" + emoji)), List.of(), List.of()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String value = frontMatterValue(report, "unparsedTokens"); //$NON-NLS-1$
+        // The quote is escaped, so the scalar does not end at it...
+        assertTrue("the embedded quote must be escaped, got: " + value, //$NON-NLS-1$
+            value.contains("a\\\"b")); //$NON-NLS-1$
+        // ...and everything legible is echoed as itself.
+        assertTrue(value.contains(cyrillic));
+        assertTrue(value.contains(emoji));
+        assertTrue(value.startsWith("[\"") && value.endsWith("\"]")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A backslash must not escape the closing quote of the scalar it sits in. */
+    @Test
+    public void testABackslashTokenIsEscapedRatherThanEndingTheScalar() throws Exception
+    {
+        String report = renderExecutedReport(newOutcome(request("a\\")), List.of(), List.of()); //$NON-NLS-1$
+
+        assertEquals("[\"a\\\\\"]", frontMatterValue(report, "unparsedTokens")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * An entry that is empty or only whitespace stays formatting, not a token - tab included, which
+     * Java counts as whitespace. Pinned so the boundary is a decision rather than an accident.
+     */
+    @Test
+    public void testWhitespaceOnlyEntriesStayFormattingNotTokens()
+    {
+        assertTrue(request("1,\t,2").unparsedTokens().isEmpty()); //$NON-NLS-1$
+        assertEquals(2, request("1,\t,2").indices().size()); //$NON-NLS-1$
+        // ...but a control character that is NOT whitespace is a token and is reported.
+        assertEquals(1, request("\u0007").unparsedTokens().size()); //$NON-NLS-1$
+    }
+
     // ==================== helpers ====================
+
+    /** The YAML front matter of a rendered report, without its --- fences. */
+    private static String frontMatter(String report)
+    {
+        int start = report.indexOf("---\n") + 4; //$NON-NLS-1$
+        return report.substring(start, report.indexOf("---\n", start)).trim(); //$NON-NLS-1$
+    }
+
+    /** The raw value of one front-matter key. */
+    private static String frontMatterValue(String report, String key)
+    {
+        for (String line : frontMatter(report).split("\n")) //$NON-NLS-1$
+        {
+            if (line.startsWith(key + ": ")) //$NON-NLS-1$
+            {
+                return line.substring(key.length() + 2).trim();
+            }
+        }
+        throw new AssertionError("no front-matter key " + key + " in:\n" + report); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 
     private static INativeChangeRefactoringItem nativeItem(Change change, boolean optional)
     {
@@ -318,24 +560,31 @@ public class MetadataRenameDisableIndicesTest
         return List.of(refactoring);
     }
 
-    private static Set<Integer> indices(Integer... values)
+    /**
+     * Builds the request through the REAL parser rather than handing the service a set of integers:
+     * what a token DOES is half of this contract (#401), and a test that skipped the parse could not
+     * see the half where a token never becomes an index at all.
+     */
+    private static DisableRequest request(String raw)
     {
-        return new LinkedHashSet<>(Arrays.asList(values));
+        return DisableRequest.parse(raw);
     }
 
     private static Object applyDisableIndices(Collection<IRefactoring> refactorings,
-        Set<Integer> disableIndices) throws Exception
+        DisableRequest disableRequest) throws Exception
     {
+        Object outcome = newOutcome(disableRequest);
         Method method = MetadataRenameService.class.getDeclaredMethod(
-            "applyDisableIndices", Collection.class, Set.class); //$NON-NLS-1$
+            "applyDisableIndices", Collection.class, Set.class, outcomeClass()); //$NON-NLS-1$
         method.setAccessible(true);
-        return method.invoke(new MetadataRenameService(), refactorings, disableIndices);
+        method.invoke(new MetadataRenameService(), refactorings, disableRequest.indices(), outcome);
+        return outcome;
     }
 
-    private static Object newOutcome(Set<Integer> requested) throws Exception
+    private static Object newOutcome(DisableRequest requested) throws Exception
     {
-        Class<?> outcomeClass = outcomeClass();
-        java.lang.reflect.Constructor<?> constructor = outcomeClass.getDeclaredConstructor(Set.class);
+        java.lang.reflect.Constructor<?> constructor =
+            outcomeClass().getDeclaredConstructor(DisableRequest.class);
         constructor.setAccessible(true);
         return constructor.newInstance(requested);
     }

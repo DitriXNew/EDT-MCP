@@ -526,8 +526,9 @@ def test_preview_for_catalog_does_not_mutate_catalog():
 # it just as loudly when nothing had been skipped at all. It matters because the caller
 # is an agent deciding whether a change was left behind on purpose.
 #
-# The report now states the REAL number, and every requested index that produced no skip
-# comes back under `unknownIndices` / `notSkippableIndices`.
+# The report now states the REAL number, and every requested ENTRY that produced no skip comes
+# back: an index that matched nothing under `unknownIndices`, one naming a required point under
+# `notSkippableIndices`, and an entry that never parsed as a number under `unparsedTokens`.
 #
 # CommonModule.CascadeEn is the target because its change set is tiny and fully known:
 # exactly two points, `#0` the bslRef in CascadeUser (Skippable: yes) and `#1` the
@@ -624,6 +625,43 @@ def test_required_disable_index_is_reported_as_applied_not_skipped():
     after = _commonmodule_names(name_filter="Reckoner")
     assert_contains(after, "| Reckoner ",
                     "the required rename point was not skipped, so the new name must exist")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_unparsable_disable_index_token_is_reported_not_swallowed():
+    _settle_before_rename()  # executes a real rename - see the helper
+    # The third way a requested entry produces no skip: it never became an index at all. The parse
+    # used to drop non-numeric tokens on the spot, so this exact call — disableIndices made ONLY of
+    # junk — answered byte for byte as if the argument had not been passed: the caller asked for a
+    # skip, got none, and nothing anywhere said so.
+    #
+    # Junk-ONLY on purpose, not "0,abc": with a valid index alongside it, the execute walk runs and
+    # the outcome gets built along the way, so a regression that carried tokens only when some index
+    # parsed would still pass. Here there is no index at all, which is what pins the report being
+    # assembled for a request the walk never had anything to do.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": "abc",
+    })
+    assert_ok(r, "execute rename with a disableIndices made only of a non-numeric token")
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "disabledCount: 0", "nothing was skipped, and nothing could have been")
+    assert_contains(r.text, 'unparsedTokens: ["abc"]',
+                    "a token that is not a number must be reported, not dropped at the parse")
+    assert_contains(r.text, "are not whole numbers and were ignored",
+                    "the report must explain what happened to it")
+    # It never became an index, so it must not be filed as one.
+    assert_not_contains(r.text, "unknownIndices",
+                        "a non-numeric token is not an unknown INDEX - it never became one")
+    # The rename itself is untouched by the junk: the cascade applied in full.
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser after a rename with an unparsable disableIndices")
+    assert_contains(src.text, "Reckoner.Marker()",
+                    "an unparsable disableIndices must not silently suppress the cascade")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

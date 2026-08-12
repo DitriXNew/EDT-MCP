@@ -19,6 +19,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.tools.rename.DisableRequest;
 import com.ditrix.edt.mcp.server.tools.rename.MetadataRenameService;
 import com.ditrix.edt.mcp.server.tools.rename.RenameProgress;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
@@ -171,22 +172,11 @@ public class RenameMetadataObjectTool implements IMcpTool
         String disableIndicesStr = JsonUtils.extractStringArgument(params, "disableIndices"); //$NON-NLS-1$
         final int maxResults = Math.max(0, JsonUtils.extractIntArgument(params, "maxResults", 20)); //$NON-NLS-1$
 
-        // Parse disable indices
-        java.util.Set<Integer> disableIndices = new java.util.HashSet<>();
-        if (disableIndicesStr != null && !disableIndicesStr.isEmpty())
-        {
-            for (String part : disableIndicesStr.split(",")) //$NON-NLS-1$
-            {
-                try
-                {
-                    disableIndices.add(Integer.parseInt(part.trim()));
-                }
-                catch (NumberFormatException e)
-                {
-                    // ignore invalid entries
-                }
-            }
-        }
+        // Parse disable indices. A token that is not a number is KEPT (as an unparsed token) rather
+        // than thrown away here: the executed report has to be able to say that the caller asked for
+        // something which produced no skip, and a value discarded at the parse no longer exists to
+        // report on (#401).
+        DisableRequest disableRequest = DisableRequest.parse(disableIndicesStr);
 
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME,
             ". Usage: {projectName: 'MyProject', objectFqn: 'Catalog.Products', newName: 'Goods'}"); //$NON-NLS-1$
@@ -240,7 +230,7 @@ public class RenameMetadataObjectTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        final java.util.Set<Integer> finalDisableIndices = disableIndices;
+        final DisableRequest finalDisableRequest = disableRequest;
         Display display = PlatformUI.getWorkbench().getDisplay();
 
         // The cascade runs on the UI thread, and nothing in that hand-off had an upper bound: EDT
@@ -253,7 +243,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                 try
                 {
                     resultRef.set(service.rename(projectName, objectFqn, newName, confirm,
-                        finalDisableIndices, maxResults, progress));
+                        finalDisableRequest, maxResults, progress));
                 }
                 catch (Exception e)
                 {

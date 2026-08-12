@@ -116,14 +116,15 @@ public class MetadataRenameService
      * @param objectFqn the FQN of the object, member or managed-form element to rename
      * @param newName the new programmatic Name
      * @param confirm {@code false} previews, {@code true} applies
-     * @param disableIndices preview '#' indices of optional change points to skip
+     * @param disableRequest what the caller asked to skip: the preview '#' indices of optional
+     *     change points, plus any tokens that did not parse as numbers (reported, not applied)
      * @param maxResults cap on the change points listed in the preview (0 = no limit)
      * @param progress the sink this method publishes its {@link RenameProgress.Phase} to, so a
      *     caller whose deadline elapsed can say what the model was left in (issue #365)
      * @return the Markdown report, or a {@link ToolResult#error} JSON payload
      */
     public String rename(String projectName, String objectFqn, String newName,
-        boolean confirm, java.util.Set<Integer> disableIndices, int maxResults, RenameProgress progress)
+        boolean confirm, DisableRequest disableRequest, int maxResults, RenameProgress progress)
     {
         // Reported as the FIRST thing the UI thread does: it is what separates "the UI thread never
         // picked the work up" from "the work started" for a caller that gave up on its deadline.
@@ -158,7 +159,7 @@ public class MetadataRenameService
         FormElementWriter.FormMemberRef formRef = FormElementWriter.parse(objectFqn);
         if (formRef != null)
         {
-            return renameFormMember(project, config, objectFqn, newName, confirm, disableIndices,
+            return renameFormMember(project, config, objectFqn, newName, confirm, disableRequest,
                 maxResults, progress, formRef);
         }
 
@@ -204,7 +205,7 @@ public class MetadataRenameService
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableIndices, progress,
+            return performRename(objectFqn, newName, refactorings, disableRequest, progress,
                 "metadata object"); //$NON-NLS-1$
         }
     }
@@ -277,14 +278,14 @@ public class MetadataRenameService
      * @param normFqn the normalized form FQN
      * @param newName the new element name
      * @param confirm {@code false} previews, {@code true} applies
-     * @param disableIndices preview '#' indices to skip
+     * @param disableRequest what the caller asked to skip (see {@link #rename})
      * @param maxResults cap on the change points listed
      * @param progress the phase sink
      * @param ref the parsed form-member reference
      * @return the Markdown report, or a {@link ToolResult#error} JSON payload
      */
     private String renameFormMember(IProject project, Configuration config, String normFqn,
-        String newName, boolean confirm, java.util.Set<Integer> disableIndices, int maxResults,
+        String newName, boolean confirm, DisableRequest disableRequest, int maxResults,
         RenameProgress progress, FormElementWriter.FormMemberRef ref)
     {
         String ineligible = formRenameIneligibility(ref);
@@ -345,7 +346,7 @@ public class MetadataRenameService
                 return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
                     Collections.emptyMap(), Collections.emptyList());
             }
-            return performRename(normFqn, newName, refactorings, disableIndices, progress,
+            return performRename(normFqn, newName, refactorings, disableRequest, progress,
                 "form element"); //$NON-NLS-1$
         }
         catch (Exception e)
@@ -2071,7 +2072,7 @@ public class MetadataRenameService
 
 
     private String performRename(String objectFqn, String newName,
-        Collection<IRefactoring> refactorings, java.util.Set<Integer> disableIndices,
+        Collection<IRefactoring> refactorings, DisableRequest disableRequest,
         RenameProgress progress, String subject)
     {
         // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
@@ -2110,11 +2111,13 @@ public class MetadataRenameService
         // check, erring the other way costs a silent half-renamed configuration.
         progress.enter(RenameProgress.Phase.APPLYING);
 
-        // Apply disableIndices by traversing items and their native changes
-        DisableOutcome disableOutcome = new DisableOutcome(disableIndices);
-        if (!disableIndices.isEmpty())
+        // Apply disableIndices by traversing items and their native changes. The outcome is built
+        // whether or not anything is applied: a request made ENTIRELY of unparsable tokens has nothing
+        // to walk for, and still has to be reported rather than answered as if it had not been made.
+        DisableOutcome disableOutcome = new DisableOutcome(disableRequest);
+        if (!disableRequest.indices().isEmpty())
         {
-            disableOutcome = applyDisableIndices(refactorings, disableIndices);
+            applyDisableIndices(refactorings, disableRequest.indices(), disableOutcome);
         }
 
         List<String> performed = new ArrayList<>();
@@ -2151,6 +2154,11 @@ public class MetadataRenameService
      * {@code UNKNOWN} is derived, not recorded: it is whatever the caller asked for that the walk never
      * reached at all (out of range, or an index that no longer exists in the tree confirm rebuilt).
      * <p>
+     * The request's UNPARSED tokens ride along unchanged. They never reach the walk - they never became
+     * indices - but they belong to the same question the report answers, "what did you ask for that
+     * produced no skip", so they are answered in the same place rather than by a second mechanism that
+     * could drift away from this one (#401).
+     * <p>
      * The counts describe the LTK flags this call set before {@code perform()} ran. A refactoring that
      * then fails is reported separately, under {@code errors} - "disabled" here never means "the edit is
      * proven to have been left alone on disk".
@@ -2174,11 +2182,13 @@ public class MetadataRenameService
         }
 
         private final SortedSet<Integer> requested;
+        private final List<String> unparsedTokens;
         private final TreeMap<Integer, Status> classified = new TreeMap<>();
 
-        DisableOutcome(Set<Integer> requested)
+        DisableOutcome(DisableRequest request)
         {
-            this.requested = new TreeSet<>(requested);
+            this.requested = new TreeSet<>(request.indices());
+            this.unparsedTokens = request.unparsedTokens();
         }
 
         void recordDisabled(int index)
@@ -2212,6 +2222,12 @@ public class MetadataRenameService
             TreeSet<Integer> unknown = new TreeSet<>(requested);
             unknown.removeAll(classified.keySet());
             return unknown;
+        }
+
+        /** Entries of the request that never became indices at all, already safe to echo. */
+        List<String> unparsedTokens()
+        {
+            return unparsedTokens;
         }
 
         private int countOf(Status status)
@@ -2282,14 +2298,14 @@ public class MetadataRenameService
      * performed: walks every refactoring item, disables the matching leaf changes of the SKIPPABLE ones
      * (via {@link #applyDisableToChange}) and unchecks an optional native item this request emptied.
      * Mutates the in-memory refactoring objects' enabled/checked state only - it does NOT perform the
-     * rename. Runs at the same point as before, under the same {@code !disableIndices.isEmpty()} guard.
-     *
-     * @return what each requested index actually did - the report states THAT, not the request (#394).
+     * rename. Runs at the same point as before, under the same "the caller asked for indices" guard.
+     * <p>
+     * Records into {@code outcome} what each requested index actually did - the report states THAT,
+     * not the request (#394).
      */
-    private DisableOutcome applyDisableIndices(Collection<IRefactoring> refactorings,
-        java.util.Set<Integer> disableIndices)
+    private void applyDisableIndices(Collection<IRefactoring> refactorings,
+        java.util.Set<Integer> disableIndices, DisableOutcome outcome)
     {
-        DisableOutcome outcome = new DisableOutcome(disableIndices);
         int[] indexCounter = {0};
         for (IRefactoring refactoring : refactorings)
         {
@@ -2301,7 +2317,6 @@ public class MetadataRenameService
                 applyDisableToItem(item, disableIndices, indexCounter, outcome);
             }
         }
-        return outcome;
     }
 
     /**
@@ -2364,6 +2379,9 @@ public class MetadataRenameService
     {
         SortedSet<Integer> notSkippable = disableOutcome.notSkippableIndices();
         SortedSet<Integer> unknown = disableOutcome.unknownIndices();
+        List<String> unparsed = disableOutcome.unparsedTokens();
+        List<String> shownTokens = unparsed.size() > DisableRequest.MAX_TOKENS_REPORTED
+            ? unparsed.subList(0, DisableRequest.MAX_TOKENS_REPORTED) : unparsed;
         StringBuilder sb = new StringBuilder();
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: executed\n"); //$NON-NLS-1$
@@ -2377,6 +2395,17 @@ public class MetadataRenameService
         if (!unknown.isEmpty())
         {
             sb.append("unknownIndices: ").append(formatIndexList(unknown)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!unparsed.isEmpty())
+        {
+            sb.append("unparsedTokens: ").append(formatTokenList(shownTokens)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (shownTokens.size() < unparsed.size())
+            {
+                // The overflow is its OWN key rather than a suffix on the sequence: appending
+                // "(N total)" after the closing bracket makes the front matter unparsable as YAML,
+                // and this block is the one part of the report meant to be read by machine.
+                sb.append("unparsedTokenCount: ").append(unparsed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
         }
         sb.append("performedCount: ").append(performed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("errors: ").append(errors.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2426,6 +2455,16 @@ public class MetadataRenameService
               .append(" matched no change point and were ignored") //$NON-NLS-1$
               .append(" - re-run the preview to get the current indices._\n"); //$NON-NLS-1$
         }
+        if (!unparsed.isEmpty())
+        {
+            // Code spans, NOT the YAML rendering: this line is Markdown, and a token like
+            // `x](http://evil)` would otherwise close the sequence's own opening bracket and turn
+            // the caller's typo into a link. A code span neutralises brackets, underscores and
+            // asterisks alike, and the backtick that could close it is stripped at the parse.
+            sb.append("_Entr(ies) ").append(formatTokenCodeSpans(shownTokens)) //$NON-NLS-1$
+              .append(" in disableIndices are not whole numbers and were ignored") //$NON-NLS-1$
+              .append(" - it takes the preview `#` index, e.g. '2,3,5'._\n"); //$NON-NLS-1$
+        }
 
         return sb.toString();
     }
@@ -2433,18 +2472,51 @@ public class MetadataRenameService
     /** Renders a set of change-point indices as a YAML flow sequence, e.g. {@code [1, 99]}. */
     private static String formatIndexList(SortedSet<Integer> indices)
     {
-        StringBuilder sb = new StringBuilder("["); //$NON-NLS-1$
+        return "[" + join(indices, String::valueOf) + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Renders unparsed tokens as a QUOTED YAML flow sequence, e.g. {@code ["abc"]}. The quoting is what
+     * keeps a token that merely LOOKS like a number distinguishable from an index; the caller is handed
+     * an already-capped list, and the overflow count is reported as its own key so this value stays a
+     * well-formed YAML sequence.
+     */
+    private static String formatTokenList(List<String> tokens)
+    {
+        return "[" + join(tokens, MetadataRenameService::yamlQuoted) + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Renders unparsed tokens for the PROSE line, as Markdown code spans. */
+    private static String formatTokenCodeSpans(List<String> tokens)
+    {
+        return join(tokens, token -> "`" + token + "`"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A YAML double-quoted scalar: backslash first, then the quote, or the escapes escape each other. */
+    private static String yamlQuoted(Object value)
+    {
+        return "\"" + String.valueOf(value).replace("\\", "\\\\") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .replace("\"", "\\\"") + "\""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The one joiner behind every "you asked for this and it produced no skip" list, so the index
+     * buckets and the token buckets cannot drift into two shapes.
+     */
+    private static String join(Collection<?> values, java.util.function.Function<Object, String> render)
+    {
+        StringBuilder sb = new StringBuilder();
         boolean first = true;
-        for (Integer index : indices)
+        for (Object value : values)
         {
             if (!first)
             {
                 sb.append(", "); //$NON-NLS-1$
             }
-            sb.append(index);
+            sb.append(render.apply(value));
             first = false;
         }
-        return sb.append("]").toString(); //$NON-NLS-1$
+        return sb.toString();
     }
 
     /**
