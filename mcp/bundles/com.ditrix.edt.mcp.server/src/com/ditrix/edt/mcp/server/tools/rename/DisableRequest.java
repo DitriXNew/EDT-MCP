@@ -144,14 +144,24 @@ public final class DisableRequest
     /**
      * Whether a code point may be echoed back as itself. Everything legible is - Cyrillic included,
      * since a mistyped 1C identifier is a likely thing to find here and mangling it would hide what
-     * the caller actually typed. Refused are only the ones that would break the containers this text
-     * goes into: control characters and non-characters (illegal in YAML), unpaired surrogates, and the
+     * the caller actually typed. Refused are the ones that would break the containers this text goes
+     * into: control characters and non-characters (illegal in YAML), unpaired surrogates, and the
      * backtick that would close the Markdown code span the prose wraps the token in.
+     * <p>
+     * FORMAT characters are refused too, and not because they break a container - they do not. They are
+     * INVISIBLE and they change how the text around them is displayed: a U+202E in an echoed token
+     * reverses the reading order of the rest of the line, so the sentence explaining what went wrong
+     * can be made to read as something else entirely (the "Trojan Source" trick). Since this whole
+     * value exists to be read back by the caller - increasingly an agent that acts on it - a character
+     * that rewrites its neighbours is exactly what "safe to echo" has to exclude. That category also
+     * covers the zero-width joiners and the soft hyphen, none of which belongs in a change-point index.
      */
     private static boolean isEchoSafe(int codePoint)
     {
+        int type = Character.getType(codePoint);
         return !Character.isISOControl(codePoint)
-            && Character.getType(codePoint) != Character.SURROGATE
+            && type != Character.FORMAT
+            && type != Character.SURROGATE
             && (codePoint & 0xFFFE) != 0xFFFE
             && codePoint != '`';
     }

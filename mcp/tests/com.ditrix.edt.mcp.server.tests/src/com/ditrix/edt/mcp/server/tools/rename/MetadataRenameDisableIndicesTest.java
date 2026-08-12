@@ -449,6 +449,61 @@ public class MetadataRenameDisableIndicesTest
     }
 
     /**
+     * A bidi override is INVISIBLE and reorders what follows it, so an echoed one can make the sentence
+     * that explains the mistake read as something else - the "Trojan Source" trick, against a report an
+     * agent acts on. Neither the YAML nor the code span defends against that: the character breaks no
+     * container, it rewrites its neighbours. So it is refused at the parse, like every FORMAT character
+     * (zero-width joiners and the soft hyphen included - none of them is a change-point index).
+     */
+    @Test
+    public void testInvisibleFormatCharactersAreNotEchoedBack()
+    {
+        // Built from code points, never pasted: an invisible character in the source of the test that
+        // guards against invisible characters is unreviewable, and raw non-ASCII literals are the
+        // corruption risk the repo escapes for anyway.
+        String rtlOverride = String.valueOf((char)0x202E); // RIGHT-TO-LEFT OVERRIDE
+        String zeroWidthSpace = String.valueOf((char)0x200B);
+        String softHyphen = String.valueOf((char)0x00AD);
+
+        String echoed = request(rtlOverride + "a" + zeroWidthSpace + "b" + softHyphen) //$NON-NLS-1$ //$NON-NLS-2$
+            .unparsedTokens().get(0);
+
+        assertEquals("?a?b?", echoed); //$NON-NLS-1$
+        // One category rejects the whole family, so the guard cannot be outgrown by the next member:
+        // embeddings and isolates go the same way as the override above.
+        String lrEmbedding = String.valueOf((char)0x202A);
+        String isolate = String.valueOf((char)0x2066);
+        String byteOrderMark = String.valueOf((char)0xFEFF);
+        assertEquals("???", request(lrEmbedding + isolate + byteOrderMark).unparsedTokens().get(0)); //$NON-NLS-1$
+    }
+
+    /**
+     * The other half of that boundary, and the reason it is drawn by CATEGORY rather than by a wider
+     * "reject anything unusual": a false refusal costs more than a tolerated oddity, and this field is
+     * where a mistyped identifier lands. Cyrillic, diacritics - combining ones included - punctuation
+     * and non-Latin scripts must all come back as themselves; only the INVISIBLE is refused.
+     * <p>
+     * Pinned because the natural next edit is to widen the predicate, and nothing else would notice.
+     */
+    @Test
+    public void testLegibleNonAsciiTokensAreEchoedUnchanged()
+    {
+        String cyrillic = "Справочник"; //$NON-NLS-1$
+        String precomposed = "café"; // Latin small e with acute //$NON-NLS-1$
+        // Built from code points: a combining mark pasted into source sits invisibly on its base
+        // letter, so the literal would be unreviewable and look identical to the precomposed one.
+        String combining = "e" + (char)0x0301; // e + COMBINING ACUTE ACCENT (category Mn) //$NON-NLS-1$
+        String punctuation = "«—…»"; // guillemets, em dash, ellipsis //$NON-NLS-1$
+        String cjk = "中"; //$NON-NLS-1$
+
+        for (String token : List.of(cyrillic, precomposed, combining, punctuation, cjk))
+        {
+            assertEquals("a legible token must be echoed as itself: " + token, //$NON-NLS-1$
+                token, request(token).unparsedTokens().get(0));
+        }
+    }
+
+    /**
      * The token is echoed into a Markdown sentence as well as into YAML. Rendered as a bare value it
      * closed the sequence's own opening bracket: {@code x](http://evil)} turned the caller's typo into
      * a link. The prose renders code spans instead, and the backtick that could close one is stripped.
