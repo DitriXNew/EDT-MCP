@@ -32,6 +32,8 @@ On a FORM attribute (and its columns) the `kind` is not limited to the list abov
 
 Nine of them also carry a nested `<extInfo>` the platform pairs with the type - `ValueList` -> `ValueListExtInfo`, `SpreadsheetDocument` -> `SpreadsheetDocumentExtInfo`, and so on. That ext-info is created, replaced or cleared automatically when the value type changes, so the attribute is never left half-built; the response reports it as an applied `extInfo`. A ValueList additionally gets the empty `itemValueType` the designer writes; set the item type afterwards with a separate `{name:'itemValueType', value:{types:[...]}}` property.
 
+Separate is not a style preference: because the retype REPLACES the ext-info, batching it with a property that lives on the old holder (`itemValueType` on a ValueList, say) is refused - one order would discard the property while reporting it as applied, the other would apply it to an EClass that no longer has it. Change the type first, then set the ext-info properties in a second call.
+
 `DynamicList` is the one type a bare `type` spec will NOT build: a dynamic list needs its query too, so it is refused with a pointer to the `queryText` / `customQuery` / `mainTable` properties that do build one (see "Dynamic list" below).
 
 ## Setting an object reference

@@ -4960,6 +4960,45 @@ public class FormElementWriterTest
         assertNull(model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testAnUnavailableClassifierCLEARSTheStaleExtInfoRatherThanKeepingIt()
+    {
+        // The nastier half of the same case: the slot is NOT empty. setExtInfoClassifier is
+        // best-effort, so on a platform whose form EPackage lacks the NEW classifier it does nothing
+        // at all - and reading the slot back then answers the PREVIOUS type's holder. Reporting that
+        // as the new pairing would persist a value-type/ext-info mismatch under a success, so the
+        // result is verified and an un-creatable slot is cleared instead.
+        AttrModel model = new AttrModel();
+        setValueType(model.attribute, "ValueList"); //$NON-NLS-1$
+        assertEquals("ValueListExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+
+        model.dropClassifier("ChartExtInfo"); //$NON-NLS-1$
+        setValueType(model.attribute, "Chart"); //$NON-NLS-1$
+
+        assertNull("an ext-info that cannot be created must not be reported as one that was", //$NON-NLS-1$
+            FormElementWriter.syncAttributeExtInfo(model.form, model.attribute));
+        assertNull("and the PREVIOUS type's holder must not survive - it describes a type the " //$NON-NLS-1$
+            + "attribute no longer has", model.attribute.eGet(feature(model.attribute, "extInfo"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnavailableItemClassifierCLEARSTheStaleExtInfoToo()
+    {
+        // The same guarantee on the item side - syncItemExtInfo shares the replacement path.
+        ItemModel model = new ItemModel("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.setType("Label"); //$NON-NLS-1$
+        assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item));
+
+        model.dropClassifier("PictureDecorationExtInfo"); //$NON-NLS-1$
+        model.setType("Picture"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNull("a Picture decoration must not keep the LabelDecorationExtInfo", //$NON-NLS-1$
+            model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
+    }
+
     // ============ the form-ITEM <extInfo> its TYPE decides (issue #369) ============
     //
     // A form item's `type` is a CLASSIFIER: it decides which concrete extInfo EClass applies. Setting
@@ -5231,6 +5270,12 @@ public class FormElementWriterTest
             EClass eClass = (EClass)pkg.getEClassifier(name);
             return pkg.getEFactoryInstance().create(eClass);
         }
+
+        /** Removes an ext-info classifier, standing in for a platform version that lacks it. */
+        void dropClassifier(String name)
+        {
+            pkg.getEClassifiers().remove(pkg.getEClassifier(name));
+        }
     }
 
     /** Gives {@code member} a real mcore {@code TypeDescription} carrying one {@code Type} per name. */
@@ -5256,16 +5301,23 @@ public class FormElementWriterTest
         final EObject form;
         final EObject attribute;
         final EObject column;
+        private final EPackage pkg;
 
         AttrModel()
         {
             this(true);
         }
 
+        /** Removes an ext-info classifier, standing in for a platform version that lacks it. */
+        void dropClassifier(String name)
+        {
+            pkg.getEClassifiers().remove(pkg.getEClassifier(name));
+        }
+
         AttrModel(boolean withExtInfoClassifiers)
         {
             EcoreFactory f = EcoreFactory.eINSTANCE;
-            EPackage pkg = f.createEPackage();
+            pkg = f.createEPackage();
             pkg.setName("formattr"); //$NON-NLS-1$
             pkg.setNsPrefix("formattr"); //$NON-NLS-1$
             pkg.setNsURI("http://ditrix.com/test/formlike-attr"); //$NON-NLS-1$

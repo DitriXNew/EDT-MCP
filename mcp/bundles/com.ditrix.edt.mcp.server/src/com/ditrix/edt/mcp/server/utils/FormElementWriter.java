@@ -2863,13 +2863,9 @@ public final class FormElementWriter
         {
             return classifier;
         }
-        setExtInfoClassifier(formModel, attribute, classifier);
-        EObject created = singleReference(attribute, FEATURE_EXT_INFO);
+        EObject created = replaceExtInfoClassifier(formModel, attribute, extInfoFeature, classifier);
         if (created == null)
         {
-            // The form EPackage of this platform version does not know the classifier. Leaving the
-            // attribute with its value type but no ext-info is what the platform itself would do for
-            // an unknown category, so this is a silent no-op rather than a failure.
             return null;
         }
         if (ECLASS_VALUE_LIST_EXT_INFO.equals(classifier))
@@ -4492,9 +4488,42 @@ public final class FormElementWriter
         {
             return classifier;
         }
-        setExtInfoClassifier(formModel, item, classifier);
-        EObject created = singleReference(item, FEATURE_EXT_INFO);
+        EObject created = replaceExtInfoClassifier(formModel, item, feature, classifier);
         return created == null ? null : created.eClass().getName();
+    }
+
+    /**
+     * Swaps {@code element}'s {@code extInfo} to a fresh instance of {@code classifier}, and never
+     * leaves the PREVIOUS type's holder behind.
+     *
+     * <p>{@link #setExtInfoClassifier} is best-effort: on a platform version whose form EPackage does
+     * not know the classifier it does nothing at all. Reading the slot back after it would then answer
+     * the STALE ext-info - the one describing the type the element no longer has - and the caller would
+     * report that class as if it were the new pairing, persisting a value-type/ext-info mismatch under
+     * a success. So the result is VERIFIED against the requested classifier, and a slot that could not
+     * be re-created is CLEARED: no ext-info is what the platform itself produces for a pairing it
+     * cannot make, and it is the only answer here that does not lie.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier comes from)
+     * @param element the form member whose ext-info is being re-paired
+     * @param extInfoFeature the member's resolved single-valued {@code extInfo} reference
+     * @param classifier the concrete ext-info EClass name the new type pairs with (never {@code null})
+     * @return the fresh ext-info of {@code classifier}, or {@code null} when it could not be created
+     */
+    private static EObject replaceExtInfoClassifier(EObject formModel, EObject element,
+        EStructuralFeature extInfoFeature, String classifier)
+    {
+        setExtInfoClassifier(formModel, element, classifier);
+        EObject created = singleReference(element, FEATURE_EXT_INFO);
+        if (created != null && classifier.equals(created.eClass().getName()))
+        {
+            return created;
+        }
+        if (created != null)
+        {
+            element.eSet(extInfoFeature, null);
+        }
+        return null;
     }
 
     /**

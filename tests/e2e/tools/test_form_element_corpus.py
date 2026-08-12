@@ -243,6 +243,32 @@ def test_form_corpus_value_list_item_type_is_settable_afterwards():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_corpus_retype_batched_with_an_ext_info_prop_is_refused():
+    # A retype REPLACES the ext-info, so batching it with a property that lives on the OLD holder is
+    # order-dependent: the property is either discarded (while still reported as applied) or applied
+    # to an EClass that lacks it. The guard must catch it for an ATTRIBUTE too, whose `type` is
+    # normalized to `valueType` before the guard reads the name.
+    base, form, form_file = _seed_form("Combo")
+    attr = form + ".Attribute.Options"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attr}), "create attribute")
+    assert_ok(_set_attribute_type(attr, "ValueList"), "type -> ValueList")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": attr,
+        "properties": [
+            {"name": "itemValueType", "value": {"types": [{"kind": "String"}]}},
+            {"name": "type", "value": {"types": [{"kind": "SpreadsheetDocument"}]}},
+        ],
+    })
+    err = assert_error(r, "a retype batched with an ext-info property must be refused")
+    assert_error_quality(err, suggests=["separate call"], ctx="the retype+extInfo combo refusal")
+
+    # and nothing may have been applied: the attribute is still a ValueList with its ext-info.
+    poll_disk_contains(form_file, 'xsi:type="form:ValueListExtInfo"',
+                       ctx="the refused batch must not have retyped the attribute")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_corpus_retype_clears_the_stale_ext_info():
     base, form, form_file = _seed_form("Retype")
     attr = form + ".Attribute.Switcher"
