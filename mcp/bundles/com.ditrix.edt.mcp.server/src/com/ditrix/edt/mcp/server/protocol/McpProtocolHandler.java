@@ -926,10 +926,11 @@ public class McpProtocolHandler
                 : ToolAnnotationClassifier.classify(tool.getName());
             // JSON tools declare the shape of their structuredContent; other tools
             // return content (not structured data) and leave outputSchema null, in
-            // which case the shared Gson omits the field entirely.
+            // which case the shared Gson omits the field entirely. The shape goes over
+            // the wire but its prose does not — see OutputSchemaCompactor for why.
             String outputSchemaJson = tool.getOutputSchema();
             JsonElement outputSchema = outputSchemaJson != null
-                ? JsonParser.parseString(outputSchemaJson)
+                ? OutputSchemaCompactor.compact(JsonParser.parseString(outputSchemaJson))
                 : null;
             result.addTool(tool.getName(), tool.getDescription(), schema, annotations, outputSchema);
         }

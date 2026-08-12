@@ -161,17 +161,14 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             + "and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to " //$NON-NLS-1$
             + "src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS " //$NON-NLS-1$
             + "any unsaved in-memory model edits. Walks EVERY top metadata object of the " //$NON-NLS-1$
-            + "configuration (all kinds), reports the objects whose .mdo is missing on disk " //$NON-NLS-1$
-            + "(missingBefore), and force-exports that missing subset so the files are " //$NON-NLS-1$
-            + "restored (fullExport=true re-exports every object instead - requires " //$NON-NLS-1$
-            + "overwriteDiskEdits=true to confirm, as it overwrites on-disk edits). Fixes " //$NON-NLS-1$
-            + "'object file does not exist' failures from update_database / XML import caused " //$NON-NLS-1$
-            + "by an accumulated desync. Dangling/orphaned references in Configuration.mdo " //$NON-NLS-1$
-            + "(unresolved proxies shown by get_project_errors as md-reference-intergrity " //$NON-NLS-1$
-            + "'lost reference' warnings that block update_database / XML import) are " //$NON-NLS-1$
-            + "REPORTED by default (danglingFound + danglingDetails); set " //$NON-NLS-1$
-            + "cleanDanglingReferences=true to REMOVE them - destructive: rewrites " //$NON-NLS-1$
-            + "Configuration.mdo. " //$NON-NLS-1$
+            + "configuration (all kinds), reports the objects whose .mdo is missing on disk, and " //$NON-NLS-1$
+            + "force-exports that missing subset so the files are restored. Fixes 'object file does " //$NON-NLS-1$
+            + "not exist' failures from update_database / XML import caused by an accumulated " //$NON-NLS-1$
+            + "desync. Dangling/orphaned references in Configuration.mdo (the md-reference-intergrity " //$NON-NLS-1$
+            + "'lost reference' warnings get_project_errors shows, which block update_database / XML " //$NON-NLS-1$
+            + "import) are REPORTED by default. Two opt-in modes are destructive: re-exporting EVERY " //$NON-NLS-1$
+            + "object instead of the missing subset overwrites on-disk edits, and REMOVING the " //$NON-NLS-1$
+            + "dangling references rewrites Configuration.mdo. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
 

@@ -197,27 +197,23 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Delete a metadata node (object or member, including a FORM object " //$NON-NLS-1$
-            + "'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO " //$NON-NLS-1$
-            + "package member 'XDTOPackage.<Package>.ObjectType.<Name>' / '...Property.<Name>' / " //$NON-NLS-1$
-            + "'...ObjectType.<Type>.Property.<Name>', or a PREDEFINED item " //$NON-NLS-1$
-            + "'<Owner>.X.Predefined.ItemName' on a Catalog / ChartOfCharacteristicTypes / " //$NON-NLS-1$
-            + "ChartOfAccounts / ChartOfCalculationTypes) " //$NON-NLS-1$
-            + "addressed by a 1C full-name FQN. Two-phase: call without confirm to " //$NON-NLS-1$
-            + "preview what would be removed, then confirm=true to apply (deletion is hard to reverse). " //$NON-NLS-1$
-            + "A top-level object - and equally an mdclass MEMBER of one (attribute / tabular " //$NON-NLS-1$
-            + "section / dimension / resource / enum value) - goes through EDT's md-refactoring, " //$NON-NLS-1$
-            + "which CASCADES the cleanup of " //$NON-NLS-1$
-            + "references in BSL code, forms and other metadata; when a reference cannot be " //$NON-NLS-1$
-            + "auto-cleaned, a confirm=true delete is BLOCKED and the referencing objects are listed " //$NON-NLS-1$
-            + "- pass force=true to delete anyway and leave those references dangling. A PREDEFINED " //$NON-NLS-1$
-            + "item is checked for incoming references the same way. An owned FORM object, a FORM " //$NON-NLS-1$
-            + "member and an XDTO package member are removed from their own container instead: " //$NON-NLS-1$
-            + "nothing blocks them (force is ignored), and no CROSS-object cascade runs - a " //$NON-NLS-1$
-            + "reference from elsewhere (a field's dataPath, a Property whose type points at the " //$NON-NLS-1$
-            + "deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details. Only the " //$NON-NLS-1$
-            + "owner's OWN pointers are cleaned: deleting an owned form clears the default-form " //$NON-NLS-1$
-            + "settings that named it. " //$NON-NLS-1$
+        return "Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass " //$NON-NLS-1$
+            + "MEMBER (attribute / tabular section / dimension / resource / enum value), a FORM " //$NON-NLS-1$
+            + "object 'Type.Object.Form.Name', a FORM member (item / attribute / command / handler), " //$NON-NLS-1$
+            + "an XDTO package member ('XDTOPackage.<Package>.ObjectType.<Name>' / " //$NON-NLS-1$
+            + "'...Property.<Name>'), or a PREDEFINED item '<Owner>.X.Predefined.ItemName'. " //$NON-NLS-1$
+            + "TWO-PHASE: call WITHOUT confirm to preview what would be removed, then confirm=true to " //$NON-NLS-1$
+            + "apply (deletion is hard to reverse). A top object - and equally an mdclass MEMBER of " //$NON-NLS-1$
+            + "one - goes through EDT's md-refactoring, which CASCADES the cleanup of references in " //$NON-NLS-1$
+            + "BSL code, forms and other metadata; when a reference cannot be auto-cleaned, a " //$NON-NLS-1$
+            + "confirm=true delete is BLOCKED and the referencing objects are listed - pass force=true " //$NON-NLS-1$
+            + "to delete anyway and leave those references dangling. A PREDEFINED item is checked for " //$NON-NLS-1$
+            + "incoming references the same way. An owned FORM object, a FORM member and an XDTO " //$NON-NLS-1$
+            + "package member are removed from their own container instead: nothing blocks them " //$NON-NLS-1$
+            + "(force is ignored), and no CROSS-object cascade runs - a reference from elsewhere (a " //$NON-NLS-1$
+            + "field's dataPath, a Property whose type points at the deleted ObjectType) is NOT " //$NON-NLS-1$
+            + "rewritten, so re-check with get_metadata_details. Only the owner's own pointers are " //$NON-NLS-1$
+            + "cleaned: deleting an owned form clears the default-form settings that named it. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
