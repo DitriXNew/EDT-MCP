@@ -68,7 +68,7 @@ By default `skipSyntaxCheck=false` — the server validates the **complete resul
 - `For` / `EndDo` (`Для` / `КонецЦикла`)
 - `Try` / `EndTry` (`Попытка` / `КонецПопытки`)
 
-Case-insensitive; Russian and English are treated equally. The checker skips empty lines, whole-line `//` comments, and multiline string continuation lines (starting with `|`). It does **not** look inside expressions or call signatures — it is not a full parser, just a fast block-balance check.
+Case-insensitive; Russian and English are treated equally, and the two dialects may be mixed. Keywords are counted wherever they appear on a line, so the single-line forms are balanced correctly: `If Cancel Then Return; EndIf;` is a whole block, and so is `For Each ... Do ... EndDo;`. The checker ignores keyword-looking text that opens no block: string literals and comments, preprocessor directives (`#If`/`#EndIf`, `#Region`, `#Insert`/`#Delete` — the whole line, however it is spaced), and a member name after a dot (`Object.EndIf` is a property, not a closer). It does **not** validate expressions or call signatures — it is not a full parser, just a fast block-balance check.
 
 What the check **will not catch**: a typo in a function name, wrong argument count, a call to a non-existent method, a type mismatch, an unescaped quote inside a string literal, a missing `;`. These errors will be reported by `get_project_errors` after the write.
 

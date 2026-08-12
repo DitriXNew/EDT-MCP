@@ -9,13 +9,34 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Lightweight BSL syntax checker that validates balanced block keywords.
  * Checks: Procedure/EndProcedure, Function/EndFunction, If/EndIf,
- * While/EndDo, For/EndDo, Try/EndTry (Russian and English, case-insensitive).
+ * While/EndDo, For/EndDo, Try/EndTry.
+ * <p>
+ * Both BSL dialects are recognized, case-insensitively, and neither is the
+ * default: every keyword is registered with its Russian and its English
+ * spelling side by side in {@link #KEYWORDS}, so a module may even mix them.
+ * <p>
+ * Keywords are matched ANYWHERE on a line and as many times as they occur, not
+ * just at its start, because BSL lets a block open and close on one physical
+ * line - \u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438; is a whole If block, and For each
+ * ... Do ... EndDo; is a whole loop. Matching only the first keyword of a line
+ * counted such a line as an unclosed block and failed the check on correct code.
+ * <p>
+ * The check is a WRITE GATE, so both error directions cost something: a false
+ * positive blocks a legitimate write, a false negative lets a broken module
+ * through. Text that only looks like a keyword is therefore excluded three ways
+ * - string literals and comments are masked out ({@link #maskStringLiterals}),
+ * preprocessor directives are skipped ({@link #isPreprocessorDirective}), and a
+ * member name after a dot is ignored ({@link #isMemberName}).
  */
 public final class BslSyntaxChecker
 {
@@ -30,59 +51,112 @@ public final class BslSyntaxChecker
     private static final String TAG_LOOP = "LOOP"; //$NON-NLS-1$
     private static final String TAG_TRY = "TRY"; //$NON-NLS-1$
 
-    // Closing keywords — check FIRST (before opening)
-    private static final Pattern END_PROCEDURE = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|EndProcedure)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * Rejects a keyword that is really part of a longer word: a letter, digit or
+     * underscore on either side means we are inside an identifier - \u041C\u043E\u0439\u0415\u0441\u043B\u0438,
+     * \u0415\u0441\u043B\u0438\u041D\u0443\u0436\u043D\u043E, and also \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438, whose trailing \u0415\u0441\u043B\u0438 can never be read as an
+     * opener because a letter precedes it.
+     */
+    private static final String LEFT_BOUNDARY = "(?<![\\p{L}\\p{N}_])"; //$NON-NLS-1$
 
-    private static final Pattern END_FUNCTION = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndFunction)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final String RIGHT_BOUNDARY = "(?![\\p{L}\\p{N}_])"; //$NON-NLS-1$
 
-    private static final Pattern END_IF = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438|EndIf)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /** Every recognized spelling, lower-cased, mapped to what it does to the stack. */
+    private static final Map<String, BlockKeyword> KEYWORDS = new HashMap<>();
 
-    private static final Pattern END_DO = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430|EndDo)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /** One alternation over all spellings in {@link #KEYWORDS}, in registration order. */
+    private static final Pattern BLOCK_KEYWORD;
 
-    private static final Pattern END_TRY = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438|EndTry)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    static
+    {
+        List<String> spellings = new ArrayList<>();
 
-    // Opening keywords. An optional "\u0410\u0441\u0438\u043D\u0445"/"Async" prefix is allowed before
-    // Procedure/Function (async procedures/functions, #287); "\u0416\u0434\u0430\u0442\u044C"/"Await" is
-    // an expression keyword and introduces no block of its own, so it is intentionally not matched here.
-    private static final Pattern PROCEDURE_START = Pattern.compile(
-        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|Procedure)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        // Closing keywords are registered first so that the alternation, which is ordered,
+        // offers the longer spelling before the shorter one it ends with.
+        register(spellings, KeywordKind.CLOSE, TAG_PROCEDURE, "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B/EndProcedure", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", "EndProcedure"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.CLOSE, TAG_FUNCTION, "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438/EndFunction", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438", "EndFunction"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.CLOSE, TAG_IF, "\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438/EndIf", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", "EndIf"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.CLOSE, TAG_LOOP, "\u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430/EndDo", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430", "EndDo"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.CLOSE, TAG_TRY, "\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438/EndTry", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438", "EndTry"); //$NON-NLS-1$ //$NON-NLS-2$
 
-    private static final Pattern FUNCTION_START = Pattern.compile(
-        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Function)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        // ElsIf continues the enclosing If instead of opening a new one. The boundary above
+        // already stops the If it ends with from matching inside it, so this entry changes no
+        // outcome today; it is registered to state the intent and to keep it true if the
+        // boundary is ever relaxed.
+        register(spellings, KeywordKind.NEUTRAL, TAG_IF, null,
+            "\u0418\u043D\u0430\u0447\u0435\u0415\u0441\u043B\u0438", "ElsIf", "ElseIf"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
-    // If but NOT ElsIf/ElseIf/ИначеЕсли
-    private static final Pattern IF_START = Pattern.compile(
-        "^\\s*(?:\u0415\u0441\u043B\u0438|If)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        // Opening keywords. An \u0410\u0441\u0438\u043D\u0445/Async prefix needs no rule of its own now that
+        // matching is not anchored to the line start - \u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430/Function is found
+        // wherever it sits. \u0416\u0434\u0430\u0442\u044C/Await is an expression keyword and opens no block,
+        // so it is deliberately absent.
+        register(spellings, KeywordKind.OPEN, TAG_PROCEDURE, null,
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430", "Procedure"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.OPEN, TAG_FUNCTION, null,
+            "\u0424\u0443\u043D\u043A\u0446\u0438\u044F", "Function"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.OPEN, TAG_IF, null,
+            "\u0415\u0441\u043B\u0438", "If"); //$NON-NLS-1$ //$NON-NLS-2$
+        register(spellings, KeywordKind.OPEN, TAG_LOOP, null,
+            "\u041F\u043E\u043A\u0430", "While", "\u0414\u043B\u044F", "For"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        register(spellings, KeywordKind.OPEN, TAG_TRY, null,
+            "\u041F\u043E\u043F\u044B\u0442\u043A\u0430", "Try"); //$NON-NLS-1$ //$NON-NLS-2$
 
-    private static final Pattern ELSIF_PATTERN = Pattern.compile(
-        "^\\s*(?:\u0418\u043D\u0430\u0447\u0435\u0415\u0441\u043B\u0438|ElsIf|ElseIf)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+        BLOCK_KEYWORD = Pattern.compile(
+            LEFT_BOUNDARY + "(" + String.join("|", spellings) + ")" + RIGHT_BOUNDARY, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    }
 
-    private static final Pattern WHILE_START = Pattern.compile(
-        "^\\s*(?:\u041F\u043E\u043A\u0430|While)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * Adds every spelling of one keyword to the alternation and to the lookup map.
+     *
+     * @param spellings the alternation being built, in order; appended to
+     * @param kind what the keyword does to the open-block stack
+     * @param tag the block tag the keyword opens or closes
+     * @param display the keyword as it should read in an error message, or
+     *     {@code null} for a kind that never reports one
+     * @param words the spellings, one per dialect
+     */
+    private static void register(List<String> spellings, KeywordKind kind, String tag, String display,
+        String... words)
+    {
+        BlockKeyword keyword = new BlockKeyword(kind, tag, display);
+        for (String word : words)
+        {
+            spellings.add(word);
+            KEYWORDS.put(word.toLowerCase(Locale.ROOT), keyword);
+        }
+    }
 
-    // For / Для (includes Для Каждого / For Each)
-    private static final Pattern FOR_START = Pattern.compile(
-        "^\\s*(?:\u0414\u043B\u044F|For)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /** What a matched keyword does to the open-block stack. */
+    private enum KeywordKind
+    {
+        /** Opens a block - pushed onto the stack. */
+        OPEN,
+        /** Closes a block - pops the stack, reporting any mismatch. */
+        CLOSE,
+        /** Neither, but still consumed so a keyword it contains cannot match inside it. */
+        NEUTRAL
+    }
 
-    private static final Pattern TRY_START = Pattern.compile(
-        "^\\s*(?:\u041F\u043E\u043F\u044B\u0442\u043A\u0430|Try)\\b", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /** A recognized block keyword: what it does, to which block, and how it reads in an error. */
+    private static final class BlockKeyword
+    {
+        private final KeywordKind kind;
+        private final String tag;
+        private final String display;
+
+        private BlockKeyword(KeywordKind kind, String tag, String display)
+        {
+            this.kind = kind;
+            this.tag = tag;
+            this.display = display;
+        }
+    }
 
     /**
      * Result of a BSL syntax check.
@@ -122,8 +196,10 @@ public final class BslSyntaxChecker
         Deque<String[]> stack = new ArrayDeque<>();
         // Carries whether a string literal is still open across physical lines
         StringLiteralState stringState = new StringLiteralState();
+        // Carries a member-access dot left dangling at the end of the previous line
+        boolean danglingDot = false;
 
-        for (int i = 0; i < lines.size(); i++) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
+        for (int i = 0; i < lines.size(); i++)
         {
             int lineNum = i + 1;
 
@@ -137,25 +213,149 @@ public final class BslSyntaxChecker
                 stringState.insideString = false;
             }
 
-            String trimmed = preprocessLine(lines.get(i), stringState);
-            if (trimmed == null)
+            String code = preprocessLine(lines.get(i), stringState);
+            if (code == null)
             {
+                // A blank, comment-only or string-continuation line does not interrupt a member
+                // access split across lines, so danglingDot is deliberately left as it was.
+                continue;
+            }
+            if (isPreprocessorDirective(code))
+            {
+                // A directive DOES interrupt it: an expression cannot legally continue across a
+                // branch boundary, and carrying the dot over would let a dot left dangling in one
+                // branch silence a real block keyword that follows in another.
+                danglingDot = false;
                 continue;
             }
 
-            // Check closing keywords FIRST
-            if (handleClosingKeyword(trimmed, lineNum, stack, errors))
-            {
-                continue;
-            }
-
-            // Check opening keywords
-            handleOpeningKeyword(trimmed, lineNum, stack);
+            scanLine(code, lineNum, stack, errors, danglingDot);
+            danglingDot = endsWithMemberDot(code);
         }
 
         reportUnclosedBlocks(stack, errors);
 
         return new CheckResult(errors.isEmpty(), errors);
+    }
+
+    /**
+     * Applies every block keyword on one line to the stack, left to right.
+     * <p>
+     * Walking the whole line is what makes the single-line forms balance: the
+     * opener and the closer of \u0415\u0441\u043B\u0438 ... \u0422\u043E\u0433\u0434\u0430 ... \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438; are both seen, in
+     * the order they are written, and so are several blocks on one line.
+     *
+     * @param code the line with string literals and comments already masked out
+     * @param lineNum the 1-based line number
+     * @param stack the open-block stack
+     * @param errors the accumulated error messages
+     * @param danglingDot whether the previous line ended on a member-access dot
+     */
+    private static void scanLine(String code, int lineNum, Deque<String[]> stack, List<String> errors,
+        boolean danglingDot)
+    {
+        Matcher matcher = BLOCK_KEYWORD.matcher(code);
+        while (matcher.find())
+        {
+            if (isMemberName(code, matcher.start(), danglingDot))
+            {
+                continue;
+            }
+            BlockKeyword keyword = KEYWORDS.get(matcher.group(1).toLowerCase(Locale.ROOT));
+            if (keyword == null)
+            {
+                continue;
+            }
+            if (keyword.kind == KeywordKind.OPEN)
+            {
+                stack.push(new String[] { keyword.tag, String.valueOf(lineNum) });
+            }
+            else if (keyword.kind == KeywordKind.CLOSE)
+            {
+                popAndCheck(stack, keyword.tag, keyword.display, lineNum, errors);
+            }
+        }
+    }
+
+    /**
+     * Tells whether a whole line is a preprocessor directive, which is skipped.
+     * <p>
+     * The BSL lexer spells the prefix {@code '#' (' '|'\t')*}, so the directive
+     * keyword may be separated from the {@code #} by spaces or tabs - matching
+     * only the glued {@code #\u0415\u0441\u043B\u0438} form would read a spaced {@code # \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438}
+     * as a runtime block closer and let it pop a real If.
+     * <p>
+     * Every directive is skipped, not just the conditional: #\u041E\u0431\u043B\u0430\u0441\u0442\u044C/#Region and
+     * the extension directives #\u0412\u0441\u0442\u0430\u0432\u043A\u0430/#\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u0435 open no runtime block either.
+     * <p>
+     * Known limitation, unchanged by this: because the directives themselves are
+     * ignored while the code inside every branch is still scanned as one stream,
+     * a module whose blocks balance only per selected variant (an If opened in
+     * the #\u0415\u0441\u043B\u0438 branch and a different one in the #\u0418\u043D\u0430\u0447\u0435 branch) is still
+     * reported as unbalanced.
+     *
+     * @param code the masked line
+     * @return true if the first non-whitespace character is {@code #}
+     */
+    private static boolean isPreprocessorDirective(String code)
+    {
+        for (int i = 0; i < code.length(); i++)
+        {
+            char c = code.charAt(i);
+            if (!Character.isWhitespace(c))
+            {
+                return c == '#';
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Tells whether the keyword found at {@code start} is a member name rather than a
+     * block keyword - that is, whether the nearest non-whitespace character before it
+     * is a member-access dot.
+     * <p>
+     * BSL allows a reserved word as a member name: the grammar's ExtName rule lists
+     * every keyword this class matches, closing ones included, so both \u041E\u0431\u044A\u0435\u043A\u0442.\u0424\u0443\u043D\u043A\u0446\u0438\u044F
+     * and \u041E\u0431\u044A\u0435\u043A\u0442.\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438 are legal member accesses. Whitespace - including a line
+     * break, which arrives here as {@code danglingDot} - is allowed after the dot.
+     *
+     * @param code the masked line
+     * @param start the index the keyword starts at
+     * @param danglingDot whether the previous line ended on a member-access dot
+     * @return true if the keyword is a member name and must not touch the stack
+     */
+    private static boolean isMemberName(String code, int start, boolean danglingDot)
+    {
+        for (int i = start - 1; i >= 0; i--)
+        {
+            char c = code.charAt(i);
+            if (!Character.isWhitespace(c))
+            {
+                return c == '.';
+            }
+        }
+        return danglingDot;
+    }
+
+    /**
+     * Tells whether a line ends on a member-access dot, so that a keyword opening the
+     * next line is a member name rather than a block keyword.
+     *
+     * @param code the masked line
+     * @return true if the last non-whitespace character is a dot
+     */
+    private static boolean endsWithMemberDot(String code)
+    {
+        for (int i = code.length() - 1; i >= 0; i--)
+        {
+            char c = code.charAt(i);
+            if (!Character.isWhitespace(c))
+            {
+                return c == '.';
+            }
+        }
+        return false;
     }
 
     /**
@@ -169,42 +369,27 @@ public final class BslSyntaxChecker
     }
 
     /**
-     * Normalize a source line for keyword matching: masks any string-literal (and
-     * comment) content via {@link #maskStringLiterals}, then drops leading
-     * whitespace and stray statement separators.
-     * <p>
-     * The leftover leading {@code ;} case shows up when a string literal closes
-     * mid-line and the assignment's trailing {@code ;} is the only unmasked
-     * character before the next real statement — e.g. a closing continuation line
-     * such as {@code |tail"; If x Then} masks to a run of spaces followed by
-     * {@code ; If x Then}; skipping that separator lets {@code If} still be
-     * recognized "at line start".
+     * Normalize a source line for keyword matching by masking any string-literal
+     * (and comment) content via {@link #maskStringLiterals}.
      *
      * @param line the raw source line
      * @param state carries whether a string literal is already open when this
      *     line starts; updated in place to reflect the state after this line
      * @return the masked line ready for keyword matching, or {@code null} if there
-     *     is no real code left on the line (blank, a full comment, a pure string
-     *     continuation line, or only statement separators)
+     *     is no real code left on the line (blank, a full comment, or a pure
+     *     string continuation line)
      */
     private static String preprocessLine(String line, StringLiteralState state)
     {
         String masked = maskStringLiterals(line, state);
-
-        int start = 0;
-        int len = masked.length();
-        while (start < len && (Character.isWhitespace(masked.charAt(start)) || masked.charAt(start) == ';'))
-        {
-            start++;
-        }
-        return start >= len ? null : masked.substring(start);
+        return masked.trim().isEmpty() ? null : masked;
     }
 
     /**
      * Masks the parts of a line that are lexically inside a string literal so that
      * keyword-looking text embedded in query or message text can never match a
-     * block keyword, while any real code on the same physical line — including
-     * code that follows the string's closing quote — is left untouched.
+     * block keyword, while any real code on the same physical line - including
+     * code that follows the string's closing quote - is left untouched.
      * <p>
      * Walks the line character by character, toggling {@code state.insideString}
      * on every double quote, EXCEPT a doubled {@code ""} which is an escaped quote
@@ -285,89 +470,6 @@ public final class BslSyntaxChecker
         // caller applies before the next line - see check()).
         state.insideString = insideString;
         return masked.toString();
-    }
-
-    /**
-     * Match a closing block keyword on the line and, if found, pop the matching opening
-     * block from the stack (recording any mismatch).
-     *
-     * @param trimmed the preprocessed line
-     * @param lineNum the 1-based line number
-     * @param stack the open-block stack
-     * @param errors the accumulated error messages
-     * @return true if a closing keyword was matched and handled
-     */
-    private static boolean handleClosingKeyword(String trimmed, int lineNum,
-        Deque<String[]> stack, List<String> errors)
-    {
-        if (END_PROCEDURE.matcher(trimmed).find())
-        {
-            popAndCheck(stack, TAG_PROCEDURE, "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B/EndProcedure", lineNum, errors); //$NON-NLS-1$
-            return true;
-        }
-        if (END_FUNCTION.matcher(trimmed).find())
-        {
-            popAndCheck(stack, TAG_FUNCTION, "\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438/EndFunction", lineNum, errors); //$NON-NLS-1$
-            return true;
-        }
-        if (END_IF.matcher(trimmed).find())
-        {
-            popAndCheck(stack, TAG_IF, "\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438/EndIf", lineNum, errors); //$NON-NLS-1$
-            return true;
-        }
-        if (END_DO.matcher(trimmed).find())
-        {
-            popAndCheck(stack, TAG_LOOP, "\u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430/EndDo", lineNum, errors); //$NON-NLS-1$
-            return true;
-        }
-        if (END_TRY.matcher(trimmed).find())
-        {
-            popAndCheck(stack, TAG_TRY, "\u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438/EndTry", lineNum, errors); //$NON-NLS-1$
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Match an opening block keyword on the line and, if found, push the corresponding
-     * open block onto the stack.
-     *
-     * @param trimmed the preprocessed line
-     * @param lineNum the 1-based line number
-     * @param stack the open-block stack
-     */
-    private static void handleOpeningKeyword(String trimmed, int lineNum, Deque<String[]> stack)
-    {
-        if (PROCEDURE_START.matcher(trimmed).find())
-        {
-            stack.push(new String[] { TAG_PROCEDURE, String.valueOf(lineNum) });
-            return;
-        }
-        if (FUNCTION_START.matcher(trimmed).find())
-        {
-            stack.push(new String[] { TAG_FUNCTION, String.valueOf(lineNum) });
-            return;
-        }
-        // If but NOT ElsIf
-        if (IF_START.matcher(trimmed).find() && !ELSIF_PATTERN.matcher(trimmed).find())
-        {
-            stack.push(new String[] { TAG_IF, String.valueOf(lineNum) });
-            return;
-        }
-        if (WHILE_START.matcher(trimmed).find())
-        {
-            stack.push(new String[] { TAG_LOOP, String.valueOf(lineNum) });
-            return;
-        }
-        if (FOR_START.matcher(trimmed).find())
-        {
-            stack.push(new String[] { TAG_LOOP, String.valueOf(lineNum) });
-            return;
-        }
-        if (TRY_START.matcher(trimmed).find())
-        {
-            stack.push(new String[] { TAG_TRY, String.valueOf(lineNum) });
-        }
     }
 
     /**
