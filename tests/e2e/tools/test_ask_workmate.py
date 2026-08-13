@@ -1,5 +1,13 @@
-"""Black-box contract tests for asynchronous ask_workmate jobs."""
+"""Black-box contract tests for asynchronous ask_workmate jobs.
 
+ask_workmate ships DISABLED: it hands the question to an external plugin that
+reaches a cloud service and can change the configuration with its own tools. So the
+default-off contract is what runs everywhere, including CI, and everything that
+actually calls the tool is opt-in - on a default server those calls answer with the
+shared "disabled by the user" text instead of the behaviour under test.
+"""
+
+import os
 import re
 
 from harness import (
@@ -9,11 +17,62 @@ from harness import (
     assert_ok,
     e2e_test,
     call,
+    E2ESkip,
+    _post,
 )
+
+# Opt-in gate for the parts that call the tool: set EDT_MCP_WORKMATE_E2E=1 on a stand
+# where the operator enabled ask_workmate in the preferences.
+WORKMATE_ENABLED = os.environ.get("EDT_MCP_WORKMATE_E2E", "").strip() not in (
+    "", "0", "false", "no")
+
+
+def _advertised_tools():
+    raw = _post("tools/list", {})
+    return set(t["name"] for t in (raw.get("result", {}).get("tools", []) or []))
+
+
+def _requires_enabled_workmate():
+    if not WORKMATE_ENABLED:
+        raise E2ESkip("ask_workmate is disabled by default; set EDT_MCP_WORKMATE_E2E=1 "
+                      "on a stand where the operator enabled it")
+
+
+@e2e_test(tool="ask_workmate", kind="read")
+def test_ask_workmate_is_disabled_by_default_and_refused():
+    """A default server must NOT advertise ask_workmate, and must refuse to run it.
+
+    Mutation check: a wrong default, a preset, or a "Restore Defaults" that clears the
+    disabled set would put a tool that talks to an external cloud service - and can
+    edit this configuration through Workmate - back in everyone's hands silently.
+    """
+    if WORKMATE_ENABLED:
+        raise E2ESkip("this stand has ask_workmate ENABLED on purpose; the default-off "
+                      "contract is asserted on a default server")
+
+    if "ask_workmate" in _advertised_tools():
+        raise AssertionError(
+            "ask_workmate must be DISABLED by default: it appeared in tools/list.")
+
+    # The shared disabled-tool path answers with TEXT (not isError): a tool the user
+    # switched off is a configuration state, not a tool failure.
+    r = call("ask_workmate", {"question": "anything"})
+    expected = "Tool 'ask_workmate' is disabled by the user"
+    if expected not in (r.text or ""):
+        raise AssertionError(
+            "a disabled tool must answer with the shared disabled-path message %r, got: %r"
+            % (expected, (r.text or "")[:300]))
+    if r.structured:
+        raise AssertionError(
+            "the disabled path carries no structured payload - anything here means the "
+            "tool RAN: %r" % r.structured)
+
+    assert_no_diff("a refused call must not touch the project on disk")
 
 
 @e2e_test(tool="ask_workmate", kind="read")
 def test_ask_workmate_real_answer_or_actionable_environment_error():
+    _requires_enabled_workmate()
     sentinel = "EDT_MCP_WORKMATE_E2E_OK"
     result = call("ask_workmate", {
         "question": (
@@ -107,6 +166,7 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
 
 @e2e_test(tool="ask_workmate", kind="read")
 def test_ask_workmate_missing_question_is_actionable_without_workmate():
+    _requires_enabled_workmate()
     result = call("ask_workmate", {})
     error = assert_error(result, "missing start/poll mode")
     assert_error_quality(
@@ -119,6 +179,7 @@ def test_ask_workmate_missing_question_is_actionable_without_workmate():
 
 @e2e_test(tool="ask_workmate", kind="read")
 def test_ask_workmate_unknown_job_id_is_actionable_without_workmate():
+    _requires_enabled_workmate()
     unknown = "e2e-missing-workmate-job"
     result = call("ask_workmate", {"jobId": unknown, "waitSeconds": 0})
     error = assert_error(result, "unknown Workmate job")
@@ -132,6 +193,7 @@ def test_ask_workmate_unknown_job_id_is_actionable_without_workmate():
 
 @e2e_test(tool="ask_workmate", kind="read")
 def test_ask_workmate_rejects_both_modes_without_workmate():
+    _requires_enabled_workmate()
     result = call("ask_workmate", {"question": "q", "jobId": "job-1"})
     error = assert_error(result, "mutually exclusive Workmate modes")
     assert_error_quality(
@@ -144,6 +206,7 @@ def test_ask_workmate_rejects_both_modes_without_workmate():
 
 @e2e_test(tool="ask_workmate", kind="read")
 def test_ask_workmate_rejects_unsupported_mode_without_workmate():
+    _requires_enabled_workmate()
     result = call("ask_workmate", {"question": "q", "mode": "jshell"})
     error = assert_error(result, "unsupported Workmate mode")
     assert_error_quality(
@@ -156,6 +219,7 @@ def test_ask_workmate_rejects_unsupported_mode_without_workmate():
 
 @e2e_test(tool="ask_workmate", kind="read")
 def test_ask_workmate_rejects_blank_workmate_tool_without_workmate():
+    _requires_enabled_workmate()
     result = call("ask_workmate", {"workmateTool": "   "})
     error = assert_error(result, "blank workmateTool")
     assert_error_quality(
