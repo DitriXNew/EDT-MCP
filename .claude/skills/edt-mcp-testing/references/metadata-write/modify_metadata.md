@@ -10,7 +10,7 @@
 - The write happens inside a BM **write transaction**; the read-back (`get_metadata_details`) is a separate **read transaction**. Runs on the model/UI side — do not hammer it concurrently with other write tools (`create_metadata`, `rename_metadata_object`, `delete_metadata`).
 - **Mutate THROUGH MCP.** This tool changes the in-memory BM model *and* the source tree. After a `-clean` redeploy EDT discards unsaved in-memory edits, so drive the change through this tool (not a hand edit of the `.mdo`) to keep model + disk in sync.
 - **No infobase exclusivity needed.** It touches the source tree / model, not the infobase DB; it does not require freeing the IB.
-- **Disk lag — closed since #406.** The owner top object's export is asynchronous, but the tool now drains its own export queue before answering (and refuses, saying the model changed, if that does not happen within 60s). Assert on the file directly after the call; the old advice to poll described exactly the window that barrier closed.
+- **Disk lag — closed since #406.** The owner top object's export is asynchronous, but the tool now drains its own export queue before answering (and refuses, saying nothing was rolled back, if that does not happen within 60s); the wait is skipped where the export state cannot be observed, and a drained queue is not proof the bytes are right. Assert on the file directly after the call; the old advice to poll described exactly the window that barrier closed.
 
 **Discovery companion.** `get_metadata_details(assignable: true)` is the read for *"what can I set, and to what"*: for each assignable property it returns the value **kind** (e.g. `ENUM`), the **current value**, and the **allowed enum literals**. Always discover the real property name + allowed value from there before composing a `modify_metadata` call — property names and enum literals are model-driven, not guessable.
 
@@ -113,7 +113,7 @@ Success (structured payload):
 Field/shape notes:
 - **`action`** — `"modified"` on success; the quickest programmatic discriminator from an error envelope.
 - **`applied`** — the list of property names actually written (e.g. `comment`, `synonym`, the discovered enum prop, `type`). Assert membership here, not on the placeholder text.
-- **`persisted`** — the model write committed and the platform accepted a save task; since #406 the tool waits for the export queue to drain before answering, so the on-disk `.mdo` is already written when you read this (a platform-side write failure is logged, not reported here).
+- **`persisted`** — the model write committed and the platform accepted a save task; since #406 the tool waits for the export queue to drain before answering, so the on-disk `.mdo` is normally already written when you read this - though a drained queue proves nothing is still pending, not that the bytes are right (a platform-side write failure is logged, not reported here), and the wait is skipped where the export state cannot be observed.
 - **`fqn`** — echoes the addressed node.
 
 **Gotchas.**

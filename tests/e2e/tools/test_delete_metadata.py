@@ -84,7 +84,8 @@ def test_confirm_deletes_top_object_gone_from_model_and_disk():
 
     # The disk assertions come FIRST, before any other MCP call, and that ordering is load-bearing
     # (#406). They are checked with no polling at all: delete_metadata now waits for its own .mdo
-    # export to drain before answering, so both files must ALREADY be right the instant it returns.
+    # export queue to drain before answering, so nothing of this call is still pending the instant
+    # it returns - and on a healthy stand that means both files are already written.
     # Anything in between - even one read-only round trip like the model read-back below - is time
     # the broken asynchronous export could have used to finish, which is exactly how this assertion
     # would quietly stop testing anything. Measured pre-fix lag was 0.02-0.15s, i.e. the same order

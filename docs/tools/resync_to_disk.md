@@ -20,7 +20,7 @@ Bulk re-synchronize the in-memory EDT model to the on-disk `src/` `.mdo` files, 
 ## When to use
 - `update_database` or `import_configuration_from_xml` fails with "object file does not exist - /Subsystems/X.mdo; /Roles/Y.mdo; ..." - the object lives in the model and in `Configuration.mdo` but has no `.mdo` on disk.
 - `get_project_errors` shows `md-reference-intergrity` warnings like "a lost reference is set in field X at position N" - `Configuration.mdo` still registers an object whose body was lost (a dangling/orphaned entry that `delete_metadata` cannot remove, because there is no object to delete).
-- After a batch of older edits, you want to guarantee every metadata object's `.mdo` is actually written out before exporting or updating the database (use `fullExport=true` for that full refresh).
+- After a batch of older edits, you want every metadata object's `.mdo` queued for rewrite and that queue drained before exporting or updating the database (use `fullExport=true` for that full refresh).
 
 ## What it does
 1. Walks EVERY metadata top object of the configuration via the BM model (all kinds) and computes which of them have no `.mdo` under `src/` - the `missingBefore` set, the real desync.

@@ -1458,7 +1458,7 @@ def assert_disk_path_gone(rel_path, ctx=""):
     """A path under the fixture is ALREADY gone — checked once, with no polling.
 
     The immediate counterpart of poll_disk_path_gone, for a tool that is supposed to have
-    finished its on-disk export BEFORE it answered (#406). Polling would defeat the point:
+    drained its on-disk export queue BEFORE it answered (#406). Polling would defeat the point:
     a build that returns while the export is still queued passes a poll and fails this."""
     full = os.path.join(PROJECT_DIR, rel_path)
     if os.path.exists(full):

@@ -158,8 +158,10 @@ public final class BmTransactions
      * task per FQN and hands them to the platform's ASYNCHRONOUS save; the platform's own
      * synchronous variant differs from it by a wait this path does not perform. The same is
      * true of the rename/delete refactorings, which schedule their save the same way rather
-     * than draining it. To establish that the bytes actually reached disk, wait afterwards -
-     * {@link BuildUtils#waitForDiskExport} is that wait.
+     * than draining it. To establish that nothing is still queued, wait afterwards -
+     * {@link BuildUtils#waitForDiskExport} is that wait. Note what it settles: the queue is
+     * empty, NOT that the bytes are right. The platform logs a per-file write failure and lets
+     * the computation complete, so a failed write drains like a successful one.
      * <p>
      * {@code AbstractMetadataWriteTool} applies it to every tool that EXTENDS it, which is not
      * the same as every metadata writer: {@code rename_metadata_object} and

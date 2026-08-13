@@ -49,6 +49,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * tools is not possible headless, so the REMOVAL outcome reporting is pinned here at the unit level
  * instead (see the {@code runRemovalWriteTask} tests).
  */
+import com.google.gson.JsonObject;
+
 public class ResyncToDiskToolTest
 {
     @Test
@@ -692,5 +694,35 @@ public class ResyncToDiskToolTest
             }
         }
         file.delete();
+    }
+
+    @Test
+    public void testTheExportBarrierIsSkippedOnlyWhenNothingWasWrittenAtAll()
+    {
+        // Pinned against the REAL tool so the key names have to match what it emits (#406).
+        ResyncToDiskTool tool = new ResyncToDiskTool();
+
+        JsonObject noOp = new JsonObject();
+        noOp.addProperty("objectsExported", 0); //$NON-NLS-1$
+        noOp.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
+        assertFalse("an in-sync project exports nothing, so there is no export of ours to wait for", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), noOp));
+
+        JsonObject exported = new JsonObject();
+        exported.addProperty("objectsExported", 3); //$NON-NLS-1$
+        exported.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
+        assertTrue("a real export MUST still be waited for", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), exported));
+
+        // The dangling cleanup re-exports Configuration on its own, so it counts as a write even
+        // when the missing-subset export list was empty.
+        JsonObject cleaned = new JsonObject();
+        cleaned.addProperty("objectsExported", 0); //$NON-NLS-1$
+        cleaned.addProperty("danglingRemovedCount", 2); //$NON-NLS-1$
+        assertTrue("removing dangling references rewrites Configuration.mdo and must be waited for", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), cleaned));
+
+        assertTrue("a result missing the counters must be waited for, not silently skipped", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), new JsonObject()));
     }
 }

@@ -119,11 +119,15 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      */
     String awaitDiskExport(Map<String, String> params, String result)
     {
-        if (result == null || !mutatesModel(params))
+        // Parsed once, and only a SUCCESS is parsed at all: an error is a well-formed JSON object
+        // too, and treating one as a write would make a rejected argument wait out the whole
+        // deadline and then be re-reported as a disk problem.
+        JsonObject success = successObject(result);
+        if (success == null || !wroteToDisk(params, success))
         {
             return result;
         }
-        String projectName = exportProjectName(params, result);
+        String projectName = exportProjectName(params, success);
         if (projectName == null || projectName.isEmpty())
         {
             return result;
@@ -149,16 +153,40 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
-     * Whether this call changes the model, and therefore has an export whose completion has to be
-     * established before answering. A preview / report-only call has nothing queued of its own, so
-     * making it wait would only let unrelated background work refuse it.
+     * Whether this particular call actually queued a write, and therefore has an export whose
+     * completion has to be established before answering.
+     * <p>
+     * The question is deliberately asked of the RESULT, not of the parameters alone: several tools
+     * have SUCCESSFUL no-op paths that the arguments cannot predict - an adoption of an object that
+     * is already adopted, a resync of a project that is already in sync. Such a call queued nothing,
+     * so the only export it could wait for belongs to somebody else, and waiting on it can only
+     * turn a healthy call into a refusal. A false refusal costs more than a missed check here,
+     * because the operation itself succeeded.
+     * <p>
+     * The default is {@code true}: a tool that says nothing about it gets the barrier. Only a tool
+     * that KNOWS it has a no-op success path answers otherwise, and it answers next to the branch
+     * that produces it.
      *
      * @param params the tool parameters
+     * @param result the tool's own result, already known to be a success
      * @return {@code true} to await the export (the default)
      */
-    protected boolean mutatesModel(Map<String, String> params)
+    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
     {
         return true;
+    }
+
+    /**
+     * Reads a string member of a result, for a subclass deciding {@link #wroteToDisk}.
+     *
+     * @param result the tool's own result
+     * @param member the member to read
+     * @return the value, or {@code null} when absent or not a primitive
+     */
+    protected static String resultString(JsonObject result, String member)
+    {
+        JsonElement value = result.get(member);
+        return value != null && value.isJsonPrimitive() ? value.getAsString() : null;
     }
 
     /**
@@ -174,35 +202,35 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      * @param result the JSON the tool produced
      * @return the project name to wait for, or {@code null} to skip the wait
      */
-    private String exportProjectName(Map<String, String> params, String result)
+    private String exportProjectName(Map<String, String> params, JsonObject result)
     {
         String key = exportProjectResultKey();
         if (key != null)
         {
-            String reported = readSuccessString(result, key);
+            String reported = resultString(result, key);
             if (reported != null)
             {
                 return reported;
             }
         }
-        return readSuccessString(result, null) == null ? null : params.get(McpKeys.PROJECT_NAME);
+        return params.get(McpKeys.PROJECT_NAME);
     }
 
     /**
-     * Reads a string member of a SUCCESSFUL tool result.
+     * Parses a tool result and returns it only when it is a SUCCESS.
      * <p>
      * Success is decided by the explicit {@code success} boolean rather than by "the payload
-     * parsed", because an error is a well-formed JSON object too - treating one as a write would
-     * make a rejected argument wait out the whole deadline and then be re-reported as a disk
-     * problem.
+     * parsed", because an error is a well-formed JSON object too.
      *
      * @param result the JSON the tool produced
-     * @param member the member to read, or {@code null} to only test for success
-     * @return the member's value, {@code ""} when {@code member} is {@code null} and the result is
-     *     a success, or {@code null} when the result is not a successful JSON object
+     * @return the parsed object, or {@code null} when it is not a successful JSON object
      */
-    private static String readSuccessString(String result, String member)
+    private static JsonObject successObject(String result)
     {
+        if (result == null)
+        {
+            return null;
+        }
         try
         {
             JsonElement parsed = JsonParser.parseString(result);
@@ -212,23 +240,15 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             }
             JsonObject object = parsed.getAsJsonObject();
             JsonElement success = object.get(KEY_SUCCESS);
-            if (success == null || !success.isJsonPrimitive() || !success.getAsJsonPrimitive().isBoolean()
-                || !success.getAsBoolean())
-            {
-                return null;
-            }
-            if (member == null)
-            {
-                return ""; //$NON-NLS-1$
-            }
-            JsonElement value = object.get(member);
-            return value != null && value.isJsonPrimitive() ? value.getAsString() : null;
+            boolean ok = success != null && success.isJsonPrimitive()
+                && success.getAsJsonPrimitive().isBoolean() && success.getAsBoolean();
+            return ok ? object : null;
         }
         catch (RuntimeException e)
         {
-            // A payload we cannot read is not evidence of a disk problem, and the mutation already
+            // A payload we cannot read is not evidence of a disk problem, and the work already
             // happened - degrade to "do not gate", never to a refusal built on a guess.
-            Activator.logError("Could not read the result of " + "a metadata write while checking its export", e); //$NON-NLS-1$ //$NON-NLS-2$
+            Activator.logError("Could not read a metadata write result while checking its export", e); //$NON-NLS-1$
             return null;
         }
     }

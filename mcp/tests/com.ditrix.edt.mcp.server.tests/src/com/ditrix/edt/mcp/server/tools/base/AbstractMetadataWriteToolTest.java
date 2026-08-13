@@ -14,11 +14,13 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
+import com.google.gson.JsonObject;
 
 /**
  * Tests for the post-write disk-export barrier in {@link AbstractMetadataWriteTool} (issue #406).
@@ -67,18 +69,18 @@ public class AbstractMetadataWriteToolTest
     {
         private final RecordingEnvironment environment;
         private final String projectResultKey;
-        private final boolean mutates;
+        private final Predicate<JsonObject> wrote;
 
         StubTool(RecordingEnvironment environment)
         {
-            this(environment, null, true);
+            this(environment, null, r -> true);
         }
 
-        StubTool(RecordingEnvironment environment, String projectResultKey, boolean mutates)
+        StubTool(RecordingEnvironment environment, String projectResultKey, Predicate<JsonObject> wrote)
         {
             this.environment = environment;
             this.projectResultKey = projectResultKey;
-            this.mutates = mutates;
+            this.wrote = wrote;
         }
 
         @Override
@@ -94,9 +96,9 @@ public class AbstractMetadataWriteToolTest
         }
 
         @Override
-        protected boolean mutatesModel(Map<String, String> params)
+        protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
         {
-            return mutates;
+            return wrote.test(result);
         }
 
         @Override
@@ -217,8 +219,35 @@ public class AbstractMetadataWriteToolTest
         String result = successJson();
 
         assertSame(result,
-            new StubTool(environment, null, false).awaitDiskExport(params(PROJECT), result));
+            new StubTool(environment, null, r -> false).awaitDiskExport(params(PROJECT), result));
         assertEquals("a preview must not reach the export wait", 0, environment.calls); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheSameToolWaitsOrNotDependingOnWhatTheRESULTSays()
+    {
+        // The no-op exemption has to discriminate on the RESULT, not on the tool or the arguments.
+        // adopt_metadata_object is the real case: "alreadyAdopted" is a SUCCESS that queued no
+        // export, while "adopted" on the very same tool, with the very same arguments, did. A hook
+        // that only saw the parameters could not tell these two apart, so it would either wait on
+        // a no-op (and let unrelated background work refuse a healthy call) or skip a real write.
+        Predicate<JsonObject> wroteUnlessAlreadyAdopted =
+            r -> !"alreadyAdopted".equals(AbstractMetadataWriteTool.resultString(r, "action")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        RecordingEnvironment onNoOp = new RecordingEnvironment(DiskExportState.PENDING);
+        String noOp = ToolResult.success().put("action", "alreadyAdopted").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame("a successful no-op must not be refused over somebody else's pending export", //$NON-NLS-1$
+            noOp, new StubTool(onNoOp, null, wroteUnlessAlreadyAdopted)
+                .awaitDiskExport(params(PROJECT), noOp));
+        assertEquals("a no-op must not even reach the export wait", 0, onNoOp.calls); //$NON-NLS-1$
+
+        RecordingEnvironment onRealWrite = new RecordingEnvironment(DiskExportState.PENDING);
+        String wrote = ToolResult.success().put("action", "adopted").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        String answer = new StubTool(onRealWrite, null, wroteUnlessAlreadyAdopted)
+            .awaitDiskExport(params(PROJECT), wrote);
+        assertEquals("a real write MUST still be waited on", 1, onRealWrite.calls); //$NON-NLS-1$
+        assertTrue("and a real write with a pending export must still be refused: " + answer, //$NON-NLS-1$
+            answer.contains("\"success\":false")); //$NON-NLS-1$
     }
 
     @Test
@@ -230,7 +259,7 @@ public class AbstractMetadataWriteToolTest
         RecordingEnvironment environment = new RecordingEnvironment(DiskExportState.DRAINED);
         String result = ToolResult.success().put("extensionProject", EXTENSION).toJson(); //$NON-NLS-1$
 
-        new StubTool(environment, "extensionProject", true).awaitDiskExport(params(PROJECT), result); //$NON-NLS-1$
+        new StubTool(environment, "extensionProject", r -> true).awaitDiskExport(params(PROJECT), result); //$NON-NLS-1$
 
         assertEquals("the barrier must wait for the project that was written, not the one asked for", //$NON-NLS-1$
             EXTENSION, environment.askedFor);
@@ -243,7 +272,7 @@ public class AbstractMetadataWriteToolTest
         // Declared key, but this particular branch did not report it.
         String result = successJson();
 
-        new StubTool(environment, "extensionProject", true).awaitDiskExport(params(PROJECT), result); //$NON-NLS-1$
+        new StubTool(environment, "extensionProject", r -> true).awaitDiskExport(params(PROJECT), result); //$NON-NLS-1$
 
         assertEquals(PROJECT, environment.askedFor);
     }

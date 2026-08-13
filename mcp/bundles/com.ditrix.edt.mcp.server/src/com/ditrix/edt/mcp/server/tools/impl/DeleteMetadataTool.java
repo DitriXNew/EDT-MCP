@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.google.gson.JsonObject;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
@@ -262,7 +263,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     @Override
-    protected boolean mutatesModel(Map<String, String> params)
+    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
     {
         // A preview writes nothing, so it has no export of its own to wait for. Letting it wait
         // anyway would only expose it to refusal by unrelated background export work.

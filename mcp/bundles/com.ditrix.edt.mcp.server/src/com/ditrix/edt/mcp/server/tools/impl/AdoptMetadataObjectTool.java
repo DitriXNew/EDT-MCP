@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
+import com.google.gson.JsonObject;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -108,10 +109,20 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty(KEY_OBJECT_BELONGING, "ADOPTED (the object is now an adopted copy)") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
                 "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
-                    + "export queue of the EXTENSION project to drain before answering, so on success the " //$NON-NLS-1$
-                    + "write has run; a write failure inside the platform is logged there and not reported " //$NON-NLS-1$
-                    + "here", false) //$NON-NLS-1$
+                    + "export queue of the EXTENSION project to drain before answering, so a success normally " //$NON-NLS-1$
+                    + "means the write has already run - but that establishes the queue is empty, not that " //$NON-NLS-1$
+                    + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
+                    + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
+    {
+        // The "already adopted" branch is a SUCCESS that never called adoptAndAttach and never
+        // queued an export, so there is nothing of ours to wait for; waiting would only let an
+        // unrelated pending export in the same extension refuse a healthy call.
+        return !"alreadyAdopted".equals(resultString(result, McpKeys.ACTION)); //$NON-NLS-1$
     }
 
     @Override

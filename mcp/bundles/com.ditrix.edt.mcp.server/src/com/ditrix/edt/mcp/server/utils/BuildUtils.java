@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -42,6 +46,16 @@ public final class BuildUtils
 
     /** @see #EXPORT_OBJECTS_SEGMENT */
     private static final String EXPORT_BLOBS_SEGMENT = "EXP_B"; //$NON-NLS-1$
+
+    /**
+     * Per project: the most recently STARTED export wait. Keyed by project name and never larger
+     * than the number of projects in the workspace.
+     * <p>
+     * This is the accumulation limit described on {@link #waitForDiskExport}: while a slot is
+     * unreturned and unexpired, the platform call from a previous request is still outstanding, and
+     * starting a second one would add another Job nobody can stop.
+     */
+    private static final ConcurrentMap<String, ExportWaitSlot> EXPORT_WAIT_RETURNED = new ConcurrentHashMap<>();
 
 
     private BuildUtils()
@@ -192,6 +206,17 @@ public final class BuildUtils
      * starts a FRESH deadline for the segment wait, and one leg of the context drain calls
      * {@code Object.wait()} with no argument at all. Passing a timeout therefore buys an advisory,
      * not a limit, and unattended safety needs a real one.
+     * <p>
+     * <b>What the deadline does NOT do.</b> {@code waitComputation} takes no progress monitor, so
+     * cancelling the job cannot stop the wait - the deadline frees the CALLER, and the platform
+     * call may still be running afterwards. That is why at most ONE export wait per project is
+     * outstanding at a time: while a previous one has not come back, this returns
+     * {@link DiskExportState#PENDING} immediately instead of scheduling a second unstoppable Job.
+     * A wedged pipeline therefore costs one Job per project, not one per request.
+     * <p>
+     * That claim is itself bounded: a wait that never comes back would otherwise shut its project
+     * out for the rest of the session, so the claim also lapses on its own deadline. The honest
+     * statement is "at most one outstanding export wait per project at a time", not "ever".
      *
      * @param project the workspace project whose export queue to drain
      * @param timeoutMs the hard deadline in milliseconds
@@ -214,11 +239,49 @@ public final class BuildUtils
             return DiskExportState.UNOBSERVABLE;
         }
 
+        // One outstanding waiter per project, at most. The platform's waitComputation takes no
+        // progress monitor, so the deadline below can free the CALLER but cannot stop the WAIT -
+        // and this barrier runs after every successful metadata write, so a wedged pipeline would
+        // otherwise get a fresh unkillable Job per call until the workbench ran out of them.
+        // Pretending we can cancel it would be the dishonest fix; this is the honest limit.
+        String key = project.getName();
+        AtomicBoolean returned = beginExportWait(key, timeoutMs);
+        if (returned == null)
+        {
+            Activator.logInfo("A previous .mdo export wait for " + key //$NON-NLS-1$
+                + " has not returned yet; not starting another one"); //$NON-NLS-1$
+            return DiskExportState.PENDING;
+        }
+
         boolean[] drained = new boolean[1];
         BoundedJob.Result result =
-            BoundedJob.run("Waiting for the .mdo export of " + project.getName(), timeoutMs, //$NON-NLS-1$
-                monitor -> drained[0] = ddManager.waitComputation(timeoutMs, true,
-                    EXPORT_OBJECTS_SEGMENT, EXPORT_BLOBS_SEGMENT));
+            BoundedJob.run("Waiting for the .mdo export of " + key, timeoutMs, //$NON-NLS-1$
+                monitor -> {
+                    try
+                    {
+                        drained[0] = ddManager.waitComputation(timeoutMs, true,
+                            EXPORT_OBJECTS_SEGMENT, EXPORT_BLOBS_SEGMENT);
+                    }
+                    finally
+                    {
+                        // Reopens the gate for this project. Set from the JOB thread, because the
+                        // whole point is to know when the platform call came back - which, on the
+                        // timeout path, is after the caller has already gone.
+                        returned.set(true);
+                    }
+                });
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            // The ONLY outcome that proves the work neither ran nor ever will: cancelling it is
+            // what kept it from starting. Nothing is outstanding, so reopen at once.
+            //
+            // NOT_RUN deliberately does NOT join this: there the job left the queue without our
+            // cancel, which happens with a SUSPENDED job manager - the job is still scheduled and
+            // will run when the manager resumes, so reopening now would let a second one be
+            // scheduled on top of it. INTERRUPTED is left closed for the same reason. Neither can
+            // strand the slot, because the slot also reopens on its own deadline.
+            returned.set(true);
+        }
 
         if (result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null)
         {
@@ -248,6 +311,72 @@ public final class BuildUtils
             return DiskExportState.UNOBSERVABLE;
         }
         return DiskExportState.PENDING;
+    }
+
+    /**
+     * Claims the single export-wait slot for a project.
+     * <p>
+     * Package-visible so the accumulation limit can be pinned without a live pipeline: it is the
+     * whole answer to "the deadline frees the caller but cannot stop the platform call", and a
+     * limit nobody tests is a limit that quietly stops holding.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs the wait's deadline, which also sizes how long an unreturned claim holds
+     * @return the flag the wait must set when it returns, or {@code null} when a previous wait for
+     *     this project has not come back yet and no new one may be started
+     */
+    static AtomicBoolean beginExportWait(String projectName, long timeoutMs)
+    {
+        AtomicBoolean[] granted = new AtomicBoolean[1];
+        long reopenAtMs = System.currentTimeMillis() + slotHoldMs(timeoutMs);
+        // compute(), not get()+put(): the map holds the bin lock across the whole decision, so two
+        // writes finishing together cannot both see a free slot and both schedule a Job. A
+        // check-then-act here would have made the limit hold only when it was not needed.
+        EXPORT_WAIT_RETURNED.compute(projectName, (name, prior) -> {
+            if (prior != null && !prior.returned.get() && System.currentTimeMillis() < prior.reopenAtMs)
+            {
+                return prior;
+            }
+            granted[0] = new AtomicBoolean();
+            return new ExportWaitSlot(granted[0], reopenAtMs);
+        });
+        return granted[0];
+    }
+
+    /**
+     * How long a slot stays claimed by a wait that never came back.
+     * <p>
+     * A stuck waiter must not shut a project out for the rest of the session, so the claim expires
+     * even when nothing ever sets the flag. The platform wait can legitimately outlive its own
+     * timeout argument by roughly double (it spends the budget draining contexts and then starts a
+     * fresh deadline), so the hold is three times the deadline: comfortably past any wait that is
+     * merely slow, and still bounded for one that is wedged.
+     *
+     * @param timeoutMs the wait's deadline
+     * @return the hold in milliseconds
+     */
+    private static long slotHoldMs(long timeoutMs)
+    {
+        return 3 * Math.max(1L, timeoutMs);
+    }
+
+    /** A project's export-wait claim: the flag its job sets, and when the claim lapses anyway. */
+    private static final class ExportWaitSlot
+    {
+        private final AtomicBoolean returned;
+        private final long reopenAtMs;
+
+        ExportWaitSlot(AtomicBoolean returned, long reopenAtMs)
+        {
+            this.returned = returned;
+            this.reopenAtMs = reopenAtMs;
+        }
+    }
+
+    /** Drops every recorded export-wait slot; for tests, which must not inherit each other's state. */
+    static void forgetExportWaits()
+    {
+        EXPORT_WAIT_RETURNED.clear();
     }
 
     /**

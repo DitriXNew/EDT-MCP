@@ -137,7 +137,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     /**
      * Total time budget (ms) to wait for the post-export {@code .mdo} flush to be
      * visible on the filesystem before counting a file as still missing.
-     * {@link BmTransactions#forceExportToDisk} runs the platform serializer
+     * {@link BmTransactions#forceExportToDisk} hands the objects to the platform serializer
      * synchronously, but a just-restored file can still lag a separate on-disk
      * existence check by a beat (OS/filesystem write-visibility, plus any
      * UI-scheduled tail of the export), so the re-check polls within this budget
@@ -208,8 +208,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .integerProperty("objectsExported", //$NON-NLS-1$
                 "Number of top objects queued for (re)writing - the missing subset by default, every " //$NON-NLS-1$
                     + "object when fullExport=true. The tool waits for the export queue to drain before " //$NON-NLS-1$
-                    + "answering, so on success the writes have run; a write failure inside the platform " //$NON-NLS-1$
-                    + "is logged there and not reported here") //$NON-NLS-1$
+                    + "answering, so a success normally means the writes have already run - but that " //$NON-NLS-1$
+                    + "establishes the queue is empty, not that the bytes are correct (a platform-side " //$NON-NLS-1$
+                    + "write failure is logged inside EDT), and the wait is skipped where the export " //$NON-NLS-1$
+                    + "state cannot be observed") //$NON-NLS-1$
             .integerProperty("totalTopObjects", "Total metadata top objects walked in the BM model") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_FULL_EXPORT, "Whether a full export of every top object was requested") //$NON-NLS-1$
             .integerProperty("missingBeforeCount", "Top objects that had no .mdo on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
@@ -226,6 +228,18 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
+    {
+        // A project that is already in sync exports nothing and reports objectsExported=0. That is
+        // a genuine no-op success, so there is no export of ours to confirm; waiting would only
+        // expose a healthy call to refusal by unrelated background export work. Dangling-reference
+        // cleanup DOES re-export Configuration, and it reports its own non-zero count, so the two
+        // are asked together rather than assuming the export list is the only writer.
+        return !"0".equals(resultString(result, "objectsExported")) //$NON-NLS-1$ //$NON-NLS-2$
+            || !"0".equals(resultString(result, "danglingRemovedCount")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Override

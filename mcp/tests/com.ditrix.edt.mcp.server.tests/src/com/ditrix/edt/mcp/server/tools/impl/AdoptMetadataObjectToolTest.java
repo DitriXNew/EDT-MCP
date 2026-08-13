@@ -21,6 +21,10 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * BM model + an extension project, so the actual adopt behaviour (objectBelonging=ADOPTED,
  * extendedConfigurationObject link, multi-extension selection) is covered by the E2E suite.
  */
+import java.util.Collections;
+
+import com.google.gson.JsonObject;
+
 public class AdoptMetadataObjectToolTest
 {
     @Test
@@ -78,5 +82,34 @@ public class AdoptMetadataObjectToolTest
         assertTrue(schema.contains("\"action\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"objectBelonging\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"persisted\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheExportBarrierIsSkippedForTheAlreadyAdoptedNoOpOnly()
+    {
+        // Pinned against the REAL tool, not a stub carrying a copy of the predicate: the value and
+        // the key both have to match what this tool actually emits, and a stub would stay green
+        // through a typo in either (#406).
+        AdoptMetadataObjectTool tool = new AdoptMetadataObjectTool();
+
+        JsonObject noOp = new JsonObject();
+        noOp.addProperty("action", "alreadyAdopted"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("'alreadyAdopted' queued no export, so the barrier must not wait for one", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), noOp));
+
+        JsonObject wrote = new JsonObject();
+        wrote.addProperty("action", "adopted"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a real adoption MUST still be waited for", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), wrote));
+
+        assertTrue("a result without the key at all must be waited for, not silently skipped", //$NON-NLS-1$
+            tool.wroteToDisk(Collections.emptyMap(), new JsonObject()));
+    }
+
+    @Test
+    public void testTheExportBarrierFollowsTheExtensionProjectTheToolReports()
+    {
+        // projectName is the BASE configuration by contract; the write goes to the EXTENSION.
+        assertEquals("extensionProject", new AdoptMetadataObjectTool().exportProjectResultKey()); //$NON-NLS-1$
     }
 }
