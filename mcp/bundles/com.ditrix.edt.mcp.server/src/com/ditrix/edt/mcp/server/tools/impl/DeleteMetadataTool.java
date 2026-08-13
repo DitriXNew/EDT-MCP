@@ -32,7 +32,6 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -55,6 +54,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.google.gson.JsonObject;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -66,6 +66,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
@@ -82,6 +83,13 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /** Bounded cascade settle seam; production delegates to {@link ProjectStateChecker}. */
+    @FunctionalInterface
+    interface CascadeSettler
+    {
+        String settle(String projectName, long timeoutMs);
+    }
+
     /**
      * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
      * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
@@ -100,11 +108,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     private final ConsentRequester consentRequester;
+    private final CascadeSettler cascadeSettler;
 
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
     {
-        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview),
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was deleted.")); //$NON-NLS-1$
     }
 
     /**
@@ -114,7 +125,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     DeleteMetadataTool(ConsentRequester consentRequester)
     {
+        this(consentRequester,
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was deleted.")); //$NON-NLS-1$
+    }
+
+    /** Test seam for the caller-thread cascade settle. */
+    DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler)
+    {
         this.consentRequester = consentRequester;
+        this.cascadeSettler = cascadeSettler;
     }
 
     /**
@@ -167,6 +187,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
+
+    /** Shared bound for derived-data drain and BM-model registration before an mdclass cascade. */
+    private static final long SETTLE_TIMEOUT_MS = 60_000L;
 
     /** Output key: title of the delete refactoring (preview). */
     private static final String KEY_REFACTORING_TITLE = "refactoringTitle"; //$NON-NLS-1$
@@ -271,6 +294,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        if (projectName == null || projectName.isEmpty() || fqn == null || fqn.isEmpty())
+        {
+            return null;
+        }
+
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        try
+        {
+            if (FormElementWriter.parse(normFqn) != null
+                || FormElementWriter.parseFormObjectCreate(normFqn) != null
+                || XdtoWriter.parseMemberRef(normFqn) != null
+                || PredefinedWriter.parseRef(normFqn) != null)
+            {
+                return null;
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // Preserve the existing UI-thread validation/error path for a malformed specialized FQN.
+            return null;
+        }
+        return cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
+    }
+
+    @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
         String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$
@@ -371,14 +423,46 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             normFqn = resolved.fqn;
         }
 
-        IRefactoring refactoring = refactoringService.createMdObjectDeleteRefactoring(
-            Collections.singletonList(node.object));
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(ctx.project);
+        return prepareMdClassDelete(ctx.project, normFqn, node.object, confirm, force,
+            refactoringService, modelResolution);
+    }
+
+    /**
+     * Creates the EDT mdclass delete refactoring only after the shared BM resolver has verified the
+     * target and dependent project models. Package-visible so the null-model refusal is covered
+     * without requiring a live workbench.
+     */
+    String prepareMdClassDelete(IProject project, String normFqn, MdObject object, boolean confirm,
+        boolean force, IMdRefactoringService refactoringService,
+        BmModelResolver.Resolution modelResolution)
+    {
+        if (!modelResolution.isAvailable())
+        {
+            return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
+        }
+
+        IRefactoring refactoring;
+        try
+        {
+            refactoring = refactoringService.createMdObjectDeleteRefactoring(
+                Collections.singletonList(object));
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not prepare delete refactoring for " + normFqn, e); //$NON-NLS-1$
+            return ToolResult.error("Could not prepare deletion of '" + normFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + project.getName() + "'. Nothing was deleted. Use list_projects to check the project " //$NON-NLS-1$
+                + "state and get_metadata_details to verify the target, then retry delete_metadata.") //$NON-NLS-1$
+                .toJson();
+        }
         if (refactoring == null)
         {
             return ToolResult.error("Failed to create delete refactoring for: " + normFqn).toJson(); //$NON-NLS-1$
         }
 
-        return confirm ? performDelete(normFqn, refactoring, force) : buildPreview(normFqn, refactoring);
+        return confirm ? performDelete(project.getName(), normFqn, refactoring, force)
+            : buildPreview(normFqn, refactoring);
     }
 
     private String buildPreview(String fqn, IRefactoring refactoring)
@@ -426,7 +510,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    private String performDelete(String fqn, IRefactoring refactoring, boolean force)
+    private String performDelete(String projectName, String fqn, IRefactoring refactoring, boolean force)
     {
         // EDT's own reference check: if the node is still referenced by metadata the refactoring
         // cannot auto-clean and the caller did not force, refuse the delete and report the
@@ -460,7 +544,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ConsentPreview preview = new ConsentPreview(
             "Delete metadata node", //$NON-NLS-1$
             subtitle, 1, Collections.singletonList(fqn));
-        return deleteWithConsent(preview, () -> performDeleteRefactoring(fqn, refactoring, force, blocking));
+        return deleteWithConsent(preview,
+            () -> performDeleteRefactoring(projectName, fqn, refactoring, force, blocking));
     }
 
     /**
@@ -471,14 +556,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      *
      * <p>Call only after consent was granted.</p>
      *
+     * @param projectName the project whose model is being changed
      * @param fqn the normalized FQN being deleted
      * @param refactoring the prepared delete refactoring
      * @param force whether blocking references were overridden
      * @param blocking the blocking references the caller already collected
      * @return the tool's JSON result
      */
-    private static String performDeleteRefactoring(String fqn, IRefactoring refactoring, boolean force,
-        List<Map<String, Object>> blocking)
+    private static String performDeleteRefactoring(String projectName, String fqn,
+        IRefactoring refactoring, boolean force, List<Map<String, Object>> blocking)
     {
         try
         {
@@ -502,8 +588,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         catch (Exception e)
         {
             Activator.logError("Error performing delete refactoring", e); //$NON-NLS-1$
-            return ToolResult.error("Delete failed: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            return ToolResult.error("Delete failed for '" + fqn + "' in project '" + projectName //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. The final state is uncertain. Use get_metadata_details to check whether the " //$NON-NLS-1$
+                + "node still exists before retrying delete_metadata.").toJson(); //$NON-NLS-1$
         }
+    }
+
+    private static String unavailableModelError(BmModelResolver.Resolution resolution,
+        String stateStatement)
+    {
+        return ToolResult.error(resolution.actionableError(NAME, stateStatement)).toJson();
     }
 
     /**
@@ -1385,16 +1479,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String normFqn, PredefinedWriter.PredefinedRef ref, PredefinedRefScan refScan,
         boolean force)
     {
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-        if (bmModelManager == null)
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolve(project);
+        if (!modelResolution.isAvailable())
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(project);
-        if (bmModel == null)
-        {
-            return ToolResult.error("BM model not available for project: " + project.getName()).toJson(); //$NON-NLS-1$
-        }
+        IBmModel bmModel = modelResolution.getModel();
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String itemName = ref.itemName;
@@ -1562,16 +1652,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         try
         {
-            IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
-            if (bmModelManager == null)
+            BmModelResolver.Resolution modelResolution = BmModelResolver.resolve(project);
+            if (!modelResolution.isAvailable())
             {
                 return new PredefinedRefScan(Collections.emptyList(), false);
             }
-            final IBmModel bmModel = bmModelManager.getModel(project);
-            if (bmModel == null)
-            {
-                return new PredefinedRefScan(Collections.emptyList(), false);
-            }
+            final IBmModel bmModel = modelResolution.getModel();
             final long ownerBmId = owner.bmGetId();
             return BmTransactions.<PredefinedRefScan>read(bmModel, "PredefinedItemBackReferences", //$NON-NLS-1$
                 (tx, pm) ->
@@ -1934,21 +2020,21 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("XDTOPackage not found: " + ref.packageFqn //$NON-NLS-1$
                 + ". Use get_metadata_objects to find an FQN.").toJson(); //$NON-NLS-1$
         }
-        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         // The generator is needed only on the confirm=true (write) path - to derive the content's own
         // export FQN from the OWNER (never via bmGetFqn() on the content itself; see
         // XdtoWriter.resolvePackageContent's javadoc for why that throws BmAssertionException even on
         // content that looks "attached").
         ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (bmModelManager == null || (confirm && fqnGenerator == null))
+        if (confirm && fqnGenerator == null)
         {
-            return ToolResult.error("IBmModelManager not available").toJson(); //$NON-NLS-1$
+            return ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
         }
-        IBmModel bmModel = bmModelManager.getModel(ctx.project);
-        if (bmModel == null)
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolve(ctx.project);
+        if (!modelResolution.isAvailable())
         {
-            return ToolResult.error("BM model not available for project: " + ctx.project.getName()).toJson(); //$NON-NLS-1$
+            return unavailableModelError(modelResolution, "Nothing was deleted."); //$NON-NLS-1$
         }
+        IBmModel bmModel = modelResolution.getModel();
         final long pkgBmId = ((IBmObject)pkgNode.object).bmGetId();
         // The RESOLVED package's canonical FQN: with the yo fallback the caller-typed spelling may
         // differ from the stored name, and force-export must target the stored top object.

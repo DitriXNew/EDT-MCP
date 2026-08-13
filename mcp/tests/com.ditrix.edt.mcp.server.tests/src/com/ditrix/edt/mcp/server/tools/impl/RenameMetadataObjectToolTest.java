@@ -80,6 +80,30 @@ public class RenameMetadataObjectToolTest
     }
 
     @Test
+    public void testFormElementRenamePropagatesDependentModelSettleRefusal()
+    {
+        AtomicBoolean settled = new AtomicBoolean(false);
+        String settleError = "BM model is not available for project 'DemoExtension'."; //$NON-NLS-1$
+        RenameMetadataObjectTool tool = new RenameMetadataObjectTool(
+            (projectName, timeoutMs) ->
+            {
+                assertEquals("Demo", projectName); //$NON-NLS-1$
+                settled.set(true);
+                return settleError;
+            });
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectFqn", "Catalog.Products.Form.ItemForm.Field.Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("newName", "Cost"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+
+        assertTrue("the caller-thread settle must run before the workbench hand-off", settled.get()); //$NON-NLS-1$
+        assertTrue("a dependent-model refusal must stop the form rename before the UI thread: " + result, //$NON-NLS-1$
+            result.contains(settleError));
+    }
+
+    @Test
     public void testSchemaDeclaresParameters()
     {
         String schema = new RenameMetadataObjectTool().getInputSchema();

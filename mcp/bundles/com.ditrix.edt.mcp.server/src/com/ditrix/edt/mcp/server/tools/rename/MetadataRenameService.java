@@ -54,6 +54,7 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -80,6 +81,9 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  */
 public class MetadataRenameService
 {
+    /** MCP operation name used in actionable preflight refusals. */
+    private static final String TOOL_NAME = "rename_metadata_object"; //$NON-NLS-1$
+
     /** Em dash placeholder rendered in markdown table cells with no value. */
     private static final String DASH = "\u2014"; //$NON-NLS-1$
 
@@ -190,8 +194,41 @@ public class MetadataRenameService
         // (keepMappingToExtendedConfigurationObjectsByIDs), so the EDT rename refactoring below keeps
         // the adoption intact - exactly as the EDT UI rename does. (Do NOT refuse adopted objects.)
 
+        BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
+        return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,
+            disableRequest, maxResults, progress, refactoringService, modelResolution);
+    }
+
+    /**
+     * Creates the EDT mdclass rename refactoring only after the shared BM resolver has verified the
+     * target and dependent project models. Package-visible so the null-model refusal is covered
+     * without requiring a live workbench.
+     */
+    String prepareMdClassRename(IProject project, String objectFqn, String newName,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, int maxResults,
+        RenameProgress progress, IMdRefactoringService refactoringService,
+        BmModelResolver.Resolution modelResolution)
+    {
+        if (!modelResolution.isAvailable())
+        {
+            return ToolResult.error(modelResolution.actionableError(TOOL_NAME,
+                "Nothing was renamed.")).toJson(); //$NON-NLS-1$
+        }
+
         // Create refactoring (returns collection because it may also rename in extension projects)
-        Collection<IRefactoring> refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+        Collection<IRefactoring> refactorings;
+        try
+        {
+            refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not prepare rename refactoring for " + objectFqn, e); //$NON-NLS-1$
+            return ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + project.getName() + "'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
+                + "to check the project state and get_metadata_details to verify the target, then " //$NON-NLS-1$
+                + "retry rename_metadata_object.").toJson(); //$NON-NLS-1$
+        }
         if (refactorings == null || refactorings.isEmpty())
         {
             return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$

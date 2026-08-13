@@ -95,6 +95,28 @@ public class RenameMetadataObjectTool implements IMcpTool
 
     private final MetadataRenameService service = new MetadataRenameService();
 
+    /** Caller-thread cascade-settle seam. */
+    @FunctionalInterface
+    interface CascadeSettler
+    {
+        String settle(String projectName, long timeoutMs);
+    }
+
+    private final CascadeSettler cascadeSettler;
+
+    /** Production instance: settle through the live EDT-backed project-state checker. */
+    public RenameMetadataObjectTool()
+    {
+        this((projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+            timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
+    }
+
+    /** Package-visible test seam for the caller-thread settle before the UI-thread hand-off. */
+    RenameMetadataObjectTool(CascadeSettler cascadeSettler)
+    {
+        this.cascadeSettler = cascadeSettler;
+    }
+
     @Override
     public String getName()
     {
@@ -224,7 +246,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         // by draining between construction and perform - would mean releasing the UI thread in the
         // middle of a rename, which drops the serialisation that keeps a concurrent write from
         // making the built cascade stale. See issue #320.
-        String building = ProjectStateChecker.settleBeforeCascadeOrError(projectName, SETTLE_TIMEOUT_MS);
+        String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
         if (building != null)
         {
             return ToolResult.error(building).toJson();

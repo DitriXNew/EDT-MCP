@@ -65,6 +65,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     @Override
     public final String execute(Map<String, String> params)
     {
+        String preUiError = beforeUiThreadOrError(params);
+        if (preUiError != null)
+        {
+            return ToolResult.error(preUiError).toJson();
+        }
+
         // Refuse to mutate the model while the project's derived data is still building:
         // a delete cascade would resolve an incomplete reference set (silently missing
         // affected references), and a create/add would see a stale duplicate/parent
@@ -296,6 +302,19 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     IExportEnvironment exportEnvironment()
     {
         return PLATFORM_EXPORT_ENVIRONMENT;
+    }
+
+    /**
+     * Optional bounded pre-flight that must run before the SWT UI-thread handoff. Most metadata
+     * writes need no additional work here; cascade tools may wait on EDT services that themselves
+     * need the UI thread while settling.
+     *
+     * @param params the tool parameters
+     * @return an error message, or {@code null} to continue
+     */
+    protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        return null;
     }
 
     /**
