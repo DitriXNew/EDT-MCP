@@ -110,6 +110,9 @@
         "message": {
           "type": "string"
         },
+        "modulePath": {
+          "type": "string"
+        },
         "success": {
           "type": "boolean"
         }

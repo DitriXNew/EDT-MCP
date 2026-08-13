@@ -270,14 +270,34 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
             List<String> candidates = new ArrayList<>();
             before.getAsJsonArray().forEach(e -> candidates.add(e.getAsString()));
-            // The listed set is CAPPED at MAX_LISTED_FQNS, so on a large desync it is a subset and
-            // cannot support a verdict about the whole: recomputing from it would report
-            // "nothing still missing" while the unlisted remainder is still absent. When the list
-            // was truncated the earlier sample stays, stale but not wrong about its own scope.
+            // The listed set is CAPPED at MAX_LISTED_FQNS, so on a large desync it is a subset,
+            // and a subset cannot support a verdict about the WHOLE. Such a report is therefore
+            // LABELLED rather than recomputed: silently returning the pre-barrier numbers was a
+            // defect of its own (the caller was told files were absent that the barrier had in
+            // fact waited out), but recomputing from the subset and publishing its count as the
+            // project's would be worse - a response contradicting itself.
             JsonElement beforeCount = json.get("missingBeforeCount"); //$NON-NLS-1$
-            if (beforeCount == null || beforeCount.getAsInt() != candidates.size())
+            boolean truncated = beforeCount != null && beforeCount.getAsInt() != candidates.size();
+
+            // A TRUNCATED list cannot support a verdict about the whole project, and the structured
+            // fields are documented as whole-project figures - so they are NOT overwritten from a
+            // subset. Writing the subset's count into stillMissingCount would produce a response
+            // that contradicts itself: missingBeforeCount 600 next to stillMissingCount 0 while
+            // 100 unlisted files are still absent. The caveat is added FIRST, before any early
+            // return, so it cannot be skipped by the "nothing changed" path below. It needs no
+            // project either, so it is settled before the workspace is touched.
+            if (truncated)
             {
-                return result;
+                // Worded to SUPERSEDE, not merely to add: the summary above says "still missing
+                // after export", and leaving that to stand next to a staleness note would make the
+                // message argue with itself.
+                json.addProperty(McpKeys.MESSAGE, resultString(json, McpKeys.MESSAGE)
+                    + " Correction to the figures above: missingBefore/stillMissing list at most " //$NON-NLS-1$
+                    + MAX_LISTED_FQNS + " entries while " + beforeCount.getAsInt() //$NON-NLS-1$
+                    + " object(s) were missing, so stillMissing/stillMissingCount are the values " //$NON-NLS-1$
+                    + "sampled at the earlier check and were NOT re-read afterwards. They may or " //$NON-NLS-1$
+                    + "may not still hold; re-run resync_to_disk to get a current figure."); //$NON-NLS-1$
+                return GsonProvider.get().toJson(json);
             }
 
             // Fully qualified: the base class has its own nested ProjectContext, which shadows
@@ -301,7 +321,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             {
                 return result;
             }
-            json.add("stillMissing", GsonProvider.get().toJsonTree(limit(stillMissing))); //$NON-NLS-1$
+            json.add("stillMissing", GsonProvider.get().toJsonTree(stillMissing)); //$NON-NLS-1$
             json.addProperty("stillMissingCount", stillMissing.size()); //$NON-NLS-1$
             json.addProperty(McpKeys.MESSAGE,
                 buildMessage(true, json.get("objectsExported").getAsInt(), //$NON-NLS-1$

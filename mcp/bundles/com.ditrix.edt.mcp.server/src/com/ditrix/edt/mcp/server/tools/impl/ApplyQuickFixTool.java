@@ -125,6 +125,10 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             .booleanProperty("success", "True when the fix was applied.", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_CHECK_ID, "The marker's check id.") //$NON-NLS-1$
             .stringProperty("location", "Where the fix was applied (module:line or object).") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_MODULE_PATH, "The module the fixed MARKER was positioned in; empty " //$NON-NLS-1$
+                + "when the marker carried no module position (typically an object-level marker " //$NON-NLS-1$
+                + "raised on the model, but also any marker whose locator did not resolve). This " //$NON-NLS-1$
+                + "is where the problem WAS, not a statement about everything the fix touched.") //$NON-NLS-1$
             .stringProperty("appliedVariant", "Description of the fix variant that was applied.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable summary.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -133,12 +137,42 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     @Override
     protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
     {
-        // A quick fix rewrites BSL source through IFixManager; it queues no .mdo export, so there
-        // is nothing of this call's to wait for. Inheriting the default would make a SUCCESSFUL
-        // source edit refusable on a 60s deadline because somebody else's metadata export was
-        // still draining in the same project - a false refusal on a healthy input, which costs
-        // more than the check it would be buying.
-        return Collections.emptyList();
+        // Two kinds of marker, two answers - and the tool knows which it fixed, so this is
+        // classified rather than assumed in either direction.
+        //
+        // A MODULE marker is fixed by editing that module, which TYPICALLY queues nothing for
+        // .mdo export; waiting anyway would let unrelated metadata work in the same project refuse
+        // a successful edit - a false refusal on a healthy input.
+        //
+        // A marker with NO module position is usually an object-level one raised on the model - and
+        // then its fix is overwhelmingly likely to queue the same export every metadata write
+        // queues. It can also just be a marker whose locator did not resolve, which is why this
+        // branch is the CONSERVATIVE one rather than the confident one: waiting costs a pause,
+        // not answering early costs a half-written tree. Skipping the wait there lets the caller commit a tree the fix has not finished
+        // writing. Neither half is a law - see the known limit below - but the two point opposite
+        // ways often enough that one answer for both is wrong either way round.
+        //
+        // Answering "empty" for both was the first shape of this defect and answering "the project"
+        // for both is its mirror; the discriminator is the marker's own module position, which this
+        // class already relies on to tell the two apart when it reports and orders candidates.
+        //
+        // KNOWN LIMIT, stated because it is a real one: the module position describes where the
+        // PROBLEM was, not everything the chosen fix touched. EDT's fix extension point does not
+        // forbid a variant on a module-positioned diagnostic from also changing the model, and
+        // nothing here can see that. Such a fix is waited for too little.
+        //
+        // The direction is deliberate rather than accidental: that residual is a MISSED check,
+        // which for this tool is exactly the pre-#406 behaviour, whereas guessing the other way
+        // would refuse work that succeeded. See issue #408 - the durable answer is for the tool to
+        // report what it wrote, instead of having it inferred from where the marker sat.
+        String modulePath = resultString(result, KEY_MODULE_PATH);
+        if (modulePath != null && !modulePath.isEmpty())
+        {
+            return Collections.emptyList();
+        }
+        String projectName = params.get(KEY_PROJECT);
+        return projectName == null || projectName.isEmpty() ? Collections.<String> emptyList()
+            : Collections.singletonList(projectName);
     }
 
     @Override
@@ -484,6 +518,10 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
                 .put("success", true) //$NON-NLS-1$
                 .put(KEY_CHECK_ID, chosen.checkId)
                 .put("location", chosen.location()) //$NON-NLS-1$
+                // Reported, not inferred: `location` collapses a module position and an object
+                // presentation into one string, so reading it back could only guess which kind of
+                // marker was fixed. The barrier's scope decision below turns on exactly that.
+                .put(KEY_MODULE_PATH, chosen.modulePath == null ? "" : chosen.modulePath) //$NON-NLS-1$
                 .put("appliedVariant", describeForListing(chosenVariant)) //$NON-NLS-1$
                 .put("message", "Applied quick-fix '" + describeForListing(chosenVariant) + "' at " + chosen.location()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 .toJson();

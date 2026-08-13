@@ -485,19 +485,44 @@ public class ApplyQuickFixToolTest
     @Test
     public void testASuccessfulSourceFixIsNeverRefusedOverSomebodyElsesMetadataExport()
     {
-        // The false-refusal guard (#406). A quick fix rewrites BSL source and queues no .mdo
-        // export, so it has nothing of its own to wait for. If it inherited the default scope, a
-        // SUCCESSFUL source edit could be turned into a 60s "export not confirmed" error because
-        // an unrelated metadata export was still draining in the same project - a refusal on a
-        // healthy input, which is the most expensive mistake this barrier can make.
-        JsonObject applied = new JsonObject();
-        applied.addProperty("success", true); //$NON-NLS-1$
-        applied.addProperty("action", "applied"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The false-refusal guard (#406). A MODULE marker is fixed by editing that module, which
+        // typically queues no .mdo export - so it must await nothing. Awaiting the project here would let an
+        // unrelated metadata export still draining in that project turn a SUCCESSFUL edit into a
+        // 60s "export not confirmed" error: a refusal of work that actually happened, which is the
+        // most expensive mistake this barrier can make.
+        JsonObject moduleFix = new JsonObject();
+        moduleFix.addProperty("success", true); //$NON-NLS-1$
+        moduleFix.addProperty("modulePath", "CommonModules/Calc/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertTrue("a source fix must await no export at all", //$NON-NLS-1$
+        assertTrue("a module-positioned fix must await no export at all", //$NON-NLS-1$
             new ApplyQuickFixTool()
                 .exportProjectsToAwait(Collections.singletonMap("projectName", "TestConfiguration"), //$NON-NLS-1$ //$NON-NLS-2$
-                    applied)
+                    moduleFix)
                 .isEmpty());
+    }
+
+    @Test
+    public void testAFixWithNoModulePositionIsWaitedForBecauseThatIsTheConservativeAnswer()
+    {
+        // The mirror, and the reason the answer above is not simply "never wait". An OBJECT-level
+        // marker has no module position because it is raised on the MODEL, so its fix is
+        // overwhelmingly likely to queue the same .mdo export every metadata write queues. Answering "empty" for it too - which is
+        // what the first version of this override did - lets the caller commit a tree the fix has
+        // not finished writing.
+        JsonObject objectFix = new JsonObject();
+        objectFix.addProperty("success", true); //$NON-NLS-1$
+        objectFix.addProperty("modulePath", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("with no module position the conservative answer is to await the export", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
+            new ArrayList<>(new ApplyQuickFixTool().exportProjectsToAwait(
+                Collections.singletonMap("projectName", "TestConfiguration"), objectFix))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A result that does not report the discriminator at all is treated as object-level too:
+        // the safe direction is to wait, because the alternative is answering early about a write.
+        assertEquals("a result without the discriminator must be awaited, not skipped", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
+            new ArrayList<>(new ApplyQuickFixTool().exportProjectsToAwait(
+                Collections.singletonMap("projectName", "TestConfiguration"), new JsonObject()))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

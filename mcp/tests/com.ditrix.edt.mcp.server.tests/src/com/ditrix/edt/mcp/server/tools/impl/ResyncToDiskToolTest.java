@@ -53,6 +53,10 @@ import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
 
+import com.google.gson.JsonArray;
+
+import com.google.gson.JsonParser;
+
 public class ResyncToDiskToolTest
 {
     @Test
@@ -729,5 +733,46 @@ public class ResyncToDiskToolTest
         assertEquals("a result missing the counters must be awaited, not silently skipped", //$NON-NLS-1$
             Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
             new ArrayList<>(tool.exportProjectsToAwait(params, new JsonObject())));
+    }
+
+    @Test
+    public void testATruncatedDiskReportIsLabelledAndItsWholeProjectCountsAreLeftAlone()
+    {
+        // missingBefore is capped at MAX_LISTED_FQNS while missingBeforeCount stays the true
+        // total, so on a large desync the listed set is a SUBSET. Two failure modes were possible
+        // here and this pins both: overwriting stillMissingCount from the subset would publish
+        // "nothing still missing" next to missingBeforeCount 600 - a response contradicting
+        // itself - and skipping the refresh silently would hand back pre-barrier numbers with no
+        // sign that they are stale.
+        JsonObject json = new JsonObject();
+        json.addProperty("success", true); //$NON-NLS-1$
+        json.addProperty("missingBeforeCount", 600); //$NON-NLS-1$
+        json.addProperty("stillMissingCount", 600); //$NON-NLS-1$
+        JsonArray listed = new JsonArray();
+        listed.add("CommonModule.A"); //$NON-NLS-1$
+        json.add("missingBefore", listed); //$NON-NLS-1$
+        // The REAL summary shape, not a placeholder: it already claims a post-export state
+        // ("still missing after export"), which is exactly what the label has to override.
+        json.addProperty("message", //$NON-NLS-1$
+            "600 object(s) had no .mdo on disk before and were written out; 600 still missing " //$NON-NLS-1$
+                + "after export. No dangling references in Configuration.mdo."); //$NON-NLS-1$
+
+        String refreshed = new ResyncToDiskTool().refreshAfterExportAwait(
+            Collections.singletonMap("projectName", "TestConfiguration"), json.toString()); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject out = JsonParser.parseString(refreshed).getAsJsonObject();
+
+        assertEquals("a subset must not overwrite the whole-project count", 600, //$NON-NLS-1$
+            out.get("stillMissingCount").getAsInt()); //$NON-NLS-1$
+        String message = out.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue("the staleness must be visible in the answer, not merely implied: " + message, //$NON-NLS-1$
+            message.contains("were NOT re-read afterwards")); //$NON-NLS-1$
+        // And it must READ as a correction of the summary above it, or the message argues with
+        // itself: "still missing after export" followed by "these are not the post-export state".
+        assertTrue("the label must supersede the earlier claim, not sit beside it: " + message, //$NON-NLS-1$
+            message.contains("Correction to the figures above")
+                && message.indexOf("still missing after export") //$NON-NLS-1$
+                    < message.indexOf("Correction to the figures above")); //$NON-NLS-1$
+        assertTrue("and it must name the true total so the caller can see the gap: " + message, //$NON-NLS-1$
+            message.contains("600")); //$NON-NLS-1$
     }
 }
