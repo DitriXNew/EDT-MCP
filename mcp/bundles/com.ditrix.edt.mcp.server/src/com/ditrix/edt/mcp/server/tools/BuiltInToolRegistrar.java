@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server.tools;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool;
@@ -112,119 +115,124 @@ public final class BuiltInToolRegistrar
     }
 
     /**
-     * Clears the registry and registers every built-in tool.
+     * Publishes every built-in tool as the registry's catalogue.
+     * <p>
+     * The catalogue is built first and handed over in ONE step. This runs on every server
+     * start, including a restart while clients - and the in-process bridge - are already
+     * calling tools: filling the live registry one tool at a time would let them see a
+     * half-populated catalogue and be told that a tool which exists is unknown.
      *
-     * @param registry the registry to populate (cleared first)
+     * @param registry the registry to publish into (its previous contents are replaced)
      */
     public static void registerAll(McpToolRegistry registry)
     {
-        // Clear existing tools
-        registry.clear();
+        List<IMcpTool> catalogue = new ArrayList<>();
 
-        // Register built-in tools
-        registry.register(new GetEdtVersionTool());
-        registry.register(new GetServerStatusTool());
-        registry.register(new GetToolGuideTool());
+        // Built-in tools
+        catalogue.add(new GetEdtVersionTool());
+        catalogue.add(new GetServerStatusTool());
+        catalogue.add(new GetToolGuideTool());
         // Progressive tool disclosure meta-tools (core toolset)
-        registry.register(new ListToolsetsTool());
-        registry.register(new EnableToolsetTool());
-        registry.register(new ListProjectsTool());
-        registry.register(new GetConfigurationPropertiesTool());
-        registry.register(new CleanProjectTool());
-        registry.register(new RevalidateObjectsTool());
-        registry.register(new ResyncToDiskTool());
-        registry.register(new ExportConfigurationToXmlTool());
-        registry.register(new ImportConfigurationFromXmlTool());
-        registry.register(new BuildExternalObjectsTool());
-        registry.register(new DeleteProjectTool());
-        registry.register(new CreateProjectTool());
-        registry.register(new GetProblemSummaryTool());
-        registry.register(new ApplyQuickFixTool());
-        registry.register(new GetProjectErrorsTool());
-        registry.register(new GetMarkersTool());
-        registry.register(new GetEventLogTool());
-        registry.register(new GetMcpHistoryTool());
-        registry.register(new ListGitBranchesTool());
-        registry.register(new SwitchGitBranchTool());
-        registry.register(new SetBranchInfobaseTool());
-        registry.register(new CreateGitBranchTool());
-        registry.register(new GitTool());
-        registry.register(new GetCheckDescriptionTool());
-        registry.register(new GetContentAssistTool());
-        registry.register(new GetPlatformDocumentationTool());
-        registry.register(new GetMetadataObjectsTool());
-        registry.register(new GetMetadataDetailsTool());
-        registry.register(new ListCommonPicturesTool());
-        registry.register(new ExportCommonPictureTool());
-        registry.register(new ListSubsystemsTool());
-        registry.register(new GetSubsystemContentTool());
-        registry.register(new FindReferencesTool());
+        catalogue.add(new ListToolsetsTool());
+        catalogue.add(new EnableToolsetTool());
+        catalogue.add(new ListProjectsTool());
+        catalogue.add(new GetConfigurationPropertiesTool());
+        catalogue.add(new CleanProjectTool());
+        catalogue.add(new RevalidateObjectsTool());
+        catalogue.add(new ResyncToDiskTool());
+        catalogue.add(new ExportConfigurationToXmlTool());
+        catalogue.add(new ImportConfigurationFromXmlTool());
+        catalogue.add(new BuildExternalObjectsTool());
+        catalogue.add(new DeleteProjectTool());
+        catalogue.add(new CreateProjectTool());
+        catalogue.add(new GetProblemSummaryTool());
+        catalogue.add(new ApplyQuickFixTool());
+        catalogue.add(new GetProjectErrorsTool());
+        catalogue.add(new GetMarkersTool());
+        catalogue.add(new GetEventLogTool());
+        catalogue.add(new GetMcpHistoryTool());
+        catalogue.add(new ListGitBranchesTool());
+        catalogue.add(new SwitchGitBranchTool());
+        catalogue.add(new SetBranchInfobaseTool());
+        catalogue.add(new CreateGitBranchTool());
+        catalogue.add(new GitTool());
+        catalogue.add(new GetCheckDescriptionTool());
+        catalogue.add(new GetContentAssistTool());
+        catalogue.add(new GetPlatformDocumentationTool());
+        catalogue.add(new GetMetadataObjectsTool());
+        catalogue.add(new GetMetadataDetailsTool());
+        catalogue.add(new ListCommonPicturesTool());
+        catalogue.add(new ExportCommonPictureTool());
+        catalogue.add(new ListSubsystemsTool());
+        catalogue.add(new GetSubsystemContentTool());
+        catalogue.add(new FindReferencesTool());
 
         // Tag tools
-        registry.register(new GetTagsTool());
-        registry.register(new GetObjectsByTagsTool());
+        catalogue.add(new GetTagsTool());
+        catalogue.add(new GetObjectsByTagsTool());
 
         // Application tools
-        registry.register(new GetApplicationsTool());
-        registry.register(new CreateInfobaseTool());
-        registry.register(new SetInfobaseCredentialsTool());
-        registry.register(new DeleteInfobaseTool());
-        registry.register(new UpdateDatabaseTool());
-        registry.register(new DebugLaunchTool());
-        registry.register(new ListConfigurationsTool());
-        registry.register(new CreateLaunchConfigTool());
-        registry.register(new DeleteLaunchConfigTool());
-        registry.register(new RunYaxunitTestsTool());
-        registry.register(new AskWorkmateTool());
-        registry.register(new TerminateLaunchTool());
+        catalogue.add(new GetApplicationsTool());
+        catalogue.add(new CreateInfobaseTool());
+        catalogue.add(new SetInfobaseCredentialsTool());
+        catalogue.add(new DeleteInfobaseTool());
+        catalogue.add(new UpdateDatabaseTool());
+        catalogue.add(new DebugLaunchTool());
+        catalogue.add(new ListConfigurationsTool());
+        catalogue.add(new CreateLaunchConfigTool());
+        catalogue.add(new DeleteLaunchConfigTool());
+        catalogue.add(new RunYaxunitTestsTool());
+        catalogue.add(new AskWorkmateTool());
+        catalogue.add(new TerminateLaunchTool());
 
         // Debug inspection tools (breakpoints + suspended state)
-        registry.register(new SetBreakpointTool());
-        registry.register(new RemoveBreakpointTool());
-        registry.register(new ListBreakpointsTool());
-        registry.register(new WaitForBreakTool());
-        registry.register(new GetVariablesTool());
-        registry.register(new SetVariableTool());
-        registry.register(new StepTool());
-        registry.register(new ResumeTool());
-        registry.register(new EvaluateExpressionTool());
-        registry.register(new DebugYaxunitTestsTool()); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
-        registry.register(new DebugStatusTool());
-        registry.register(new StartProfilingTool());
-        registry.register(new StopProfilingTool());
-        registry.register(new GetProfilingResultsTool());
+        catalogue.add(new SetBreakpointTool());
+        catalogue.add(new RemoveBreakpointTool());
+        catalogue.add(new ListBreakpointsTool());
+        catalogue.add(new WaitForBreakTool());
+        catalogue.add(new GetVariablesTool());
+        catalogue.add(new SetVariableTool());
+        catalogue.add(new StepTool());
+        catalogue.add(new ResumeTool());
+        catalogue.add(new EvaluateExpressionTool());
+        catalogue.add(new DebugYaxunitTestsTool()); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
+        catalogue.add(new DebugStatusTool());
+        catalogue.add(new StartProfilingTool());
+        catalogue.add(new StopProfilingTool());
+        catalogue.add(new GetProfilingResultsTool());
 
         // BSL code analysis tools
-        registry.register(new ReadModuleSourceTool());
-        registry.register(new WriteModuleSourceTool());
-        registry.register(new GetModuleStructureTool());
-        registry.register(new ListModulesTool());
-        registry.register(new SearchInCodeTool());
-        registry.register(new ReadMethodSourceTool());
-        registry.register(new GetMethodCallHierarchyTool());
-        registry.register(new GetOutgoingStructuresTool());
-        registry.register(new GoToDefinitionTool());
-        registry.register(new GetSymbolInfoTool());
-        registry.register(new GetFormLayoutSnapshotTool());
-        registry.register(new GetFormScreenshotTool());
-        registry.register(new GetTemplateScreenshotTool());
-        registry.register(new ValidateQueryTool());
+        catalogue.add(new ReadModuleSourceTool());
+        catalogue.add(new WriteModuleSourceTool());
+        catalogue.add(new GetModuleStructureTool());
+        catalogue.add(new ListModulesTool());
+        catalogue.add(new SearchInCodeTool());
+        catalogue.add(new ReadMethodSourceTool());
+        catalogue.add(new GetMethodCallHierarchyTool());
+        catalogue.add(new GetOutgoingStructuresTool());
+        catalogue.add(new GoToDefinitionTool());
+        catalogue.add(new GetSymbolInfoTool());
+        catalogue.add(new GetFormLayoutSnapshotTool());
+        catalogue.add(new GetFormScreenshotTool());
+        catalogue.add(new GetTemplateScreenshotTool());
+        catalogue.add(new ValidateQueryTool());
 
         // Metadata refactoring tools (form members are created/edited/removed by their FQNs via
         // create/modify/delete_metadata; the former add_form_*/set_form_item_property/delete_form_item/
         // get_form_structure tools were folded into those + get_metadata_details and removed in F4b).
-        registry.register(new RenameMetadataObjectTool());
-        registry.register(new DeleteMetadataTool());
-        registry.register(new CreateMetadataTool());
-        registry.register(new ModifyMetadataTool());
-        registry.register(new AdoptMetadataObjectTool());
-        registry.register(new ValidateXdtoPackageTool());
+        catalogue.add(new RenameMetadataObjectTool());
+        catalogue.add(new DeleteMetadataTool());
+        catalogue.add(new CreateMetadataTool());
+        catalogue.add(new ModifyMetadataTool());
+        catalogue.add(new AdoptMetadataObjectTool());
+        catalogue.add(new ValidateXdtoPackageTool());
 
         // LanguageTool translation tools
-        registry.register(new GenerateTranslationStringsTool());
-        registry.register(new TranslateConfigurationTool());
-        registry.register(new GetTranslationProjectInfoTool());
+        catalogue.add(new GenerateTranslationStringsTool());
+        catalogue.add(new TranslateConfigurationTool());
+        catalogue.add(new GetTranslationProjectInfoTool());
 
+        registry.replaceAll(catalogue);
         Activator.logInfo("Registered " + registry.getToolCount() + " MCP tools"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }
