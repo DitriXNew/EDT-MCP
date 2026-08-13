@@ -216,8 +216,19 @@ public class MetadataRenameService
         }
 
         // Create refactoring (returns collection because it may also rename in extension projects)
-        Collection<IRefactoring> refactorings =
-            refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+        Collection<IRefactoring> refactorings;
+        try
+        {
+            refactorings = refactoringService.createMdObjectRenameRefactoring(targetObject, newName);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not prepare rename refactoring for " + objectFqn, e); //$NON-NLS-1$
+            return ToolResult.error("Could not prepare rename of '" + objectFqn + "' in project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + project.getName() + "'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
+                + "to check the project state and get_metadata_details to verify the target, then " //$NON-NLS-1$
+                + "retry rename_metadata_object.").toJson(); //$NON-NLS-1$
+        }
         if (refactorings == null || refactorings.isEmpty())
         {
             return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$

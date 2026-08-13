@@ -33,6 +33,7 @@ import org.junit.Test;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -91,6 +92,32 @@ public class MetadataRenameServiceTest
         verify(refactoringService, never()).createMdObjectRenameRefactoring(
             org.mockito.ArgumentMatchers.any(MdObject.class),
             org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    public void testMdClassRenameContainsNullModelRaceFromEdtRefactoring()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        IBmModelManager modelManager = mock(IBmModelManager.class);
+        when(modelManager.getModel(project)).thenReturn(mock(IBmModel.class));
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        MdObject object = mock(MdObject.class);
+        BmModelResolver.Resolution resolution = BmModelResolver.resolve(project, modelManager);
+        when(refactoringService.createMdObjectRenameRefactoring(object, "Calculator")) //$NON-NLS-1$
+            .thenThrow(new NullPointerException(
+                "Cannot invoke \"IBmModel.getId()\" because \"model\" is null")); //$NON-NLS-1$
+
+        String json = new MetadataRenameService().prepareMdClassRename(project,
+            "CommonModule.Calc", "Calculator", object, false, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
+            refactoringService, resolution);
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Could not prepare rename of 'CommonModule.Calc' in project " //$NON-NLS-1$
+            + "'TestConfiguration'. Nothing was renamed; no cascade started. Use list_projects " //$NON-NLS-1$
+            + "to check the project state and get_metadata_details to verify the target, then " //$NON-NLS-1$
+            + "retry rename_metadata_object.", result.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Cyrillic 'Spravochnik' - the Russian TYPE token for a Catalog. */
