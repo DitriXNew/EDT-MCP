@@ -47,6 +47,16 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
     /** Input param: comma-separated test names as Module.Method. */
     private static final String KEY_TESTS = "tests"; //$NON-NLS-1$
 
+    /**
+     * Input param: comma-separated YAXUnit tags to select tests by.
+     *
+     * <p>Carried by the alias rather than left to the delegate: an argument this shim does not
+     * list is dropped silently, and a dropped TAG filter is the one failure mode that looks like
+     * success — the run would start unfiltered and execute every test instead of the requested
+     * slice. The alias promises "identical behaviour", so the filter families have to stay in step.
+     */
+    private static final String KEY_TAGS = "tags"; //$NON-NLS-1$
+
     /** Input param: whether to run a silent DB update before launch. */
     private static final String KEY_UPDATE_BEFORE_LAUNCH = "updateBeforeLaunch"; //$NON-NLS-1$
 
@@ -85,6 +95,10 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
             .stringProperty(KEY_MODULES, "Comma-separated module names to filter tests.") //$NON-NLS-1$
             .stringProperty(KEY_TESTS,
                 "Comma-separated test names as Module.Method (recommended: pin to one test for a predictable cycle).") //$NON-NLS-1$
+            .stringProperty(KEY_TAGS,
+                "Comma-separated YAXUnit tags to select tests by. A test is selected when its module, " //$NON-NLS-1$
+                    + "its suite, or the test itself carries one of these tags; matching is " //$NON-NLS-1$
+                    + "case-insensitive and exclusion is not supported by YAXUnit.") //$NON-NLS-1$
             .booleanProperty(KEY_UPDATE_BEFORE_LAUNCH,
                 "Default true: terminate any live client and run a silent DB update first so no modal " //$NON-NLS-1$
                     + "'Update database?' dialog blocks the call; false keeps legacy delegate behaviour — " //$NON-NLS-1$
@@ -109,6 +123,7 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
         putIfPresent(forwarded, KEY_EXTENSIONS, params.get(KEY_EXTENSIONS));
         putIfPresent(forwarded, KEY_MODULES, params.get(KEY_MODULES));
         putIfPresent(forwarded, KEY_TESTS, params.get(KEY_TESTS));
+        putIfPresent(forwarded, KEY_TAGS, params.get(KEY_TAGS));
         putIfPresent(forwarded, KEY_UPDATE_BEFORE_LAUNCH, params.get(KEY_UPDATE_BEFORE_LAUNCH));
         putIfPresent(forwarded, KEY_UPDATE_SCOPE, params.get(KEY_UPDATE_SCOPE));
         putIfPresent(forwarded, KEY_EXTERNAL_INFOBASE_CHANGES,

@@ -11,11 +11,35 @@ Two ways to identify the launch:
 - `launchConfigurationName` (preferred) — the exact runtime-client config name from `list_configurations`. When set, `projectName` and `applicationId` are derived from it.
 - `projectName` + `applicationId` — required together when `launchConfigurationName` is omitted. Get the application id from `get_applications`.
 
-Optional test filters (each an array of names, AND-combined; a comma-separated string is also accepted):
+Optional test filters (each an array of names; the families are AND-combined with one another, while the values WITHIN one family are OR-ed. A comma-separated string is also accepted):
 
 - `extensions` — restrict to tests in these extensions.
 - `modules` — restrict to these test modules.
 - `tests` — individual tests in `Module.Method` format.
+- `tags` — restrict to tests carrying one of these YAXUnit tags.
+
+### Filtering by tag
+
+Tags are declared next to the test, so they stay in step with it — which is what a hand-maintained
+`modules` list cannot do. `ЮТТесты.Тег("юнит")` before the first suite tags the whole MODULE;
+after `ДобавитьТестовыйНабор(...)` it tags that SUITE; on a test it tags that test.
+
+The tool only puts the list into `filter.tags`; YAXUnit itself does the selecting. What that means
+in practice (verified against YAXUnit v25.12):
+
+- A test is selected when its MODULE, its SUITE, **or** the test itself carries a listed tag — a
+  module-level tag covers everything inside it.
+- Matching is **case-insensitive** (`Smoke` and `smoke` are the same tag).
+- Exclusion is **not supported** by the framework. There is no "everything except" syntax; a
+  leading `-` is matched literally, as part of the tag name. Select the layer you want by tagging it.
+- An **empty** list is not a filter — the run is unfiltered, exactly as if `tags` had been omitted.
+- A tag no test carries selects **nothing**, and neither the tool nor the framework treats that as
+  a bad request — there is no "unknown tag" error to expect. What you get back is the report of a
+  run in which nothing matched. (If no report is produced at all, the call fails with the
+  missing-report error; see the gotcha below, which cannot distinguish that from a
+  YAXUnit-not-installed infobase.)
+- A value may not contain a comma: the families are comma-separated on the way in, so `a,b` is
+  read as two tags, never as one tag named `a,b`. This applies to `extensions`/`modules`/`tests` too.
 
 Control:
 

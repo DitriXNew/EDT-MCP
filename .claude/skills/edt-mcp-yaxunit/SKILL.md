@@ -82,7 +82,7 @@ Unconditional: `ЮТест.Упал("why")`, `ЮТест.Пропустить("r
 
 ## Running through MCP
 
-- **`run_yaxunit_tests`** — starts a run, polls up to `timeout` seconds, returns a JUnit-Markdown report (plus `report.md`/`junit.xml` on disk). Filters (arrays, AND): `extensions`, `modules`, `tests` (format `Module.Method`). With no filter — default `filter.extensions=["tests"]`.
+- **`run_yaxunit_tests`** — starts a run, polls up to `timeout` seconds, returns a JUnit-Markdown report (plus `report.md`/`junit.xml` on disk). Filters (arrays; families AND-combined, values within a family OR-ed): `extensions`, `modules`, `tests` (format `Module.Method`), `tags`. With no filter — default `filter.extensions=["tests"]`. `tags` selects by the YAXUnit tags declared with `ЮТТесты.Тег(...)` — module-, suite- or test-level, case-insensitive, no exclusion syntax.
 - **`debug_yaxunit_tests`** — runs in debug mode (breakpoints fire); then `wait_for_break` → `get_variables` / `evaluate_expression` / `step` / `resume`. Pin to one test (`tests=["Module.Method"]`) for predictability.
 
 ### Repo gotchas

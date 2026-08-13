@@ -78,6 +78,11 @@ public class DebugYaxunitTestsToolTest
         assertTrue(schema.contains("\"extensions\""));
         assertTrue(schema.contains("\"modules\""));
         assertTrue(schema.contains("\"tests\""));
+        // Parity with run_yaxunit_tests (#409): a filter family this alias does not declare is
+        // also not forwarded, and a dropped TAG filter fails as a full unfiltered run rather
+        // than as an error — the one failure mode that looks like success.
+        assertTrue("schema must include tags (parity with run_yaxunit_tests)",
+            schema.contains("\"tags\""));
         assertTrue("schema must include updateBeforeLaunch (auto-chain switch)",
             schema.contains("\"updateBeforeLaunch\""));
         // Parity with run_yaxunit_tests: the deprecated alias declares (and forwards)

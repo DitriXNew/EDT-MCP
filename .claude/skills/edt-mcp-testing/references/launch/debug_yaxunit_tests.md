@@ -49,7 +49,7 @@ step(threadId=<threadId>, mode="over")
 resume(threadId=<threadId>)
 ```
 
-Filter params are all comma-separated and optional: `extensions`, `modules`, `tests` (Module.Method format, recommended). They map to the YAXUnit `filter.{extensions,modules,tests}` arrays in the generated `xUnitParams.json` (`buildParamsJson`); the JSON also pins `reportFormat="jUnit"` and `closeAfterTests=true`. Omitting all three runs the whole suite (heavier, not recommended under the debugger).
+Filter params are all comma-separated and optional: `extensions`, `modules`, `tests` (Module.Method format, recommended), `tags`. They map to the YAXUnit `filter.{extensions,modules,tests,tags}` arrays in the generated `xUnitParams.json` (`buildParamsJson`); the JSON also pins `reportFormat="jUnit"` and `closeAfterTests=true`. Omitting all four runs the whole suite (heavier, not recommended under the debugger).
 
 **Verify / observe.** This tool does not report test results itself. Confirm progress and outcome out-of-band:
 - Suspension is confirmed by `wait_for_break` returning `{"hit":true, ...}` — see [debug/wait_for_break.md](../debug/wait_for_break.md).

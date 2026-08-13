@@ -967,6 +967,10 @@
           "description": "EDT project name (required if launchConfigurationName is omitted).",
           "type": "string"
         },
+        "tags": {
+          "description": "Comma-separated YAXUnit tags to select tests by. A test is selected when its module, its suite, or the test itself carries one of these tags; matching is case-insensitive and exclusion is not supported by YAXUnit.",
+          "type": "string"
+        },
         "tests": {
           "description": "Comma-separated test names as Module.Method (recommended: pin to one test for a predictable cycle).",
           "type": "string"
@@ -3739,6 +3743,13 @@
         "projectName": {
           "description": "EDT project name (required if launchConfigurationName is omitted).",
           "type": "string"
+        },
+        "tags": {
+          "description": "YAXUnit tags to select tests by (array; a comma-separated string is also accepted). A test is selected when its module, its suite, or the test itself carries one of these tags; several tags are OR-ed, and the tag filter is AND-ed with extensions/modules/tests. Matching is case-insensitive. Exclusion is NOT supported by YAXUnit — a leading '-' is matched literally, not negated. A tag no test carries is not an error, just an empty selection.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "tests": {
           "description": "Test names in Module.Method format (array; a comma-separated string is also accepted).",
