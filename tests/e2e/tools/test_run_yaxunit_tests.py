@@ -62,8 +62,8 @@ mutation-sensitive against the SPECIFIC message, not just is_error):
 Parameter shape (from getInputSchema / execute) — all OPTIONAL at the schema level;
 the required-ness is conditional and enforced in code:
     launchConfigurationName (str), projectName (str), applicationId (str),
-    extensions (array), modules (array), tests (array) -- each declared type:array
-    but a comma-separated string is also accepted (shared extractArrayArgument),
+    extensions (array), modules (array), tests (array), tags (array) -- each declared
+    type:array but a comma-separated string is also accepted (shared extractArrayArgument),
     timeout (int, default 45, clamped into [1, 45] — see below), updateBeforeLaunch
     (bool, default true).
 There is NO closed enum and NO declared XOR pair; the real conditional-required
@@ -327,5 +327,67 @@ def test_timeout_above_the_ceiling_is_clamped_not_rejected():
     )
     assert "timeout" not in err.lower(), (
         "an over-large timeout must be clamped SILENTLY, not rejected: " + err
+    )
+    assert_no_diff("a rejected launch must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #409 — the tag filter is a first-class filter family
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_tags_filter_is_accepted_as_an_array():
+    """`tags` must be ACCEPTED and carried into the ordinary flow.
+
+    SCOPE, stated honestly: this call dies at launch-config resolution, long before any
+    xUnitParams.json is written, so it does NOT prove the tag reaches the filter — an
+    implementation that ignored `tags` outright would also pass. What it does prove is
+    the wire contract: the argument is accepted in its declared array form and the call
+    proceeds to fail on its REAL precondition (the missing launch configuration) instead
+    of on the parameter. A schema/validation regression that rejected the new key would
+    surface here; a carriage regression would not.
+
+    Carriage is pinned by the unit ratchets RunYaxunitTestsToolTest.
+    testTagsLandInTheGeneratedFilter and ...testRunKeyDistinguishesTagSelections, which
+    drive the production seams with the same RunRequest the run path builds, and which
+    were verified to go red when the filter branch or the key term is deleted."""
+    bad_cfg = "NoSuchLaunchConfig_Filtered_e2e"
+    r = call(
+        "run_yaxunit_tests",
+        {"launchConfigurationName": bad_cfg, "tags": ["smoke", "nodb"]},
+    )
+    err = assert_error(r, "a tag filter must reach the normal flow")
+    assert_error_quality(
+        err,
+        names=[bad_cfg],
+        suggests=["list_configurations"],
+        ctx="a tag filter is accepted like any other filter family",
+    )
+    # The failure must be the no-config sentinel, NOT a complaint about the argument:
+    # an unknown/rejected parameter would surface as an error naming the value instead.
+    assert "smoke" not in err and "nodb" not in err, (
+        "tags must be accepted silently, not echoed back as a bad argument: " + err
+    )
+    assert_no_diff("a rejected launch must not touch the project on disk")
+
+
+@e2e_test(tool="run_yaxunit_tests", kind="read")
+def test_tags_filter_also_accepts_a_comma_separated_string():
+    """`tags` follows the same dual wire shape as the other filter families.
+
+    `extensions`/`modules`/`tests` are declared as arrays but a comma-separated string
+    is accepted too (shared extractArrayArgument). A new family that took only one of
+    the two shapes would be an inconsistency callers trip over, so pin the string form
+    explicitly — it is the shape the deprecated debug_yaxunit_tests alias forwards."""
+    bad_cfg = "NoSuchLaunchConfig_FilteredCsv_e2e"
+    r = call(
+        "run_yaxunit_tests",
+        {"launchConfigurationName": bad_cfg, "tags": "smoke,nodb"},
+    )
+    err = assert_error(r, "a comma-separated tag filter must reach the normal flow")
+    assert_error_quality(
+        err,
+        names=[bad_cfg],
+        suggests=["list_configurations"],
+        ctx="a comma-separated tag filter is accepted like the array form",
     )
     assert_no_diff("a rejected launch must not touch the project on disk")

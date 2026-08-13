@@ -11,6 +11,7 @@ Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report
 | extensions | — | array | Extension names to filter tests (array; a comma-separated string is also accepted). |
 | modules | — | array | Module names to filter tests (array; a comma-separated string is also accepted). |
 | tests | — | array | Test names in Module.Method format (array; a comma-separated string is also accepted). |
+| tags | — | array | YAXUnit tags to select tests by (array; a comma-separated string is also accepted). A test is selected when its module, its suite, or the test itself carries one of these tags; several tags are OR-ed, and the tag filter is AND-ed with extensions/modules/tests. Matching is case-insensitive. Exclusion is NOT supported by YAXUnit — a leading '-' is matched literally, not negated. A tag no test carries is not an error, just an empty selection. |
 | timeout | — | integer | Wall-clock window in seconds for the WHOLE call, not just the polling step (default and maximum 45; a larger value is clamped to it, because an MCP transport cuts the call at around 60s and a longer window would return a bare transport error instead of an answer). The call returns WITHIN this window: at least 80% of it is available to the work, the remainder is reserved so the answer can be assembled rather than cut off. On expiry the tool returns Pending with the current phase — or, if the work never started at all, an explicit error saying so (that one case can take up to half a second longer, while the server establishes the work never began); call again with the same arguments to keep waiting. |
 | updateBeforeLaunch | — | boolean | Auto-chain (default: true): force-recompute the project + its extensions, terminate a live client and run a silent DB update first, so a freshly edited extension runs fresh (not stale), auto-answering the platform's update dialogs. This makes a blocking dialog unlikely, NOT impossible: a dialog EDT raises outside the tool's own windows still waits for a human, and the tool reports it as a Pending whose phase stops changing. false: legacy delegate behaviour — no client sweep, no auto-confirmed update dialog; platform dialogs may appear and block. Results are never served from a cache — a completed run is re-executed on the next identical call regardless of this flag. |
 | updateScope | — | string | Which projects to rebuild+update before the run: 'all' (configuration + dependent extensions, default), 'configuration', or 'extension:<ProjectName>' (comma-separate several). Forces a derived-data recompute so a freshly edited extension's .cfe is regenerated and loaded into the infobase before the run. Unknown extension names fail the call (the error lists the available names). Only applies when updateBeforeLaunch=true. |
@@ -31,11 +32,35 @@ Two ways to identify the launch:
 - `launchConfigurationName` (preferred) — the exact runtime-client config name from `list_configurations`. When set, `projectName` and `applicationId` are derived from it.
 - `projectName` + `applicationId` — required together when `launchConfigurationName` is omitted. Get the application id from `get_applications`.
 
-Optional test filters (each an array of names, AND-combined; a comma-separated string is also accepted):
+Optional test filters (each an array of names; the families are AND-combined with one another, while the values WITHIN one family are OR-ed. A comma-separated string is also accepted):
 
 - `extensions` — restrict to tests in these extensions.
 - `modules` — restrict to these test modules.
 - `tests` — individual tests in `Module.Method` format.
+- `tags` — restrict to tests carrying one of these YAXUnit tags.
+
+### Filtering by tag
+
+Tags are declared next to the test, so they stay in step with it — which is what a hand-maintained
+`modules` list cannot do. `ЮТТесты.Тег("юнит")` before the first suite tags the whole MODULE;
+after `ДобавитьТестовыйНабор(...)` it tags that SUITE; on a test it tags that test.
+
+The tool only puts the list into `filter.tags`; YAXUnit itself does the selecting. What that means
+in practice (verified against YAXUnit v25.12):
+
+- A test is selected when its MODULE, its SUITE, **or** the test itself carries a listed tag — a
+  module-level tag covers everything inside it.
+- Matching is **case-insensitive** (`Smoke` and `smoke` are the same tag).
+- Exclusion is **not supported** by the framework. There is no "everything except" syntax; a
+  leading `-` is matched literally, as part of the tag name. Select the layer you want by tagging it.
+- An **empty** list is not a filter — the run is unfiltered, exactly as if `tags` had been omitted.
+- A tag no test carries selects **nothing**, and neither the tool nor the framework treats that as
+  a bad request — there is no "unknown tag" error to expect. What you get back is the report of a
+  run in which nothing matched. (If no report is produced at all, the call fails with the
+  missing-report error; see the gotcha below, which cannot distinguish that from a
+  YAXUnit-not-installed infobase.)
+- A value may not contain a comma: the families are comma-separated on the way in, so `a,b` is
+  read as two tags, never as one tag named `a,b`. This applies to `extensions`/`modules`/`tests` too.
 
 Control:
 

@@ -25,19 +25,19 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
-import com._1c.g5.v8.dt.platform.version.Version;
-import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
@@ -68,6 +68,7 @@ import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
+import com.google.gson.JsonObject;
 
 /**
  * Deletes a metadata node (a top-level object or a subordinate member) addressed by a 1C full-name
@@ -282,6 +283,37 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable description of the result") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
+    {
+        // A preview writes nothing, so it queued no export and must not be exposed to refusal by
+        // unrelated background work.
+        if (!JsonUtils.extractBooleanArgument(params, "confirm", false)) //$NON-NLS-1$
+        {
+            return Collections.emptyList();
+        }
+        // Scope is the TARGET project only, deliberately.
+        //
+        // A confirmed mdclass delete does cascade: EDT's md-refactoring also cleans the references
+        // held by dependent extensions, and their .mdo files are exported too - so in that branch
+        // the honest set is larger than this. It is not added here, because the set EDT exposes
+        // (IDependentProject.getDependent, the same selection #405's pre-flight uses) is the set of
+        // models it SCANS, not the set it WRITES, and awaiting a scanned-but-untouched extension
+        // reintroduces exactly the false refusal this same review round removed from
+        // apply_quick_fix: an unrelated wedged export in that extension would fail a healthy
+        // delete. The specialized branches make it worse - form-member, form-object, XDTO-member
+        // and predefined-item deletes bypass the refactoring entirely and touch only this project.
+        //
+        // Awaiting only the target is therefore a KNOWN NARROW WAIT, and its cost is bounded and
+        // named: a cascade that also dirtied an extension can answer while that extension's export
+        // is still queued - the pre-#406 behaviour for that file, not a regression. Closing it
+        // properly needs the tool to report what it actually wrote rather than have it re-derived
+        // afterwards, which is a change to how tools describe their own writes.
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        return projectName == null || projectName.isEmpty() ? Collections.<String> emptyList()
+            : Collections.singletonList(projectName);
     }
 
     @Override

@@ -88,6 +88,25 @@ public class RunYaxunitTestsTool implements IMcpTool
     /** Input/filter param: test names in Module.Method format. */
     private static final String KEY_TESTS = "tests"; //$NON-NLS-1$
 
+    /**
+     * Input/filter param: YAXUnit tags to select tests by.
+     *
+     * <p>Lands in {@code filter.tags} of the generated {@code xUnitParams.json}; the framework
+     * ({@code ЮТФильтрацияСлужебный.УстановитьКонтекст}) reads that key and applies the filter
+     * itself, so nothing here interprets a tag. Verified against YAXUnit v25.12:
+     * <ul>
+     *   <li>values are OR-ed with one another and AND-ed with the other filter families;</li>
+     *   <li>a test is selected when its MODULE, its SUITE, or the test itself carries a listed
+     *       tag — tags are inherited downwards;</li>
+     *   <li>matching is case-INSENSITIVE (the framework lowercases both the filter and the
+     *       declared tag before comparing);</li>
+     *   <li>an EMPTY list is not a filter at all — the framework treats it as "no tag filter"
+     *       and runs everything, which is why the empty case is left out of the JSON entirely;</li>
+     *   <li>there is NO negation/exclusion syntax — a leading '-' is matched literally.</li>
+     * </ul>
+     */
+    private static final String KEY_TAGS = "tags"; //$NON-NLS-1$
+
     /** JUnit XML report file name written by the YAXUnit run. */
     private static final String VAL_JUNIT_XML = "junit.xml"; //$NON-NLS-1$
 
@@ -211,6 +230,13 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringArrayProperty(KEY_EXTENSIONS, "Extension names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$
             .stringArrayProperty(KEY_MODULES, "Module names to filter tests (array; a comma-separated string is also accepted).") //$NON-NLS-1$
             .stringArrayProperty(KEY_TESTS, "Test names in Module.Method format (array; a comma-separated string is also accepted).") //$NON-NLS-1$
+            .stringArrayProperty(KEY_TAGS, //$NON-NLS-1$
+                "YAXUnit tags to select tests by (array; a comma-separated string is also accepted). " //$NON-NLS-1$
+                    + "A test is selected when its module, its suite, or the test itself carries one " //$NON-NLS-1$
+                    + "of these tags; several tags are OR-ed, and the tag filter is AND-ed with " //$NON-NLS-1$
+                    + "extensions/modules/tests. Matching is case-insensitive. Exclusion is NOT " //$NON-NLS-1$
+                    + "supported by YAXUnit — a leading '-' is matched literally, not negated. A tag " //$NON-NLS-1$
+                    + "no test carries is not an error, just an empty selection.") //$NON-NLS-1$
             .integerProperty("timeout", TIMEOUT_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
                 "Auto-chain (default: true): force-recompute the project + its extensions, terminate a " //$NON-NLS-1$
@@ -429,13 +455,14 @@ public class RunYaxunitTestsTool implements IMcpTool
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
-        // extensions/modules/tests are declared as arrays but threaded internally as
+        // extensions/modules/tests/tags are declared as arrays but threaded internally as
         // comma-strings (run key, retry, buildParamsJson). extractArrayArgument accepts
         // BOTH a JSON array and a comma-separated string; re-join to the canonical comma
         // form so the downstream String plumbing is unchanged.
         String extensions = joinList(JsonUtils.extractArrayArgument(params, KEY_EXTENSIONS));
         String modules = joinList(JsonUtils.extractArrayArgument(params, KEY_MODULES));
         String tests = joinList(JsonUtils.extractArrayArgument(params, KEY_TESTS));
+        String tags = joinList(JsonUtils.extractArrayArgument(params, KEY_TAGS));
         int timeout = clampTimeout(JsonUtils.extractIntArgument(params, "timeout", DEFAULT_TIMEOUT)); //$NON-NLS-1$
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, //$NON-NLS-1$
             "updateBeforeLaunch", true); //$NON-NLS-1$
@@ -467,7 +494,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         purgeTerminatedLaunches();
 
         RunRequest request = new RunRequest(configName, projectName, applicationId, extensions,
-            modules, tests, timeout, updateBeforeLaunch, updateScope, externalChanges, debug);
+            modules, tests, tags, timeout, updateBeforeLaunch, updateScope, externalChanges, debug);
         return runBounded(request);
     }
 
@@ -776,7 +803,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * (the resolved {@code projectName}/{@code applicationId} derived from the launch
      * config are kept as method locals in {@link #runTests}, never written back here).
      */
-    private static final class RunRequest
+    static final class RunRequest
     {
         final String configName;
         final String projectName;
@@ -784,6 +811,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         final String extensions;
         final String modules;
         final String tests;
+        final String tags;
         final int timeout;
         final boolean updateBeforeLaunch;
         final String updateScope;
@@ -791,7 +819,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         final boolean debug;
 
         RunRequest(String configName, String projectName, String applicationId, String extensions, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-                String modules, String tests, int timeout, boolean updateBeforeLaunch,
+                String modules, String tests, String tags, int timeout, boolean updateBeforeLaunch,
                 String updateScope, ExternalInfobaseChangesPolicy externalChanges, boolean debug)
         {
             this.configName = configName;
@@ -800,6 +828,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             this.extensions = extensions;
             this.modules = modules;
             this.tests = tests;
+            this.tags = tags;
             this.timeout = timeout;
             this.updateBeforeLaunch = updateBeforeLaunch;
             this.updateScope = updateScope;
@@ -875,18 +904,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             if (req.debug)
             {
                 return launchDebugMode(matchingConfig, project, projectName, applicationId,
-                    appManager, launchManager, req.extensions, req.modules, req.tests,
-                    req.updateBeforeLaunch, req.updateScope, req.externalChanges, deadlineMs, state);
+                    appManager, launchManager, req, deadlineMs, state);
             }
 
-            // Use the launch config name as the run-key root — stable across
-            // (project, applicationId) vs. launchConfigurationName call styles.
-            // The conflict policy is part of the key: a run started under one
-            // externalInfobaseChanges answer must never be reused (or its report delivered) for a
-            // later call that asked for a different one.
-            String runKey = matchingConfig.getName() + ":" //$NON-NLS-1$
-                    + sha1(safe(req.extensions) + "|" + safe(req.modules) + "|" + safe(req.tests) //$NON-NLS-1$ //$NON-NLS-2$
-                        + "|" + req.externalChanges.wireValue()); //$NON-NLS-1$
+            String runKey = buildRunKey(matchingConfig.getName(), req);
             Path reportDir = stableReportDir(runKey);
 
             // If a launch is already running for this key, just poll it.
@@ -1042,8 +1063,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         cleanupTempDir(reportDir);
         Files.createDirectories(reportDir);
         Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
-        String paramsJson = buildParamsJson(reportDir.resolve(VAL_JUNIT_XML).toString(),
-                req.extensions, req.modules, req.tests);
+        String paramsJson = buildParamsJson(reportDir.resolve(VAL_JUNIT_XML).toString(), req);
         Files.write(paramsFile, paramsJson.getBytes(StandardCharsets.UTF_8));
         Activator.logInfo("YAXUnit params written to: " + paramsFile); //$NON-NLS-1$
 
@@ -1483,11 +1503,9 @@ public class RunYaxunitTestsTool implements IMcpTool
      * preparation it waits on is the same one, and a wait that outlives the transport is no
      * more useful here than on the polling path.
      */
-    private String launchDebugMode(ILaunchConfiguration matchingConfig, IProject project, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+    private String launchDebugMode(ILaunchConfiguration matchingConfig, IProject project, // NOSONAR the request IS the parameter object; the rest are the RESOLVED context, which the request deliberately does not carry
             String projectName, String applicationId, IApplicationManager appManager,
-            ILaunchManager launchManager, String extensions, String modules, String tests,
-            boolean updateBeforeLaunch, String updateScope, ExternalInfobaseChangesPolicy externalChanges,
-            long deadlineMs, CallState state)
+            ILaunchManager launchManager, RunRequest req, long deadlineMs, CallState state)
         throws IOException, CoreException
     {
         // Native path separators: YAXUnit builds file:// URIs and breaks on forward slashes on Windows.
@@ -1498,7 +1516,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         Path paramsFile = reportDir.resolve("xUnitParams.json"); //$NON-NLS-1$
         Path junitFile = reportDir.resolve(VAL_JUNIT_XML);
         Files.write(paramsFile,
-            buildParamsJson(junitFile.toString(), extensions, modules, tests).getBytes(StandardCharsets.UTF_8));
+            buildParamsJson(junitFile.toString(), req).getBytes(StandardCharsets.UTF_8));
 
         // Suspend listener must be live before the launch starts producing events.
         DebugSessionRegistry.get().ensureListenerRegistered();
@@ -1507,13 +1525,13 @@ public class RunYaxunitTestsTool implements IMcpTool
         // budget, same as the RUN path. The sweep + launch (Phase 3) runs
         // synchronously after prep completes, under the per-key lock.
         PreLaunchResult preLaunch = null;
-        if (updateBeforeLaunch)
+        if (req.updateBeforeLaunch)
         {
             String prepKey = LaunchLifecycleUtils.prepKeyFor(projectName, applicationId)
-                + "|" + externalChanges.wireValue(); //$NON-NLS-1$
+                + "|" + req.externalChanges.wireValue(); //$NON-NLS-1$
             final PreLaunchResult[] resultHolder = new PreLaunchResult[1];
             PrepRequest prepReq = new PrepRequest(projectName, launchManager, project,
-                applicationId, appManager, updateScope, externalChanges,
+                applicationId, appManager, req.updateScope, req.externalChanges,
                 "YAXUnit debug pre-launch preparation for " + projectName); //$NON-NLS-1$
 
             String pendingOrError = awaitPreparedOrPending(prepKey, prepReq, resultHolder,
@@ -1549,7 +1567,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             // (ATTR_APPLICATION_ID else project default — see
             // resolveDefaultApplicationId above) and is stamped onto the working copy
             // below, so it is exactly the key the delegate's 1003 check uses.
-            if (shouldSweepExistingClientSession(updateBeforeLaunch)
+            if (shouldSweepExistingClientSession(req.updateBeforeLaunch)
                 && LaunchLifecycleUtils.ensureNoExistingClientSession(project, applicationId))
             {
                 Activator.logInfo("YAXUnit debug: terminated an existing client session before " //$NON-NLS-1$
@@ -1579,12 +1597,12 @@ public class RunYaxunitTestsTool implements IMcpTool
             // updateBeforeLaunch=false, the armed confirmer presses the
             // non-destructive "Keep existing and start new" so an unattended call
             // never hangs on the modal.
-            boolean[] armFlags = debugPathArmFlags(updateBeforeLaunch);
+            boolean[] armFlags = debugPathArmFlags(req.updateBeforeLaunch);
             // Same as the RUN path: gated on the update opt-out, and the only armed window
             // around a standalone-server application's delegate-performed update.
             String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
                 applicationId);
-            ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? externalChanges : null;
+            ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
             // Same as the RUN path: this is the only armed window around a standalone-server
             // application's delegate-performed update, so a cancel here is reported with its cause.
             LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = launchPolicy == null
@@ -2289,9 +2307,42 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
+     * Builds the stable run key that identifies one (launch config + filter + conflict policy)
+     * combination.
+     *
+     * <p>The launch config name is the key root — stable across the
+     * {@code (project, applicationId)} and {@code launchConfigurationName} call styles. Everything
+     * that changes WHICH tests run, or under what answer to EDT's conflict modal they run, is
+     * folded into the hash: the key governs active-launch reuse ({@link #ACTIVE_LAUNCHES}),
+     * once-only pending delivery ({@link #PENDING_FETCH}) and the report directory
+     * ({@link #stableReportDir}). A filter that is NOT in the key would let a run started under
+     * one selection be polled by — and have its report delivered to — a call that asked for a
+     * different one.
+     *
+     * <p>Package-private and static so a test can pin the PRODUCTION formula: this is the exact
+     * method the run path calls, not a reconstruction of it. A test that rebuilt the string itself
+     * would keep passing if the call site dropped an argument.
+     *
+     * <p>It takes the whole {@link RunRequest} rather than the individual fields on purpose: a
+     * call site that had to list them could silently omit one, and an omitted filter fails as a
+     * SHARED run identity — the quietest failure this method has. Passing the request makes that
+     * unrepresentable, and lets the test drive the same object the run path does.
+     *
+     * @param configName resolved launch configuration name
+     * @param req the request whose filter and conflict policy identify the run
+     * @return the run key
+     */
+    static String buildRunKey(String configName, RunRequest req)
+    {
+        return configName + ":" //$NON-NLS-1$
+            + sha1(safe(req.extensions) + "|" + safe(req.modules) + "|" + safe(req.tests) //$NON-NLS-1$ //$NON-NLS-2$
+                + "|" + safe(req.tags) + "|" + safe(req.externalChanges.wireValue())); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
      * Computes a short hex SHA-1 hash for filter parts so the runKey is bounded.
      */
-    private String sha1(String input)
+    private static String sha1(String input)
     {
         try
         {
@@ -2310,16 +2361,34 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
     }
 
-    private String safe(String s)
+    private static String safe(String s)
     {
         return s == null ? "" : s; //$NON-NLS-1$
     }
 
     /**
      * Builds the xUnitParams.json content.
+     *
+     * <p>Each filter family is written only when it is non-empty. That is not a micro-optimization:
+     * YAXUnit decides whether a family filters at all by whether its list is filled
+     * ({@code ЗначениеЗаполнено}), so an empty list and an absent key mean the same thing to the
+     * framework — "do not filter on this" — and writing an empty array would be a promise the
+     * framework does not keep.
+     *
+     * <p>Package-private and static so the generated filter can be asserted directly; this is the
+     * method both the RUN and the DEBUG path call, and it reads the filter families off the request
+     * so neither path can pass a subset of them.
+     *
+     * @param reportPath absolute path of the JUnit XML the run must write
+     * @param req the request carrying the filter families
+     * @return the serialized parameters file content
      */
-    private String buildParamsJson(String reportPath, String extensions, String modules, String tests)
+    static String buildParamsJson(String reportPath, RunRequest req)
     {
+        String extensions = req.extensions;
+        String modules = req.modules;
+        String tests = req.tests;
+        String tags = req.tags;
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("reportPath", reportPath); //$NON-NLS-1$
         params.put("reportFormat", "jUnit"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2346,6 +2415,12 @@ public class RunYaxunitTestsTool implements IMcpTool
             hasFilter = true;
         }
 
+        if (tags != null && !tags.isEmpty())
+        {
+            filter.put(KEY_TAGS, splitToList(tags));
+            hasFilter = true;
+        }
+
         if (hasFilter)
         {
             params.put("filter", filter); //$NON-NLS-1$
@@ -2357,7 +2432,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     /**
      * Splits a comma-separated string into a list.
      */
-    private List<String> splitToList(String value)
+    private static List<String> splitToList(String value)
     {
         List<String> result = new ArrayList<>();
         for (String part : value.split(",")) //$NON-NLS-1$

@@ -35,6 +35,9 @@ from harness import (
     assert_no_diff,
     assert_tree_unchanged,
     assert_diff_contains,
+    assert_disk_lacks,
+    assert_disk_path_gone,
+    poll_disk_count,
     poll_disk_path_gone,
     poll_disk_lacks,
     poll_disk_contains,
@@ -65,13 +68,8 @@ def _list_catalogs():
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_confirm_deletes_top_object_gone_from_model_and_disk():
-    # Settle first, for the reason the disk assertions below make visible. This test failed once on
-    # a CI runner whose derived-data queue was badly backed up (the very next test then spent 2222s
-    # never reaching ready): the model read-back passed and the object's own .mdo was gone, but the
-    # Configuration.mdo rewrite had not landed inside poll_disk_lacks's 10s. That is the export
-    # queued behind other work, not a delete that failed - so drain the queue before starting,
-    # rather than widen the poll and call a backlog "normal".
-    settle_or_fail("this delete (its Configuration.mdo export is asserted within 10s)")
+    # Settle first, so this measures the delete rather than a backlog it inherited.
+    settle_or_fail("this delete (its Configuration.mdo export is asserted below)")
     assert_contains(_list_commonmodules(), "Calc", "baseline: CommonModule.Calc must exist")
 
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": "CommonModule.Calc", "confirm": True})
@@ -81,13 +79,41 @@ def test_confirm_deletes_top_object_gone_from_model_and_disk():
         "confirm=true must take the execute branch (action=executed): %r" % (r.structured,)
     assert r.structured.get("fqn") == "CommonModule.Calc", "must echo the target fqn"
 
+    # POLLED, not read immediately - and that is a statement about this PATH, not a softening of
+    # the check. #406 gave the write tools an export barrier, but a barrier that only WAITS is
+    # ordered with the export only when the same call SUBMITTED it. create_metadata and
+    # modify_metadata do submit (forceExportToDisk -> scheduleSave) and then the barrier waits, so
+    # submission happens-before the wait and an immediate read is fair there. The generic mdclass
+    # delete path - a top object OR a member, anything that goes through EDT's md-refactoring -
+    # submits nothing: the refactoring schedules its own save and unblocks the derived-data
+    # pipeline at the very end, so between perform() returning and those tasks appearing there is a
+    # window in which "is the export segment quiet?" answers yes - truthfully, and too early.
+    #
+    # That is not theory. On run 31728870176 this assertion failed at 6.34s (i.e. the call returned
+    # on its own, nowhere near the 60s deadline) with the object's own .mdo ALREADY gone and
+    # Configuration.mdo not yet rewritten, and the EDT log for that shard contains none of the
+    # barrier's failure markers - so the wait ran and reported the queue drained while one of the
+    # two export tasks was still to come.
+    #
+    # A test that demands more than the tool can promise is the same defect as code that promises
+    # more than it does, which is what this whole change is about. So the assertion states what IS
+    # guaranteed here - the files do arrive - and the missing guarantee is recorded in #408 rather
+    # than papered over: closing it needs the delete to submit its own export before returning.
+    #
+    # Why both files: they are SEPARATE export tasks with no ordering between them, so the tree
+    # passes through a state where Configuration.mdo still references an object whose own file is
+    # already gone.
+    poll_disk_path_gone("src/CommonModules/Calc/Calc.mdo",
+                        ctx="delete must remove the object's own .mdo from disk")
+    # poll_disk_count(..., 0), not poll_disk_lacks: that helper counts a MISSING file as "lacks",
+    # so it would also pass if Configuration.mdo vanished entirely. The claim here is that the file
+    # is present and no longer names the object.
+    poll_disk_count("src/Configuration/Configuration.mdo", "CommonModule.Calc", 0,
+                    ctx="delete must remove the Configuration.mdo collection reference")
+
     after = _list_commonmodules()
     assert_not_contains(after, "| Calc ", "CommonModule.Calc must be GONE from the model")
     assert_contains(after, "OK", "sibling CommonModule.OK must survive a targeted delete")
-    poll_disk_path_gone("src/CommonModules/Calc/Calc.mdo",
-                        ctx="delete must remove the object's own .mdo from disk")
-    poll_disk_lacks("src/Configuration/Configuration.mdo", "CommonModule.Calc",
-                    ctx="delete must remove the Configuration.mdo collection reference")
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
@@ -566,14 +592,17 @@ def test_delete_form_object_preview_then_confirm():
     assert_ok(r, "delete the form object (confirm)")
     assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
     assert r.structured.get("fqn") == fqn, "must echo the target form fqn"
-    poll_disk_path_gone("src/Catalogs/Catalog/Forms/%s/Form.form" % form,
-                        ctx="the deleted form's content Form.form must be gone from disk")
+    # IMMEDIATE, unlike the top-object delete above, and for the reason spelled out there: the
+    # owned-form branch calls forceExportToDisk itself, so its submission happens-before the #406
+    # barrier's wait and the files really are settled when the call returns.
+    assert_disk_path_gone("src/Catalogs/Catalog/Forms/%s/Form.form" % form,
+                          ctx="the deleted form's content Form.form must be gone from disk")
     # The form's whole resource FOLDER (not just Form.form) must be gone - an orphan
     # Forms/<Name>/ folder survived the model delete, the owner delete and resync_to_disk before.
-    poll_disk_path_gone("src/Catalogs/Catalog/Forms/%s" % form,
-                        ctx="the deleted form's resource folder must be gone from disk")
-    poll_disk_lacks("src/Catalogs/Catalog/Catalog.mdo", form,
-                    ctx="the deleted form's <forms> entry must be gone from the owner .mdo")
+    assert_disk_path_gone("src/Catalogs/Catalog/Forms/%s" % form,
+                          ctx="the deleted form's resource folder must be gone from disk")
+    assert_disk_lacks("src/Catalogs/Catalog/Catalog.mdo", form,
+                      ctx="the deleted form's <forms> entry must be gone from the owner .mdo")
     # With the orphan folder gone, get_metadata_details on the form FQN no longer resolves it -
     # it must NOT render a live structure, and must behave exactly like a form that NEVER existed (the
     # form branch reports the same unresolvable-form ERROR for both, so the deleted form is now

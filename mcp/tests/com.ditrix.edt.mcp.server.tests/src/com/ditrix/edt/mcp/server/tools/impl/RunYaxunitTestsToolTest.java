@@ -93,6 +93,7 @@ public class RunYaxunitTestsToolTest
         assertTrue("schema must declare extensions", schema.contains("\"extensions\""));
         assertTrue("schema must declare modules", schema.contains("\"modules\""));
         assertTrue("schema must declare tests", schema.contains("\"tests\""));
+        assertTrue("schema must declare tags", schema.contains("\"tags\""));
         assertTrue("schema must declare timeout", schema.contains("\"timeout\""));
         // projectName and applicationId must be in the required list
         assertTrue("projectName must be required",
@@ -927,5 +928,106 @@ public class RunYaxunitTestsToolTest
         Field f = InfobaseAuthDialogSuppressor.class.getDeclaredField("lastActivityEndMillis"); //$NON-NLS-1$
         f.setAccessible(true);
         return f.getLong(null);
+    }
+
+    // ---------------------------------------------------------------------
+    // Tag filter (#409)
+    //
+    // The tool writes xUnitParams.json itself; YAXUnit reads filter.tags from it
+    // (ЮТФильтрацияСлужебный.УстановитьКонтекст) and applies the filter. These tests
+    // drive the two production seams the value must survive — the generated JSON and
+    // the run key — through the SAME RunRequest the run path builds, so a field the
+    // request stops carrying is caught here rather than at a call site.
+    // ---------------------------------------------------------------------
+
+    /** Builds the request exactly as {@code execute()} does, varying only the filter. */
+    private static RunYaxunitTestsTool.RunRequest req(String extensions, String modules,
+            String tests, String tags)
+    {
+        return new RunYaxunitTestsTool.RunRequest("Cfg", "Proj", "App", extensions, modules, tests,
+            tags, 45, true, null, ExternalInfobaseChangesPolicy.OVERRIDE, false);
+    }
+
+    @Test
+    public void testTagsLandInTheGeneratedFilter()
+    {
+        String json = RunYaxunitTestsTool.buildParamsJson("/tmp/out/junit.xml",
+            req(null, null, null, "smoke,nodb"));
+
+        assertTrue("the tag filter must be written as filter.tags so YAXUnit can read it: " + json,
+            json.contains("\"tags\""));
+        assertTrue("each tag must be a separate array element: " + json, json.contains("\"smoke\""));
+        assertTrue("each tag must be a separate array element: " + json, json.contains("\"nodb\""));
+        assertTrue("tags alone must be enough to emit the filter object: " + json,
+            json.contains("\"filter\""));
+    }
+
+    @Test
+    public void testTagsCombineWithTheOtherFilterFamilies()
+    {
+        String json = RunYaxunitTestsTool.buildParamsJson("/tmp/out/junit.xml",
+            req("MyExt", "MyModule", "MyModule.TestOne", "smoke"));
+
+        assertTrue("extensions must survive alongside tags: " + json, json.contains("\"MyExt\""));
+        assertTrue("modules must survive alongside tags: " + json, json.contains("\"MyModule\""));
+        assertTrue("tests must survive alongside tags: " + json,
+            json.contains("\"MyModule.TestOne\""));
+        assertTrue("tags must survive alongside the other families: " + json,
+            json.contains("\"smoke\""));
+        // Presence alone would also pass if two families were transposed, so pin the tag to ITS
+        // key: YAXUnit reads each family separately and a tag under "modules" filters nothing.
+        assertTrue("the tag must sit under the tags key, not another family's: " + json,
+            json.contains("\"tags\":[\"smoke\"]"));
+    }
+
+    /**
+     * An empty tag list must not reach the file at all.
+     *
+     * <p>YAXUnit decides whether a family filters by whether its list is filled
+     * ({@code ЗначениеЗаполнено}), so writing {@code "tags": []} would say "no tag filter"
+     * in a way that merely LOOKS like a filter. Absent and empty must stay the same thing.
+     */
+    @Test
+    public void testEmptyOrAbsentTagsWriteNoFilterAtAll()
+    {
+        String absent = RunYaxunitTestsTool.buildParamsJson("/tmp/out/junit.xml",
+            req(null, null, null, null));
+        assertFalse("no filter object may be written when nothing filters: " + absent,
+            absent.contains("\"filter\""));
+
+        String empty = RunYaxunitTestsTool.buildParamsJson("/tmp/out/junit.xml",
+            req(null, null, null, ""));
+        assertFalse("an empty tag list is not a filter: " + empty, empty.contains("\"tags\""));
+        assertFalse("an empty tag list must not conjure a filter object: " + empty,
+            empty.contains("\"filter\""));
+    }
+
+    /**
+     * Different tag selections must be different runs.
+     *
+     * <p>The run key governs active-launch reuse, once-only pending delivery and the report
+     * directory. If tags were not folded into it, a run started for one tag could be polled by —
+     * and have its report handed to — a call that asked for a different one.
+     */
+    @Test
+    public void testRunKeyDistinguishesTagSelections()
+    {
+        String smoke = RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, "smoke"));
+        String slow = RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, "slow"));
+        String none = RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, null));
+
+        assertFalse("two different tag filters must not share a run key", smoke.equals(slow));
+        // The load-bearing one: if tags were dropped from the formula, a tag-filtered run would
+        // collapse onto the unfiltered run's key and could be served the full suite's report.
+        assertFalse("a tag-filtered run must not share the unfiltered run's key",
+            smoke.equals(none));
+        assertTrue("the launch config name stays the key root", smoke.startsWith("Cfg:"));
+        assertEquals("the same tag filter must be the same run", smoke,
+            RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, "smoke")));
+
+        // The families are hashed in a fixed order separated by '|': the same word must mean a
+        // different run depending on which family it was passed in.
+        assertFalse("the same word in a different filter family must be a different run",
+            smoke.equals(RunYaxunitTestsTool.buildRunKey("Cfg", req(null, "smoke", null, null))));
     }
 }

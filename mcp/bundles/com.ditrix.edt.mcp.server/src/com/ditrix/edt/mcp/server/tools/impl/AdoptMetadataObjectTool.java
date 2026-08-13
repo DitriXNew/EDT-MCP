@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -32,6 +34,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.google.gson.JsonObject;
 
 /**
  * Adopts a base-configuration metadata object — or one of its members
@@ -106,8 +109,29 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "FQN of the adopted object in the extension") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_EXTENSION_PROJECT, "The extension the object was adopted into") //$NON-NLS-1$
             .stringProperty(KEY_OBJECT_BELONGING, "ADOPTED (the object is now an adopted copy)") //$NON-NLS-1$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk", false) //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue of the EXTENSION project to drain before answering, so a success normally " //$NON-NLS-1$
+                    + "means the write has already run - but that establishes the queue is empty, not that " //$NON-NLS-1$
+                    + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
+                    + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
+    {
+        // "already adopted" is a SUCCESS that never called adoptAndAttach and never queued an
+        // export, so there is nothing of ours to wait for.
+        if ("alreadyAdopted".equals(resultString(result, McpKeys.ACTION))) //$NON-NLS-1$
+        {
+            return Collections.emptyList();
+        }
+        // projectName is the BASE configuration by contract, but adoption writes into the
+        // EXTENSION - so the export to wait for is the one the tool reports, not the one it was
+        // asked about.
+        String extension = resultString(result, KEY_EXTENSION_PROJECT);
+        return extension == null ? Collections.emptyList() : Collections.singletonList(extension);
     }
 
     @Override

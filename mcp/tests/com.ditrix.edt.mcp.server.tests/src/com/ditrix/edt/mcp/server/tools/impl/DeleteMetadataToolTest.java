@@ -59,6 +59,12 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  * the Eclipse/EDT runtime. The execute() path (refactoring preview / perform) needs a live workbench
  * and BM model, so it is covered by the E2E suite.
  */
+import java.util.Collection;
+
+import java.util.HashMap;
+
+import java.util.Collections;
+
 public class DeleteMetadataToolTest
 {
     @Test
@@ -1561,5 +1567,29 @@ public class DeleteMetadataToolTest
         }).gateFormMemberDelete("Catalog.Products.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
             columnRef(), false, previewWithDescendants(3), new RecordingWrite());
         assertEquals("the prompt counts the member plus its contained elements", 4, seen[0]); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPreviewAwaitsNothingAndAConfirmAwaitsExactlyTheTargetProject()
+    {
+        // The scope question (#406): which exports did THIS call queue?
+        DeleteMetadataTool tool = new DeleteMetadataTool();
+        JsonObject result = new JsonObject();
+
+        Map<String, String> preview = new HashMap<>();
+        preview.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a preview mutates nothing, so it queued no export and must await none", //$NON-NLS-1$
+            tool.exportProjectsToAwait(preview, result).isEmpty());
+
+        Map<String, String> confirm = new HashMap<>(preview);
+        confirm.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        // EXACT equality, not "contains": the scope is the target and nothing else. A wait that
+        // also covered the dependent extensions was tried and rejected in review - the set EDT
+        // exposes is what it SCANS, not what it WRITES, so awaiting a scanned-but-untouched
+        // extension would fail a healthy delete on somebody else's wedged export. A `contains`
+        // assertion would let that come back unnoticed.
+        assertEquals("a confirmed delete awaits the target project and nothing else", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration"), //$NON-NLS-1$
+            new ArrayList<>(tool.exportProjectsToAwait(confirm, result)));
     }
 }

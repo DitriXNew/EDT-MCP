@@ -149,22 +149,36 @@ public final class BmTransactions
      * Forces the BM model's pending serialization of a top object to its {@code .mdo}
      * file on disk, AFTER the {@link #write} transaction that mutated it has committed.
      * <p>
-     * A bare {@link #write} commit only updates the in-memory model and ENQUEUES the
-     * asynchronous {@code .mdo} export; nothing drains it, so the change is invisible
-     * on disk and is discarded by a refresh / {@code clean_project} / EDT restart
-     * (rename/delete avoid this because the refactoring service drains the pipeline).
-     * {@link IBmModelManager#forceExport} runs the platform's own object exporter
-     * synchronously, writing the same {@code .mdo} EDT writes on a normal save.
+     * A bare {@link #write} commit updates the in-memory model and leaves the {@code .mdo}
+     * export to the reactor's own post-commit scheduling; calling this makes the export of the
+     * named top objects explicit rather than incidental, which is what a tool needs when it is
+     * about to report on those specific files.
+     * <p>
+     * <b>It does not write the file.</b> {@link IBmModelManager#forceExport} builds one save
+     * task per FQN and hands them to the platform's ASYNCHRONOUS save; the platform's own
+     * synchronous variant differs from it by a wait this path does not perform. The same is
+     * true of the rename/delete refactorings, which schedule their save the same way rather
+     * than draining it. To establish that nothing is still queued, wait afterwards -
+     * {@link BuildUtils#waitForDiskExport} is that wait. Note what it settles: the queue is
+     * empty, NOT that the bytes are right. The platform logs a per-file write failure and lets
+     * the computation complete, so a failed write drains like a successful one.
+     * <p>
+     * {@code AbstractMetadataWriteTool} applies it to every tool that EXTENDS it, which is not
+     * the same as every metadata writer: {@code rename_metadata_object} and
+     * {@code build_external_objects} implement {@code IMcpTool} directly and are therefore still
+     * uncovered. A new caller of this method outside that base class has to wait for itself.
      * <p>
      * MUST be called OUTSIDE the {@link #write} boundary (it starts its own task).
      * {@code topObjectFqn} must be a TOP object FQN: for a nested change (e.g. a new
      * attribute) pass the PARENT object's FQN, not the child's.
      *
      * @param project the workspace project owning the object
-     * @param topObjectFqn the FQN of the top object whose {@code .mdo} to write
-     * @return {@code true} if the platform serialized an object; {@code false} if the
-     *         services/project/FQN could not be resolved or the export failed (the
-     *         in-memory mutation still stands - this is best-effort persistence)
+     * @param topObjectFqn the FQN of the top object whose {@code .mdo} to queue
+     * @return {@code true} if the platform accepted a save task for the object; {@code false}
+     *         if the services/project/FQN could not be resolved or the submission threw. A
+     *         {@code true} says the export was SCHEDULED, not that the file was written - the
+     *         write happens later, and a failure inside it is logged by the platform and never
+     *         surfaces here
      */
     public static boolean forceExportToDisk(IProject project, String topObjectFqn)
     {
@@ -175,13 +189,20 @@ public final class BmTransactions
      * List overload of {@link #forceExportToDisk(IProject, String)} for a mutation
      * that dirtied MORE THAN ONE top object - e.g. creating an object dirties both the
      * new object AND the {@code Configuration} (its child collection changed), so BOTH
-     * must be serialized or the {@code Configuration.mdo} reference lags behind (the
+     * must be queued or the {@code Configuration.mdo} reference lags behind (the
      * new object would be orphaned on a restart before the async export drains).
+     * <p>
+     * Passing them together does NOT make them land together: the platform turns each FQN into
+     * its own save task with no ordering between them, which is why a half-exported tree can
+     * show an object's own {@code .mdo} already written or deleted while {@code Configuration.mdo}
+     * still holds the previous collection.
      *
      * @param project the workspace project owning the objects
-     * @param topObjectFqns the FQNs of every top object whose {@code .mdo} to write
-     * @return {@code true} if the platform serialized at least one object; {@code false}
-     *         if the services/project could not be resolved or the export failed
+     * @param topObjectFqns the FQNs of every top object whose {@code .mdo} to queue
+     * @return {@code true} if the platform accepted a save task for at least one object;
+     *         {@code false} if the services/project could not be resolved or the submission
+     *         threw. See {@link #forceExportToDisk(IProject, String)} for what {@code true}
+     *         does and does not promise
      */
     public static boolean forceExportToDisk(IProject project, List<String> topObjectFqns)
     {

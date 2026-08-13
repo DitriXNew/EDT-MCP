@@ -1454,6 +1454,41 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
           % (rel_path, substr, ctx, last[:700]))
 
 
+def assert_disk_path_gone(rel_path, ctx=""):
+    """A path under the fixture is ALREADY gone — checked once, with no polling.
+
+    PRECONDITION, and it is not optional: only for a call that SUBMITTED its own export
+    (create_metadata / modify_metadata / the specialized delete branches call forceExportToDisk,
+    then the #406 barrier waits, so submission happens-before the wait). A call that leaves the
+    scheduling to EDT's md-refactoring — the generic delete path, top object OR member — has no
+    such ordering: the barrier can
+    truthfully observe a quiet export segment before the refactoring has queued its save. Use the
+    polling variant there; see test_confirm_deletes_top_object_gone_from_model_and_disk and #408."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    if os.path.exists(full):
+        _fail("expected %s to be gone from disk the moment the call returned, but it is still "
+              "there - the tool answered before its export reached disk [%s]" % (rel_path, ctx))
+
+
+def assert_disk_lacks(rel_path, substr, ctx=""):
+    """One named fixture file EXISTS and does not contain substr — checked once, no polling.
+
+    Requiring the file to exist is deliberate, and is the difference from poll_disk_lacks:
+    that helper treats a MISSING file as satisfying "lacks", so it would also pass while the
+    owning file is mid-rewrite. Here the file must be present AND already correct.
+
+    Same precondition as assert_disk_path_gone: only for a call that submitted its own export."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    if not os.path.exists(full):
+        _fail("expected %s to exist and no longer mention %r, but the file is missing [%s]"
+              % (rel_path, substr, ctx))
+    with open(full, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    if substr in content:
+        _fail("expected %s to no longer contain %r the moment the call returned - the tool "
+              "answered before its export reached disk [%s]" % (rel_path, substr, ctx))
+
+
 def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
     """Poll until a fixture file no longer contains substr (e.g. a removed collection
     reference). A missing file also satisfies 'lacks'. Polls because the on-disk edit
