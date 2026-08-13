@@ -30,8 +30,8 @@ public final class ProjectStateChecker
     /** Poll interval while EDT is reopening project storage and registering BM models. */
     private static final long MODEL_REGISTRATION_POLL_MS = 50L;
 
-    /** Bounds participant re-discovery when EDT project contexts keep changing. */
-    private static final int MAX_PARTICIPANT_DISCOVERY_PASSES = 3;
+    /** Bounds passes that discover previously unseen participants while EDT contexts keep changing. */
+    private static final int MAX_NEW_PARTICIPANT_DISCOVERY_PASSES = 3;
 
     /**
      * Persistent project-description natures declared by EDT 2026.1 for projects that can own a BM
@@ -365,26 +365,46 @@ public final class ProjectStateChecker
         // with its batch session, so it is never drained or asked about here: one slow, unrelated
         // project must not eat the shared deadline and delay a rename of an otherwise-ready project.
         Set<String> settledParticipantNames = new HashSet<>();
-        for (int pass = 0; pass < MAX_PARTICIPANT_DISCOVERY_PASSES; pass++)
+        Set<String> discoveredParticipantNames = new HashSet<>();
+        int newParticipantDiscoveryPasses = 0;
+        while (true)
         {
+            boolean discoveredNewParticipantThisPass = false;
+            IProject lastNewParticipant = null;
+
             // Drain the base UNCONDITIONALLY on every pass. An instant READY probe can become stale
             // while BM models are registering; a quiet pipeline returns immediately, while a project
-            // that restarted since the previous pass gets another bounded chance to settle.
+            // that restarted since the previous pass gets another chance under the shared deadline.
             long remaining = deadline - System.currentTimeMillis();
             if (remaining > 0)
             {
                 env.waitForDerivedData(project, remaining);
             }
-            IProject stillBuilding = drainParticipants(project, deadline, env,
+            List<IProject> participants = findParticipants(project, env);
+            lastNewParticipant = rememberNewParticipants(participants,
+                discoveredParticipantNames);
+            discoveredNewParticipantThisPass = lastNewParticipant != null;
+            IProject stillBuilding = drainParticipants(participants, deadline, env,
                 settledParticipantNames);
             String building = env.buildingErrorOrNull(project);
             if (building != null || stillBuilding != null)
             {
-                if (pass + 1 >= MAX_PARTICIPANT_DISCOVERY_PASSES
+                if (discoveredNewParticipantThisPass)
+                {
+                    newParticipantDiscoveryPasses++;
+                }
+                String currentError = building != null ? building
+                    : participantBuildingError(project, stillBuilding);
+                if (newParticipantDiscoveryPasses >= MAX_NEW_PARTICIPANT_DISCOVERY_PASSES
                     || deadline - System.currentTimeMillis() <= 0)
                 {
-                    return building != null ? building
-                        : participantBuildingError(project, stillBuilding);
+                    // Both probes above are fresh: a limit is never allowed to manufacture a
+                    // "still building" claim about a project that was not actually checked.
+                    return currentError;
+                }
+                if (!waitBeforeAnotherSettlePass(deadline, env))
+                {
+                    return currentError;
                 }
                 continue;
             }
@@ -405,8 +425,16 @@ public final class ProjectStateChecker
             // data. Re-check the base and every participant that was already settled; a stale pre-model
             // verdict must never be the one used to release the cascade.
             String refreshedBuilding = env.buildingErrorOrNull(project);
-            List<IProject> participants = findParticipants(project, env);
+            participants = findParticipants(project, env);
+            IProject newlyDiscovered = rememberNewParticipants(participants,
+                discoveredParticipantNames);
+            if (newlyDiscovered != null)
+            {
+                discoveredNewParticipantThisPass = true;
+                lastNewParticipant = newlyDiscovered;
+            }
             Set<String> rebuildingParticipantNames = new HashSet<>();
+            IProject refreshedParticipantBuilding = null;
             for (IProject participant : participants)
             {
                 String participantName = participant.getName();
@@ -415,6 +443,10 @@ public final class ProjectStateChecker
                 {
                     settledParticipantNames.remove(participantName);
                     rebuildingParticipantNames.add(participantName);
+                    if (refreshedParticipantBuilding == null)
+                    {
+                        refreshedParticipantBuilding = participant;
+                    }
                 }
             }
             List<IProject> unserved = findUnsettledParticipants(participants,
@@ -424,30 +456,52 @@ public final class ProjectStateChecker
                 return null;
             }
 
-            if (pass + 1 < MAX_PARTICIPANT_DISCOVERY_PASSES
-                && deadline - System.currentTimeMillis() > 0)
-            {
-                continue;
-            }
-
-            // No time/pass remains for another drain. Every refusal below is based on a fresh probe;
-            // idle newly-discovered participants still need no wait and can safely be accepted.
-            if (refreshedBuilding != null)
-            {
-                return refreshedBuilding;
-            }
+            // Newly discovered participants have not been drained yet. Probe all of them now so a
+            // deadline/discovery-limit refusal names a participant that is verifiably building.
             for (IProject participant : unserved)
             {
-                if (rebuildingParticipantNames.contains(participant.getName())
-                    || env.isBuilding(participant))
+                if (!rebuildingParticipantNames.contains(participant.getName())
+                    && env.isBuilding(participant)
+                    && refreshedParticipantBuilding == null)
                 {
-                    return participantBuildingError(project, participant);
+                    refreshedParticipantBuilding = participant;
                 }
-                settledParticipantNames.add(participant.getName());
             }
-            return null;
+            if (discoveredNewParticipantThisPass)
+            {
+                newParticipantDiscoveryPasses++;
+            }
+            String currentError = refreshedBuilding;
+            if (currentError == null && refreshedParticipantBuilding != null)
+            {
+                currentError = participantBuildingError(project, refreshedParticipantBuilding);
+            }
+            if (newParticipantDiscoveryPasses >= MAX_NEW_PARTICIPANT_DISCOVERY_PASSES)
+            {
+                return currentError != null ? currentError
+                    : participantDiscoveryError(project, lastNewParticipant);
+            }
+            if (deadline - System.currentTimeMillis() <= 0)
+            {
+                // The fresh probes found no busy project. The deadline forbids more waiting, not a
+                // cascade whose complete currently-visible participant set is already idle.
+                return currentError;
+            }
+            if (currentError != null && !waitBeforeAnotherSettlePass(deadline, env))
+            {
+                return currentError;
+            }
         }
-        return null;
+    }
+
+    private static boolean waitBeforeAnotherSettlePass(long deadline, CascadeEnvironment env)
+    {
+        long remaining = deadline - System.currentTimeMillis();
+        if (remaining <= 0)
+        {
+            return false;
+        }
+        return env.waitBeforeModelRetry(Math.min(MODEL_REGISTRATION_POLL_MS, remaining));
     }
 
     private static String waitForRefactoringModels(IProject project, long deadline,
@@ -475,23 +529,23 @@ public final class ProjectStateChecker
      * Waits for the PARTICIPATING open EDT projects' derived data, until the shared
      * {@code deadline}, then verifies them unconditionally.
      * <p>
-     * The projects that take part in the cascade are the ones that extend {@code base} (per
-     * {@link CascadeEnvironment#resolveBaseProject(IProject)}): the rename builds a refactoring
-     * for each of them, so one that is still building is the collision this whole pre-flight
-     * exists to prevent. An unrelated open project is not a participant - it cannot collide with
-     * this cascade, so it is never drained, never asked about, and never able to consume the
-     * shared deadline or cause a refusal.
+     * The supplied projects are the participating extensions discovered for the cascade's base:
+     * the rename builds a refactoring for each of them, so one that is still building is the
+     * collision this whole pre-flight exists to prevent. An unrelated open project is never
+     * supplied here and cannot consume the shared deadline or cause a refusal.
      *
-     * @param base the cascade's base project
+     * @param participants the currently visible participating extension projects
      * @param deadline absolute time (ms) the whole drain must not exceed
      * @param env the seam over the workspace/derived-data services
      * @return the first PARTICIPATING extension that is still building, or {@code null} when every
      *         participant settled
      */
-    private static IProject drainParticipants(IProject base, long deadline, CascadeEnvironment env,
+    private static IProject drainParticipants(List<IProject> participants, long deadline,
+        CascadeEnvironment env,
         Set<String> settledParticipantNames)
     {
-        for (IProject participant : findUnsettledParticipants(base, env, settledParticipantNames))
+        for (IProject participant : findUnsettledParticipants(participants,
+            settledParticipantNames))
         {
             long remaining = deadline - System.currentTimeMillis();
             if (remaining > 0)
@@ -510,10 +564,18 @@ public final class ProjectStateChecker
         return null;
     }
 
-    private static List<IProject> findUnsettledParticipants(IProject base, CascadeEnvironment env,
-        Set<String> settledParticipantNames)
+    private static IProject rememberNewParticipants(List<IProject> participants,
+        Set<String> discoveredParticipantNames)
     {
-        return findUnsettledParticipants(findParticipants(base, env), settledParticipantNames);
+        IProject lastNewParticipant = null;
+        for (IProject participant : participants)
+        {
+            if (discoveredParticipantNames.add(participant.getName()))
+            {
+                lastNewParticipant = participant;
+            }
+        }
+        return lastNewParticipant;
     }
 
     private static List<IProject> findUnsettledParticipants(List<IProject> discoveredParticipants,
@@ -552,6 +614,13 @@ public final class ProjectStateChecker
         return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
             + "' and is still building, so it takes part in this cascade with an " //$NON-NLS-1$
             + "incomplete index. Please wait and retry."; //$NON-NLS-1$
+    }
+
+    private static String participantDiscoveryError(IProject base, IProject participant)
+    {
+        return "Project '" + participant.getName() + "' newly appeared as a cascade participant of '" //$NON-NLS-1$ //$NON-NLS-2$
+            + base.getName() + "' while EDT project contexts were still changing. The participant " //$NON-NLS-1$
+            + "set did not stabilize, so no cascade was started. Please wait and retry."; //$NON-NLS-1$
     }
 
     /**
