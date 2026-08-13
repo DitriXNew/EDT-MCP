@@ -65,6 +65,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
@@ -81,6 +82,13 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  */
 public class DeleteMetadataTool extends AbstractMetadataWriteTool
 {
+    /** Bounded cascade settle seam; production delegates to {@link ProjectStateChecker}. */
+    @FunctionalInterface
+    interface CascadeSettler
+    {
+        String settle(String projectName, long timeoutMs);
+    }
+
     /**
      * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
      * {@link DestructiveConsentGate#getInstance()}, which stays a private static final singleton, while
@@ -99,11 +107,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     private final ConsentRequester consentRequester;
+    private final CascadeSettler cascadeSettler;
 
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
     {
-        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+        this((tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview),
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was deleted.")); //$NON-NLS-1$
     }
 
     /**
@@ -113,7 +124,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     DeleteMetadataTool(ConsentRequester consentRequester)
     {
+        this(consentRequester,
+            (projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+                timeoutMs, NAME, "Nothing was deleted.")); //$NON-NLS-1$
+    }
+
+    /** Test seam for the caller-thread cascade settle. */
+    DeleteMetadataTool(ConsentRequester consentRequester, CascadeSettler cascadeSettler)
+    {
         this.consentRequester = consentRequester;
+        this.cascadeSettler = cascadeSettler;
     }
 
     /**
@@ -166,6 +186,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     public static final String NAME = "delete_metadata"; //$NON-NLS-1$
+
+    /** Shared bound for derived-data drain and BM-model registration before an mdclass cascade. */
+    private static final long SETTLE_TIMEOUT_MS = 60_000L;
 
     /** Output key: title of the delete refactoring (preview). */
     private static final String KEY_REFACTORING_TITLE = "refactoringTitle"; //$NON-NLS-1$
@@ -259,6 +282,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .booleanProperty("forced", "Whether the delete was forced past blocking references") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable description of the result") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
+        String fqn = JsonUtils.extractStringArgument(params, "fqn"); //$NON-NLS-1$
+        if (projectName == null || projectName.isEmpty() || fqn == null || fqn.isEmpty())
+        {
+            return null;
+        }
+
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        try
+        {
+            if (FormElementWriter.parse(normFqn) != null
+                || FormElementWriter.parseFormObjectCreate(normFqn) != null
+                || XdtoWriter.parseMemberRef(normFqn) != null
+                || PredefinedWriter.parseRef(normFqn) != null)
+            {
+                return null;
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // Preserve the existing UI-thread validation/error path for a malformed specialized FQN.
+            return null;
+        }
+        return cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
     }
 
     @Override

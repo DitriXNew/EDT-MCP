@@ -224,7 +224,8 @@ public class RenameMetadataObjectTool implements IMcpTool
         // by draining between construction and perform - would mean releasing the UI thread in the
         // middle of a rename, which drops the serialisation that keeps a concurrent write from
         // making the built cascade stale. See issue #320.
-        String building = ProjectStateChecker.settleBeforeCascadeOrError(projectName, SETTLE_TIMEOUT_MS);
+        String building = ProjectStateChecker.settleBeforeCascadeOrError(projectName, SETTLE_TIMEOUT_MS,
+            NAME, "Nothing was renamed."); //$NON-NLS-1$
         if (building != null)
         {
             return ToolResult.error(building).toJson();

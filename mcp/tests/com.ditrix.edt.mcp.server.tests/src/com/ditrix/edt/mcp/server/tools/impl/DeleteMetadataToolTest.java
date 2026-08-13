@@ -85,6 +85,38 @@ public class DeleteMetadataToolTest
     }
 
     @Test
+    public void testMdClassDeleteSettlesBeforeCallingEdtRefactoring()
+    {
+        String settleError = "BM model is not available for project 'DependentConfiguration'. " //$NON-NLS-1$
+            + "Nothing was deleted. Use list_projects to check the project state, then retry " //$NON-NLS-1$
+            + "delete_metadata when the project is ready."; //$NON-NLS-1$
+        String[] settledProject = {null};
+        long[] settledTimeout = {0L};
+        DeleteMetadataTool.CascadeSettler settler = (projectName, timeoutMs) ->
+        {
+            settledProject[0] = projectName;
+            settledTimeout[0] = timeoutMs;
+            return settleError;
+        };
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("fqn", "CommonModule.Calc"); //$NON-NLS-1$ //$NON-NLS-2$
+        DeleteMetadataTool tool = new DeleteMetadataTool(
+            (name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW, settler);
+
+        String json = tool.execute(params);
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(settleError, result.get("error").getAsString()); //$NON-NLS-1$
+        assertEquals("TestConfiguration", settledProject[0]); //$NON-NLS-1$
+        assertEquals(60_000L, settledTimeout[0]);
+        verify(refactoringService, never()).createMdObjectDeleteRefactoring(
+            org.mockito.ArgumentMatchers.anyCollection());
+    }
+
+    @Test
     public void testNameConstant()
     {
         assertEquals("delete_metadata", new DeleteMetadataTool().getName()); //$NON-NLS-1$

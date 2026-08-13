@@ -24,6 +24,9 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class ProjectStateChecker
 {
+    /** Poll interval while EDT is reopening project storage and registering BM models. */
+    private static final long MODEL_REGISTRATION_POLL_MS = 50L;
+
     /**
      * Project state enumeration.
      */
@@ -254,8 +257,8 @@ public final class ProjectStateChecker
 
     /**
      * The pre-flight for a CASCADE operation (a rename / delete refactoring): actively waits for the
-     * project's derived-data pipeline to drain, then re-checks, and returns the "still building"
-     * message when it did not settle in time.
+     * project's derived-data pipeline to drain and for EDT to register every BM model the refactoring
+     * will use, then returns an actionable error when either condition did not settle in time.
      * <p>
      * {@link #buildingErrorOrNull(IProject)} alone is an INSTANT probe, and a cascade needs more than
      * that. EDT's refactoring opens a BM batch session; a derived-data task that is still pending when
@@ -269,10 +272,27 @@ public final class ProjectStateChecker
      * retryable message every other tool uses instead of blocking the wire for five minutes.
      *
      * @param projectName the project the cascade will mutate (a null/empty name skips the check)
-     * @param settleTimeoutMs how long to wait for the pipeline to drain
-     * @return the building message with a retry hint, or {@code null} when the cascade may proceed
+     * @param settleTimeoutMs how long to wait for the pipeline and BM models to settle
+     * @return an actionable error, or {@code null} when the cascade may proceed
      */
     public static String settleBeforeCascadeOrError(String projectName, long settleTimeoutMs)
+    {
+        return settleBeforeCascadeOrError(projectName, settleTimeoutMs,
+            "the cascade operation", "No cascade was started."); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Operation-aware cascade pre-flight. The operation and state statement keep a BM-model timeout
+     * identical to the guarded refusal the calling tool already exposes.
+     *
+     * @param projectName the project the cascade will mutate (a null/empty name skips the check)
+     * @param settleTimeoutMs how long to wait for derived data and BM-model registration
+     * @param operationName the MCP tool the caller may retry
+     * @param stateStatement what is known about the refused mutation, including punctuation
+     * @return an actionable error, or {@code null} when the cascade may proceed
+     */
+    public static String settleBeforeCascadeOrError(String projectName, long settleTimeoutMs,
+        String operationName, String stateStatement)
     {
         if (projectName == null || projectName.isEmpty())
         {
@@ -280,7 +300,8 @@ public final class ProjectStateChecker
         }
         IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
             .getRoot().getProject(projectName);
-        return settleBeforeCascadeOrError(project, settleTimeoutMs, CascadeEnvironment.DEFAULT);
+        return settleBeforeCascadeOrError(project, settleTimeoutMs, CascadeEnvironment.DEFAULT,
+            operationName, stateStatement);
     }
 
     /**
@@ -290,11 +311,19 @@ public final class ProjectStateChecker
      * which resolves {@code project} from the workspace and injects {@link CascadeEnvironment#DEFAULT}.
      *
      * @param project the project the cascade will mutate
-     * @param settleTimeoutMs how long to wait for the pipeline to drain
+     * @param settleTimeoutMs how long to wait for the pipeline and BM models to settle
      * @param env the seam over the workspace/derived-data services
-     * @return the building message with a retry hint, or {@code null} when the cascade may proceed
+     * @return an actionable error, or {@code null} when the cascade may proceed
      */
     static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs, CascadeEnvironment env)
+    {
+        return settleBeforeCascadeOrError(project, settleTimeoutMs, env,
+            "the cascade operation", "No cascade was started."); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Package-visible operation-aware seam for headless cascade-settle tests. */
+    static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
+        CascadeEnvironment env, String operationName, String stateStatement)
     {
         if (!project.exists() || !project.isOpen())
         {
@@ -325,7 +354,38 @@ public final class ProjectStateChecker
         }
         // A PARTICIPATING extension that did not settle is refused like the base project would be:
         // the cascade is about to enter its refactoring too.
-        return stillBuilding;
+        if (stillBuilding != null)
+        {
+            return stillBuilding;
+        }
+
+        // Derived data and BM-model registration are separate EDT lifecycles. A storage reopen can
+        // leave the target or one of EDT's dependent refactoring projects without a registered model
+        // after the index is already READY. Poll the shared resolver under the SAME deadline so a
+        // transient close/reopen window is waited out, while a model that never returns produces the
+        // same actionable refusal as the final guard at the refactoring call site.
+        return waitForRefactoringModels(project, deadline, env, operationName, stateStatement);
+    }
+
+    private static String waitForRefactoringModels(IProject project, long deadline,
+        CascadeEnvironment env, String operationName, String stateStatement)
+    {
+        BmModelResolver.Resolution resolution = env.resolveModelsForRefactoring(project);
+        while (!resolution.isAvailable())
+        {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0)
+            {
+                return resolution.actionableError(operationName, stateStatement);
+            }
+            long waitMs = Math.min(MODEL_REGISTRATION_POLL_MS, remaining);
+            if (!env.waitBeforeModelRetry(waitMs))
+            {
+                return resolution.actionableError(operationName, stateStatement);
+            }
+            resolution = env.resolveModelsForRefactoring(project);
+        }
+        return null;
     }
 
     /**
@@ -394,7 +454,8 @@ public final class ProjectStateChecker
      * CascadeEnvironment)} (and {@link #settleBeforeCascadeOrError(IProject, long,
      * CascadeEnvironment)}) with no live workspace. {@link #DEFAULT} delegates to the same EDT
      * services ({@link IDtProjectManager}, {@link ExtensionOriginUtils#resolveBaseProject(IProject)},
-     * {@link BuildUtils#waitForDerivedData(IProject, long)}) this pre-flight always used.
+     * {@link BuildUtils#waitForDerivedData(IProject, long)},
+     * {@link BmModelResolver#resolveForRefactoring(IProject)}) this pre-flight uses.
      * <p>
      * Public (unlike the package-visible {@code settleBeforeCascadeOrError} overload that takes
      * it): Mockito's proxy generation cannot mock a non-public type across the fragment-test /
@@ -430,6 +491,12 @@ public final class ProjectStateChecker
 
         /** Whether {@code project}'s derived-data pipeline is still (transiently) building. */
         boolean isBuilding(IProject project);
+
+        /** Resolves all BM models EDT will map while constructing this project's refactoring. */
+        BmModelResolver.Resolution resolveModelsForRefactoring(IProject project);
+
+        /** Waits before another BM-model resolution attempt; {@code false} means the wait was interrupted. */
+        boolean waitBeforeModelRetry(long timeoutMs);
 
         /** Delegates to the live, {@code Activator}-backed EDT services. */
         CascadeEnvironment DEFAULT = new CascadeEnvironment()
@@ -477,6 +544,27 @@ public final class ProjectStateChecker
             public boolean isBuilding(IProject project)
             {
                 return buildingErrorOrNull(project) != null;
+            }
+
+            @Override
+            public BmModelResolver.Resolution resolveModelsForRefactoring(IProject project)
+            {
+                return BmModelResolver.resolveForRefactoring(project);
+            }
+
+            @Override
+            public boolean waitBeforeModelRetry(long timeoutMs)
+            {
+                try
+                {
+                    Thread.sleep(timeoutMs);
+                    return true;
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
             }
         };
     }
