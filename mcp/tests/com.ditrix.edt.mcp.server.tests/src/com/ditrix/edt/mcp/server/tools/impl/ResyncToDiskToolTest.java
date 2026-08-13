@@ -57,6 +57,8 @@ import com.google.gson.JsonArray;
 
 import com.google.gson.JsonParser;
 
+import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
+
 public class ResyncToDiskToolTest
 {
     @Test
@@ -758,7 +760,7 @@ public class ResyncToDiskToolTest
                 + "after export. No dangling references in Configuration.mdo."); //$NON-NLS-1$
 
         String refreshed = new ResyncToDiskTool().refreshAfterExportAwait(
-            Collections.singletonMap("projectName", "TestConfiguration"), json.toString()); //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.singletonMap("projectName", "TestConfiguration"), json.toString(), true); //$NON-NLS-1$ //$NON-NLS-2$
         JsonObject out = JsonParser.parseString(refreshed).getAsJsonObject();
 
         assertEquals("a subset must not overwrite the whole-project count", 600, //$NON-NLS-1$
@@ -774,5 +776,149 @@ public class ResyncToDiskToolTest
                     < message.indexOf("Correction to the figures above")); //$NON-NLS-1$
         assertTrue("and it must name the true total so the caller can see the gap: " + message, //$NON-NLS-1$
             message.contains("600")); //$NON-NLS-1$
+    }
+
+    /** Drives the barrier through the real entry, recording both ends so the ORDER is observable. */
+    private static final class RecordingResync extends ResyncToDiskTool
+    {
+        private final List<String> order;
+        private final DiskExportState answer;
+
+        RecordingResync(List<String> order)
+        {
+            this(order, DiskExportState.DRAINED);
+        }
+
+        RecordingResync(List<String> order, DiskExportState answer)
+        {
+            this.order = order;
+            this.answer = answer;
+        }
+
+        String drive(Map<String, String> params, String result)
+        {
+            return awaitDiskExport(params, result);
+        }
+
+        @Override
+        protected IExportEnvironment exportEnvironment()
+        {
+            return (projectName, timeoutMs) -> {
+                order.add("waited"); //$NON-NLS-1$
+                return answer;
+            };
+        }
+
+        @Override
+        UnaryOperator<String> revalidator()
+        {
+            return projectName -> {
+                order.add("revalidated"); //$NON-NLS-1$
+                return "{\"success\":true}"; //$NON-NLS-1$
+            };
+        }
+    }
+
+    @Test
+    public void testRevalidationStartsOnlyAfterTheExportDrainNotBeforeIt()
+    {
+        // ORDER, not presence. revalidate=true asks for a rebuild that SEES the export, and the
+        // rebuild reads the disk - so starting it while the export is still queued can validate
+        // the previous bytes and report on them. That failure is silent: the call succeeds, the
+        // revalidation runs, and nothing in the answer says which state of the disk it judged.
+        //
+        // Both ends are recorded into one log, so this pins the sequence rather than the fact that
+        // each happened. Before the fix the rebuild ran inside executeOnUiThread - i.e. before the
+        // barrier existed at all in this path - and this log would not contain "revalidated" here.
+        List<String> order = new ArrayList<>();
+        RecordingResync tool = new RecordingResync(order);
+
+        JsonObject json = new JsonObject();
+        json.addProperty("success", true); //$NON-NLS-1$
+        json.addProperty("objectsExported", 3); //$NON-NLS-1$
+        json.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
+
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("revalidate", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        tool.drive(params, json.toString());
+
+        assertEquals("the rebuild must be ordered strictly after the export drain", //$NON-NLS-1$
+            Arrays.asList("waited", "revalidated"), order); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testWithoutTheFlagNothingIsRevalidatedAndNoExtraWaitAppears()
+    {
+        // The other half of the contract: a caller that did not ask for revalidation must not pay
+        // for one, and must not acquire a second wait either.
+        List<String> order = new ArrayList<>();
+        RecordingResync tool = new RecordingResync(order);
+
+        JsonObject json = new JsonObject();
+        json.addProperty("success", true); //$NON-NLS-1$
+        json.addProperty("objectsExported", 3); //$NON-NLS-1$
+        json.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
+
+        tool.drive(Collections.singletonMap("projectName", "TestConfiguration"), //$NON-NLS-1$ //$NON-NLS-2$
+            json.toString());
+
+        assertEquals("without revalidate=true only the export wait may happen", //$NON-NLS-1$
+            Collections.singletonList("waited"), order); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRevalidationIsSkippedAndSaidSoWhenTheExportCouldNotBeObserved()
+    {
+        // UNOBSERVABLE is not DRAINED. The barrier lets the call through - nothing failed - but it
+        // established nothing about the disk either, and a rebuild started from unconfirmed bytes
+        // could report on a stale state: the same defect this move fixes, with a different cause.
+        // The caller ASKED for revalidation, so being skipped has to be said out loud.
+        List<String> order = new ArrayList<>();
+        RecordingResync tool = new RecordingResync(order, DiskExportState.UNOBSERVABLE);
+
+        JsonObject json = new JsonObject();
+        json.addProperty("success", true); //$NON-NLS-1$
+        json.addProperty("objectsExported", 3); //$NON-NLS-1$
+        json.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
+
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("revalidate", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String out = tool.drive(params, json.toString());
+
+        // "waited", not "drained": the barrier ran, it just could not establish anything.
+        assertEquals("an unobserved export must not start a rebuild", //$NON-NLS-1$
+            Collections.singletonList("waited"), order); //$NON-NLS-1$
+        assertTrue("the skip must be reported, not silent: " + out, //$NON-NLS-1$
+            JsonParser.parseString(out).getAsJsonObject().get("revalidateWarning") //$NON-NLS-1$
+                .getAsString().contains("Revalidation was skipped")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANoOpResyncStillRevalidatesBecauseItQueuedNothingToWaitFor()
+    {
+        // The empty-scope path. An in-sync project exports nothing, so the barrier has nothing to
+        // await - but revalidate=true was still asked for, and there is nothing outstanding that
+        // could make the disk stale. Returning early there would silently drop the rebuild for
+        // exactly the calls that had no export.
+        List<String> order = new ArrayList<>();
+        RecordingResync tool = new RecordingResync(order, DiskExportState.DRAINED);
+
+        JsonObject json = new JsonObject();
+        json.addProperty("success", true); //$NON-NLS-1$
+        json.addProperty("objectsExported", 0); //$NON-NLS-1$
+        json.addProperty("danglingRemovedCount", 0); //$NON-NLS-1$
+
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("revalidate", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        tool.drive(params, json.toString());
+
+        assertEquals("a no-op must still revalidate, and must not wait for anything", //$NON-NLS-1$
+            Collections.singletonList("revalidated"), order); //$NON-NLS-1$
     }
 }

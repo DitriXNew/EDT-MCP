@@ -125,7 +125,10 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      * @param result the JSON the tool produced
      * @return {@code result} unchanged, or an actionable error when the export is still pending
      */
-    String awaitDiskExport(Map<String, String> params, String result)
+    // Protected, not package-visible: a subclass's own test drives the barrier through this entry
+    // to pin that its post-barrier work is ordered AFTER the drain, and that ordering is not
+    // observable from anywhere else.
+    protected String awaitDiskExport(Map<String, String> params, String result)
     {
         // Parsed once, and only a SUCCESS is parsed at all: an error is a well-formed JSON object
         // too, and treating one as a write would make a rejected argument wait out the whole
@@ -138,25 +141,39 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         Collection<String> projects = exportProjectsToAwait(params, success);
         if (projects == null || projects.isEmpty())
         {
-            return result;
+            // Nothing to WAIT for, but the post-wait step still runs: a tool may have work that
+            // must not start until the barrier is behind it, and skipping it here would silently
+            // drop that work for exactly the calls that queued nothing. Reported as established:
+            // this call put nothing in the queue, so there is nothing about it left unfinished.
+            return refreshAfterExportAwait(params, result, true);
         }
         // ONE budget for the whole set, not one per project: a cascade that touches the base and
         // three extensions must not be able to take four deadlines to answer.
         long deadlineAtMs = System.currentTimeMillis() + EXPORT_DEADLINE_MS;
+        // Tracked, because DRAINED and UNOBSERVABLE are not the same news for a tool whose next
+        // step reads the disk: only the first says the export finished. Passing them on as one
+        // would be the "wider than the code" mistake this PR keeps finding.
+        boolean drainEstablished = true;
         for (String projectName : projects)
         {
             if (projectName == null || projectName.isEmpty())
             {
+                // A named-but-unusable entry is not a project we established anything about, so it
+                // must not leave the verdict at its optimistic initial value: skipping the wait is
+                // not the same as the wait having succeeded.
+                drainEstablished = false;
                 continue;
             }
             long remainingMs = Math.max(1L, deadlineAtMs - System.currentTimeMillis());
-            if (exportEnvironment().waitForDiskExport(projectName, remainingMs)
-                == BuildUtils.DiskExportState.PENDING)
+            BuildUtils.DiskExportState state =
+                exportEnvironment().waitForDiskExport(projectName, remainingMs);
+            if (state == BuildUtils.DiskExportState.PENDING)
             {
                 return exportNotConfirmed(projectName);
             }
+            drainEstablished &= state == BuildUtils.DiskExportState.DRAINED;
         }
-        return refreshAfterExportAwait(params, result);
+        return refreshAfterExportAwait(params, result, drainEstablished);
     }
 
     /**
@@ -235,9 +252,14 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      *
      * @param params the tool parameters
      * @param result the JSON the tool produced
+     * @param drainEstablished whether the export was actually observed to finish. {@code false}
+     *     means the barrier could not observe the export state at all - NOT that anything failed,
+     *     and NOT that the disk is current. Work that only makes sense on exported bytes must
+     *     check this rather than assume the wait proved something.
      * @return the result to return, possibly updated
      */
-    protected String refreshAfterExportAwait(Map<String, String> params, String result)
+    protected String refreshAfterExportAwait(Map<String, String> params, String result,
+        boolean drainEstablished)
     {
         return result;
     }
@@ -299,7 +321,7 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
      * the part worth pinning.
      */
     @FunctionalInterface
-    interface IExportEnvironment
+    protected interface IExportEnvironment
     {
         /**
          * @param projectName the name of the project whose export queue to drain
@@ -319,9 +341,12 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     };
 
     /**
-     * @return the environment the export barrier runs against; overridden only by tests
+     * @return the environment the export barrier runs against; overridden only by tests. Protected
+     *     rather than package-visible so a subclass's OWN test can observe the barrier - pinning
+     *     that a tool's post-barrier work really happens after the drain needs both ends visible
+     *     from one place.
      */
-    IExportEnvironment exportEnvironment()
+    protected IExportEnvironment exportEnvironment()
     {
         return PLATFORM_EXPORT_ENVIRONMENT;
     }

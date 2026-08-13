@@ -248,9 +248,88 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             ? Collections.singletonList(projectName) : Collections.<String> emptyList();
     }
 
-    @Override
-    protected String refreshAfterExportAwait(Map<String, String> params, String result)
+    /**
+     * @return the revalidation delegate; overridden only by tests, so the ORDER of the drain and
+     *     the rebuild can be observed without a live workspace
+     */
+    UnaryOperator<String> revalidator()
     {
+        return CleanProjectTool::cleanProject;
+    }
+
+    /**
+     * Runs the optional post-export revalidation and folds its warning into the result.
+     * <p>
+     * Deliberately here rather than in {@code executeOnUiThread}: {@code revalidate=true} asks for
+     * a rebuild THAT SEES THE EXPORT, and inside the UI-thread body the export is still queued. A
+     * local wait there would not do either - it would block the UI thread on EDT's own pipeline,
+     * which is the deadlock this whole barrier is arranged to avoid. Running after the barrier
+     * costs no second wait: the barrier has already done the waiting there was to do.
+     * <p>
+     * It is SKIPPED when the barrier could not observe the export at all. That state means the
+     * bytes are UNKNOWN, not known-stale - but a rebuild is only worth running on bytes known to
+     * be current, so running anyway could reproduce the defect this move fixes, with a different
+     * cause and no way to tell afterwards.
+     *
+     * @param params the tool parameters
+     * @param result the JSON produced so far
+     * @param drainEstablished whether the export was observed to finish
+     * @return the result, with {@code revalidateWarning} added when the revalidation reported one
+     *     or was skipped
+     */
+    private String revalidateAfterExport(Map<String, String> params, String result,
+        boolean drainEstablished)
+    {
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        if (projectName == null || projectName.isEmpty()
+            || !JsonUtils.extractBooleanArgument(params, KEY_REVALIDATE, false))
+        {
+            return result;
+        }
+        if (!drainEstablished)
+        {
+            return withRevalidateWarning(result, "Revalidation was skipped: the export to disk " //$NON-NLS-1$
+                + "could not be confirmed, and a rebuild started from unconfirmed bytes could " //$NON-NLS-1$
+                + "report on a stale state. Re-run resync_to_disk with revalidate=true once the " //$NON-NLS-1$
+                + "project reports ready."); //$NON-NLS-1$
+        }
+        // Reached only on a SUCCESS envelope (the base class does not call this otherwise), and a
+        // failed export answers with an error - so "the export succeeded" is already established.
+        String warning = runOptionalRevalidation(projectName, true, true, revalidator());
+        return warning == null ? result : withRevalidateWarning(result, warning);
+    }
+
+    /**
+     * Adds {@code revalidateWarning} to a result, leaving it untouched when it cannot be parsed.
+     *
+     * @param result the JSON produced so far
+     * @param warning the warning to attach
+     * @return the result with the warning attached
+     */
+    private static String withRevalidateWarning(String result, String warning)
+    {
+        try
+        {
+            JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+            json.addProperty("revalidateWarning", warning); //$NON-NLS-1$
+            return GsonProvider.get().toJson(json);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not attach a revalidation warning", e); //$NON-NLS-1$
+            return result;
+        }
+    }
+
+    @Override
+    protected String refreshAfterExportAwait(Map<String, String> params, String result,
+        boolean drainEstablished)
+    {
+        // Runs AFTER the export barrier, and off the UI thread. Revalidation first: it is the step
+        // whose whole point is to read the exported bytes, so it must not be ordered behind a
+        // best-effort report refresh that might return early.
+        String revalidated = revalidateAfterExport(params, result, drainEstablished);
+
         // This tool REPORTS on disk, and it sampled disk inside executeOnUiThread - before the
         // export queue had drained. Anything it found "still missing" there may exist by the time
         // the caller reads the answer, so the sample is retaken now that the wait has finished.
@@ -258,15 +337,15 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         String projectName = params.get(McpKeys.PROJECT_NAME);
         if (projectName == null || projectName.isEmpty())
         {
-            return result;
+            return revalidated;
         }
         try
         {
-            JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+            JsonObject json = JsonParser.parseString(revalidated).getAsJsonObject();
             JsonElement before = json.get("missingBefore"); //$NON-NLS-1$
             if (before == null || !before.isJsonArray() || before.getAsJsonArray().isEmpty())
             {
-                return result;
+                return revalidated;
             }
             List<String> candidates = new ArrayList<>();
             before.getAsJsonArray().forEach(e -> candidates.add(e.getAsString()));
@@ -305,7 +384,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             com.ditrix.edt.mcp.server.utils.ProjectContext context = com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
             if (!context.exists())
             {
-                return result;
+                // `revalidated`, not `result`: the revalidation may already have attached a warning,
+                // and every other exit from here preserves it. Returning the pre-revalidation
+                // payload would drop exactly the news the caller needs.
+                return revalidated;
             }
             List<String> stillMissing = findMissingMdoFiles(context.project(), candidates);
             // Compared as a SET, not by size: one file arriving while another disappears leaves the
@@ -319,7 +401,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
             if (new LinkedHashSet<>(previousMissing).equals(new LinkedHashSet<>(stillMissing)))
             {
-                return result;
+                return revalidated;
             }
             json.add("stillMissing", GsonProvider.get().toJsonTree(stillMissing)); //$NON-NLS-1$
             json.addProperty("stillMissingCount", stillMissing.size()); //$NON-NLS-1$
@@ -336,7 +418,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             // A result we cannot restate is still a valid result; never fail the call over the
             // freshness of a report field.
             Activator.logError("Could not refresh the resync disk report after the export wait", e); //$NON-NLS-1$
-            return result;
+            return revalidated;
         }
     }
 
@@ -433,10 +515,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         DanglingResult dangling =
             cleanDanglingReferences(ctx.config, bmModel, ctx.project, cleanDangling);
 
-        // Step 6 (optional, best-effort): refresh stale validation markers. Only run
-        // when the export actually succeeded - a failed export must not then trigger a
-        // full clean build.
-        String revalidateWarning = runOptionalRevalidation(projectName, revalidate, exported);
+        // Step 6 (optional, best-effort) does NOT happen here. Revalidation rebuilds FROM DISK,
+        // and at this point the export it is supposed to validate is still queued - so running it
+        // now would rebuild from the previous bytes and report on them, which is precisely the
+        // guarantee the caller asked for by passing revalidate=true. It runs in
+        // refreshAfterExportAwait instead, after the export barrier. That is also the thread
+        // clean_project normally runs on: CleanProjectTool implements IMcpTool directly, so its
+        // own calls are off the UI thread, and this was the odd one out.
 
         // The force-export swallows failures and returns false (unresolved
         // services/project, or the export threw). `exported` is true when the export
@@ -469,10 +554,6 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         if (dangling.warning != null)
         {
             result.put("danglingWarning", dangling.warning); //$NON-NLS-1$
-        }
-        if (revalidateWarning != null)
-        {
-            result.put("revalidateWarning", revalidateWarning); //$NON-NLS-1$
         }
         result.put(McpKeys.MESSAGE, buildMessage(exported, exported ? exportFqns.size() : 0, fullExport,
             missingBefore.size(), stillMissing.size(), dangling.found, dangling.removedFromModel,

@@ -85,7 +85,7 @@ public class AbstractMetadataWriteToolTest
         }
 
         @Override
-        IExportEnvironment exportEnvironment()
+        protected IExportEnvironment exportEnvironment()
         {
             return environment;
         }
@@ -310,7 +310,7 @@ public class AbstractMetadataWriteToolTest
         }
 
         @Override
-        IExportEnvironment exportEnvironment()
+        protected IExportEnvironment exportEnvironment()
         {
             return environment;
         }
