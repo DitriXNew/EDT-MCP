@@ -357,14 +357,7 @@ public final class ProjectStateChecker
             // produce its established error instead of advising a retry that can never succeed.
             return null;
         }
-        // Drain UNCONDITIONALLY - do not gate this on the instant probe. On the CI run that
-        // exposed this, the probe answered READY and a derived-data task was executing one
-        // second later, so a drain that only ran when the probe said BUILDING would have been
-        // skipped on the very call it exists for. With a quiet pipeline (or a name that is not
-        // an EDT project at all) waitAllComputations returns immediately, so the cost is zero
-        // where there is nothing to wait for.
         long deadline = System.currentTimeMillis() + settleTimeoutMs;
-        env.waitForDerivedData(project, settleTimeoutMs);
         // A cascade is not confined to the named project: a rename builds one refactoring per
         // PARTICIPATING project, which includes the configuration EXTENSIONS that adopt the
         // renamed object - drain those too, sharing the SAME deadline, so this cannot multiply
@@ -374,18 +367,26 @@ public final class ProjectStateChecker
         Set<String> settledParticipantNames = new HashSet<>();
         for (int pass = 0; pass < MAX_PARTICIPANT_DISCOVERY_PASSES; pass++)
         {
-            String stillBuilding = drainParticipants(project, deadline, env,
+            // Drain the base UNCONDITIONALLY on every pass. An instant READY probe can become stale
+            // while BM models are registering; a quiet pipeline returns immediately, while a project
+            // that restarted since the previous pass gets another bounded chance to settle.
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining > 0)
+            {
+                env.waitForDerivedData(project, remaining);
+            }
+            IProject stillBuilding = drainParticipants(project, deadline, env,
                 settledParticipantNames);
             String building = env.buildingErrorOrNull(project);
-            if (building != null)
+            if (building != null || stillBuilding != null)
             {
-                return building;
-            }
-            // A PARTICIPATING extension that did not settle is refused like the base project would be:
-            // the cascade is about to enter its refactoring too.
-            if (stillBuilding != null)
-            {
-                return stillBuilding;
+                if (pass + 1 >= MAX_PARTICIPANT_DISCOVERY_PASSES
+                    || deadline - System.currentTimeMillis() <= 0)
+                {
+                    return building != null ? building
+                        : participantBuildingError(project, stillBuilding);
+                }
+                continue;
             }
 
             // Derived data and BM-model registration are separate EDT lifecycles. A storage reopen can
@@ -400,28 +401,51 @@ public final class ProjectStateChecker
                 return modelError;
             }
 
-            // A project context may have been invisible to getOpenDtProjects() while its storage was
-            // restarting, then become visible while model registration was polled. Re-discover after
-            // that wait and drain every newly visible participant before allowing the cascade through.
-            List<IProject> unserved = findUnsettledParticipants(project, env,
-                settledParticipantNames);
-            if (unserved.isEmpty())
+            // Model polling happens during the same storage-reopen window that can start fresh derived
+            // data. Re-check the base and every participant that was already settled; a stale pre-model
+            // verdict must never be the one used to release the cascade.
+            String refreshedBuilding = env.buildingErrorOrNull(project);
+            List<IProject> participants = findParticipants(project, env);
+            Set<String> rebuildingParticipantNames = new HashSet<>();
+            for (IProject participant : participants)
             {
-                return null;
-            }
-            if (pass + 1 >= MAX_PARTICIPANT_DISCOVERY_PASSES
-                || deadline - System.currentTimeMillis() <= 0)
-            {
-                for (IProject participant : unserved)
+                String participantName = participant.getName();
+                if (settledParticipantNames.contains(participantName)
+                    && env.isBuilding(participant))
                 {
-                    if (env.isBuilding(participant))
-                    {
-                        return participantBuildingError(project, participant);
-                    }
-                    settledParticipantNames.add(participant.getName());
+                    settledParticipantNames.remove(participantName);
+                    rebuildingParticipantNames.add(participantName);
                 }
+            }
+            List<IProject> unserved = findUnsettledParticipants(participants,
+                settledParticipantNames);
+            if (refreshedBuilding == null && unserved.isEmpty())
+            {
                 return null;
             }
+
+            if (pass + 1 < MAX_PARTICIPANT_DISCOVERY_PASSES
+                && deadline - System.currentTimeMillis() > 0)
+            {
+                continue;
+            }
+
+            // No time/pass remains for another drain. Every refusal below is based on a fresh probe;
+            // idle newly-discovered participants still need no wait and can safely be accepted.
+            if (refreshedBuilding != null)
+            {
+                return refreshedBuilding;
+            }
+            for (IProject participant : unserved)
+            {
+                if (rebuildingParticipantNames.contains(participant.getName())
+                    || env.isBuilding(participant))
+                {
+                    return participantBuildingError(project, participant);
+                }
+                settledParticipantNames.add(participant.getName());
+            }
+            return null;
         }
         return null;
     }
@@ -458,13 +482,13 @@ public final class ProjectStateChecker
      * this cascade, so it is never drained, never asked about, and never able to consume the
      * shared deadline or cause a refusal.
      *
-     * @param base the project already drained by the caller
+     * @param base the cascade's base project
      * @param deadline absolute time (ms) the whole drain must not exceed
      * @param env the seam over the workspace/derived-data services
-     * @return the retryable message for a PARTICIPATING extension that is still building (naming
-     *         it), or {@code null} when every participant settled
+     * @return the first PARTICIPATING extension that is still building, or {@code null} when every
+     *         participant settled
      */
-    private static String drainParticipants(IProject base, long deadline, CascadeEnvironment env,
+    private static IProject drainParticipants(IProject base, long deadline, CascadeEnvironment env,
         Set<String> settledParticipantNames)
     {
         for (IProject participant : findUnsettledParticipants(base, env, settledParticipantNames))
@@ -479,7 +503,7 @@ public final class ProjectStateChecker
             // prevents another wait.
             if (env.isBuilding(participant))
             {
-                return participantBuildingError(base, participant);
+                return participant;
             }
             settledParticipantNames.add(participant.getName());
         }
@@ -489,10 +513,29 @@ public final class ProjectStateChecker
     private static List<IProject> findUnsettledParticipants(IProject base, CascadeEnvironment env,
         Set<String> settledParticipantNames)
     {
+        return findUnsettledParticipants(findParticipants(base, env), settledParticipantNames);
+    }
+
+    private static List<IProject> findUnsettledParticipants(List<IProject> discoveredParticipants,
+        Set<String> settledParticipantNames)
+    {
+        List<IProject> unsettledParticipants = new ArrayList<>();
+        for (IProject participant : discoveredParticipants)
+        {
+            if (!settledParticipantNames.contains(participant.getName()))
+            {
+                unsettledParticipants.add(participant);
+            }
+        }
+        return unsettledParticipants;
+    }
+
+    private static List<IProject> findParticipants(IProject base, CascadeEnvironment env)
+    {
         List<IProject> participants = new ArrayList<>();
         for (IProject candidate : env.getOpenDtProjects())
         {
-            if (candidate.equals(base) || settledParticipantNames.contains(candidate.getName()))
+            if (candidate.equals(base))
             {
                 continue;
             }

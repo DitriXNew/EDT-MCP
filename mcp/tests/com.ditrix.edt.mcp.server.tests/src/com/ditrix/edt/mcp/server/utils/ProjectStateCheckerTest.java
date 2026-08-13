@@ -245,7 +245,7 @@ public class ProjectStateCheckerTest
         assertNull(result);
         verify(env, never()).waitForDerivedData(eq(initialParticipant), anyLong());
         verify(env, never()).waitForDerivedData(eq(rediscoveredParticipant), anyLong());
-        verify(env).isBuilding(initialParticipant);
+        verify(env, times(2)).isBuilding(initialParticipant);
         verify(env).isBuilding(rediscoveredParticipant);
     }
 
@@ -328,7 +328,62 @@ public class ProjectStateCheckerTest
 
         assertNull(result);
         verify(env).waitForDerivedData(eq(restartedExtension), anyLong());
-        verify(env).isBuilding(restartedExtension);
+        verify(env, times(2)).isBuilding(restartedExtension);
+    }
+
+    @Test
+    public void baseThatStartsBuildingDuringModelPollingIsNotReleasedByAStaleProbe()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        String building = "Project 'Base' started building again. Please wait and retry."; //$NON-NLS-1$
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.buildingErrorOrNull(base)).thenReturn(null, building);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base,
+            SETTLE_TIMEOUT_MS, env);
+
+        assertTrue("the post-model base probe must prevent a stale-ready release", result != null); //$NON-NLS-1$
+        assertTrue("the refusal must name the base project: " + result, result.contains("Base")); //$NON-NLS-1$ //$NON-NLS-2$
+        verify(env, times(3)).waitForDerivedData(eq(base), anyLong());
+    }
+
+    @Test
+    public void settledParticipantThatRestartsStaysBlockedThroughTheLastPass()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject participant = mockOpenProject("RestartedExtension"); //$NON-NLS-1$
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(participant));
+        when(env.isExtensionProject(participant)).thenReturn(true);
+        when(env.resolveBaseProject(participant)).thenReturn(base);
+        when(env.isBuilding(participant)).thenReturn(false, true, true);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base,
+            SETTLE_TIMEOUT_MS, env);
+
+        assertTrue("a participant still rebuilding after every pass must be refused", result != null); //$NON-NLS-1$
+        assertTrue("the refusal must name the restarted participant: " + result, //$NON-NLS-1$
+            result.contains("RestartedExtension")); //$NON-NLS-1$
+        verify(env, times(3)).waitForDerivedData(eq(participant), anyLong());
+    }
+
+    @Test
+    public void settledParticipantThatRestartsIsDrainedAgainAndMayRecover()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject participant = mockOpenProject("RecoveringExtension"); //$NON-NLS-1$
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(participant));
+        when(env.isExtensionProject(participant)).thenReturn(true);
+        when(env.resolveBaseProject(participant)).thenReturn(base);
+        when(env.isBuilding(participant)).thenReturn(false, true, false);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base,
+            SETTLE_TIMEOUT_MS, env);
+
+        assertNull(result);
+        verify(env, times(2)).waitForDerivedData(eq(participant), anyLong());
+        verify(env, times(4)).isBuilding(participant);
     }
 
     @Test
@@ -345,7 +400,7 @@ public class ProjectStateCheckerTest
 
         assertNull(result);
         verify(env, never()).isBuilding(base);
-        verify(env).buildingErrorOrNull(base);
+        verify(env, times(2)).buildingErrorOrNull(base);
         verify(env).resolveModelsForRefactoring(base);
     }
 
