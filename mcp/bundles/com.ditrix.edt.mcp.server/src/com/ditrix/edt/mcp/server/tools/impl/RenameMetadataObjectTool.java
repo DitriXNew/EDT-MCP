@@ -172,10 +172,10 @@ public class RenameMetadataObjectTool implements IMcpTool
         String disableIndicesStr = JsonUtils.extractStringArgument(params, "disableIndices"); //$NON-NLS-1$
         final int maxResults = Math.max(0, JsonUtils.extractIntArgument(params, "maxResults", 20)); //$NON-NLS-1$
 
-        // Parse disable indices. A token that is not a number is KEPT (as an unparsed token) rather
-        // than thrown away here: the executed report has to be able to say that the caller asked for
-        // something which produced no skip, and a value discarded at the parse no longer exists to
-        // report on (#401).
+        // Parse disable indices. An entry that is not an index is COUNTED rather than thrown away here:
+        // the executed report has to be able to say that the caller asked for something which produced
+        // no skip, and a value discarded at the parse no longer exists to report on (#401). The count
+        // and not the text - see DisableRequest for why.
         DisableRequest disableRequest = DisableRequest.parse(disableIndicesStr);
 
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME,

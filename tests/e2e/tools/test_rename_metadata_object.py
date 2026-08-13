@@ -527,8 +527,9 @@ def test_preview_for_catalog_does_not_mutate_catalog():
 # is an agent deciding whether a change was left behind on purpose.
 #
 # The report now states the REAL number, and every requested ENTRY that produced no skip comes
-# back: an index that matched nothing under `unknownIndices`, one naming a required point under
-# `notSkippableIndices`, and an entry that never parsed as a number under `unparsedTokens`.
+# back: an index that matched nothing under `unknownIndices`, one naming a point the refactoring
+# requires under `notSkippableIndices`, one naming a point this tool cannot switch off under
+# `unsupportedIndices`, and entries that never parsed as indices COUNTED under `unparsedCount`.
 #
 # CommonModule.CascadeEn is the target because its change set is tiny and fully known:
 # exactly two points, `#0` the bslRef in CascadeUser (Skippable: yes) and `#1` the
@@ -649,9 +650,13 @@ def test_unparsable_disable_index_token_is_reported_not_swallowed():
     assert_ok(r, "execute rename with a disableIndices made only of a non-numeric token")
     assert_contains(r.text, "action: executed", "the rename must still execute")
     assert_contains(r.text, "disabledCount: 0", "nothing was skipped, and nothing could have been")
-    assert_contains(r.text, 'unparsedTokens: ["abc"]',
-                    "a token that is not a number must be reported, not dropped at the parse")
-    assert_contains(r.text, "are not whole numbers and were ignored",
+    assert_contains(r.text, "unparsedCount: 1",
+                    "an entry that is not a number must be reported, not dropped at the parse")
+    # The CONTENT is deliberately not echoed - see DisableRequest for the nine defects that decided
+    # it. The signal is what the caller needed; the signal is a number.
+    assert_not_contains(r.text, "abc",
+                        "the caller's own text must not come back in the report")
+    assert_contains(r.text, "entr(ies) in disableIndices could not be read as change-point indices",
                     "the report must explain what happened to it")
     # It never became an index, so it must not be filed as one.
     assert_not_contains(r.text, "unknownIndices",

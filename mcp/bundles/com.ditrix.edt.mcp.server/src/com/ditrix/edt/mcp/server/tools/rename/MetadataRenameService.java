@@ -117,7 +117,7 @@ public class MetadataRenameService
      * @param newName the new programmatic Name
      * @param confirm {@code false} previews, {@code true} applies
      * @param disableRequest what the caller asked to skip: the preview '#' indices of optional
-     *     change points, plus any tokens that did not parse as numbers (reported, not applied)
+     *     change points, plus a count of the entries that were not indices at all
      * @param maxResults cap on the change points listed in the preview (0 = no limit)
      * @param progress the sink this method publishes its {@link RenameProgress.Phase} to, so a
      *     caller whose deadline elapsed can say what the model was left in (issue #365)
@@ -2149,15 +2149,15 @@ public class MetadataRenameService
      * REAL number of skipped change points instead of echoing the size of the request (#394).
      * <p>
      * Every index the confirm-side walk hands out is classified at most once - the counter issues each
-     * value exactly once - so the three buckets are disjoint by construction, and a single
+     * value exactly once - so the buckets are disjoint by construction, and a single
      * {@code index -> status} map keeps them that way rather than trusting three sets to stay exclusive.
      * {@code UNKNOWN} is derived, not recorded: it is whatever the caller asked for that the walk never
      * reached at all (out of range, or an index that no longer exists in the tree confirm rebuilt).
      * <p>
-     * The request's UNPARSED tokens ride along unchanged. They never reach the walk - they never became
-     * indices - but they belong to the same question the report answers, "what did you ask for that
-     * produced no skip", so they are answered in the same place rather than by a second mechanism that
-     * could drift away from this one (#401).
+     * The request's unparsable entries ride along as a COUNT. They never reach the walk - they never
+     * became indices - but they belong to the same question the report answers, "what did you ask for
+     * that produced no skip", so they are answered in the same place rather than by a second mechanism
+     * that could drift away from this one (#401).
      * <p>
      * The counts describe the LTK flags this call set before {@code perform()} ran. A refactoring that
      * then fails is reported separately, under {@code errors} - "disabled" here never means "the edit is
@@ -2174,21 +2174,31 @@ public class MetadataRenameService
              */
             DISABLED,
             /**
-             * The index named a real change point that cannot be skipped, so it stayed in the rename.
-             * Whether it then SUCCEEDED is a different question, answered by {@code performedCount} and
-             * {@code errors} - this pass runs before {@code perform()} and cannot know.
+             * The index named a real change point that the REFACTORING deems mandatory, so it stayed in
+             * the rename. Whether it then SUCCEEDED is a different question, answered by
+             * {@code performedCount} and {@code errors} - this pass runs before {@code perform()}.
              */
-            NOT_SKIPPABLE
+            NOT_SKIPPABLE,
+            /**
+             * The index named a change point THIS TOOL cannot switch off, whatever the refactoring
+             * thinks of it: a plain item owns no leaf {@code Change} to disable, and the only lever it
+             * has - unchecking the item - this branch does not pull. Kept apart from
+             * {@link #NOT_SKIPPABLE} because the two are different facts and the caller acts on them
+             * differently: one says the rename requires this edit, the other says we cannot honour the
+             * request. Reporting the second as the first is the report telling an untruth (#394's rule),
+             * and it is a live case - the preview marks such a row {@code Skippable: yes}.
+             */
+            UNSUPPORTED
         }
 
         private final SortedSet<Integer> requested;
-        private final List<String> unparsedTokens;
+        private final int unparsedCount;
         private final TreeMap<Integer, Status> classified = new TreeMap<>();
 
         DisableOutcome(DisableRequest request)
         {
             this.requested = new TreeSet<>(request.indices());
-            this.unparsedTokens = request.unparsedTokens();
+            this.unparsedCount = request.unparsedCount();
         }
 
         void recordDisabled(int index)
@@ -2199,6 +2209,11 @@ public class MetadataRenameService
         void recordNotSkippable(int index)
         {
             classified.put(index, Status.NOT_SKIPPABLE);
+        }
+
+        void recordUnsupported(int index)
+        {
+            classified.put(index, Status.UNSUPPORTED);
         }
 
         /**
@@ -2224,10 +2239,19 @@ public class MetadataRenameService
             return unknown;
         }
 
-        /** Entries of the request that never became indices at all, already safe to echo. */
-        List<String> unparsedTokens()
+        /**
+         * How many entries of the request never became indices at all. A COUNT and not the entries -
+         * see {@link DisableRequest} for the nine defects that decided that.
+         */
+        int unparsedCount()
         {
-            return unparsedTokens;
+            return unparsedCount;
+        }
+
+        /** Requested indices naming a change point this tool has no way to switch off. */
+        SortedSet<Integer> unsupportedIndices()
+        {
+            return indicesOf(Status.UNSUPPORTED);
         }
 
         private int countOf(Status status)
@@ -2359,12 +2383,23 @@ public class MetadataRenameService
         }
         else
         {
-            // Regular rename item - it owns no leaf Change to switch off, so it is not skippable
-            // whatever it reports for isOptional(); consume its index and say so if it was requested.
+            // Regular rename item: it owns no leaf Change to switch off, so this branch cannot honour
+            // a request for it either way. WHY it cannot differs, though, and the report must not blur
+            // the two: a non-optional item is one the refactoring itself requires, while an OPTIONAL one
+            // is a change point the preview offered as skippable (it prints the item's own isOptional())
+            // and only this implementation cannot deliver. Calling the second "mandatory" would be the
+            // report asserting something untrue about the refactoring.
             int index = indexCounter[0]++;
             if (disableIndices.contains(index))
             {
-                outcome.recordNotSkippable(index);
+                if (item.isOptional())
+                {
+                    outcome.recordUnsupported(index);
+                }
+                else
+                {
+                    outcome.recordNotSkippable(index);
+                }
             }
         }
     }
@@ -2379,9 +2414,8 @@ public class MetadataRenameService
     {
         SortedSet<Integer> notSkippable = disableOutcome.notSkippableIndices();
         SortedSet<Integer> unknown = disableOutcome.unknownIndices();
-        List<String> unparsed = disableOutcome.unparsedTokens();
-        List<String> shownTokens = unparsed.size() > DisableRequest.MAX_TOKENS_REPORTED
-            ? unparsed.subList(0, DisableRequest.MAX_TOKENS_REPORTED) : unparsed;
+        SortedSet<Integer> unsupported = disableOutcome.unsupportedIndices();
+        int unparsedCount = disableOutcome.unparsedCount();
         StringBuilder sb = new StringBuilder();
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: executed\n"); //$NON-NLS-1$
@@ -2396,16 +2430,13 @@ public class MetadataRenameService
         {
             sb.append("unknownIndices: ").append(formatIndexList(unknown)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        if (!unparsed.isEmpty())
+        if (!unsupported.isEmpty())
         {
-            sb.append("unparsedTokens: ").append(formatTokenList(shownTokens)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (shownTokens.size() < unparsed.size())
-            {
-                // The overflow is its OWN key rather than a suffix on the sequence: appending
-                // "(N total)" after the closing bracket makes the front matter unparsable as YAML,
-                // and this block is the one part of the report meant to be read by machine.
-                sb.append("unparsedTokenCount: ").append(unparsed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            sb.append("unsupportedIndices: ").append(formatIndexList(unsupported)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (unparsedCount > 0)
+        {
+            sb.append("unparsedCount: ").append(unparsedCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append("performedCount: ").append(performed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("errors: ").append(errors.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2449,20 +2480,27 @@ public class MetadataRenameService
               .append(" could NOT be skipped and were left in the rename:") //$NON-NLS-1$
               .append(" the refactoring deems them mandatory._\n"); //$NON-NLS-1$
         }
+        if (!unsupported.isEmpty())
+        {
+            sb.append("_Change point(s) ").append(formatIndexList(unsupported)) //$NON-NLS-1$
+              .append(" were left in the rename because THIS TOOL cannot switch them off,") //$NON-NLS-1$
+              .append(" not because the refactoring requires them") //$NON-NLS-1$
+              .append(" - only native change points can be skipped._\n"); //$NON-NLS-1$
+        }
         if (!unknown.isEmpty())
         {
             sb.append("_Index(es) ").append(formatIndexList(unknown)) //$NON-NLS-1$
               .append(" matched no change point and were ignored") //$NON-NLS-1$
               .append(" - re-run the preview to get the current indices._\n"); //$NON-NLS-1$
         }
-        if (!unparsed.isEmpty())
+        if (unparsedCount > 0)
         {
-            // Code spans, NOT the YAML rendering: this line is Markdown, and a token like
-            // `x](http://evil)` would otherwise close the sequence's own opening bracket and turn
-            // the caller's typo into a link. A code span neutralises brackets, underscores and
-            // asterisks alike, and the backtick that could close it is stripped at the parse.
-            sb.append("_Entr(ies) ").append(formatTokenCodeSpans(shownTokens)) //$NON-NLS-1$
-              .append(" in disableIndices are not whole numbers and were ignored") //$NON-NLS-1$
+            // The COUNT, never the entries. Echoing the caller's own text back into this sentence
+            // is what produced nine defects across seven review rounds; the signal is what the caller
+            // needed, and the signal is a number. See DisableRequest for the full list.
+            sb.append("_").append(unparsedCount) //$NON-NLS-1$
+              .append(" entr(ies) in disableIndices could not be read as change-point indices") //$NON-NLS-1$
+              .append(" and were ignored") //$NON-NLS-1$
               .append(" - it takes the preview `#` index, e.g. '2,3,5'._\n"); //$NON-NLS-1$
         }
 
@@ -2476,32 +2514,8 @@ public class MetadataRenameService
     }
 
     /**
-     * Renders unparsed tokens as a QUOTED YAML flow sequence, e.g. {@code ["abc"]}. The quoting is what
-     * keeps a token that merely LOOKS like a number distinguishable from an index; the caller is handed
-     * an already-capped list, and the overflow count is reported as its own key so this value stays a
-     * well-formed YAML sequence.
-     */
-    private static String formatTokenList(List<String> tokens)
-    {
-        return "[" + join(tokens, MetadataRenameService::yamlQuoted) + "]"; //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    /** Renders unparsed tokens for the PROSE line, as Markdown code spans. */
-    private static String formatTokenCodeSpans(List<String> tokens)
-    {
-        return join(tokens, token -> "`" + token + "`"); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    /** A YAML double-quoted scalar: backslash first, then the quote, or the escapes escape each other. */
-    private static String yamlQuoted(Object value)
-    {
-        return "\"" + String.valueOf(value).replace("\\", "\\\\") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .replace("\"", "\\\"") + "\""; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-    }
-
-    /**
      * The one joiner behind every "you asked for this and it produced no skip" list, so the index
-     * buckets and the token buckets cannot drift into two shapes.
+     * buckets cannot drift into two shapes.
      */
     private static String join(Collection<?> values, java.util.function.Function<Object, String> render)
     {
