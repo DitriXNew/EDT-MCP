@@ -23,6 +23,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Small bounded registry for long-running MCP work whose result is polled by id.
@@ -182,6 +183,17 @@ public final class BackgroundJobs implements AutoCloseable
             // Work that can always be abandoned simply proceeds.
             return true;
         }
+    }
+
+    /** Who owns a job's work, and therefore its admission slot. */
+    private enum WorkState
+    {
+        /** Submitted; neither the callable nor a canceller has claimed it yet. */
+        NOT_STARTED,
+        /** The callable claimed it: only the callable may release the slot. */
+        STARTED,
+        /** A canceller claimed it first: the callable will not run, and will not release. */
+        CANCELLED_BEFORE_START
     }
 
     /** Work submitted to the registry. */
@@ -409,7 +421,13 @@ public final class BackgroundJobs implements AutoCloseable
         }
         for (JobRecord record : records)
         {
-            record.fail("EDT-MCP is stopping; the background job was cancelled."); //$NON-NLS-1$
+            // Shutdown gets the same treatment as the deadline: a job whose request is already
+            // handed over must not be published as "cancelled, try again", because the retry
+            // after the restart would perform the action a second time. The pool is torn down
+            // either way below - what is at stake here is only what a poller is told.
+            record.failUnlessCommitted("EDT-MCP is stopping; the background job was cancelled.", //$NON-NLS-1$
+                "EDT-MCP is stopping, but this request was already handed over and cannot be " //$NON-NLS-1$
+                    + "taken back."); //$NON-NLS-1$
             record.cancelWork();
         }
 
@@ -564,11 +582,13 @@ public final class BackgroundJobs implements AutoCloseable
         /** Gives the admission slot back; see {@link #releaseSlot()}. */
         private Runnable slotRelease;
         private boolean slotReleased;
-        /** Set once the callable is executing, together with the thread executing it. */
-        private boolean workStarted;
-        private Thread worker;
-        /** Set when the work was cancelled before its callable could start. */
-        private boolean cancelledBeforeStart;
+        /**
+         * Which side owns the work, decided ONCE: the callable that starts it, or the canceller
+         * that gets there first. Whoever wins the transition out of {@link WorkState#NOT_STARTED}
+         * owes the admission slot, which is why this cannot be two separate flags.
+         */
+        private final AtomicReference<WorkState> workState =
+            new AtomicReference<>(WorkState.NOT_STARTED);
 
         JobRecord(String id, String initialProgress)
         {
@@ -624,20 +644,15 @@ public final class BackgroundJobs implements AutoCloseable
         }
 
         /**
-         * Marks the callable as running on the current thread.
+         * Takes ownership of the work, and with it of the admission slot.
          *
          * @return {@code false} when the job was cancelled before this point, in which case the
-         *         work must NOT run - its slot has already been accounted for by the canceller
+         *         work must NOT run and must NOT release the slot - the canceller won the same
+         *         compare-and-set and has already accounted for it
          */
-        synchronized boolean beginWork()
+        boolean beginWork()
         {
-            if (cancelledBeforeStart)
-            {
-                return false;
-            }
-            workStarted = true;
-            worker = Thread.currentThread();
-            return true;
+            return workState.compareAndSet(WorkState.NOT_STARTED, WorkState.STARTED);
         }
 
         synchronized void setDeadlineFuture(ScheduledFuture<?> future)
@@ -732,36 +747,38 @@ public final class BackgroundJobs implements AutoCloseable
         /**
          * Stops the work, and settles who owes the admission slot in the same step.
          * <p>
-         * A running callable is INTERRUPTED rather than cancelled through its future: cancelling
-         * it would let the task report itself finished while the callable still owns the worker
-         * thread, and the slot would be handed to a replacement job that then has nowhere to
-         * run. Work that has not started is cancelled outright, and then the slot is owed by
-         * this side - the callable that would have released it will never execute.
+         * ONE compare-and-set decides which case this is, so the two sides cannot both act:
+         * work that never started is cancelled here and its slot is owed by this side, because
+         * the callable that would have released it will never run. Work that HAS started is
+         * left to its own callable - it still owns the pool thread, and handing its slot to a
+         * replacement would promise a thread that is not free.
+         * <p>
+         * A started callable is stopped through its own future, never by interrupting a thread
+         * this record remembers: the pool reuses threads, so a remembered thread may by then be
+         * running somebody else's job, and the interrupt would land on that job instead.
+         * {@code FutureTask} interrupts only while its own runner is still set, which is exactly
+         * the guarantee needed here.
          */
         void cancelWork()
         {
-            Thread running;
-            Future<?> future = null;
+            Future<?> future;
             synchronized (this)
             {
-                running = workStarted ? worker : null;
-                if (running == null)
-                {
-                    cancelledBeforeStart = true;
-                    future = workFuture;
-                }
+                future = workFuture;
             }
-            if (running != null)
+            if (workState.compareAndSet(WorkState.NOT_STARTED, WorkState.CANCELLED_BEFORE_START))
             {
-                // Its own finally gives the slot back once it actually unwinds.
-                running.interrupt();
+                if (future != null)
+                {
+                    future.cancel(false);
+                }
+                releaseSlot();
                 return;
             }
             if (future != null)
             {
-                future.cancel(false);
+                future.cancel(true);
             }
-            releaseSlot();
         }
 
         void await(long waitMs)

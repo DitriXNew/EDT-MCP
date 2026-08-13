@@ -926,30 +926,26 @@ public class WorkmateGateway
                 {
                     throw GatewayException.timedOut();
                 }
-                // Losing the claim here means the runnable started first: wait for it to
-                // finish rather than reporting a failure for a question already asked.
-                if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS))
-                {
-                    // Still not back - the SWT thread is busy. The question is committed
-                    // either way, so this reports the hand-off instead of a timeout: a
-                    // retryable error would be answered with a duplicate question, while the
-                    // original invocation is still on its way to the chat.
-                    progress.onProgress("Handed the question to the Workmate chat view; " //$NON-NLS-1$
-                        + "the view is still busy opening it."); //$NON-NLS-1$
-                    return;
-                }
+                // Losing the claim here means the runnable started first, and only the runnable
+                // knows how this ends: it either asks the question or finds the job already
+                // terminal and skips it. Reporting either outcome before it decides would be a
+                // guess - a timeout invites a duplicate question, a success can be a lie - so
+                // this waits for the runnable itself. The wait is bounded by the job's own
+                // budget, which interrupts this thread when it expires.
+                delivered.await();
             }
             catch (InterruptedException e)
             {
+                Thread.currentThread().interrupt();
                 if (!claimed.compareAndSet(false, true))
                 {
-                    // The runnable already owns delivery and is asking the question right
-                    // now. Reporting a failure here would invite a retry that asks Workmate
-                    // a second time, so record the hand-off and let the interrupt stand.
-                    Thread.currentThread().interrupt();
-                    progress.onProgress(
-                        "Delivered the question to the Workmate chat view."); //$NON-NLS-1$
-                    return;
+                    // The runnable owns delivery. An interrupt here means the job was already
+                    // published as terminal - that is the only thing that interrupts this
+                    // thread - so the runnable's own commit check will refuse and the question
+                    // will NOT be sent. Claiming delivery would be a lie, and claiming a
+                    // failure changes nothing about a job that is already terminal.
+                    throw GatewayException.callFailed("the wait for the Workmate chat view was " //$NON-NLS-1$
+                        + "cut short before it confirmed the hand-off"); //$NON-NLS-1$
                 }
                 throw e;
             }
