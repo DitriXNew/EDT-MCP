@@ -288,11 +288,21 @@ public final class BslSyntaxChecker
      * Every directive is skipped, not just the conditional: #\u041E\u0431\u043B\u0430\u0441\u0442\u044C/#Region and
      * the extension directives #\u0412\u0441\u0442\u0430\u0432\u043A\u0430/#\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u0435 open no runtime block either.
      * <p>
-     * Known limitation, unchanged by this: because the directives themselves are
-     * ignored while the code inside every branch is still scanned as one stream,
-     * a module whose blocks balance only per selected variant (an If opened in
-     * the #\u0415\u0441\u043B\u0438 branch and a different one in the #\u0418\u043D\u0430\u0447\u0435 branch) is still
-     * reported as unbalanced.
+     * Scanning every arm of a conditional as one stream - rather than once per
+     * selected variant - is sound against EDT's grammar. An arm holds complete
+     * {@code Statement SEMICOLON} items and may only end with a nested
+     * preprocessor statement; the method- and module-level forms likewise hold
+     * complete declarations, methods and statements, and the inner and
+     * {@code ...After} forms continue with complete statements too. No arm can
+     * therefore hold just part of an If/While/For/Try or of a Method: each one
+     * balances on its own, so their concatenation balances exactly when every
+     * variant does, and a per-variant analysis would return the same verdict.
+     * <p>
+     * That reasoning is scoped to what EDT's grammar accepts. Whether some 1C
+     * platform version tolerates a runtime block split across a conditional
+     * boundary is NOT established here; such source is outside this check's
+     * guarantee, and on it the one-stream scan may balance where no variant
+     * does. This is a block-balance gate, not a parser.
      *
      * @param code the masked line
      * @return true if the first non-whitespace character is {@code #}
