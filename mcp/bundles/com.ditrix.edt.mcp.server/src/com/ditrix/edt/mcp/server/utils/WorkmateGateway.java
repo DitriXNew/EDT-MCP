@@ -575,14 +575,10 @@ public class WorkmateGateway
                 return CHAT_SESSION_ID;
             }
 
-            Method getOrCreate =
-                requireMethod(managerClass, "getOrCreateSession", String.class); //$NON-NLS-1$
-            Object session = invoke(getOrCreate, manager, (String)null);
-            if (session == null)
-            {
-                throw GatewayException.notReady("Workmate returned no JShell session"); //$NON-NLS-1$
-            }
-
+            // Resolve everything the re-keying needs BEFORE creating a session. Creating one
+            // is a side effect that cannot be undone - invalidating a session key makes
+            // Workmate's removal listener CLOSE it - so a structure mismatch discovered
+            // afterwards would leave an orphan session behind on every retry.
             Field cacheField = requirePrivateField(manager.getClass(), "cache"); //$NON-NLS-1$
             Object cache = readField(cacheField, manager);
             if (cache == null)
@@ -591,8 +587,21 @@ public class WorkmateGateway
                     + manager.getClass().getName() + ".cache' is empty"); //$NON-NLS-1$
             }
             Class<?> cacheClass = requireClass(uiCommonBundle, GUAVA_CACHE);
-            invoke(requireMethod(cacheClass, "put", Object.class, Object.class), //$NON-NLS-1$
-                cache, CHAT_SESSION_ID, session);
+            Method put = requireMethod(cacheClass, "put", Object.class, Object.class); //$NON-NLS-1$
+
+            Method getOrCreate =
+                requireMethod(managerClass, "getOrCreateSession", String.class); //$NON-NLS-1$
+            Object session = invoke(getOrCreate, manager, (String)null);
+            if (session == null)
+            {
+                throw GatewayException.notReady("Workmate returned no JShell session"); //$NON-NLS-1$
+            }
+
+            // The session now answers to TWO keys: the UUID Workmate generated for it, and
+            // ours. The generated one is deliberately left in place - dropping it would run
+            // the removal listener and close the session - so this costs one extra entry of
+            // Workmate's 16, and only while no constant session exists yet.
+            invoke(put, cache, CHAT_SESSION_ID, session);
 
             if (invoke(getSession, manager, CHAT_SESSION_ID) == null)
             {

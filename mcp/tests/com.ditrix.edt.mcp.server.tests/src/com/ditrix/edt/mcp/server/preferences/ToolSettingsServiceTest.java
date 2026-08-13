@@ -182,6 +182,39 @@ public class ToolSettingsServiceTest
             store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
+    /**
+     * ask_workmate hands the question to an external plugin that reaches a cloud service and
+     * can then change the configuration with its own tools, so it must arrive DISABLED both on
+     * a fresh install (the shipped default) and on an upgrade (the version 3 migration).
+     */
+    @Test
+    public void testAskWorkmateIsOffByDefaultAndOnUpgrade()
+    {
+        assertTrue("the shipped default must disable ask_workmate",
+            ToolSettingsService.parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS)
+                .contains("ask_workmate"));
+
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        // A store saved before ask_workmate existed, already past the earlier migrations.
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, "debug_launch");
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 2);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertTrue("the upgrade must disable ask_workmate: " + disabled,
+            disabled.contains("ask_workmate"));
+        assertTrue("it must keep what the user had chosen: " + disabled,
+            disabled.contains("debug_launch"));
+        // The earlier steps are past their own thresholds and must NOT re-run.
+        assertFalse("a git choice made earlier must survive: " + disabled,
+            disabled.contains("git"));
+    }
+
     @Test
     public void testMigrationDoesNotReAddAToolTheUserDeliberatelyEnabled()
     {

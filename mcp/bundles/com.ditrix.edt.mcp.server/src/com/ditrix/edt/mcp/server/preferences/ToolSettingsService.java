@@ -120,6 +120,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             {
                 changed |= migrateApplyQuickFixIntoReadOnlyPreset(disabled);
             }
+            if (storedVersion < 3)
+            {
+                // ask_workmate ships OFF: it hands the question to an external plugin that
+                // reaches a cloud service and may then change the configuration with its
+                // own tools. That is a decision to opt into, not to inherit on upgrade.
+                changed |= disabled.add("ask_workmate"); //$NON-NLS-1$
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));

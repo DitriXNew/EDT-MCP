@@ -12,6 +12,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.ditrix.edt.mcp.server.utils.WorkmateGateway.FailureKind;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.GatewayException;
 
 /**
@@ -107,6 +108,16 @@ public final class WorkmateChatSessionPublisher
         catch (GatewayException e)
         {
             published.set(false);
+            if (e.getKind() == FailureKind.INCOMPATIBLE)
+            {
+                // Workmate's session manager no longer looks the way this adapter expects.
+                // That cannot resolve itself, and retrying every minute would only repeat
+                // the same log line forever, so stop and leave the chat without the bridge.
+                logInfo("Giving up on publishing a JShell session for the 1C:Workmate chat: " //$NON-NLS-1$
+                    + e.getMessage());
+                stop();
+                return false;
+            }
             // Workmate starting up produces the same message on every pass; report a
             // given reason once so a missing plugin cannot fill the log.
             String reason = e.getMessage();

@@ -89,11 +89,11 @@ public final class PreferenceConstants
      * Analysis Only / Code Review preset (saved before {@code apply_quick_fix} existed) gains it in
      * its disabled set, so an upgrading user's read-only preset stays read-only.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 2;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 3;
 
     /** Default: all tools enabled (empty string = no disabled tools) */
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
-    public static final String DEFAULT_DISABLED_TOOLS = "git"; //$NON-NLS-1$
+    public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
 
     // === Progressive tool disclosure (dynamic toolsets) ===
 

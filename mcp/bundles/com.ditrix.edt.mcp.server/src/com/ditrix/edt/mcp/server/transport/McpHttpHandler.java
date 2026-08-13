@@ -260,8 +260,9 @@ public class McpHttpHandler implements HttpHandler
 
     private void handleMcpRequest(HttpExchange exchange) throws IOException
     {
-        // Increment request counter
-        server.incrementRequestCount();
+        // The request counter is incremented by McpProtocolHandler, not here: calls also
+        // arrive through the in-process bridge, and counting at the transport left the
+        // status bar frozen while those ran.
 
         Activator.logInfo("MCP request received from " + exchange.getRemoteAddress()); //$NON-NLS-1$
 

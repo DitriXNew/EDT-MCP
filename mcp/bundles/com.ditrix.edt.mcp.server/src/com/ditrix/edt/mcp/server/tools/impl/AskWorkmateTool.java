@@ -277,9 +277,12 @@ public class AskWorkmateTool implements IMcpTool
      * @param projectName optional project the caller asked about, used in the example
      * @return the preamble, ending with a blank line before the question
      */
-    private static String mcpBridgePreamble(String projectName)
+    static String mcpBridgePreamble(String projectName)
     {
-        String project = projectName == null ? "<project>" : projectName; //$NON-NLS-1$
+        // The name lands inside a JSON string inside a Java string literal, so a quote or
+        // a backslash in it would otherwise produce a snippet that does not compile.
+        String project = projectName == null ? "<project>" //$NON-NLS-1$
+            : projectName.replace("\\", "\\\\\\\\").replace("\"", "\\\\\\\""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         return "The EDT-MCP plugin runs in this same EDT and publishes its entry point as an " //$NON-NLS-1$
             + "ordinary OSGi service under the JDK type " //$NON-NLS-1$
             + "java.util.function.BiFunction<String,String,String> with the service property " //$NON-NLS-1$
@@ -316,8 +319,12 @@ public class AskWorkmateTool implements IMcpTool
      */
     private static String toolCatalogue()
     {
-        String names = McpToolRegistry.getInstance().getAllTools().stream()
+        McpToolRegistry registry = McpToolRegistry.getInstance();
+        String names = registry.getAllTools().stream()
             .map(IMcpTool::getName)
+            // Only what a bridge call would actually be allowed to run: naming a tool the
+            // user disabled would send Workmate off to call it and get refused.
+            .filter(registry::isToolEnabled)
             .sorted()
             .collect(Collectors.joining(", ")); //$NON-NLS-1$
         if (names.isEmpty())

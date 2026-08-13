@@ -143,6 +143,18 @@ public class McpProtocolHandler
                 // Intentionally swallowed — the wire path must be unaffected by the
                 // recorder (see the contract above).
             }
+
+            // Counted in its OWN guard, not the recorder's: the recorder is allowed to
+            // fail (a supported, tested path), and sharing one catch let a recorder
+            // failure silently stop the status bar from counting.
+            try
+            {
+                countRequest();
+            }
+            catch (Exception countingFailure) // NOSONAR: the counter must never break a call
+            {
+                // Same contract as the recorder above.
+            }
         }
         return response;
     }
@@ -162,6 +174,29 @@ public class McpProtocolHandler
      * @param responseJson the response body, or {@code null} for a notification
      * @param durationMs the wall-clock exchange duration in milliseconds
      */
+    /**
+     * Counts one processed request for the status bar, at the same choke point as the
+     * history.
+     * <p>
+     * It deliberately does NOT live in the HTTP handler: requests also arrive through
+     * the in-process bridge, and counting them at the transport made the status bar
+     * stand still while Workmate was driving tool after tool. Package-private and
+     * overridable so the guard around it is unit-testable; a missing plugin context
+     * (shutdown race, headless test) is tolerated exactly like the recorder above.
+     */
+    void countRequest()
+    {
+        Activator activator = Activator.getDefault();
+        if (activator != null)
+        {
+            McpServer server = activator.getMcpServer();
+            if (server != null)
+            {
+                server.incrementRequestCount();
+            }
+        }
+    }
+
     void recordToHistory(String method, String toolName, String requestJson, String responseJson,
         long durationMs)
     {

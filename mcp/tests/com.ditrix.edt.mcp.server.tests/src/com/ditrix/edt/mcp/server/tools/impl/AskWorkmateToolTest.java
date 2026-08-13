@@ -426,6 +426,42 @@ public class AskWorkmateToolTest
         assertTrue(sent.get().contains("<project>")); //$NON-NLS-1$
     }
 
+    /**
+     * The project name lands inside a JSON string inside a Java string literal in the
+     * snippet Workmate is told to run, so a quote or a backslash in it has to survive two
+     * levels of escaping or the snippet does not compile.
+     */
+    @Test
+    public void testProjectNameIsEscapedForTheNestedJavaAndJsonLiteral()
+    {
+        // Asserted by DECODING rather than by matching escape soup: undo the Java string
+        // literal, parse the JSON, and the name must come back exactly as it went in.
+        assertEquals("He said \"no\"", decodeProjectArgument("He said \"no\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("C:\\Temp", decodeProjectArgument("C:\\Temp")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("TestConfiguration", decodeProjectArgument("TestConfiguration")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Reads back the project name from the snippet the preamble tells Workmate to run.
+     * Goes straight at the preamble: reaching it through {@code execute} would need an OPEN
+     * EDT project, which a headless test has no way to provide.
+     */
+    private static String decodeProjectArgument(String projectName)
+    {
+        String preamble = AskWorkmateTool.mcpBridgePreamble(projectName);
+        int start = preamble.indexOf("\"{"); //$NON-NLS-1$
+        assertTrue("no arguments literal in: " + preamble, start >= 0); //$NON-NLS-1$
+        int end = preamble.indexOf("}\"", start); //$NON-NLS-1$
+        assertTrue("unterminated arguments literal in: " + preamble, end > start); //$NON-NLS-1$
+
+        // Level 1: the Java string literal the snippet contains.
+        String javaLiteralBody = preamble.substring(start + 1, end + 1);
+        String json = javaLiteralBody.replace("\\\"", "\"").replace("\\\\", "\\"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // Level 2: the JSON arguments object itself.
+        return JsonParser.parseString(json).getAsJsonObject()
+            .get("projectName").getAsString(); //$NON-NLS-1$
+    }
+
     @Test
     public void testUnsupportedModeIsActionable()
     {

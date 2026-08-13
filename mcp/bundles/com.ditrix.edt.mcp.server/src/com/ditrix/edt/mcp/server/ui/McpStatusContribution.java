@@ -15,13 +15,16 @@ import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.ui.menus.WorkbenchWindowControlContribution;
@@ -42,14 +45,16 @@ import com.ditrix.edt.mcp.server.protocol.McpConstants;
 public class McpStatusContribution extends WorkbenchWindowControlContribution
 {
     /**
-     * Width hint for the counter label cell. The status bar trim allocates space once at creation,
-     * so this reserve (placed after the counter text) keeps room for long tool names in the status
-     * label and for the growing request counter without clipping.
+     * Width reserved for the item. The trim allocates it once at creation, so it has to
+     * fit the widest state: a long tool name while a call runs, plus the counter.
      */
-    private static final int COUNTER_LABEL_WIDTH_HINT = 200;
+    private static final int CANVAS_WIDTH_HINT = 200;
 
-    /** Minimum width for the counter label cell so the timer/counter stays visible when space is tight */
-    private static final int COUNTER_LABEL_MIN_WIDTH = 56;
+    /** Left edge of the text, past the indicator image. */
+    private static final int TEXT_X = 18;
+
+    /** Gap between the status text and the counter. */
+    private static final int COUNTER_GAP = 4;
     
     /** Maximum length for tool name display before truncation */
     private static final int TOOL_NAME_MAX_LENGTH = 25;
@@ -64,9 +69,22 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
     private static final double FONT_SIZE_SCALE = 0.9;
     
     private Composite container;
-    private Label circleLabel;
-    private Label statusLabel;
-    private Label counterLabel;
+
+    /**
+     * The whole item is ONE canvas, painted against its real height.
+     * <p>
+     * Labels were used here before and clipped: a label demands the height of its font,
+     * and the workbench trim hands out whatever height it has, so the text was cut off
+     * (and negative layout margins only made it worse). Painting centres everything on
+     * {@code bounds.height} instead, which fits any trim.
+     */
+    private Canvas statusCanvas;
+
+    /** Painted state: the indicator image, the status text and the counter text. */
+    private Image currentImage;
+    private String statusText = "MCP"; //$NON-NLS-1$
+    private String counterText = "[0]"; //$NON-NLS-1$
+
     private Menu popupMenu;
     private Font font;
     
@@ -84,25 +102,37 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
     protected Control createControl(Composite parent)
     {
         container = new Composite(parent, SWT.NONE);
-        GridLayout layout = new GridLayout(3, false);
+        GridLayout layout = new GridLayout(1, false);
         layout.marginWidth = 2;
-        layout.marginHeight = -5;
-        layout.marginBottom = -5;
+        // All vertical margins are zero and the canvas fills what is left, so the item
+        // adapts to the trim's height instead of demanding one. They used to be NEGATIVE
+        // (-5 top and bottom, plus another -5 at the bottom), which shrank the computed
+        // height below what the content needs and clipped it.
+        layout.marginHeight = 0;
+        layout.marginTop = 0;
+        layout.marginBottom = 0;
+        layout.verticalSpacing = 0;
         container.setLayout(layout);
-        
-        // Create colored circle indicator
+
         createStatusImages(parent.getDisplay());
-        
-        circleLabel = new Label(container, SWT.NONE);
-        circleLabel.setImage(greyImage);
-        GridData circleGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
-        circleGd.widthHint = CIRCLE_SIZE_HINT;
-        circleGd.heightHint = CIRCLE_SIZE_HINT;
-        circleLabel.setLayoutData(circleGd);
-        
-        // Create popup menu on circle click
+        currentImage = greyImage;
+
+        statusCanvas = new Canvas(container, SWT.NONE);
+        GridData canvasGd = new GridData(SWT.FILL, SWT.FILL, true, true);
+        canvasGd.widthHint = CANVAS_WIDTH_HINT;
+        statusCanvas.setLayoutData(canvasGd);
+
+        // Font first: the paint routine measures text with it.
+        Font originalFont = statusCanvas.getFont();
+        FontData fontData = originalFont.getFontData()[0];
+        fontData.setHeight((int)(fontData.getHeight() * FONT_SIZE_SCALE));
+        font = new Font(originalFont.getDevice(), fontData);
+        statusCanvas.setFont(font);
+
+        statusCanvas.addPaintListener(this::paintStatus);
+
         createPopupMenu();
-        circleLabel.addMouseListener(new MouseAdapter()
+        statusCanvas.addMouseListener(new MouseAdapter()
         {
             @Override
             public void mouseUp(MouseEvent e)
@@ -114,37 +144,10 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
                 }
             }
         });
-        
-        // Create "MCP" label
-        statusLabel = new Label(container, SWT.NONE);
-        statusLabel.setText("MCP"); //$NON-NLS-1$
-        
-        // Make font smaller
-        Font originalFont = statusLabel.getFont();
-        FontData fontData = originalFont.getFontData()[0];
-        fontData.setHeight((int)(fontData.getHeight() * FONT_SIZE_SCALE));
-        font = new Font(originalFont.getDevice(), fontData);
-        statusLabel.setFont(font);
-        
-        // Left-aligned, sized by its text: the counter follows right after, all spare width goes after the counter
-        GridData statusGd = new GridData(SWT.BEGINNING, SWT.CENTER, false, true);
-        statusLabel.setLayoutData(statusGd);
-        
-        // Create counter label [N]
-        counterLabel = new Label(container, SWT.NONE);
-        counterLabel.setText("[0]"); //$NON-NLS-1$
-        counterLabel.setFont(font);
-        
-        // The counter sits right after the status text; the width reserve trails after it,
-        // so neither the counter nor a long tool name ever gets clipped at the trim edge
-        GridData counterGd = new GridData(SWT.BEGINNING, SWT.CENTER, true, true);
-        counterGd.widthHint = COUNTER_LABEL_WIDTH_HINT;
-        counterGd.minimumWidth = COUNTER_LABEL_MIN_WIDTH;
-        counterLabel.setLayoutData(counterGd);
-        
+
         // Force redraw
         parent.getParent().setRedraw(true);
-        
+
         // Update initial status
         updateStatus();
         
@@ -220,7 +223,7 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
 
     private void createPopupMenu()
     {
-        popupMenu = new Menu(circleLabel);
+        popupMenu = new Menu(statusCanvas);
         
         // Signal menu items (shown only when tool is executing)
         MenuItem cancelItem = new MenuItem(popupMenu, SWT.PUSH);
@@ -541,7 +544,48 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         String tooltip = buildTooltip(isExecuting, running, currentTool, port, requestCount);
         applyTooltip(tooltip);
 
-        container.layout(true);
+        // One canvas: repaint it instead of re-laying out labels.
+        if (statusCanvas != null && !statusCanvas.isDisposed())
+        {
+            statusCanvas.redraw();
+        }
+    }
+
+    /**
+     * Paints the whole item: indicator, status text and counter, all centred on the
+     * canvas's ACTUAL height so nothing is ever clipped by a short trim.
+     *
+     * @param event the paint event carrying the GC to draw with
+     */
+    private void paintStatus(org.eclipse.swt.events.PaintEvent event)
+    {
+        Rectangle bounds = statusCanvas.getBounds();
+        if (bounds.width <= 0 || bounds.height <= 0)
+        {
+            return;
+        }
+        GC gc = event.gc;
+        gc.setAntialias(SWT.ON);
+        gc.setTextAntialias(SWT.ON);
+        if (font != null && !font.isDisposed())
+        {
+            gc.setFont(font);
+        }
+        int centerY = bounds.height / 2;
+
+        if (currentImage != null && !currentImage.isDisposed())
+        {
+            Rectangle imageBounds = currentImage.getBounds();
+            gc.drawImage(currentImage, 0, centerY - imageBounds.height / 2);
+        }
+
+        gc.setForeground(statusCanvas.getForeground());
+        Point statusExtent = gc.textExtent(statusText);
+        gc.drawText(statusText, TEXT_X, centerY - statusExtent.y / 2, SWT.DRAW_TRANSPARENT);
+
+        Point counterExtent = gc.textExtent(counterText);
+        gc.drawText(counterText, TEXT_X + statusExtent.x + COUNTER_GAP,
+            centerY - counterExtent.y / 2, SWT.DRAW_TRANSPARENT);
     }
 
     /**
@@ -550,17 +594,14 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
      */
     private void updateCircleImage(boolean isExecuting, boolean running)
     {
-        if (circleLabel != null && !circleLabel.isDisposed())
+        if (isExecuting)
         {
-            if (isExecuting)
-            {
-                // Blink between yellow and green during execution
-                circleLabel.setImage(blinkState ? yellowImage : greenImage);
-            }
-            else
-            {
-                circleLabel.setImage(running ? greenImage : greyImage);
-            }
+            // Blink between yellow and green during execution
+            currentImage = blinkState ? yellowImage : greenImage;
+        }
+        else
+        {
+            currentImage = running ? greenImage : greyImage;
         }
     }
 
@@ -570,21 +611,17 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
      */
     private void updateStatusLabel(boolean isExecuting, String currentTool)
     {
-        if (statusLabel != null && !statusLabel.isDisposed())
+        if (isExecuting)
         {
-            if (isExecuting)
-            {
-                // Add MCP: prefix and truncate tool name if too long
-                String displayName = currentTool.length() > TOOL_NAME_MAX_LENGTH
-                    ? "MCP: " + currentTool.substring(0, TOOL_NAME_MAX_LENGTH - 3) + "..." //$NON-NLS-1$ //$NON-NLS-2$
-                    : "MCP: " + currentTool; //$NON-NLS-1$
-                statusLabel.setText(displayName);
-            }
-            else
-            {
-                boolean updateAvail = UpdateChecker.getInstance().isUpdateAvailable();
-                statusLabel.setText(updateAvail ? "MCP New release" : "MCP"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            // Add MCP: prefix and truncate tool name if too long
+            statusText = currentTool.length() > TOOL_NAME_MAX_LENGTH
+                ? "MCP: " + currentTool.substring(0, TOOL_NAME_MAX_LENGTH - 3) + "..." //$NON-NLS-1$ //$NON-NLS-2$
+                : "MCP: " + currentTool; //$NON-NLS-1$
+        }
+        else
+        {
+            boolean updateAvail = UpdateChecker.getInstance().isUpdateAvailable();
+            statusText = updateAvail ? "MCP New release" : "MCP"; //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -594,19 +631,15 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
      */
     private void updateCounterLabel(boolean isExecuting, long executionSeconds, long requestCount)
     {
-        if (counterLabel != null && !counterLabel.isDisposed())
+        if (isExecuting)
         {
-            if (isExecuting)
-            {
-                long minutes = executionSeconds / 60;
-                long seconds = executionSeconds % 60;
-                String timeStr = String.format("%02d:%02d", minutes, seconds); //$NON-NLS-1$
-                counterLabel.setText(timeStr);
-            }
-            else
-            {
-                counterLabel.setText("[" + requestCount + "]"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            long minutes = executionSeconds / 60;
+            long seconds = executionSeconds % 60;
+            counterText = String.format("%02d:%02d", minutes, seconds); //$NON-NLS-1$
+        }
+        else
+        {
+            counterText = "[" + requestCount + "]"; //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -650,17 +683,9 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
      */
     private void applyTooltip(String tooltip)
     {
-        if (circleLabel != null && !circleLabel.isDisposed())
+        if (statusCanvas != null && !statusCanvas.isDisposed())
         {
-            circleLabel.setToolTipText(tooltip);
-        }
-        if (statusLabel != null && !statusLabel.isDisposed())
-        {
-            statusLabel.setToolTipText(tooltip);
-        }
-        if (counterLabel != null && !counterLabel.isDisposed())
-        {
-            counterLabel.setToolTipText(tooltip);
+            statusCanvas.setToolTipText(tooltip);
         }
     }
 

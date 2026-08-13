@@ -365,11 +365,28 @@ works in both directions:
   background job and returns a pollable `jobId`, so the MCP transport request
   does not stay open for the full cloud round-trip. The Workmate bundles remain
   optional and are loaded only at runtime through OSGi/reflection; they are not
-  part of this project's target platform.
+  part of this project's target platform. **The tool ships disabled** — it sends
+  the question to an external cloud service and Workmate may change the
+  configuration with its own tools — so enable it under
+  *Preferences → EDT MCP Server → Tools* first.
 - The OSGi service `com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge` lets
   Workmate/JShell list and call EDT-MCP tools without importing EDT-MCP packages.
   `callTool` goes through the same dispatcher as MCP `tools/call` and returns its
   JSON-RPC response.
+
+Two details decide whether this actually works, both measured against Workmate
+1.0.5:
+
+- **The skill.** `ConversationFacade` defaults to `raw`, under which the cloud
+  answers from the model alone — one assistant message, no tool call, no look at
+  the project. `ask_workmate` therefore sends `custom` (the skill Workmate's own
+  autopilot uses), which runs the full tool loop. Override with `skillName` only
+  if you know the name is accepted; the cloud refuses most others outright.
+- **The question carries the bridge.** Workmate's chat reads a project's
+  `.workmate` rules, but this Java path does not, so `ask_workmate` prefixes the
+  question with the bridge instructions and the list of tool NAMES (full
+  descriptions stay behind `get_tool_guide`, which it calls when it needs one).
+  Pass `shareMcpTools=false` to send the question verbatim instead.
 
 The same instance is published under the JDK types `BiFunction<String,String,String>`
 (`callTool`) and `Supplier<String>` (`listTools`), both carrying the service property
@@ -409,6 +426,30 @@ try {
     bundleContext.ungetService(serviceReference);
 }
 ```
+
+### Letting Workmate's chat use the bridge
+
+Workmate's agentic chat holds its `JShell` tool but **not** `JShellSession`, and
+`JShell` rejects every call whose `repl_session_id` it cannot resolve. The chat can
+therefore execute code but cannot obtain the one value executing code requires.
+
+EDT-MCP breaks that deadlock: shortly after startup it registers a JShell session
+under the constant id **`edt-mcp`** (retried in the background while Workmate comes
+up, and again if Workmate ever evicts it). Together with `jshell_edt_canonical_imports`
+— a fixed entry in Workmate's own scenario catalogue — both values JShell demands are
+constants, so a project's rules can name them literally and nothing has to be passed
+around at runtime:
+
+```
+repl_session_id = "edt-mcp"
+manual_ids      = ["jshell_edt_canonical_imports"]
+```
+
+[`tests/TestConfiguration/.workmate/WORKMATE.md`](tests/TestConfiguration/.workmate/WORKMATE.md)
+is a working example of such a rules file; copy it into `<project>/.workmate/` to give
+the chat the same access in your own configuration. Note that the chat cannot reach the
+HTTP endpoint at all — `java.net.URL`, `java.net.Socket` and `ProcessBuilder` are on
+Workmate's restricted-types list — so the in-process bridge is its only route.
 
 ## Multi-EDT Proxy
 
