@@ -81,10 +81,20 @@ public final class WorkmateChatSessionPublisher
             PERIOD_SECONDS, TimeUnit.SECONDS);
     }
 
-    /** Stops the periodic attempt; the registered session stays valid in Workmate. */
+    /**
+     * Stops the periodic attempt AND drops the session it published.
+     * <p>
+     * The session must not outlive this bundle: it holds the bridge object bound by earlier
+     * snippets, so leaving it alive across an update would keep the chat calling the stopped
+     * bundle's bridge and class loader instead of the newly registered one.
+     */
     public void stop()
     {
         scheduler.shutdownNow();
+        if (published.getAndSet(false))
+        {
+            gateway.discardChatSession();
+        }
     }
 
     /**

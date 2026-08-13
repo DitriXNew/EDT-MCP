@@ -149,6 +149,15 @@ public class AskWorkmateToolTest
         params.put("timeoutSeconds", "0"); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorContains(tool.execute(params), "timeoutSeconds", "omit it to use the default"); //$NON-NLS-1$ //$NON-NLS-2$
 
+        // A job owns a worker for its whole budget, so an unbounded value would let a few
+        // calls park the pool until EDT restarts.
+        params.put("timeoutSeconds", String.valueOf(Integer.MAX_VALUE)); //$NON-NLS-1$
+        assertErrorContains(tool.execute(params), "timeoutSeconds", //$NON-NLS-1$ //$NON-NLS-2$
+            "1 to " + AskWorkmateTool.MAX_TIMEOUT_SECONDS); //$NON-NLS-1$
+        params.put("timeoutSeconds", //$NON-NLS-1$
+            String.valueOf(AskWorkmateTool.MAX_TIMEOUT_SECONDS + 1));
+        assertErrorContains(tool.execute(params), "timeoutSeconds", "holds a worker"); //$NON-NLS-1$ //$NON-NLS-2$
+
         params.remove("timeoutSeconds"); //$NON-NLS-1$
         params.put("waitSeconds", "46"); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorContains(tool.execute(params), "waitSeconds", "0 to 45"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -414,6 +423,10 @@ public class AskWorkmateToolTest
             assertTrue(preamble.contains("aaa_first, zzz_last")); //$NON-NLS-1$
             assertFalse(preamble.contains("Probe for the preamble catalogue")); //$NON-NLS-1$
             assertTrue(preamble.contains("get_tool_guide")); //$NON-NLS-1$
+            // Delegating to this very tool is allowed and explained, not filtered out; what
+            // keeps it safe is the concurrency bound, not hiding the tool.
+            assertTrue(preamble.contains("sub-agent")); //$NON-NLS-1$
+            assertTrue(preamble.contains("one level deep")); //$NON-NLS-1$
         }
         finally
         {
@@ -463,6 +476,39 @@ public class AskWorkmateToolTest
         // Level 2: the JSON arguments object itself.
         return JsonParser.parseString(json).getAsJsonObject()
             .get("projectName").getAsString(); //$NON-NLS-1$
+    }
+
+    /**
+     * Workmate may delegate a sub-question to this tool, and a parent job holds a worker
+     * while its child needs one, so the pool has to be bounded rather than trusted.
+     */
+    @Test
+    public void testConcurrentJobsAreBoundedWithAnActionableRefusal() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AskWorkmateTool tool = tool(blockingGateway(entered, release,
+            new WorkmateResponse("late", null))); //$NON-NLS-1$
+        try
+        {
+            // A job counts from the moment it is accepted, whether it got a worker or is
+            // queued behind one - which is the point: the pool is what must not fill up.
+            for (int i = 0; i < AskWorkmateTool.MAX_CONCURRENT_JOBS; i++)
+            {
+                Map<String, String> params = params("question", "q" + i); //$NON-NLS-1$ //$NON-NLS-2$
+                params.put("waitSeconds", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+                assertJobStatus(tool.execute(params), "running"); //$NON-NLS-1$
+            }
+
+            Map<String, String> overflow = params("question", "one too many"); //$NON-NLS-1$ //$NON-NLS-2$
+            overflow.put("waitSeconds", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertErrorContains(tool.execute(overflow), "jobs running", //$NON-NLS-1$ //$NON-NLS-2$
+                "Poll the jobId", "instead of nesting deeper"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        finally
+        {
+            release.countDown();
+        }
     }
 
     @Test

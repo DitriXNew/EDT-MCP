@@ -624,6 +624,17 @@ public class WorkmateGateway
             invoke(put, cache, CHAT_SESSION_ID, session);
             generatedSessionId = readSessionId(session);
 
+            // Publishing a CLOSED session would be worse than publishing none: the entry
+            // resolves, so the next pass would accept it and every JShell call against it
+            // would fail. A concurrent creation can evict - and therefore close - this very
+            // session between its creation and this line, so the object itself is checked,
+            // not merely the presence of the key.
+            if (isClosedSession(session))
+            {
+                throw GatewayException.notReady("Workmate closed the new JShell session " //$NON-NLS-1$
+                    + "before it could be published (its session cache evicted it)"); //$NON-NLS-1$
+            }
+
             if (invoke(getSession, manager, CHAT_SESSION_ID) == null)
             {
                 throw GatewayException.incompatible("the session did not become reachable " //$NON-NLS-1$
@@ -684,6 +695,52 @@ public class WorkmateGateway
         catch (ReflectiveOperationException | RuntimeException e)
         {
             return null;
+        }
+    }
+
+    /**
+     * Drops the session published under {@link #CHAT_SESSION_ID}, so nothing outlives this
+     * bundle.
+     * <p>
+     * A JShell session keeps whatever the snippets bound in it - including {@code mcp}, the
+     * bridge object of the bundle that is stopping, along with its class loader. Left alive
+     * across an update, the chat would go on calling the OLD bridge: unregistering an OSGi
+     * service does not revoke a reference already handed out. Invalidating runs Workmate's
+     * removal listener, which closes the session, so the next start publishes a fresh one
+     * bound to the new bridge.
+     * <p>
+     * Best effort and silent: this runs during teardown, where nothing can be reported and
+     * a missing or already-stopped Workmate is the normal case.
+     */
+    public void discardChatSession()
+    {
+        try
+        {
+            Bundle uiCommonBundle = requireBundle(UI_COMMON_BUNDLE);
+            Object injector = resolveInjector(uiCommonBundle);
+            Class<?> injectorClass = requireClass(uiCommonBundle, GUICE_INJECTOR);
+            Method getInstance = requireMethod(injectorClass, "getInstance", Class.class); //$NON-NLS-1$
+            Class<?> managerClass = requireClass(uiCommonBundle, SESSION_MANAGER);
+            Object manager = invoke(getInstance, injector, managerClass);
+            if (manager == null)
+            {
+                return;
+            }
+            Method invalidate =
+                requireMethod(managerClass, "invalidateSession", String.class); //$NON-NLS-1$
+            // Both keys: the constant one, and the id Workmate generated for the same
+            // object, so its cache is not left holding an entry for a closed session.
+            invoke(invalidate, manager, CHAT_SESSION_ID);
+            String generated = generatedSessionId;
+            if (generated != null)
+            {
+                invoke(invalidate, manager, generated);
+                generatedSessionId = null;
+            }
+        }
+        catch (GatewayException | RuntimeException e)
+        {
+            // Teardown: nothing to report to, and Workmate being gone is expected.
         }
     }
 

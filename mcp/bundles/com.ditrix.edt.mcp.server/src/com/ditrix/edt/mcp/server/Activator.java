@@ -89,8 +89,12 @@ public class Activator extends AbstractUIPlugin
         boolean headless = isHeadless();
         if (!headless)
         {
-            // Register tools before publishing the bridge so a consumer can never
-            // observe the service with a transiently empty catalogue.
+            // Register tools before publishing the bridge, so the service is not visible
+            // with an empty catalogue at STARTUP. This orders startup only: a later
+            // restart of the server re-runs registerTools(), which clears and repopulates
+            // the shared registry, and a call arriving during that window can still see a
+            // partial catalogue - through the bridge exactly as through HTTP, since both
+            // read the same singleton.
             mcpServer.registerTools();
         }
 

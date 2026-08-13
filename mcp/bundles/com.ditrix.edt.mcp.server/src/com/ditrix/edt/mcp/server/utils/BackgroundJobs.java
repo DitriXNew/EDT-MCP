@@ -276,6 +276,25 @@ public final class BackgroundJobs implements AutoCloseable
     }
 
     /** @return current job snapshot, or {@code null} when the id is unknown/evicted */
+    /**
+     * Counts jobs that are still running.
+     * <p>
+     * Exists so a caller can bound how many of ITS jobs are in flight at once. That matters
+     * for work that can start more of itself: a job holds one of the shared workers for its
+     * whole life, so an unbounded chain of nested starts would park the pool.
+     *
+     * @return number of jobs currently in {@link Status#RUNNING}
+     */
+    public int runningCount()
+    {
+        synchronized (jobsLock)
+        {
+            return (int)jobs.values().stream()
+                .filter(record -> record.snapshot().getStatus() == Status.RUNNING)
+                .count();
+        }
+    }
+
     public JobSnapshot get(String jobId)
     {
         JobRecord record;

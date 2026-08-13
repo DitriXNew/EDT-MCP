@@ -39,6 +39,21 @@ public class AskWorkmateTool implements IMcpTool
     static final int DEFAULT_WAIT_SECONDS = 5;
     static final int MAX_WAIT_SECONDS = 45;
 
+    /**
+     * Upper bound for a job's total budget. A job holds one of the shared workers and a
+     * registry slot for its whole life, so an unbounded value would let a handful of calls
+     * park the pool until EDT restarts. An hour is far past any real Workmate conversation.
+     */
+    static final int MAX_TIMEOUT_SECONDS = 3600;
+
+    /**
+     * How many jobs of this tool may run at once. Below the shared pool's worker count on
+     * purpose: Workmate is invited to delegate a sub-question to this tool, and a parent job
+     * occupies a worker while its child needs one, so leaving a worker free is what keeps a
+     * one-level delegation from waiting on itself.
+     */
+    static final int MAX_CONCURRENT_JOBS = 3;
+
     private static final String KEY_QUESTION = "question"; //$NON-NLS-1$
     private static final String KEY_JOB_ID = "jobId"; //$NON-NLS-1$
     private static final String KEY_PROJECT_NAME = "projectName"; //$NON-NLS-1$
@@ -141,6 +156,7 @@ public class AskWorkmateTool implements IMcpTool
             .integerProperty(KEY_TIMEOUT_SECONDS,
                 "Start mode only: total wall-clock budget for the background job across all " //$NON-NLS-1$
                     + "polls, in seconds; defaults to " + DEFAULT_TIMEOUT_SECONDS //$NON-NLS-1$
+                    + " and accepts 1 to " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
                     + ". After this budget the job becomes failed. This is not the per-call " //$NON-NLS-1$
                     + "waitSeconds budget.") //$NON-NLS-1$
             .integerProperty(KEY_WAIT_SECONDS,
@@ -237,14 +253,19 @@ public class AskWorkmateTool implements IMcpTool
         if (params.containsKey(KEY_TIMEOUT_SECONDS))
         {
             Integer parsedTimeout = optionalPositiveInt(params, KEY_TIMEOUT_SECONDS);
-            if (parsedTimeout == null)
+            if (parsedTimeout == null || parsedTimeout.intValue() > MAX_TIMEOUT_SECONDS)
             {
-                return positiveIntegerError(KEY_TIMEOUT_SECONDS, params.get(KEY_TIMEOUT_SECONDS));
+                return timeoutSecondsError(params.get(KEY_TIMEOUT_SECONDS));
             }
             timeoutSeconds = parsedTimeout.intValue();
         }
 
         final int jobTimeoutSeconds = timeoutSeconds;
+        String tooManyJobs = refuseWhenPoolIsBusy();
+        if (tooManyJobs != null)
+        {
+            return tooManyJobs;
+        }
         try
         {
             JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
@@ -310,6 +331,11 @@ public class AskWorkmateTool implements IMcpTool
             + "}\n\n" //$NON-NLS-1$
             + "Reuse one session for follow-up calls. Report what the tool actually " //$NON-NLS-1$
             + "returned and never invent a result.\n\n" //$NON-NLS-1$
+            + "ask_workmate is in that list on purpose: you may delegate a self-contained " //$NON-NLS-1$
+            + "sub-question to it as a sub-agent. It answers asynchronously - take the " //$NON-NLS-1$
+            + "jobId from its reply and poll with {\"jobId\":\"...\"} instead of waiting - " //$NON-NLS-1$
+            + "and only a few such jobs may run at once, so delegate one level deep, not a " //$NON-NLS-1$
+            + "chain.\n\n" //$NON-NLS-1$
             + toolCatalogue() + "Question:\n"; //$NON-NLS-1$
     }
 
@@ -364,9 +390,9 @@ public class AskWorkmateTool implements IMcpTool
         if (params.containsKey(KEY_TIMEOUT_SECONDS))
         {
             Integer parsedTimeout = optionalPositiveInt(params, KEY_TIMEOUT_SECONDS);
-            if (parsedTimeout == null)
+            if (parsedTimeout == null || parsedTimeout.intValue() > MAX_TIMEOUT_SECONDS)
             {
-                return positiveIntegerError(KEY_TIMEOUT_SECONDS, params.get(KEY_TIMEOUT_SECONDS));
+                return timeoutSecondsError(params.get(KEY_TIMEOUT_SECONDS));
             }
             timeoutSeconds = parsedTimeout.intValue();
         }
@@ -415,6 +441,11 @@ public class AskWorkmateTool implements IMcpTool
 
         final IProject jobProject = project;
         final int jobTimeoutSeconds = timeoutSeconds;
+        String tooManyJobs = refuseWhenPoolIsBusy();
+        if (tooManyJobs != null)
+        {
+            return tooManyJobs;
+        }
         try
         {
             JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
@@ -555,6 +586,39 @@ public class AskWorkmateTool implements IMcpTool
     {
         return ToolResult.error(key + " must be a positive integer, but was '" //$NON-NLS-1$
             + value + "'. Pass " + key + ">=1 or omit it to use the default.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Refuses to start when this tool already has {@link #MAX_CONCURRENT_JOBS} jobs running.
+     * <p>
+     * Workmate is told it may delegate a sub-question to this very tool, which is useful and
+     * deliberate - but a job holds one of the shared workers for its whole life, so a chain
+     * of nested starts would park the pool and every job in it would then wait out its
+     * budget. This bounds that to a handful and says so, instead of letting the caller
+     * discover it as a hang.
+     *
+     * @return an actionable error, or {@code null} when a job may start
+     */
+    private String refuseWhenPoolIsBusy()
+    {
+        int running = jobs.runningCount();
+        if (running < MAX_CONCURRENT_JOBS)
+        {
+            return null;
+        }
+        return ToolResult.error(NAME + " already has " + running //$NON-NLS-1$
+            + " jobs running, which is the limit of " + MAX_CONCURRENT_JOBS //$NON-NLS-1$
+            + ". Poll the jobId of a running job and act on its answer before starting " //$NON-NLS-1$
+            + "another; if this happened while delegating a sub-question, ask it directly " //$NON-NLS-1$
+            + "instead of nesting deeper.").toJson(); //$NON-NLS-1$
+    }
+
+    private static String timeoutSecondsError(String value)
+    {
+        return ToolResult.error("timeoutSeconds must be an integer from 1 to " //$NON-NLS-1$
+            + MAX_TIMEOUT_SECONDS + ", but was '" + value + "'. A job holds a worker for its " //$NON-NLS-1$ //$NON-NLS-2$
+            + "whole budget, so pass a realistic bound or omit it to use the default of " //$NON-NLS-1$
+            + DEFAULT_TIMEOUT_SECONDS + " seconds.").toJson(); //$NON-NLS-1$
     }
 
     private static String waitSecondsError(String value)
