@@ -8,12 +8,15 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
@@ -21,14 +24,6 @@ import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
-import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
-import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
-import com.e1c.g5.v8.dt.check.qfix.IFixManager;
-import com.e1c.g5.v8.dt.check.qfix.IFixVariant;
-import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
-import org.osgi.framework.Bundle;
-import org.osgi.framework.FrameworkUtil;
-
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -36,6 +31,12 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
+import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
+import com.e1c.g5.v8.dt.check.qfix.IFixManager;
+import com.e1c.g5.v8.dt.check.qfix.IFixVariant;
+import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
+import com.google.gson.JsonObject;
 
 /**
  * Applies EDT's official quick-fix (auto-fix) to one validation marker — the MCP
@@ -127,6 +128,17 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             .stringProperty("appliedVariant", "Description of the fix variant that was applied.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("message", "Human-readable summary.") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
+    }
+
+    @Override
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
+    {
+        // A quick fix rewrites BSL source through IFixManager; it queues no .mdo export, so there
+        // is nothing of this call's to wait for. Inheriting the default would make a SUCCESSFUL
+        // source edit refusable on a 60s deadline because somebody else's metadata export was
+        // still draining in the same project - a false refusal on a healthy input, which costs
+        // more than the check it would be buying.
+        return Collections.emptyList();
     }
 
     @Override

@@ -31,6 +31,10 @@ import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
  * -&gt; variants -&gt; execute) needs a live workbench + marker manager + IFixManager, so it is
  * covered by the E2E suite (test_apply_quick_fix.py).
  */
+import java.util.Collections;
+
+import com.google.gson.JsonObject;
+
 public class ApplyQuickFixToolTest
 {
     @Test
@@ -476,5 +480,24 @@ public class ApplyQuickFixToolTest
             new MarkerMatch(null, "check-a", null, null, "only one"))); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertFalse(ApplyQuickFixTool.hasUnresolvableAmbiguity(matches));
+    }
+
+    @Test
+    public void testASuccessfulSourceFixIsNeverRefusedOverSomebodyElsesMetadataExport()
+    {
+        // The false-refusal guard (#406). A quick fix rewrites BSL source and queues no .mdo
+        // export, so it has nothing of its own to wait for. If it inherited the default scope, a
+        // SUCCESSFUL source edit could be turned into a 60s "export not confirmed" error because
+        // an unrelated metadata export was still draining in the same project - a refusal on a
+        // healthy input, which is the most expensive mistake this barrier can make.
+        JsonObject applied = new JsonObject();
+        applied.addProperty("success", true); //$NON-NLS-1$
+        applied.addProperty("action", "applied"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a source fix must await no export at all", //$NON-NLS-1$
+            new ApplyQuickFixTool()
+                .exportProjectsToAwait(Collections.singletonMap("projectName", "TestConfiguration"), //$NON-NLS-1$ //$NON-NLS-2$
+                    applied)
+                .isEmpty());
     }
 }

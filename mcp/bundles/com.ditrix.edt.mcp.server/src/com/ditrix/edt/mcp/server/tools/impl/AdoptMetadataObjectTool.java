@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -28,11 +30,11 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
-import com.google.gson.JsonObject;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.google.gson.JsonObject;
 
 /**
  * Adopts a base-configuration metadata object — or one of its members
@@ -117,21 +119,19 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     @Override
-    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
     {
-        // The "already adopted" branch is a SUCCESS that never called adoptAndAttach and never
-        // queued an export, so there is nothing of ours to wait for; waiting would only let an
-        // unrelated pending export in the same extension refuse a healthy call.
-        return !"alreadyAdopted".equals(resultString(result, McpKeys.ACTION)); //$NON-NLS-1$
-    }
-
-    @Override
-    protected String exportProjectResultKey()
-    {
+        // "already adopted" is a SUCCESS that never called adoptAndAttach and never queued an
+        // export, so there is nothing of ours to wait for.
+        if ("alreadyAdopted".equals(resultString(result, McpKeys.ACTION))) //$NON-NLS-1$
+        {
+            return Collections.emptyList();
+        }
         // projectName is the BASE configuration by contract, but adoption writes into the
-        // EXTENSION - so the export to wait for is the one reported in the result, not the
-        // one that was asked for.
-        return KEY_EXTENSION_PROJECT;
+        // EXTENSION - so the export to wait for is the one the tool reports, not the one it was
+        // asked about.
+        String extension = resultString(result, KEY_EXTENSION_PROJECT);
+        return extension == null ? Collections.emptyList() : Collections.singletonList(extension);
     }
 
     @Override

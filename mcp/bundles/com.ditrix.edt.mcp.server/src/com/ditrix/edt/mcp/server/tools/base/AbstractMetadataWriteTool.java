@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.base;
 
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -129,26 +131,49 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         // too, and treating one as a write would make a rejected argument wait out the whole
         // deadline and then be re-reported as a disk problem.
         JsonObject success = successObject(result);
-        if (success == null || !wroteToDisk(params, success))
+        if (success == null)
         {
             return result;
         }
-        String projectName = exportProjectName(params, success);
-        if (projectName == null || projectName.isEmpty())
+        Collection<String> projects = exportProjectsToAwait(params, success);
+        if (projects == null || projects.isEmpty())
         {
             return result;
         }
-        if (exportEnvironment().waitForDiskExport(projectName, EXPORT_DEADLINE_MS)
-            != BuildUtils.DiskExportState.PENDING)
+        // ONE budget for the whole set, not one per project: a cascade that touches the base and
+        // three extensions must not be able to take four deadlines to answer.
+        long deadlineAtMs = System.currentTimeMillis() + EXPORT_DEADLINE_MS;
+        for (String projectName : projects)
         {
-            return result;
+            if (projectName == null || projectName.isEmpty())
+            {
+                continue;
+            }
+            long remainingMs = Math.max(1L, deadlineAtMs - System.currentTimeMillis());
+            if (exportEnvironment().waitForDiskExport(projectName, remainingMs)
+                == BuildUtils.DiskExportState.PENDING)
+            {
+                return exportNotConfirmed(projectName);
+            }
         }
-        // Every clause here is kept to what PENDING actually establishes. It says "not confirmed",
-        // not "timed out", because PENDING also covers a wait that failed outright rather than
-        // running out of time; it says the files MAY be inconsistent, not that they are, because an
-        // unconfirmed export is unknown rather than known-bad; and it says "nothing was rolled
-        // back" rather than "the model change stands", because this base class is also inherited by
-        // a tool that reports on disk without changing the model at all.
+        return refreshAfterExportAwait(params, result);
+    }
+
+    /**
+     * The refusal for an export this call queued and could not see finish.
+     * <p>
+     * Every clause is kept to what PENDING actually establishes. It says "not confirmed", not
+     * "timed out", because PENDING also covers a wait that failed outright rather than running out
+     * of time; it says the files MAY be inconsistent, not that they are, because an unconfirmed
+     * export is unknown rather than known-bad; and it says "nothing was rolled back" rather than
+     * "the model change stands", because this base class is also inherited by a tool that reports
+     * on disk without changing the model at all.
+     *
+     * @param projectName the project whose export did not confirm
+     * @return the JSON error
+     */
+    private static String exportNotConfirmed(String projectName)
+    {
         return ToolResult.error("The operation completed, but its export to disk was not confirmed " //$NON-NLS-1$
             + "within a " + (EXPORT_DEADLINE_MS / 1000) + "s budget, so the files of project '" //$NON-NLS-1$ //$NON-NLS-2$
             + projectName + "' may not be consistent on disk: an object's own .mdo can already be " //$NON-NLS-1$
@@ -159,31 +184,66 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     }
 
     /**
-     * Whether this particular call actually queued a write, and therefore has an export whose
-     * completion has to be established before answering.
+     * Which export queues this call asks to see drained before it answers - the projects it
+     * CLAIMS to have written. An empty collection means "await nothing".
      * <p>
-     * The question is deliberately asked of the RESULT, not of the parameters alone: several tools
-     * have SUCCESSFUL no-op paths that the arguments cannot predict - an adoption of an object that
-     * is already adopted, a resync of a project that is already in sync. Such a call queued nothing,
-     * so the only export it could wait for belongs to somebody else, and waiting on it can only
-     * turn a healthy call into a refusal. A false refusal costs more than a missed check here,
-     * because the operation itself succeeded.
+     * Deliberately a claim rather than a guarantee: a tool may knowingly under-claim, and
+     * {@code delete_metadata} does for the cascade case. The barrier is only ever as complete as
+     * the answer it is given.
      * <p>
-     * The default is {@code true}: a tool that says nothing about it gets the barrier. Only a tool
-     * that KNOWS it has a no-op success path answers otherwise, and it answers next to the branch
-     * that produces it.
+     * The single question the barrier asks. It is deliberately asked of the RESULT and returns a
+     * SET rather than a yes/no, because both halves of "wait for what" vary per call and neither
+     * can be read off the arguments or off the class:
+     * <ul>
+     * <li>{@code apply_quick_fix} rewrites BSL source and queues no {@code .mdo} export at all, so
+     * waiting could only let unrelated work in the same project refuse a healthy edit;</li>
+     * <li>{@code adopt_metadata_object} is called with the BASE configuration by contract and
+     * writes into the EXTENSION;</li>
+     * <li>a confirmed {@code delete_metadata} cascade also cleans references in the dependent
+     * extensions, whose exports this hook does NOT currently claim - see the reason and the cost
+     * at that tool's override;</li>
+     * <li>an adoption of an already-adopted object, a resync of an in-sync project and a delete
+     * PREVIEW are successes that queued nothing.</li>
+     * </ul>
+     * Asking "did it write?" and "whose project?" separately is what produced those as four
+     * separate defects; asking which exports THIS call queued puts them all to one question, so a
+     * tool added later answers it in one place instead of becoming a fifth. It does not follow that
+     * every answer is complete - a tool can still under-claim, and {@code delete_metadata} knowingly
+     * does for the cascade case.
+     * <p>
+     * The default is the project named in {@code projectName}: a tool that says nothing is assumed
+     * to have written where it was asked to.
      *
      * @param params the tool parameters
      * @param result the tool's own result, already known to be a success
-     * @return {@code true} to await the export (the default)
+     * @return the projects to await; empty to skip the wait entirely
      */
-    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
     {
-        return true;
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        return projectName == null || projectName.isEmpty() ? Collections.emptyList()
+            : Collections.singletonList(projectName);
     }
 
     /**
-     * Reads a string member of a result, for a subclass deciding {@link #wroteToDisk}.
+     * Lets a tool restate anything in its result that the export wait has just made out of date.
+     * <p>
+     * A tool that reports on DISK state samples it inside {@code executeOnUiThread}, which is
+     * before the barrier ran - so a field like "these files are still missing" can describe a
+     * moment that no longer exists by the time the caller reads it. The default changes nothing;
+     * only a tool that reports disk state has anything to restate.
+     *
+     * @param params the tool parameters
+     * @param result the JSON the tool produced
+     * @return the result to return, possibly updated
+     */
+    protected String refreshAfterExportAwait(Map<String, String> params, String result)
+    {
+        return result;
+    }
+
+    /**
+     * Reads a string member of a result, for a subclass deciding {@link #exportProjectsToAwait}.
      *
      * @param result the tool's own result
      * @param member the member to read
@@ -193,33 +253,6 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
     {
         JsonElement value = result.get(member);
         return value != null && value.isJsonPrimitive() ? value.getAsString() : null;
-    }
-
-    /**
-     * The project whose export queue must drain, which is NOT always the one named in the
-     * parameters: {@code adopt_metadata_object} takes the BASE configuration by contract and writes
-     * into the EXTENSION, so a barrier keyed blindly on {@code projectName} would wait for a
-     * project that has nothing queued and pass while the real target is still exporting.
-     * <p>
-     * The default reads {@code projectName}; a subclass whose target differs reports it through a
-     * key it already puts in its own result.
-     *
-     * @param params the tool parameters
-     * @param result the JSON the tool produced
-     * @return the project name to wait for, or {@code null} to skip the wait
-     */
-    private String exportProjectName(Map<String, String> params, JsonObject result)
-    {
-        String key = exportProjectResultKey();
-        if (key != null)
-        {
-            String reported = resultString(result, key);
-            if (reported != null)
-            {
-                return reported;
-            }
-        }
-        return params.get(McpKeys.PROJECT_NAME);
     }
 
     /**
@@ -257,17 +290,6 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             Activator.logError("Could not read a metadata write result while checking its export", e); //$NON-NLS-1$
             return null;
         }
-    }
-
-    /**
-     * The result key naming the project whose export must drain, when it is not the one in
-     * {@code projectName}.
-     *
-     * @return the result key, or {@code null} to use {@code projectName} (the default)
-     */
-    protected String exportProjectResultKey()
-    {
-        return null;
     }
 
     /**

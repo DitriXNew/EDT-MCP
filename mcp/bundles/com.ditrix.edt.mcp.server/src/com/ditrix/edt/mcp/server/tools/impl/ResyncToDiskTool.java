@@ -8,9 +8,11 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -35,6 +37,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -231,15 +234,90 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     }
 
     @Override
-    protected boolean wroteToDisk(Map<String, String> params, JsonObject result)
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
     {
         // A project that is already in sync exports nothing and reports objectsExported=0. That is
         // a genuine no-op success, so there is no export of ours to confirm; waiting would only
         // expose a healthy call to refusal by unrelated background export work. Dangling-reference
         // cleanup DOES re-export Configuration, and it reports its own non-zero count, so the two
         // are asked together rather than assuming the export list is the only writer.
-        return !"0".equals(resultString(result, "objectsExported")) //$NON-NLS-1$ //$NON-NLS-2$
+        boolean queued = !"0".equals(resultString(result, "objectsExported")) //$NON-NLS-1$ //$NON-NLS-2$
             || !"0".equals(resultString(result, "danglingRemovedCount")); //$NON-NLS-1$ //$NON-NLS-2$
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        return queued && projectName != null && !projectName.isEmpty()
+            ? Collections.singletonList(projectName) : Collections.<String> emptyList();
+    }
+
+    @Override
+    protected String refreshAfterExportAwait(Map<String, String> params, String result)
+    {
+        // This tool REPORTS on disk, and it sampled disk inside executeOnUiThread - before the
+        // export queue had drained. Anything it found "still missing" there may exist by the time
+        // the caller reads the answer, so the sample is retaken now that the wait has finished.
+        // Reporting the earlier moment would describe a state that no longer exists.
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        if (projectName == null || projectName.isEmpty())
+        {
+            return result;
+        }
+        try
+        {
+            JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+            JsonElement before = json.get("missingBefore"); //$NON-NLS-1$
+            if (before == null || !before.isJsonArray() || before.getAsJsonArray().isEmpty())
+            {
+                return result;
+            }
+            List<String> candidates = new ArrayList<>();
+            before.getAsJsonArray().forEach(e -> candidates.add(e.getAsString()));
+            // The listed set is CAPPED at MAX_LISTED_FQNS, so on a large desync it is a subset and
+            // cannot support a verdict about the whole: recomputing from it would report
+            // "nothing still missing" while the unlisted remainder is still absent. When the list
+            // was truncated the earlier sample stays, stale but not wrong about its own scope.
+            JsonElement beforeCount = json.get("missingBeforeCount"); //$NON-NLS-1$
+            if (beforeCount == null || beforeCount.getAsInt() != candidates.size())
+            {
+                return result;
+            }
+
+            // Fully qualified: the base class has its own nested ProjectContext, which shadows
+            // the shared resolver inside every subclass.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context = com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            if (!context.exists())
+            {
+                return result;
+            }
+            List<String> stillMissing = findMissingMdoFiles(context.project(), candidates);
+            // Compared as a SET, not by size: one file arriving while another disappears leaves the
+            // count equal and the named entries wrong, which is the failure this refresh exists to
+            // prevent rather than one it may reproduce.
+            JsonElement previous = json.get("stillMissing"); //$NON-NLS-1$
+            List<String> previousMissing = new ArrayList<>();
+            if (previous != null && previous.isJsonArray())
+            {
+                previous.getAsJsonArray().forEach(e -> previousMissing.add(e.getAsString()));
+            }
+            if (new LinkedHashSet<>(previousMissing).equals(new LinkedHashSet<>(stillMissing)))
+            {
+                return result;
+            }
+            json.add("stillMissing", GsonProvider.get().toJsonTree(limit(stillMissing))); //$NON-NLS-1$
+            json.addProperty("stillMissingCount", stillMissing.size()); //$NON-NLS-1$
+            json.addProperty(McpKeys.MESSAGE,
+                buildMessage(true, json.get("objectsExported").getAsInt(), //$NON-NLS-1$
+                    json.get(KEY_FULL_EXPORT).getAsBoolean(), candidates.size(), stillMissing.size(),
+                    json.get("danglingFound").getAsInt(), //$NON-NLS-1$
+                    json.get("danglingRemovedCount").getAsInt() > 0, //$NON-NLS-1$
+                    json.get(KEY_CLEAN_DANGLING_REFERENCES).getAsBoolean()));
+            return GsonProvider.get().toJson(json);
+        }
+        catch (RuntimeException e)
+        {
+            // A result we cannot restate is still a valid result; never fail the call over the
+            // freshness of a report field.
+            Activator.logError("Could not refresh the resync disk report after the export wait", e); //$NON-NLS-1$
+            return result;
+        }
     }
 
     @Override
@@ -377,7 +455,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             result.put("revalidateWarning", revalidateWarning); //$NON-NLS-1$
         }
         result.put(McpKeys.MESSAGE, buildMessage(exported, exported ? exportFqns.size() : 0, fullExport,
-            missingBefore.size(), stillMissing.size(), dangling, cleanDangling));
+            missingBefore.size(), stillMissing.size(), dangling.found, dangling.removedFromModel,
+            cleanDangling));
         return result.toJson();
     }
 
@@ -1113,7 +1192,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
     /** Builds a concise human-readable summary of the outcome. */
     private static String buildMessage(boolean exported, int objectsExported, boolean fullExport,
-        int missingBefore, int stillMissing, DanglingResult dangling, boolean cleanDangling)
+        int missingBefore, int stillMissing, int danglingFound, boolean danglingRemovedFromModel,
+        boolean cleanDangling)
     {
         StringBuilder sb = new StringBuilder();
         if (!exported)
@@ -1143,18 +1223,18 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         }
         // Dangling-reference summary.
         sb.append(' ');
-        if (dangling.found == 0)
+        if (danglingFound == 0)
         {
             sb.append("No dangling references in Configuration.mdo."); //$NON-NLS-1$
         }
-        else if (dangling.removedFromModel)
+        else if (danglingRemovedFromModel)
         {
-            sb.append("Removed ").append(dangling.found) //$NON-NLS-1$
+            sb.append("Removed ").append(danglingFound) //$NON-NLS-1$
                 .append(" dangling reference(s) from Configuration.mdo."); //$NON-NLS-1$
         }
         else
         {
-            sb.append("Found ").append(dangling.found) //$NON-NLS-1$
+            sb.append("Found ").append(danglingFound) //$NON-NLS-1$
                 .append(" dangling reference(s) in Configuration.mdo"); //$NON-NLS-1$
             sb.append(cleanDangling
                 ? " (not removed - see danglingWarning)." //$NON-NLS-1$

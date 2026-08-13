@@ -25,6 +25,10 @@ import java.util.Collections;
 
 import com.google.gson.JsonObject;
 
+import java.util.ArrayList;
+
+import java.util.Map;
+
 public class AdoptMetadataObjectToolTest
 {
     @Test
@@ -85,31 +89,26 @@ public class AdoptMetadataObjectToolTest
     }
 
     @Test
-    public void testTheExportBarrierIsSkippedForTheAlreadyAdoptedNoOpOnly()
+    public void testTheExportScopeIsTheExtensionAndOnlyForARealAdoption()
     {
-        // Pinned against the REAL tool, not a stub carrying a copy of the predicate: the value and
-        // the key both have to match what this tool actually emits, and a stub would stay green
-        // through a typo in either (#406).
+        // Pinned against the REAL tool, not a stub carrying a copy of the rule: both the key and
+        // the value have to match what this tool actually emits, and a stub stays green through a
+        // typo in either (#406).
         AdoptMetadataObjectTool tool = new AdoptMetadataObjectTool();
+        Map<String, String> params = Collections.singletonMap("projectName", "TestConfiguration"); //$NON-NLS-1$ //$NON-NLS-2$
 
         JsonObject noOp = new JsonObject();
         noOp.addProperty("action", "alreadyAdopted"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("'alreadyAdopted' queued no export, so the barrier must not wait for one", //$NON-NLS-1$
-            tool.wroteToDisk(Collections.emptyMap(), noOp));
+        noOp.addProperty("extensionProject", "TestConfiguration.tests"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("'alreadyAdopted' queued no export, so nothing must be awaited", //$NON-NLS-1$
+            tool.exportProjectsToAwait(params, noOp).isEmpty());
 
-        JsonObject wrote = new JsonObject();
-        wrote.addProperty("action", "adopted"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("a real adoption MUST still be waited for", //$NON-NLS-1$
-            tool.wroteToDisk(Collections.emptyMap(), wrote));
-
-        assertTrue("a result without the key at all must be waited for, not silently skipped", //$NON-NLS-1$
-            tool.wroteToDisk(Collections.emptyMap(), new JsonObject()));
-    }
-
-    @Test
-    public void testTheExportBarrierFollowsTheExtensionProjectTheToolReports()
-    {
+        JsonObject adopted = new JsonObject();
+        adopted.addProperty("action", "adopted"); //$NON-NLS-1$ //$NON-NLS-2$
+        adopted.addProperty("extensionProject", "TestConfiguration.tests"); //$NON-NLS-1$ //$NON-NLS-2$
         // projectName is the BASE configuration by contract; the write goes to the EXTENSION.
-        assertEquals("extensionProject", new AdoptMetadataObjectTool().exportProjectResultKey()); //$NON-NLS-1$
+        assertEquals("a real adoption must await the EXTENSION, not the project it was called with", //$NON-NLS-1$
+            Collections.singletonList("TestConfiguration.tests"), //$NON-NLS-1$
+            new ArrayList<>(tool.exportProjectsToAwait(params, adopted)));
     }
 }
