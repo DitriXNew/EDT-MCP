@@ -261,14 +261,10 @@ public class AskWorkmateTool implements IMcpTool
         }
 
         final int jobTimeoutSeconds = timeoutSeconds;
-        String tooManyJobs = refuseWhenPoolIsBusy();
-        if (tooManyJobs != null)
-        {
-            return tooManyJobs;
-        }
         try
         {
             JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
+                MAX_CONCURRENT_JOBS,
                 "Accepted the direct Workmate tool call.", progress -> { //$NON-NLS-1$
                     try
                     {
@@ -282,6 +278,10 @@ public class AskWorkmateTool implements IMcpTool
                         throw new WorkmateJobException(actionableMessage(e, jobTimeoutSeconds), e);
                     }
                 });
+            if (started == null)
+            {
+                return tooManyJobsError();
+            }
             return render(await(started.getId(), waitSeconds));
         }
         catch (RejectedExecutionException e)
@@ -441,14 +441,10 @@ public class AskWorkmateTool implements IMcpTool
 
         final IProject jobProject = project;
         final int jobTimeoutSeconds = timeoutSeconds;
-        String tooManyJobs = refuseWhenPoolIsBusy();
-        if (tooManyJobs != null)
-        {
-            return tooManyJobs;
-        }
         try
         {
             JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
+                MAX_CONCURRENT_JOBS,
                 "Accepted the question.", progress -> { //$NON-NLS-1$
                     try
                     {
@@ -471,6 +467,10 @@ public class AskWorkmateTool implements IMcpTool
                             actionableMessage(e, jobTimeoutSeconds), e);
                     }
                 });
+            if (started == null)
+            {
+                return tooManyJobsError();
+            }
             return render(await(started.getId(), waitSeconds));
         }
         catch (RejectedExecutionException e)
@@ -589,28 +589,26 @@ public class AskWorkmateTool implements IMcpTool
     }
 
     /**
-     * Refuses to start when this tool already has {@link #MAX_CONCURRENT_JOBS} jobs running.
+     * Reports that the admission limit turned this start away.
+     * <p>
+     * The decision itself belongs to {@code BackgroundJobs.start(.., maxRunning, ..)}, which
+     * counts and admits under one lock: counting here and starting afterwards would let
+     * concurrent requests all see room and all start, defeating the reserved worker. This
+     * method only phrases the refusal.
      * <p>
      * Workmate is told it may delegate a sub-question to this very tool, which is useful and
      * deliberate - but a job holds one of the shared workers for its whole life, so a chain
      * of nested starts would park the pool and every job in it would then wait out its
-     * budget. This bounds that to a handful and says so, instead of letting the caller
-     * discover it as a hang.
+     * budget. Saying so beats letting the caller discover it as a hang.
      *
-     * @return an actionable error, or {@code null} when a job may start
+     * @return the actionable error for a refused start
      */
-    private String refuseWhenPoolIsBusy()
+    private static String tooManyJobsError()
     {
-        int running = jobs.runningCount();
-        if (running < MAX_CONCURRENT_JOBS)
-        {
-            return null;
-        }
-        return ToolResult.error(NAME + " already has " + running //$NON-NLS-1$
-            + " jobs running, which is the limit of " + MAX_CONCURRENT_JOBS //$NON-NLS-1$
-            + ". Poll the jobId of a running job and act on its answer before starting " //$NON-NLS-1$
-            + "another; if this happened while delegating a sub-question, ask it directly " //$NON-NLS-1$
-            + "instead of nesting deeper.").toJson(); //$NON-NLS-1$
+        return ToolResult.error(NAME + " already has " + MAX_CONCURRENT_JOBS //$NON-NLS-1$
+            + " jobs running, which is the limit. Poll the jobId of a running job and act " //$NON-NLS-1$
+            + "on its answer before starting another; if this happened while delegating a " //$NON-NLS-1$
+            + "sub-question, ask it directly instead of nesting deeper.").toJson(); //$NON-NLS-1$
     }
 
     private static String timeoutSecondsError(String value)

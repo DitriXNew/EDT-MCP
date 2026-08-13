@@ -233,6 +233,27 @@ public final class BackgroundJobs implements AutoCloseable
      */
     public JobSnapshot start(long timeoutMs, String initialProgress, JobWork work)
     {
+        return start(timeoutMs, Integer.MAX_VALUE, initialProgress, work);
+    }
+
+    /**
+     * Starts a job only while fewer than {@code maxRunning} jobs are running, counting and
+     * admitting under ONE lock.
+     * <p>
+     * A caller that counts first and starts afterwards has a window in which several
+     * concurrent requests all see room and all start, which defeats the very reservation the
+     * count was meant to enforce. Admission has to be part of the insertion, not a check
+     * before it.
+     *
+     * @param timeoutMs total job budget in milliseconds
+     * @param maxRunning admit only while strictly fewer jobs are running
+     * @param initialProgress first domain-specific progress message
+     * @param work work to execute off the caller thread
+     * @return the initial snapshot, or {@code null} when the running limit is reached
+     * @throws RejectedExecutionException when the registry is stopped or full
+     */
+    public JobSnapshot start(long timeoutMs, int maxRunning, String initialProgress, JobWork work)
+    {
         if (work == null)
         {
             throw new IllegalArgumentException("Background job work must not be null"); //$NON-NLS-1$
@@ -248,6 +269,10 @@ public final class BackgroundJobs implements AutoCloseable
             {
                 throw new RejectedExecutionException("Background job registry is full with " //$NON-NLS-1$
                     + maxStoredJobs + " running jobs"); //$NON-NLS-1$
+            }
+            if (countRunning() >= maxRunning)
+            {
+                return null;
             }
             jobs.put(record.id, record);
         }
@@ -276,23 +301,12 @@ public final class BackgroundJobs implements AutoCloseable
     }
 
     /** @return current job snapshot, or {@code null} when the id is unknown/evicted */
-    /**
-     * Counts jobs that are still running.
-     * <p>
-     * Exists so a caller can bound how many of ITS jobs are in flight at once. That matters
-     * for work that can start more of itself: a job holds one of the shared workers for its
-     * whole life, so an unbounded chain of nested starts would park the pool.
-     *
-     * @return number of jobs currently in {@link Status#RUNNING}
-     */
-    public int runningCount()
+    /** Counts running jobs; the caller must hold {@link #jobsLock}. */
+    private int countRunning()
     {
-        synchronized (jobsLock)
-        {
-            return (int)jobs.values().stream()
-                .filter(record -> record.snapshot().getStatus() == Status.RUNNING)
-                .count();
-        }
+        return (int)jobs.values().stream()
+            .filter(record -> record.snapshot().getStatus() == Status.RUNNING)
+            .count();
     }
 
     public JobSnapshot get(String jobId)

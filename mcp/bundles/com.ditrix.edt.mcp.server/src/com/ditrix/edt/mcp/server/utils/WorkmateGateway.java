@@ -824,13 +824,15 @@ public class WorkmateGateway
             // in Optional.ofNullable - and it means "no editor selection", which is exactly our case.
             AtomicReference<Throwable> failure = new AtomicReference<>();
             CountDownLatch delivered = new CountDownLatch(1);
-            // Set before this method reports a failure, and checked inside the runnable: a
-            // queued asyncExec is NOT cancelled by our giving up on it. Without the flag a
-            // busy UI thread would post the question minutes later, after the caller was
-            // told the hand-off failed and possibly retried - asking Workmate twice.
-            AtomicBoolean abandoned = new AtomicBoolean(false);
+            // ONE claim decides whether the question is asked, taken by whoever gets there
+            // first: the runnable before invoking, or this thread when it gives up. A
+            // queued asyncExec is NOT cancelled by our giving up on it, and a plain
+            // read-then-set flag still loses the race at the boundary - the runnable can
+            // read "not abandoned", this thread can then time out, and the question is
+            // asked anyway, after the caller was told it failed and possibly retried.
+            AtomicBoolean claimed = new AtomicBoolean(false);
             Display.getDefault().asyncExec(() -> {
-                if (abandoned.get())
+                if (!claimed.compareAndSet(false, true))
                 {
                     return;
                 }
@@ -849,15 +851,21 @@ public class WorkmateGateway
             });
             try
             {
+                if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    && claimed.compareAndSet(false, true))
+                {
+                    throw GatewayException.timedOut();
+                }
+                // Losing the claim here means the runnable started first: wait for it to
+                // finish rather than reporting a failure for a question already asked.
                 if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS))
                 {
-                    abandoned.set(true);
                     throw GatewayException.timedOut();
                 }
             }
             catch (InterruptedException e)
             {
-                abandoned.set(true);
+                claimed.compareAndSet(false, true);
                 throw e;
             }
             Throwable error = failure.get();

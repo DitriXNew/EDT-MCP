@@ -32,7 +32,10 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
   internal tool-call rounds. It must be a positive integer. Omit it to use
   Workmate's own default.
 - `skillName` applies only when starting and optionally selects a Workmate skill.
-  Omit it to use Workmate's default/raw skill.
+  Omit it: this tool then sends `custom`, the skill under which Workmate runs its
+  own tool loop. Workmate's `raw` skill is NOT the default here and is worth
+  knowing about only to avoid it - under `raw` the cloud answers from the model
+  alone, calls no tools and inspects nothing.
 - `timeoutSeconds` is the total wall-clock budget for the background job across
   every poll. It must be positive and defaults to 300 seconds. When this budget
   expires, the job becomes `failed`.
@@ -79,7 +82,6 @@ Start in one EDT project's context and wait briefly for a fast answer:
 {
   "question":"Review the current project structure and suggest the next refactoring",
   "projectName":"MyConfiguration",
-  "skillName":"raw",
   "timeoutSeconds":300,
   "waitSeconds":5
 }

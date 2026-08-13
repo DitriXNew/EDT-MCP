@@ -15,6 +15,7 @@ import static org.junit.Assert.fail;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Test;
@@ -25,6 +26,58 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
 /** Focused lifecycle and capacity tests for {@link BackgroundJobs}. */
 public class BackgroundJobsTest
 {
+    /**
+     * Admission has to happen INSIDE the same lock as insertion. A caller that counts first
+     * and starts afterwards has a window where several concurrent starts all see room, which
+     * is exactly what a running limit exists to prevent.
+     */
+    @Test
+    public void testConcurrentStartsCannotExceedTheRunningLimit() throws Exception
+    {
+        final int limit = 2;
+        final int racers = 8;
+        try (BackgroundJobs jobs = new BackgroundJobs(50, 4))
+        {
+            CountDownLatch release = new CountDownLatch(1);
+            CountDownLatch ready = new CountDownLatch(racers);
+            CountDownLatch go = new CountDownLatch(1);
+            AtomicInteger admitted = new AtomicInteger();
+
+            for (int i = 0; i < racers; i++)
+            {
+                Thread racer = new Thread(() -> {
+                    ready.countDown();
+                    try
+                    {
+                        go.await();
+                        JobSnapshot started = jobs.start(60_000L, limit, "start", progress -> { //$NON-NLS-1$
+                            release.await();
+                            return "done"; //$NON-NLS-1$
+                        });
+                        if (started != null)
+                        {
+                            admitted.incrementAndGet();
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                racer.setDaemon(true);
+                racer.start();
+            }
+
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            go.countDown();
+            Thread.sleep(200);
+            release.countDown();
+
+            assertEquals("no more than the limit may ever be admitted", //$NON-NLS-1$
+                limit, admitted.get());
+        }
+    }
+
     @Test
     public void testWorkRunsOnNamedDaemonWorker()
     {
