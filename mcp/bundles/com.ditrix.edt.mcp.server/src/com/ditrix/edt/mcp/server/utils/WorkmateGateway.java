@@ -42,6 +42,13 @@ import org.osgi.framework.FrameworkUtil;
  */
 public class WorkmateGateway
 {
+    /**
+     * The id Workmate generated for the session published under {@link #CHAT_SESSION_ID},
+     * remembered so that key can be kept warm too. Volatile: written by whichever thread
+     * publishes, read by the next pass.
+     */
+    private volatile String generatedSessionId;
+
     private static final String AI_BUNDLE = "com.e1c.edt.ai"; //$NON-NLS-1$
     private static final String UI_COMMON_BUNDLE = "com.e1c.edt.ai.ui.common"; //$NON-NLS-1$
     private static final String UI_BUNDLE = "com.e1c.edt.ai.ui"; //$NON-NLS-1$
@@ -570,10 +577,23 @@ public class WorkmateGateway
             }
 
             Method getSession = requireMethod(managerClass, "getSession", String.class); //$NON-NLS-1$
-            if (invoke(getSession, manager, CHAT_SESSION_ID) != null)
+
+            // Touch the id Workmate generated, so idle expiry does not drop THAT entry: the
+            // session answers to two keys, and evicting either one runs Workmate's removal
+            // listener, which CLOSES the shared session object.
+            String generated = generatedSessionId;
+            if (generated != null)
+            {
+                invoke(getSession, manager, generated);
+            }
+
+            Object existing = invoke(getSession, manager, CHAT_SESSION_ID);
+            if (existing != null && !isClosedSession(existing))
             {
                 return CHAT_SESSION_ID;
             }
+            // A present but CLOSED session is the case a plain null-check misses: the entry
+            // still resolves, every JShell call against it fails, and nothing recreates it.
 
             // Resolve everything the re-keying needs BEFORE creating a session. Creating one
             // is a side effect that cannot be undone - invalidating a session key makes
@@ -600,8 +620,9 @@ public class WorkmateGateway
             // The session now answers to TWO keys: the UUID Workmate generated for it, and
             // ours. The generated one is deliberately left in place - dropping it would run
             // the removal listener and close the session - so this costs one extra entry of
-            // Workmate's 16, and only while no constant session exists yet.
+            // Workmate's 16, and both keys are kept warm on every pass above.
             invoke(put, cache, CHAT_SESSION_ID, session);
+            generatedSessionId = readSessionId(session);
 
             if (invoke(getSession, manager, CHAT_SESSION_ID) == null)
             {
@@ -618,6 +639,51 @@ public class WorkmateGateway
         {
             throw GatewayException.callFailed("could not register the chat JShell session: " //$NON-NLS-1$
                 + e);
+        }
+    }
+
+    /**
+     * Reports whether a Workmate JShell session has already been closed.
+     * <p>
+     * Tolerant on purpose: when the field cannot be read the session is treated as ALIVE,
+     * because the alternative - recreating on every pass - would churn Workmate's session
+     * cache instead of merely leaving the chat without a bridge.
+     *
+     * @param session the session object to inspect
+     * @return {@code true} only when the session is provably closed
+     */
+    private static boolean isClosedSession(Object session)
+    {
+        try
+        {
+            Field closedField = session.getClass().getDeclaredField("isClosed"); //$NON-NLS-1$
+            closedField.setAccessible(true);
+            Object closed = closedField.get(session);
+            return closed instanceof AtomicBoolean && ((AtomicBoolean)closed).get();
+        }
+        catch (ReflectiveOperationException | RuntimeException e)
+        {
+            return false;
+        }
+    }
+
+    /**
+     * Reads the id Workmate assigned to a session, so both of its cache keys can be kept
+     * warm. Returns {@code null} when unavailable; the caller then simply cannot touch it.
+     *
+     * @param session the session object to inspect
+     * @return the session's own id, or {@code null}
+     */
+    private static String readSessionId(Object session)
+    {
+        try
+        {
+            Object id = session.getClass().getMethod("getSessionId").invoke(session); //$NON-NLS-1$
+            return id instanceof String ? (String)id : null;
+        }
+        catch (ReflectiveOperationException | RuntimeException e)
+        {
+            return null;
         }
     }
 
@@ -701,7 +767,16 @@ public class WorkmateGateway
             // in Optional.ofNullable - and it means "no editor selection", which is exactly our case.
             AtomicReference<Throwable> failure = new AtomicReference<>();
             CountDownLatch delivered = new CountDownLatch(1);
+            // Set before this method reports a failure, and checked inside the runnable: a
+            // queued asyncExec is NOT cancelled by our giving up on it. Without the flag a
+            // busy UI thread would post the question minutes later, after the caller was
+            // told the hand-off failed and possibly retried - asking Workmate twice.
+            AtomicBoolean abandoned = new AtomicBoolean(false);
             Display.getDefault().asyncExec(() -> {
+                if (abandoned.get())
+                {
+                    return;
+                }
                 try
                 {
                     askQuestion.invoke(chat, aiContext, question);
@@ -715,9 +790,18 @@ public class WorkmateGateway
                     delivered.countDown();
                 }
             });
-            if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            try
             {
-                throw GatewayException.timedOut();
+                if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                {
+                    abandoned.set(true);
+                    throw GatewayException.timedOut();
+                }
+            }
+            catch (InterruptedException e)
+            {
+                abandoned.set(true);
+                throw e;
             }
             Throwable error = failure.get();
             if (error != null)

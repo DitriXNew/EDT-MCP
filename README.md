@@ -548,7 +548,7 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
-| [`ask_workmate`](docs/tools/ask_workmate.md) | Start or poll a background question to the 1C:Workmate plugin without holding an MCP request open for the full cloud conversation. Requires a compatible Work… |
+| [`ask_workmate`](docs/tools/ask_workmate.md) | Start or poll a background question to the 1C:Workmate plugin without holding an MCP request open for the full cloud conversation. Requires a compatible Work… *(not enabled by default)* |
 | [`debug_yaxunit_tests`](docs/tools/debug_yaxunit_tests.md) | Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect. Prefer… |
 | [`run_yaxunit_tests`](docs/tools/run_yaxunit_tests.md) | Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. The whole call is bounded by `timeout` (default and maximum 45s, larger val… |
 

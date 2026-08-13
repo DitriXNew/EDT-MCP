@@ -70,6 +70,9 @@ public class AskWorkmateToolTest
         ToolAnnotations annotations = tool.getAnnotations();
         assertEquals(Boolean.FALSE, annotations.getReadOnlyHint());
         assertEquals(Boolean.FALSE, annotations.getIdempotentHint());
+        // Not a guess: Workmate's loop can edit metadata and BSL, and workmateTool mode can
+        // run arbitrary JShell code. Clients gate confirmation on this hint.
+        assertEquals(Boolean.TRUE, annotations.getDestructiveHint());
         assertEquals(Boolean.TRUE, annotations.getOpenWorldHint());
     }
 

@@ -15,7 +15,7 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
 | workmateTool | — | string | Exact name of a Workmate tool to invoke directly, e.g. 'JShellSession', 'JShellManual' or 'JShell'. Passing this parameter selects the direct tool mode by itself: question and mode are not used, and no language model is involved, so the tool either runs or returns its own error. |
 | workmateArgs | — | string | Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or {"scope":"eclipse","code":"..."}. Defaults to an empty object. |
 | shareMcpTools | — | boolean | Start mode only: when true (the default), the question is prefixed with instructions that let Workmate call EDT-MCP's own tools through this plugin's in-process bridge, so it can inspect the real project instead of answering from general 1C knowledge. Pass false to send the question verbatim and leave Workmate on its own tools. |
-| mode | — | string | Start mode only: 'answer' (default) asks Workmate's one-shot conversation API and RETURNS its answer as text, but Workmate does not use its own tools there and cannot inspect the project. 'chat' hands the question to Workmate's agentic chat, which does use its tools and can search and edit the configuration - but its answer is rendered in the EDT chat panel for a human and is NOT returned here. |
+| mode | — | string | Start mode only: 'answer' (default) runs Workmate's tool loop and RETURNS its answer as text: it inspects the project with its own tools and, through this plugin's bridge, with EDT-MCP's, so it can also change code and metadata. 'chat' hands the same question to Workmate's agentic chat instead; the work happens there and its answer is rendered in the EDT chat panel for a human, so it is NOT returned here. Prefer 'answer' unless a human should continue the conversation in the panel. |
 
 ## Guide
 ## Parameter details
@@ -40,12 +40,13 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
   accepts values from 0 through 45; use 0 to return immediately. It never extends
   the job's total `timeoutSeconds` budget.
 - `mode` applies only when starting and selects what happens to the question.
-  `answer` (the default) uses Workmate's one-shot conversation API and returns
-  its answer as text, but Workmate does not run its own tools there and cannot
-  inspect the project. `chat` hands the question to Workmate's agentic chat,
-  which does use its tools and can search and edit the configuration - but the
-  answer is rendered in the EDT chat panel for a human and is **not** returned
-  through MCP; the job completes with a handoff note instead.
+  `answer` (the default) runs Workmate's tool loop and returns its answer as
+  text: it inspects the project with its own tools and, through this plugin's
+  bridge, with EDT-MCP's, so it can also change code and metadata. `chat` hands
+  the same question to Workmate's agentic chat instead; the work happens there
+  and the answer is rendered in the EDT chat panel for a human, so it is **not**
+  returned through MCP - the job completes with a handoff note. Prefer `answer`
+  unless a human should carry the conversation on in the panel.
 - `workmateTool` runs one of Workmate's OWN tools directly, with no language
   model in the loop, so the tool either runs or returns its own error. Pass the
   exact tool name, for example `JShellSession`, `JShellManual` or `JShell`.

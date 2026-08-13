@@ -108,9 +108,12 @@ public class AskWorkmateTool implements IMcpTool
     @Override
     public ToolAnnotations getAnnotations()
     {
-        // Workmate reaches an external service and its own tool loop may have side
-        // effects, so this is neither read-only nor idempotent.
-        return new ToolAnnotations(null, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
+        // Workmate reaches an external service and its own tool loop may have side effects,
+        // so this is neither read-only nor idempotent. destructiveHint is TRUE and not a
+        // conservative guess: the loop can edit metadata and BSL, and the direct workmateTool
+        // mode can run arbitrary JShell code. Clients use this hint to decide whether a call
+        // needs confirmation, and promising non-destructive here would be a false guarantee.
+        return new ToolAnnotations(null, Boolean.FALSE, Boolean.TRUE, Boolean.FALSE,
             Boolean.TRUE);
     }
 
@@ -160,12 +163,14 @@ public class AskWorkmateTool implements IMcpTool
                     + "of answering from general 1C knowledge. Pass false to send the question " //$NON-NLS-1$
                     + "verbatim and leave Workmate on its own tools.") //$NON-NLS-1$
             .stringProperty(KEY_MODE,
-                "Start mode only: '" + MODE_ANSWER + "' (default) asks Workmate's one-shot " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "conversation API and RETURNS its answer as text, but Workmate does not " //$NON-NLS-1$
-                    + "use its own tools there and cannot inspect the project. '" + MODE_CHAT //$NON-NLS-1$
-                    + "' hands the question to Workmate's agentic chat, which does use its " //$NON-NLS-1$
-                    + "tools and can search and edit the configuration - but its answer is " //$NON-NLS-1$
-                    + "rendered in the EDT chat panel for a human and is NOT returned here.") //$NON-NLS-1$
+                "Start mode only: '" + MODE_ANSWER + "' (default) runs Workmate's tool loop " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "and RETURNS its answer as text: it inspects the project with its own " //$NON-NLS-1$
+                    + "tools and, through this plugin's bridge, with EDT-MCP's, so it can " //$NON-NLS-1$
+                    + "also change code and metadata. '" + MODE_CHAT //$NON-NLS-1$
+                    + "' hands the same question to Workmate's agentic chat instead; the work " //$NON-NLS-1$
+                    + "happens there and its answer is rendered in the EDT chat panel for a " //$NON-NLS-1$
+                    + "human, so it is NOT returned here. Prefer '" + MODE_ANSWER //$NON-NLS-1$
+                    + "' unless a human should continue the conversation in the panel.") //$NON-NLS-1$
             .build();
     }
 
