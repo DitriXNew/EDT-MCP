@@ -123,6 +123,67 @@
   {
     "annotations": {
       "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Start or poll a background question to the 1C:Workmate plugin without holding an MCP request open for the full cloud conversation. Requires a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call get_tool_guide('ask_workmate').",
+    "inputSchema": {
+      "properties": {
+        "jobId": {
+          "description": "Poll mode: id returned by an earlier ask_workmate call. Required when question is omitted; mutually exclusive with question.",
+          "type": "string"
+        },
+        "maxToolRounds": {
+          "description": "Start mode only: optional positive limit for Workmate's internal tool-call rounds.",
+          "type": "integer"
+        },
+        "mode": {
+          "description": "Start mode only: 'answer' (default) asks Workmate's one-shot conversation API and RETURNS its answer as text, but Workmate does not use its own tools there and cannot inspect the project. 'chat' hands the question to Workmate's agentic chat, which does use its tools and can search and edit the configuration - but its answer is rendered in the EDT chat panel for a human and is NOT returned here.",
+          "type": "string"
+        },
+        "projectName": {
+          "description": "Start mode only: optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context.",
+          "type": "string"
+        },
+        "question": {
+          "description": "Start mode: non-empty question or instruction to send to 1C:Workmate. Required when jobId is omitted; mutually exclusive with jobId.",
+          "type": "string"
+        },
+        "shareMcpTools": {
+          "description": "Start mode only: when true (the default), the question is prefixed with instructions that let Workmate call EDT-MCP's own tools through this plugin's in-process bridge, so it can inspect the real project instead of answering from general 1C knowledge. Pass false to send the question verbatim and leave Workmate on its own tools.",
+          "type": "boolean"
+        },
+        "skillName": {
+          "description": "Start mode only: optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing.",
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "description": "Start mode only: total wall-clock budget for the background job across all polls, in seconds; defaults to 300. After this budget the job becomes failed. This is not the per-call waitSeconds budget.",
+          "type": "integer"
+        },
+        "waitSeconds": {
+          "description": "Maximum time this single start or poll call may wait for completion, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget.",
+          "type": "integer"
+        },
+        "workmateArgs": {
+          "description": "Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or {\"scope\":\"eclipse\",\"code\":\"...\"}. Defaults to an empty object.",
+          "type": "string"
+        },
+        "workmateTool": {
+          "description": "Exact name of a Workmate tool to invoke directly, e.g. 'JShellSession', 'JShellManual' or 'JShell'. Passing this parameter selects the direct tool mode by itself: question and mode are not used, and no language model is involved, so the tool either runs or returns its own error.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "ask_workmate",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
     },

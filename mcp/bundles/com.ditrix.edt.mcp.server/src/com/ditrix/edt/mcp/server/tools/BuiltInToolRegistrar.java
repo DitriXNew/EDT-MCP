@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.impl.AdoptMetadataObjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.ApplyQuickFixTool;
+import com.ditrix.edt.mcp.server.tools.impl.AskWorkmateTool;
 import com.ditrix.edt.mcp.server.tools.impl.BuildExternalObjectsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateGitBranchTool;
@@ -174,6 +175,7 @@ public final class BuiltInToolRegistrar
         registry.register(new CreateLaunchConfigTool());
         registry.register(new DeleteLaunchConfigTool());
         registry.register(new RunYaxunitTestsTool());
+        registry.register(new AskWorkmateTool());
         registry.register(new TerminateLaunchTool());
 
         // Debug inspection tools (breakpoints + suspended state)

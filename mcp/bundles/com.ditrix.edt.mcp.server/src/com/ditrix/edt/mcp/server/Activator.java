@@ -6,8 +6,14 @@
 
 package com.ditrix.edt.mcp.server;
 
+import java.util.Dictionary;
+import java.util.Hashtable;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceRegistration;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.core.event.IEventBroker;
@@ -31,7 +37,10 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
 import com._1c.g5.v8.dt.rights.IRightInfosService;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com.ditrix.edt.mcp.server.groups.IGroupService;
+import com.ditrix.edt.mcp.server.bridge.EdtMcpBridge;
+import com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge;
 import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
@@ -54,6 +63,9 @@ public class Activator extends AbstractUIPlugin
     /** MCP Server instance */
     private McpServer mcpServer;
 
+    /** In-process bridge exposed to sibling OSGi bundles by string service name. */
+    private ServiceRegistration<?> bridgeRegistration;
+
     /**
      * EDT platform service access (OSGi service trackers + their getters).
      * The activator delegates each {@code getXxx} convenience method to this.
@@ -74,24 +86,42 @@ public class Activator extends AbstractUIPlugin
         plugin = this; // NOSONAR Eclipse singleton/Activator init pattern; method cannot be static
         mcpServer = new McpServer();
 
+        boolean headless = isHeadless();
+        if (!headless)
+        {
+            // Register tools before publishing the bridge so a consumer can never
+            // observe the service with a transiently empty catalogue.
+            mcpServer.registerTools();
+        }
+
+        // Publish the stable in-process bridge in every OSGi runtime, including the
+        // headless test application. It is registered under three names: the
+        // interface's STRING name (for consumers that resolve it reflectively) plus
+        // the JDK function types, so a consumer that cannot see the bridge package -
+        // an AI assistant running a JShell snippet, for instance - still gets a typed
+        // handle. The service property tells those JDK-typed lookups apart from any
+        // other BiFunction/Supplier service in the runtime.
+        Dictionary<String, Object> bridgeProperties = new Hashtable<>();
+        bridgeProperties.put(IEdtMcpBridge.SERVICE_PROPERTY, IEdtMcpBridge.SERVICE_PROPERTY_VALUE);
+        bridgeRegistration = context.registerService(
+            new String[] { IEdtMcpBridge.class.getName(), BiFunction.class.getName(),
+                Supplier.class.getName() },
+            new EdtMcpBridge(), bridgeProperties);
+
         // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
         // This prevents background platform startup races that can fail the test process.
-        if (isHeadless())
+        if (headless)
         {
             logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
             return;
         }
-
-        // Register tools eagerly so descriptions are available in the preferences UI
-        // even if the MCP server has not been started yet.
-        mcpServer.registerTools();
 
         // Initialize service trackers
         services.init(context);
 
         // Run startup orchestration (group service + UI integrations) in the
         // same order as before.
-        orchestrator.start(isHeadless());
+        orchestrator.start(headless);
 
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
     }
@@ -99,6 +129,16 @@ public class Activator extends AbstractUIPlugin
     @Override
     public void stop(BundleContext context) throws Exception
     {
+        if (bridgeRegistration != null)
+        {
+            bridgeRegistration.unregister();
+            bridgeRegistration = null;
+        }
+
+        // Cancel Workmate conversations and stop their non-UI worker/deadline threads
+        // before the bundle's services and class loader are torn down.
+        BackgroundJobs.shutdownShared();
+
         if (mcpServer != null && mcpServer.isRunning())
         {
             mcpServer.stop();
