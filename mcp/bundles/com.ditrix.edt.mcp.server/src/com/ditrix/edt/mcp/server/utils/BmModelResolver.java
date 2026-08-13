@@ -181,13 +181,14 @@ public final class BmModelResolver
          *
          * @param operationName the MCP tool the caller may retry
          * @param stateStatement what is known about the refused mutation, including punctuation
-         * @return a value-naming message with a state-check and retry action
+         * @return a value-naming message with a transient-state explanation and retry action
          */
         public String actionableError(String operationName, String stateStatement)
         {
             return "BM model is not available for project '" + unavailableProjectName + "'. " //$NON-NLS-1$ //$NON-NLS-2$
-                + stateStatement + " Use list_projects to check the project state, then retry " //$NON-NLS-1$
-                + operationName + " when the project is ready."; //$NON-NLS-1$
+                + stateStatement + " This is a transient window while EDT reopens the project's " //$NON-NLS-1$
+                + "storage; list_projects does not expose BM-model registration and will still " //$NON-NLS-1$
+                + "report the project as ready. Wait a few seconds, then retry " + operationName + "."; //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 }

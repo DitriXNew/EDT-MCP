@@ -36,8 +36,9 @@ public class BmModelResolverTest
         assertFalse(result.isAvailable());
         assertEquals("TestConfiguration", result.getUnavailableProjectName()); //$NON-NLS-1$
         assertEquals("BM model is not available for project 'TestConfiguration'. Nothing was " //$NON-NLS-1$
-            + "deleted. Use list_projects to check the project state, then retry delete_metadata " //$NON-NLS-1$
-            + "when the project is ready.", //$NON-NLS-1$
+            + "deleted. This is a transient window while EDT reopens the project's storage; " //$NON-NLS-1$
+            + "list_projects does not expose BM-model registration and will still report the " //$NON-NLS-1$
+            + "project as ready. Wait a few seconds, then retry delete_metadata.", //$NON-NLS-1$
             result.actionableError("delete_metadata", "Nothing was deleted.")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 

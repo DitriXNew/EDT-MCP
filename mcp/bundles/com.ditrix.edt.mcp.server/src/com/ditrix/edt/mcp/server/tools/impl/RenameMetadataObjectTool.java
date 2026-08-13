@@ -95,11 +95,11 @@ public class RenameMetadataObjectTool implements IMcpTool
 
     private final MetadataRenameService service = new MetadataRenameService();
 
-    /** Caller-thread settle seam; {@code true} requests EDT's dependent-model set. */
+    /** Caller-thread cascade-settle seam. */
     @FunctionalInterface
     interface CascadeSettler
     {
-        String settle(String projectName, long timeoutMs, boolean includeDependentModels);
+        String settle(String projectName, long timeoutMs);
     }
 
     private final CascadeSettler cascadeSettler;
@@ -107,14 +107,11 @@ public class RenameMetadataObjectTool implements IMcpTool
     /** Production instance: settle through the live EDT-backed project-state checker. */
     public RenameMetadataObjectTool()
     {
-        this((projectName, timeoutMs, includeDependentModels) -> includeDependentModels
-            ? ProjectStateChecker.settleBeforeCascadeOrError(projectName, timeoutMs,
-                NAME, "Nothing was renamed.") //$NON-NLS-1$
-            : ProjectStateChecker.settleBeforeTargetModelOrError(projectName, timeoutMs,
-                NAME, "Nothing was renamed.")); //$NON-NLS-1$
+        this((projectName, timeoutMs) -> ProjectStateChecker.settleBeforeCascadeOrError(projectName,
+            timeoutMs, NAME, "Nothing was renamed.")); //$NON-NLS-1$
     }
 
-    /** Package-visible test seam for selecting the model scope before the UI-thread hand-off. */
+    /** Package-visible test seam for the caller-thread settle before the UI-thread hand-off. */
     RenameMetadataObjectTool(CascadeSettler cascadeSettler)
     {
         this.cascadeSettler = cascadeSettler;
@@ -249,23 +246,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         // by draining between construction and perform - would mean releasing the UI thread in the
         // middle of a rename, which drops the serialisation that keeps a concurrent write from
         // making the built cascade stale. See issue #320.
-        // Match MetadataRenameService's dispatch before settling. A form-element rename constructs
-        // one IFormRefactoringService refactoring for the target form, so it needs the target model
-        // but must not wait for unrelated dependent models. The mdclass branch keeps EDT's complete
-        // dependent-model set. A malformed specialized FQN stays on the existing service-validation
-        // path and takes the conservative mdclass settle.
-        boolean includeDependentModels = true;
-        try
-        {
-            includeDependentModels = FormElementWriter.parse(
-                MetadataTypeUtils.normalizeFqn(objectFqn)) == null;
-        }
-        catch (RuntimeException e)
-        {
-            // Preserve the existing UI-thread validation/error path.
-        }
-        String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS,
-            includeDependentModels);
+        String building = cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
         if (building != null)
         {
             return ToolResult.error(building).toJson();

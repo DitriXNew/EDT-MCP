@@ -80,17 +80,15 @@ public class RenameMetadataObjectToolTest
     }
 
     @Test
-    public void testFormElementRenameSettlesOnlyTheTargetModel()
+    public void testFormElementRenamePropagatesDependentModelSettleRefusal()
     {
-        AtomicBoolean includeDependentModels = new AtomicBoolean(true);
         AtomicBoolean settled = new AtomicBoolean(false);
-        String settleError = "target-model settle sentinel"; //$NON-NLS-1$
+        String settleError = "BM model is not available for project 'DemoExtension'."; //$NON-NLS-1$
         RenameMetadataObjectTool tool = new RenameMetadataObjectTool(
-            (projectName, timeoutMs, includeDependents) ->
+            (projectName, timeoutMs) ->
             {
                 assertEquals("Demo", projectName); //$NON-NLS-1$
                 settled.set(true);
-                includeDependentModels.set(includeDependents);
                 return settleError;
             });
         Map<String, String> params = new HashMap<>();
@@ -101,9 +99,7 @@ public class RenameMetadataObjectToolTest
         String result = tool.execute(params);
 
         assertTrue("the caller-thread settle must run before the workbench hand-off", settled.get()); //$NON-NLS-1$
-        assertFalse("a single-form refactoring must not request dependent BM models", //$NON-NLS-1$
-            includeDependentModels.get());
-        assertTrue("the settle refusal must stop the rename before the UI thread: " + result, //$NON-NLS-1$
+        assertTrue("a dependent-model refusal must stop the form rename before the UI thread: " + result, //$NON-NLS-1$
             result.contains(settleError));
     }
 

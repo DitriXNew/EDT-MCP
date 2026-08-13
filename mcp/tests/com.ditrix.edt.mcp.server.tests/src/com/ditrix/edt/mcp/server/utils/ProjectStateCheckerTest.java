@@ -96,7 +96,6 @@ public class ProjectStateCheckerTest
         CascadeEnvironment env = mock(CascadeEnvironment.class);
         when(env.hasBmModelProjectNature(any(IProject.class))).thenReturn(null);
         when(env.resolveModelsForRefactoring(any(IProject.class))).thenReturn(available);
-        when(env.resolveTargetModel(any(IProject.class))).thenReturn(available);
         return env;
     }
 
@@ -117,17 +116,24 @@ public class ProjectStateCheckerTest
     }
 
     @Test
-    public void targetModelSettleDoesNotConsultDependentModels()
+    public void formRenameSettleRefusesWhenADependentModelIsMissing()
     {
         IProject project = mockOpenProject("FormProject"); //$NON-NLS-1$
+        IProject dependent = mockOpenProject("FormProjectExtension"); //$NON-NLS-1$
+        IBmModelManager modelManager = mock(IBmModelManager.class);
+        when(modelManager.getModel(dependent)).thenReturn(null);
+        BmModelResolver.Resolution unavailable = BmModelResolver.resolve(dependent, modelManager);
         CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.resolveModelsForRefactoring(project)).thenReturn(unavailable);
+        when(env.waitBeforeModelRetry(anyLong())).thenReturn(false);
 
-        String result = ProjectStateChecker.settleBeforeTargetModelOrError(project,
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(project,
             SETTLE_TIMEOUT_MS, env, "rename_metadata_object", "Nothing was renamed."); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertNull(result);
-        verify(env).resolveTargetModel(project);
-        verify(env, never()).resolveModelsForRefactoring(any(IProject.class));
+        assertTrue("the form rename must be refused by the missing dependent model: " + result, //$NON-NLS-1$
+            result.contains("project 'FormProjectExtension'")); //$NON-NLS-1$
+        verify(env).resolveModelsForRefactoring(project);
+        verify(env).waitBeforeModelRetry(anyLong());
     }
 
     @Test
@@ -218,6 +224,114 @@ public class ProjectStateCheckerTest
     }
 
     @Test
+    public void expiredDeadlineChecksIdleParticipantsWithoutWaitingOrRefusing()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject initialParticipant = mockOpenProject("InitialExtension"); //$NON-NLS-1$
+        IProject rediscoveredParticipant = mockOpenProject("RediscoveredExtension"); //$NON-NLS-1$
+
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.getOpenDtProjects()).thenReturn(Collections.singletonList(initialParticipant),
+            Arrays.asList(initialParticipant, rediscoveredParticipant));
+        when(env.isExtensionProject(initialParticipant)).thenReturn(true);
+        when(env.isExtensionProject(rediscoveredParticipant)).thenReturn(true);
+        when(env.resolveBaseProject(initialParticipant)).thenReturn(base);
+        when(env.resolveBaseProject(rediscoveredParticipant)).thenReturn(base);
+        when(env.isBuilding(initialParticipant)).thenReturn(false);
+        when(env.isBuilding(rediscoveredParticipant)).thenReturn(false);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base, 0L, env);
+
+        assertNull(result);
+        verify(env, never()).waitForDerivedData(eq(initialParticipant), anyLong());
+        verify(env, never()).waitForDerivedData(eq(rediscoveredParticipant), anyLong());
+        verify(env).isBuilding(initialParticipant);
+        verify(env).isBuilding(rediscoveredParticipant);
+    }
+
+    @Test
+    public void expiredDeadlineRefusesRediscoveredBuildingParticipantByName()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject participant = mockOpenProject("RestartedExtension"); //$NON-NLS-1$
+
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.getOpenDtProjects()).thenReturn(Collections.emptyList(),
+            Collections.singletonList(participant));
+        when(env.isExtensionProject(participant)).thenReturn(true);
+        when(env.resolveBaseProject(participant)).thenReturn(base);
+        when(env.isBuilding(participant)).thenReturn(true);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base, 0L, env);
+
+        assertTrue("must refuse the participant that is actually still building", result != null); //$NON-NLS-1$
+        assertTrue("the refusal must name the building participant: " + result, //$NON-NLS-1$
+            result.contains("RestartedExtension")); //$NON-NLS-1$
+        verify(env, never()).waitForDerivedData(eq(participant), anyLong());
+        verify(env).isBuilding(participant);
+    }
+
+    @Test
+    public void lastDiscoveryChecksEveryNewParticipantBeforeProceeding()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject firstPassParticipant = mockOpenProject("FirstPassExtension"); //$NON-NLS-1$
+        IProject secondPassParticipant = mockOpenProject("SecondPassExtension"); //$NON-NLS-1$
+        IProject finalIdleParticipant = mockOpenProject("FinalIdleExtension"); //$NON-NLS-1$
+        IProject finalBuildingParticipant = mockOpenProject("FinalBuildingExtension"); //$NON-NLS-1$
+
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.getOpenDtProjects()).thenReturn(Collections.emptyList(),
+            Collections.singletonList(firstPassParticipant),
+            Collections.singletonList(firstPassParticipant),
+            Arrays.asList(firstPassParticipant, secondPassParticipant),
+            Arrays.asList(firstPassParticipant, secondPassParticipant),
+            Arrays.asList(firstPassParticipant, secondPassParticipant, finalIdleParticipant,
+                finalBuildingParticipant));
+        for (IProject participant : Arrays.asList(firstPassParticipant, secondPassParticipant,
+            finalIdleParticipant, finalBuildingParticipant))
+        {
+            when(env.isExtensionProject(participant)).thenReturn(true);
+            when(env.resolveBaseProject(participant)).thenReturn(base);
+        }
+        when(env.isBuilding(firstPassParticipant)).thenReturn(false);
+        when(env.isBuilding(secondPassParticipant)).thenReturn(false);
+        when(env.isBuilding(finalIdleParticipant)).thenReturn(false);
+        when(env.isBuilding(finalBuildingParticipant)).thenReturn(true);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base,
+            SETTLE_TIMEOUT_MS, env);
+
+        assertTrue("the last discovery must refuse a later participant that is building", //$NON-NLS-1$
+            result != null);
+        assertTrue("the refusal must name the second newly discovered participant: " + result, //$NON-NLS-1$
+            result.contains("FinalBuildingExtension")); //$NON-NLS-1$
+        verify(env).isBuilding(finalIdleParticipant);
+        verify(env).isBuilding(finalBuildingParticipant);
+    }
+
+    @Test
+    public void participantThatReappearsDuringModelRegistrationIsDrainedAndChecked()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        IProject restartedExtension = mockOpenProject("RestartedExtension"); //$NON-NLS-1$
+
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        when(env.getOpenDtProjects()).thenReturn(Collections.emptyList(),
+            Collections.singletonList(restartedExtension));
+        when(env.isExtensionProject(restartedExtension)).thenReturn(true);
+        when(env.resolveBaseProject(restartedExtension)).thenReturn(base);
+        when(env.isBuilding(restartedExtension)).thenReturn(false);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base,
+            SETTLE_TIMEOUT_MS, env);
+
+        assertNull(result);
+        verify(env).waitForDerivedData(eq(restartedExtension), anyLong());
+        verify(env).isBuilding(restartedExtension);
+    }
+
+    @Test
     public void settledFollowUpAfterStaleBuildingProbeStillChecksModels()
     {
         IProject base = mockOpenProject("Base"); //$NON-NLS-1$
@@ -304,8 +418,9 @@ public class ProjectStateCheckerTest
             "delete_metadata", "Nothing was deleted."); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertEquals("BM model is not available for project 'DependentConfiguration'. Nothing was " //$NON-NLS-1$
-            + "deleted. Use list_projects to check the project state, then retry delete_metadata " //$NON-NLS-1$
-            + "when the project is ready.", result); //$NON-NLS-1$
+            + "deleted. This is a transient window while EDT reopens the project's storage; " //$NON-NLS-1$
+            + "list_projects does not expose BM-model registration and will still report the " //$NON-NLS-1$
+            + "project as ready. Wait a few seconds, then retry delete_metadata.", result); //$NON-NLS-1$
     }
 
     @Test

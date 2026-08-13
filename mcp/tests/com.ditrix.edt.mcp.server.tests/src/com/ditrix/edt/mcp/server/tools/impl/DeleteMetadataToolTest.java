@@ -78,8 +78,10 @@ public class DeleteMetadataToolTest
         JsonObject result = JsonParser.parseString(json).getAsJsonObject();
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals("BM model is not available for project 'TestConfiguration'. Nothing was " //$NON-NLS-1$
-            + "deleted. Use list_projects to check the project state, then retry delete_metadata " //$NON-NLS-1$
-            + "when the project is ready.", result.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+            + "deleted. This is a transient window while EDT reopens the project's storage; " //$NON-NLS-1$
+            + "list_projects does not expose BM-model registration and will still report the " //$NON-NLS-1$
+            + "project as ready. Wait a few seconds, then retry delete_metadata.", //$NON-NLS-1$
+            result.get("error").getAsString()); //$NON-NLS-1$
         verify(refactoringService, never()).createMdObjectDeleteRefactoring(
             org.mockito.ArgumentMatchers.anyCollection());
     }
@@ -88,8 +90,9 @@ public class DeleteMetadataToolTest
     public void testMdClassDeleteSettlesBeforeCallingEdtRefactoring()
     {
         String settleError = "BM model is not available for project 'DependentConfiguration'. " //$NON-NLS-1$
-            + "Nothing was deleted. Use list_projects to check the project state, then retry " //$NON-NLS-1$
-            + "delete_metadata when the project is ready."; //$NON-NLS-1$
+            + "Nothing was deleted. This is a transient window while EDT reopens the project's " //$NON-NLS-1$
+            + "storage; list_projects does not expose BM-model registration and will still report " //$NON-NLS-1$
+            + "the project as ready. Wait a few seconds, then retry delete_metadata."; //$NON-NLS-1$
         String[] settledProject = {null};
         long[] settledTimeout = {0L};
         DeleteMetadataTool.CascadeSettler settler = (projectName, timeoutMs) ->

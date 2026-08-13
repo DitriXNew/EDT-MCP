@@ -8,7 +8,9 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 
@@ -27,6 +29,9 @@ public final class ProjectStateChecker
 {
     /** Poll interval while EDT is reopening project storage and registering BM models. */
     private static final long MODEL_REGISTRATION_POLL_MS = 50L;
+
+    /** Bounds participant re-discovery when EDT project contexts keep changing. */
+    private static final int MAX_PARTICIPANT_DISCOVERY_PASSES = 3;
 
     /**
      * Persistent project-description natures declared by EDT 2026.1 for projects that can own a BM
@@ -319,31 +324,6 @@ public final class ProjectStateChecker
     }
 
     /**
-     * Form-refactoring settle variant. EDT's form branch builds one refactoring for the target form
-     * through {@code IFormRefactoringService}; it does not execute the mdclass service's dependent-
-     * model mapping. Derived data is still drained under the shared deadline, but only the target
-     * project's BM model is required.
-     *
-     * @param projectName the project containing the target form
-     * @param settleTimeoutMs how long to wait for derived data and target-model registration
-     * @param operationName the MCP tool the caller may retry
-     * @param stateStatement what is known about the refused mutation, including punctuation
-     * @return an actionable error, or {@code null} when the form refactoring may proceed
-     */
-    public static String settleBeforeTargetModelOrError(String projectName, long settleTimeoutMs,
-        String operationName, String stateStatement)
-    {
-        if (projectName == null || projectName.isEmpty())
-        {
-            return null;
-        }
-        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
-            .getRoot().getProject(projectName);
-        return settleBeforeCascadeOrError(project, settleTimeoutMs, CascadeEnvironment.DEFAULT,
-            operationName, stateStatement, false);
-    }
-
-    /**
      * Seam-taking variant of {@link #settleBeforeCascadeOrError(String, long)}, package-visible so a
      * unit test can drive it with a fake {@link CascadeEnvironment} and no live workspace / EDT
      * services. Production code only ever reaches this through the {@code (String, long)} overload,
@@ -363,22 +343,6 @@ public final class ProjectStateChecker
     /** Package-visible operation-aware seam for headless cascade-settle tests. */
     static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
         CascadeEnvironment env, String operationName, String stateStatement)
-    {
-        return settleBeforeCascadeOrError(project, settleTimeoutMs, env, operationName,
-            stateStatement, true);
-    }
-
-    /** Package-visible target-model-only seam for headless form-refactoring settle tests. */
-    static String settleBeforeTargetModelOrError(IProject project, long settleTimeoutMs,
-        CascadeEnvironment env, String operationName, String stateStatement)
-    {
-        return settleBeforeCascadeOrError(project, settleTimeoutMs, env, operationName,
-            stateStatement, false);
-    }
-
-    private static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
-        CascadeEnvironment env, String operationName, String stateStatement,
-        boolean includeDependentModels)
     {
         if (!project.exists() || !project.isOpen())
         {
@@ -407,35 +371,65 @@ public final class ProjectStateChecker
         // the wait. An unrelated open project takes no part in the refactoring and cannot collide
         // with its batch session, so it is never drained or asked about here: one slow, unrelated
         // project must not eat the shared deadline and delay a rename of an otherwise-ready project.
-        String stillBuilding = drainParticipants(project, deadline, env);
-        String building = env.buildingErrorOrNull(project);
-        if (building != null)
+        Set<String> settledParticipantNames = new HashSet<>();
+        for (int pass = 0; pass < MAX_PARTICIPANT_DISCOVERY_PASSES; pass++)
         {
-            return building;
-        }
-        // A PARTICIPATING extension that did not settle is refused like the base project would be:
-        // the cascade is about to enter its refactoring too.
-        if (stillBuilding != null)
-        {
-            return stillBuilding;
-        }
+            String stillBuilding = drainParticipants(project, deadline, env,
+                settledParticipantNames);
+            String building = env.buildingErrorOrNull(project);
+            if (building != null)
+            {
+                return building;
+            }
+            // A PARTICIPATING extension that did not settle is refused like the base project would be:
+            // the cascade is about to enter its refactoring too.
+            if (stillBuilding != null)
+            {
+                return stillBuilding;
+            }
 
-        // Derived data and BM-model registration are separate EDT lifecycles. A storage reopen can
-        // leave the target or one of EDT's dependent refactoring projects without a registered model
-        // after the index is already READY. Poll the shared resolver under the SAME deadline so a
-        // transient close/reopen window is waited out, while a model that never returns produces the
-        // same actionable refusal as the final guard at the refactoring call site.
-        return waitForRefactoringModels(project, deadline, env, operationName, stateStatement,
-            includeDependentModels);
+            // Derived data and BM-model registration are separate EDT lifecycles. A storage reopen can
+            // leave the target or one of EDT's dependent refactoring projects without a registered model
+            // after the index is already READY. Both mdclass and form refactorings go through the same
+            // RefactoringService, which collects dependent models identically, so both wait for the
+            // complete refactoring-model set under the SAME deadline.
+            String modelError = waitForRefactoringModels(project, deadline, env, operationName,
+                stateStatement);
+            if (modelError != null)
+            {
+                return modelError;
+            }
+
+            // A project context may have been invisible to getOpenDtProjects() while its storage was
+            // restarting, then become visible while model registration was polled. Re-discover after
+            // that wait and drain every newly visible participant before allowing the cascade through.
+            List<IProject> unserved = findUnsettledParticipants(project, env,
+                settledParticipantNames);
+            if (unserved.isEmpty())
+            {
+                return null;
+            }
+            if (pass + 1 >= MAX_PARTICIPANT_DISCOVERY_PASSES
+                || deadline - System.currentTimeMillis() <= 0)
+            {
+                for (IProject participant : unserved)
+                {
+                    if (env.isBuilding(participant))
+                    {
+                        return participantBuildingError(project, participant);
+                    }
+                    settledParticipantNames.add(participant.getName());
+                }
+                return null;
+            }
+        }
+        return null;
     }
 
     private static String waitForRefactoringModels(IProject project, long deadline,
-        CascadeEnvironment env, String operationName, String stateStatement,
-        boolean includeDependentModels)
+        CascadeEnvironment env, String operationName, String stateStatement)
     {
-        BmModelResolver.Resolution resolution = includeDependentModels
-            ? env.resolveModelsForRefactoring(project)
-            : env.resolveTargetModel(project);
+        BmModelResolver.Resolution resolution = env.resolveModelsForRefactoring(project);
         while (!resolution.isAvailable())
         {
             long remaining = deadline - System.currentTimeMillis();
@@ -448,9 +442,7 @@ public final class ProjectStateChecker
             {
                 return resolution.actionableError(operationName, stateStatement);
             }
-            resolution = includeDependentModels
-                ? env.resolveModelsForRefactoring(project)
-                : env.resolveTargetModel(project);
+            resolution = env.resolveModelsForRefactoring(project);
         }
         return null;
     }
@@ -472,12 +464,35 @@ public final class ProjectStateChecker
      * @return the retryable message for a PARTICIPATING extension that is still building (naming
      *         it), or {@code null} when every participant settled
      */
-    private static String drainParticipants(IProject base, long deadline, CascadeEnvironment env)
+    private static String drainParticipants(IProject base, long deadline, CascadeEnvironment env,
+        Set<String> settledParticipantNames)
+    {
+        for (IProject participant : findUnsettledParticipants(base, env, settledParticipantNames))
+        {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining > 0)
+            {
+                env.waitForDerivedData(participant, remaining);
+            }
+            // Checked after the drain attempt and REGARDLESS of the remaining time: running out of
+            // deadline is not a reason to stop asking whether a participant is ready - it only
+            // prevents another wait.
+            if (env.isBuilding(participant))
+            {
+                return participantBuildingError(base, participant);
+            }
+            settledParticipantNames.add(participant.getName());
+        }
+        return null;
+    }
+
+    private static List<IProject> findUnsettledParticipants(IProject base, CascadeEnvironment env,
+        Set<String> settledParticipantNames)
     {
         List<IProject> participants = new ArrayList<>();
         for (IProject candidate : env.getOpenDtProjects())
         {
-            if (candidate.equals(base))
+            if (candidate.equals(base) || settledParticipantNames.contains(candidate.getName()))
             {
                 continue;
             }
@@ -486,39 +501,20 @@ public final class ProjectStateChecker
                 participants.add(candidate);
             }
         }
-        drainAll(participants, deadline, env);
-        // Checked AFTER the drain and REGARDLESS of the remaining time: running out of deadline
-        // is not a reason to stop asking whether a participant is ready - it is a reason to say so.
-        for (IProject participant : participants)
-        {
-            if (env.isBuilding(participant))
-            {
-                return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
-                    + "' and is still building, so it takes part in this cascade with an " //$NON-NLS-1$
-                    + "incomplete index. Please wait and retry."; //$NON-NLS-1$
-            }
-        }
-        return null;
+        return participants;
     }
 
-    /** Drains each project in turn, giving up as soon as the shared deadline is spent. */
-    private static void drainAll(List<IProject> projects, long deadline, CascadeEnvironment env)
+    private static String participantBuildingError(IProject base, IProject participant)
     {
-        for (IProject project : projects)
-        {
-            long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0)
-            {
-                return;
-            }
-            env.waitForDerivedData(project, remaining);
-        }
+        return "Project '" + participant.getName() + "' extends '" + base.getName() //$NON-NLS-1$
+            + "' and is still building, so it takes part in this cascade with an " //$NON-NLS-1$
+            + "incomplete index. Please wait and retry."; //$NON-NLS-1$
     }
 
     /**
      * Seam over the workspace / derived-data services the cascade pre-flight needs, so a unit
-     * test can substitute a fake and exercise {@link #drainParticipants(IProject, long,
-     * CascadeEnvironment)} (and {@link #settleBeforeCascadeOrError(IProject, long,
+     * test can substitute a fake and exercise {@code drainParticipants} (and
+     * {@link #settleBeforeCascadeOrError(IProject, long,
      * CascadeEnvironment)}) with no live workspace. {@link #DEFAULT} delegates to the same EDT
      * services ({@link IDtProjectManager}, {@link ExtensionOriginUtils#resolveBaseProject(IProject)},
      * {@link BuildUtils#waitForDerivedData(IProject, long)},
@@ -570,9 +566,6 @@ public final class ProjectStateChecker
 
         /** Resolves all BM models EDT will map while constructing this project's refactoring. */
         BmModelResolver.Resolution resolveModelsForRefactoring(IProject project);
-
-        /** Resolves only the target project's BM model for a single-form refactoring. */
-        BmModelResolver.Resolution resolveTargetModel(IProject project);
 
         /** Waits before another BM-model resolution attempt; {@code false} means the wait was interrupted. */
         boolean waitBeforeModelRetry(long timeoutMs);
@@ -641,12 +634,6 @@ public final class ProjectStateChecker
             public BmModelResolver.Resolution resolveModelsForRefactoring(IProject project)
             {
                 return BmModelResolver.resolveForRefactoring(project);
-            }
-
-            @Override
-            public BmModelResolver.Resolution resolveTargetModel(IProject project)
-            {
-                return BmModelResolver.resolve(project);
             }
 
             @Override

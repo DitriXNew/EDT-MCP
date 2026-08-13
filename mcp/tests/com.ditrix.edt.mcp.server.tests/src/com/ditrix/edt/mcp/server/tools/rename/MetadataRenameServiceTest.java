@@ -86,8 +86,9 @@ public class MetadataRenameServiceTest
         JsonObject result = JsonParser.parseString(json).getAsJsonObject();
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals("BM model is not available for project 'DependentConfiguration'. Nothing was " //$NON-NLS-1$
-            + "renamed. Use list_projects to check the project state, then retry " //$NON-NLS-1$
-            + "rename_metadata_object when the project is ready.", //$NON-NLS-1$
+            + "renamed. This is a transient window while EDT reopens the project's storage; " //$NON-NLS-1$
+            + "list_projects does not expose BM-model registration and will still report the " //$NON-NLS-1$
+            + "project as ready. Wait a few seconds, then retry rename_metadata_object.", //$NON-NLS-1$
             result.get("error").getAsString()); //$NON-NLS-1$
         verify(refactoringService, never()).createMdObjectRenameRefactoring(
             org.mockito.ArgumentMatchers.any(MdObject.class),
