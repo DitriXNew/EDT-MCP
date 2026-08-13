@@ -94,8 +94,40 @@ public class ProjectStateCheckerTest
         when(modelManager.getModel(project)).thenReturn(mock(IBmModel.class));
         BmModelResolver.Resolution available = BmModelResolver.resolve(project, modelManager);
         CascadeEnvironment env = mock(CascadeEnvironment.class);
+        when(env.hasBmModelProjectNature(any(IProject.class))).thenReturn(null);
         when(env.resolveModelsForRefactoring(any(IProject.class))).thenReturn(available);
+        when(env.resolveTargetModel(any(IProject.class))).thenReturn(available);
         return env;
+    }
+
+    @Test
+    public void openNonEdtProjectSkipsBmModelPolling()
+    {
+        IProject project = mockOpenProject("PlainJavaProject"); //$NON-NLS-1$
+        CascadeEnvironment env = mock(CascadeEnvironment.class);
+        when(env.hasBmModelProjectNature(project)).thenReturn(Boolean.FALSE);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(project,
+            SETTLE_TIMEOUT_MS, env);
+
+        assertNull(result);
+        verify(env, never()).waitForDerivedData(any(IProject.class), anyLong());
+        verify(env, never()).resolveModelsForRefactoring(any(IProject.class));
+        verify(env, never()).waitBeforeModelRetry(anyLong());
+    }
+
+    @Test
+    public void targetModelSettleDoesNotConsultDependentModels()
+    {
+        IProject project = mockOpenProject("FormProject"); //$NON-NLS-1$
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+
+        String result = ProjectStateChecker.settleBeforeTargetModelOrError(project,
+            SETTLE_TIMEOUT_MS, env, "rename_metadata_object", "Nothing was renamed."); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(result);
+        verify(env).resolveTargetModel(project);
+        verify(env, never()).resolveModelsForRefactoring(any(IProject.class));
     }
 
     @Test
@@ -183,6 +215,24 @@ public class ProjectStateCheckerTest
 
         assertNull(result);
         verify(env).waitForDerivedData(eq(participant), anyLong());
+    }
+
+    @Test
+    public void settledFollowUpAfterStaleBuildingProbeStillChecksModels()
+    {
+        IProject base = mockOpenProject("Base"); //$NON-NLS-1$
+        CascadeEnvironment env = mockEnvironmentWithAvailableModels();
+        // Pin the review interleaving: the old first probe said BUILDING, while the actionable
+        // follow-up already says settled. Returning that null directly used to bypass model waiting.
+        when(env.isBuilding(base)).thenReturn(true);
+        when(env.buildingErrorOrNull(base)).thenReturn(null);
+
+        String result = ProjectStateChecker.settleBeforeCascadeOrError(base, SETTLE_TIMEOUT_MS, env);
+
+        assertNull(result);
+        verify(env, never()).isBuilding(base);
+        verify(env).buildingErrorOrNull(base);
+        verify(env).resolveModelsForRefactoring(base);
     }
 
     @Test

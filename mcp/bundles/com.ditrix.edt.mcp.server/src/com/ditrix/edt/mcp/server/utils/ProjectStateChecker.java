@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.eclipse.core.resources.IProject;
@@ -26,6 +27,19 @@ public final class ProjectStateChecker
 {
     /** Poll interval while EDT is reopening project storage and registering BM models. */
     private static final long MODEL_REGISTRATION_POLL_MS = 50L;
+
+    /**
+     * Persistent project-description natures declared by EDT 2026.1 for projects that can own a BM
+     * model. Unlike {@link IDtProjectManager#getDtProject(IProject)} and
+     * {@code IV8ProjectManager.getProjects()}, these do not disappear when EDT disposes and restarts a
+     * project context: EDT's source removes both runtime registrations during disposal, while the
+     * nature IDs remain in the Eclipse {@code .project} description until the project is converted or
+     * deleted. That makes the nature the safe permanent/non-EDT discriminator for this bounded wait.
+     */
+    private static final List<String> BM_MODEL_PROJECT_NATURES = Arrays.asList(
+        "com._1c.g5.v8.dt.core.V8ConfigurationNature", //$NON-NLS-1$
+        "com._1c.g5.v8.dt.core.V8ExtensionNature", //$NON-NLS-1$
+        "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"); //$NON-NLS-1$
 
     /**
      * Project state enumeration.
@@ -305,6 +319,31 @@ public final class ProjectStateChecker
     }
 
     /**
+     * Form-refactoring settle variant. EDT's form branch builds one refactoring for the target form
+     * through {@code IFormRefactoringService}; it does not execute the mdclass service's dependent-
+     * model mapping. Derived data is still drained under the shared deadline, but only the target
+     * project's BM model is required.
+     *
+     * @param projectName the project containing the target form
+     * @param settleTimeoutMs how long to wait for derived data and target-model registration
+     * @param operationName the MCP tool the caller may retry
+     * @param stateStatement what is known about the refused mutation, including punctuation
+     * @return an actionable error, or {@code null} when the form refactoring may proceed
+     */
+    public static String settleBeforeTargetModelOrError(String projectName, long settleTimeoutMs,
+        String operationName, String stateStatement)
+    {
+        if (projectName == null || projectName.isEmpty())
+        {
+            return null;
+        }
+        IProject project = org.eclipse.core.resources.ResourcesPlugin.getWorkspace()
+            .getRoot().getProject(projectName);
+        return settleBeforeCascadeOrError(project, settleTimeoutMs, CascadeEnvironment.DEFAULT,
+            operationName, stateStatement, false);
+    }
+
+    /**
      * Seam-taking variant of {@link #settleBeforeCascadeOrError(String, long)}, package-visible so a
      * unit test can drive it with a fake {@link CascadeEnvironment} and no live workspace / EDT
      * services. Production code only ever reaches this through the {@code (String, long)} overload,
@@ -325,11 +364,33 @@ public final class ProjectStateChecker
     static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
         CascadeEnvironment env, String operationName, String stateStatement)
     {
+        return settleBeforeCascadeOrError(project, settleTimeoutMs, env, operationName,
+            stateStatement, true);
+    }
+
+    /** Package-visible target-model-only seam for headless form-refactoring settle tests. */
+    static String settleBeforeTargetModelOrError(IProject project, long settleTimeoutMs,
+        CascadeEnvironment env, String operationName, String stateStatement)
+    {
+        return settleBeforeCascadeOrError(project, settleTimeoutMs, env, operationName,
+            stateStatement, false);
+    }
+
+    private static String settleBeforeCascadeOrError(IProject project, long settleTimeoutMs,
+        CascadeEnvironment env, String operationName, String stateStatement,
+        boolean includeDependentModels)
+    {
         if (!project.exists() || !project.isOpen())
         {
             // Nothing to drain, and asking anyway can block on a project EDT is still disposing.
             // A missing / closed project is not this method's error to report either - the caller's
             // own resolution names the value ("Project not found: X").
+            return null;
+        }
+        if (Boolean.FALSE.equals(env.hasBmModelProjectNature(project)))
+        {
+            // This is permanently outside EDT; let the caller's project/configuration validation
+            // produce its established error instead of advising a retry that can never succeed.
             return null;
         }
         // Drain UNCONDITIONALLY - do not gate this on the instant probe. On the CI run that
@@ -347,10 +408,10 @@ public final class ProjectStateChecker
         // with its batch session, so it is never drained or asked about here: one slow, unrelated
         // project must not eat the shared deadline and delay a rename of an otherwise-ready project.
         String stillBuilding = drainParticipants(project, deadline, env);
-        if (env.isBuilding(project))
+        String building = env.buildingErrorOrNull(project);
+        if (building != null)
         {
-            // Shaped by buildingErrorOrNull, the single place that composes this message.
-            return buildingErrorOrNull(project);
+            return building;
         }
         // A PARTICIPATING extension that did not settle is refused like the base project would be:
         // the cascade is about to enter its refactoring too.
@@ -364,13 +425,17 @@ public final class ProjectStateChecker
         // after the index is already READY. Poll the shared resolver under the SAME deadline so a
         // transient close/reopen window is waited out, while a model that never returns produces the
         // same actionable refusal as the final guard at the refactoring call site.
-        return waitForRefactoringModels(project, deadline, env, operationName, stateStatement);
+        return waitForRefactoringModels(project, deadline, env, operationName, stateStatement,
+            includeDependentModels);
     }
 
     private static String waitForRefactoringModels(IProject project, long deadline,
-        CascadeEnvironment env, String operationName, String stateStatement)
+        CascadeEnvironment env, String operationName, String stateStatement,
+        boolean includeDependentModels)
     {
-        BmModelResolver.Resolution resolution = env.resolveModelsForRefactoring(project);
+        BmModelResolver.Resolution resolution = includeDependentModels
+            ? env.resolveModelsForRefactoring(project)
+            : env.resolveTargetModel(project);
         while (!resolution.isAvailable())
         {
             long remaining = deadline - System.currentTimeMillis();
@@ -383,7 +448,9 @@ public final class ProjectStateChecker
             {
                 return resolution.actionableError(operationName, stateStatement);
             }
-            resolution = env.resolveModelsForRefactoring(project);
+            resolution = includeDependentModels
+                ? env.resolveModelsForRefactoring(project)
+                : env.resolveTargetModel(project);
         }
         return null;
     }
@@ -492,8 +559,20 @@ public final class ProjectStateChecker
         /** Whether {@code project}'s derived-data pipeline is still (transiently) building. */
         boolean isBuilding(IProject project);
 
+        /** The target project's actionable build error, or {@code null} when it has settled. */
+        String buildingErrorOrNull(IProject project);
+
+        /**
+         * Whether the persistent project description carries an EDT nature that can own a BM model.
+         * {@code null} means the description could not be read, which is not proof of a non-EDT project.
+         */
+        Boolean hasBmModelProjectNature(IProject project);
+
         /** Resolves all BM models EDT will map while constructing this project's refactoring. */
         BmModelResolver.Resolution resolveModelsForRefactoring(IProject project);
+
+        /** Resolves only the target project's BM model for a single-form refactoring. */
+        BmModelResolver.Resolution resolveTargetModel(IProject project);
 
         /** Waits before another BM-model resolution attempt; {@code false} means the wait was interrupted. */
         boolean waitBeforeModelRetry(long timeoutMs);
@@ -547,9 +626,27 @@ public final class ProjectStateChecker
             }
 
             @Override
+            public String buildingErrorOrNull(IProject project)
+            {
+                return ProjectStateChecker.buildingErrorOrNull(project);
+            }
+
+            @Override
+            public Boolean hasBmModelProjectNature(IProject project)
+            {
+                return ProjectContext.hasAnyNature(project, BM_MODEL_PROJECT_NATURES);
+            }
+
+            @Override
             public BmModelResolver.Resolution resolveModelsForRefactoring(IProject project)
             {
                 return BmModelResolver.resolveForRefactoring(project);
+            }
+
+            @Override
+            public BmModelResolver.Resolution resolveTargetModel(IProject project)
+            {
+                return BmModelResolver.resolve(project);
             }
 
             @Override

@@ -80,6 +80,34 @@ public class RenameMetadataObjectToolTest
     }
 
     @Test
+    public void testFormElementRenameSettlesOnlyTheTargetModel()
+    {
+        AtomicBoolean includeDependentModels = new AtomicBoolean(true);
+        AtomicBoolean settled = new AtomicBoolean(false);
+        String settleError = "target-model settle sentinel"; //$NON-NLS-1$
+        RenameMetadataObjectTool tool = new RenameMetadataObjectTool(
+            (projectName, timeoutMs, includeDependents) ->
+            {
+                assertEquals("Demo", projectName); //$NON-NLS-1$
+                settled.set(true);
+                includeDependentModels.set(includeDependents);
+                return settleError;
+            });
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectFqn", "Catalog.Products.Form.ItemForm.Field.Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("newName", "Cost"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+
+        assertTrue("the caller-thread settle must run before the workbench hand-off", settled.get()); //$NON-NLS-1$
+        assertFalse("a single-form refactoring must not request dependent BM models", //$NON-NLS-1$
+            includeDependentModels.get());
+        assertTrue("the settle refusal must stop the rename before the UI thread: " + result, //$NON-NLS-1$
+            result.contains(settleError));
+    }
+
+    @Test
     public void testSchemaDeclaresParameters()
     {
         String schema = new RenameMetadataObjectTool().getInputSchema();
