@@ -30,6 +30,12 @@
   and the answer is rendered in the EDT chat panel for a human, so it is **not**
   returned through MCP - the job completes with a handoff note. Prefer `answer`
   unless a human should carry the conversation on in the panel.
+- `shareMcpTools` prefixes the question with the instructions Workmate needs to
+  call EDT-MCP's tools through this plugin's in-process bridge. It defaults to
+  true for `answer`, where nothing else would tell Workmate the bridge exists,
+  and to false for `chat`, which loads the project's own `.workmate` rules and
+  already finds the same instructions there. Pass it explicitly for a chat on a
+  project that carries no such rules.
 - `workmateTool` runs one of Workmate's OWN tools directly, with no language
   model in the loop, so the tool either runs or returns its own error. Pass the
   exact tool name, for example `JShellSession`, `JShellManual` or `JShell`.

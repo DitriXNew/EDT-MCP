@@ -157,6 +157,23 @@ public final class BackgroundJobs implements AutoCloseable
     public interface ProgressReporter
     {
         void add(String message);
+
+        /**
+         * Declares that the work has passed the point where it can still be abandoned, so the
+         * deadline must stop reporting a retryable failure for it.
+         * <p>
+         * Work that hands something to another thread - EDT's SWT thread, a remote service -
+         * cannot take it back once it is handed over. Publishing "timed out, start a new job"
+         * for such a job invites a retry that performs the SAME action a second time. After
+         * this call the total budget can still be exceeded, but the outcome is whatever the
+         * work reports, not a manufactured failure.
+         * <p>
+         * The work stays responsible for terminating on its own: nothing cancels it afterwards.
+         */
+        default void markCommitted()
+        {
+            // Nothing to do for work that can always be abandoned.
+        }
     }
 
     /** Work submitted to the registry. */
@@ -289,17 +306,22 @@ public final class BackgroundJobs implements AutoCloseable
             inFlight.incrementAndGet();
         }
 
-        FutureTask<Void> task = new FutureTask<>(() -> {
-            try
+        FutureTask<Void> task = new FutureTask<Void>(() -> {
+            runWork(record, work);
+            return null;
+        })
+        {
+            @Override
+            protected void done()
             {
-                runWork(record, work);
-            }
-            finally
-            {
+                // Exactly once, on EVERY terminal transition - including a cancel that lands
+                // before a worker thread picks the task up. Releasing the slot from the
+                // callable instead would leak it in that case: FutureTask.run() returns
+                // without running the callable when the task is already cancelled, so the
+                // admission would never be given back and the limit would shrink for good.
                 inFlight.decrementAndGet();
             }
-            return null;
-        });
+        };
         record.setWorkFuture(task);
 
         try
@@ -313,8 +335,8 @@ public final class BackgroundJobs implements AutoCloseable
         catch (RejectedExecutionException e)
         {
             record.fail("Background job could not start because the registry is stopping."); //$NON-NLS-1$
+            // The slot comes back through the task's done() hook, which this cancel triggers.
             task.cancel(true);
-            inFlight.decrementAndGet();
             throw e;
         }
         return record.snapshot();
@@ -424,7 +446,20 @@ public final class BackgroundJobs implements AutoCloseable
         }
         try
         {
-            Object result = work.run(record::addProgress);
+            Object result = work.run(new ProgressReporter()
+            {
+                @Override
+                public void add(String message)
+                {
+                    record.addProgress(message);
+                }
+
+                @Override
+                public void markCommitted()
+                {
+                    record.markCommitted();
+                }
+            });
             record.complete(result);
         }
         catch (InterruptedException e)
@@ -445,6 +480,17 @@ public final class BackgroundJobs implements AutoCloseable
     private static void timeOut(JobRecord record, long timeoutMs)
     {
         String timeout = formatSeconds(timeoutMs);
+        if (record.isCommitted())
+        {
+            // The work has handed the request over and cannot take it back. Failing the job
+            // now would report a retryable error for something that is still on its way, and
+            // the retry would perform the same action twice - so the budget is allowed to
+            // overrun and the work reports its own outcome.
+            record.addProgress("The total timeoutSeconds budget of " + timeout //$NON-NLS-1$
+                + " expired after the request was already handed over, so it is left to " //$NON-NLS-1$
+                + "finish instead of being reported as failed."); //$NON-NLS-1$
+            return;
+        }
         if (record.fail("Job exceeded its total timeoutSeconds budget of " //$NON-NLS-1$
             + timeout + ". Start a new job with a larger timeoutSeconds value, or check " //$NON-NLS-1$
             + "Workmate and network status.")) //$NON-NLS-1$
@@ -494,6 +540,8 @@ public final class BackgroundJobs implements AutoCloseable
         private final CountDownLatch completed = new CountDownLatch(1);
 
         private Status status = Status.RUNNING;
+        /** Set by the work once its request can no longer be taken back. */
+        private boolean committed;
         private long completedAtMs;
         private long completedAtNanos;
         private Object result;
@@ -510,6 +558,16 @@ public final class BackgroundJobs implements AutoCloseable
         synchronized boolean isRunning()
         {
             return status == Status.RUNNING;
+        }
+
+        synchronized void markCommitted()
+        {
+            committed = true;
+        }
+
+        synchronized boolean isCommitted()
+        {
+            return committed;
         }
 
         synchronized void setWorkFuture(Future<?> future)

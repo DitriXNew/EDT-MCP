@@ -535,6 +535,72 @@ public class AskWorkmateToolTest
         assertContains(result, "chat panel", "mode='answer'"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * The chat reads the project's own .workmate rules, so it does not need the preamble and
+     * must not be handed a wall of instructions by default - but a project without those rules
+     * has no other way to learn about the bridge, so an explicit request still works.
+     */
+    @Test
+    public void testChatModeLeavesOutTheBridgePreambleUnlessItIsAskedFor()
+    {
+        AtomicReference<String> pushed = new AtomicReference<>();
+        Map<String, String> params = modeParams("chat", "Which catalogs exist?"); //$NON-NLS-1$ //$NON-NLS-2$
+        tool(chatGateway(pushed)).execute(params);
+        assertEquals("Which catalogs exist?", pushed.get()); //$NON-NLS-1$
+
+        params.put("shareMcpTools", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        tool(chatGateway(pushed)).execute(params);
+        assertTrue(pushed.get().contains("edt.mcp.bridge=v1")); //$NON-NLS-1$
+        assertTrue(pushed.get().endsWith("Question:\nWhich catalogs exist?")); //$NON-NLS-1$
+    }
+
+    /**
+     * Once the chat hand-off is claimed the question CANNOT be taken back. Reporting the
+     * budget as a failure there would invite a retry, and the retry would ask Workmate the
+     * same question a second time - so the job waits for the real outcome instead.
+     */
+    @Test
+    public void testCommittedChatHandoffOutlivingItsBudgetIsNotReportedAsFailed() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AskWorkmateTool tool = tool(new WorkmateGateway()
+        {
+            @Override
+            public void pushToChat(IProject project, String question, ProgressListener progress)
+                throws GatewayException
+            {
+                progress.onCommitted();
+                entered.countDown();
+                try
+                {
+                    release.await();
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                progress.onProgress("Delivered the question to the Workmate chat view."); //$NON-NLS-1$
+            }
+        });
+
+        Map<String, String> start = modeParams("chat", "find the usages"); //$NON-NLS-1$ //$NON-NLS-2$
+        start.put("waitSeconds", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        start.put("timeoutSeconds", "1"); //$NON-NLS-1$ //$NON-NLS-2$
+        String jobId = extractJobId(tool.execute(start));
+        assertTrue(entered.await(2, TimeUnit.SECONDS));
+
+        Map<String, String> poll = params("jobId", jobId); //$NON-NLS-1$
+        poll.put("waitSeconds", "2"); //$NON-NLS-1$ //$NON-NLS-2$
+        String afterBudget = tool.execute(poll);
+        assertJobStatus(afterBudget, "running"); //$NON-NLS-1$
+        assertContains(afterBudget, "expired after the request was already handed over"); //$NON-NLS-1$
+
+        release.countDown();
+        poll.put("waitSeconds", "5"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertJobStatus(tool.execute(poll), "done"); //$NON-NLS-1$
+    }
+
     @Test
     public void testChatModeFailureIsReportedAsAFailedJob()
     {

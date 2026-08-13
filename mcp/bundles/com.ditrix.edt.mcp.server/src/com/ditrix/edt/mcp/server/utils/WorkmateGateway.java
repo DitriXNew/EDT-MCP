@@ -112,6 +112,16 @@ public class WorkmateGateway
     {
         /** @param message completed adapter milestone */
         void onProgress(String message);
+
+        /**
+         * Reports that the request has been handed over and can no longer be withdrawn, so
+         * the caller must stop treating a later timeout as a retryable failure - a retry
+         * would ask Workmate the same question twice.
+         */
+        default void onCommitted()
+        {
+            // Callers that cannot retry anyway have nothing to do here.
+        }
     }
 
     /** Kinds of runtime failure that the MCP tool turns into actionable errors. */
@@ -635,10 +645,15 @@ public class WorkmateGateway
                     + "before it could be published (its session cache evicted it)"); //$NON-NLS-1$
             }
 
+            // NOT_READY, not INCOMPATIBLE: the entry can also be missing because a concurrent
+            // creation evicted it in the moment between the put above and this lookup, and
+            // that race resolves itself on the next pass. INCOMPATIBLE would stop the
+            // publisher for good, so the transient cause must not be able to reach it.
             if (invoke(getSession, manager, CHAT_SESSION_ID) == null)
             {
-                throw GatewayException.incompatible("the session did not become reachable " //$NON-NLS-1$
-                    + "under id '" + CHAT_SESSION_ID + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+                throw GatewayException.notReady("the session did not become reachable " //$NON-NLS-1$
+                    + "under id '" + CHAT_SESSION_ID //$NON-NLS-1$
+                    + "' (its session cache evicted the entry)"); //$NON-NLS-1$
             }
             return CHAT_SESSION_ID;
         }
@@ -836,6 +851,12 @@ public class WorkmateGateway
                 {
                     return;
                 }
+                // Winning the claim IS the point of no return, and it is announced from here
+                // rather than from the waiting thread on purpose: the waiter only learns that
+                // it lost the claim when its wait runs out, and the job's own budget can
+                // expire long before that - which is exactly when a manufactured "timed out,
+                // start a new job" would send this question to Workmate a second time.
+                progress.onCommitted();
                 try
                 {
                     askQuestion.invoke(chat, aiContext, question);
@@ -860,7 +881,13 @@ public class WorkmateGateway
                 // finish rather than reporting a failure for a question already asked.
                 if (!delivered.await(CHAT_HANDOFF_TIMEOUT_SECONDS, TimeUnit.SECONDS))
                 {
-                    throw GatewayException.timedOut();
+                    // Still not back - the SWT thread is busy. The question is committed
+                    // either way, so this reports the hand-off instead of a timeout: a
+                    // retryable error would be answered with a duplicate question, while the
+                    // original invocation is still on its way to the chat.
+                    progress.onProgress("Handed the question to the Workmate chat view; " //$NON-NLS-1$
+                        + "the view is still busy opening it."); //$NON-NLS-1$
+                    return;
                 }
             }
             catch (InterruptedException e)

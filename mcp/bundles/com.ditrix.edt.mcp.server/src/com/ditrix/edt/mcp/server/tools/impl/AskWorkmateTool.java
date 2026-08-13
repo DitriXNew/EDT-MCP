@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.GatewayException;
+import com.ditrix.edt.mcp.server.utils.WorkmateGateway.ProgressListener;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.WorkmateResponse;
 
 /** Starts and polls questions sent through the co-located Workmate facade. */
@@ -173,11 +174,13 @@ public class AskWorkmateTool implements IMcpTool
                 "Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or " //$NON-NLS-1$
                     + "{\"scope\":\"eclipse\",\"code\":\"...\"}. Defaults to an empty object.") //$NON-NLS-1$
             .booleanProperty(KEY_SHARE_MCP_TOOLS,
-                "Start mode only: when true (the default), the question is prefixed with " //$NON-NLS-1$
-                    + "instructions that let Workmate call EDT-MCP's own tools through this " //$NON-NLS-1$
-                    + "plugin's in-process bridge, so it can inspect the real project instead " //$NON-NLS-1$
-                    + "of answering from general 1C knowledge. Pass false to send the question " //$NON-NLS-1$
-                    + "verbatim and leave Workmate on its own tools.") //$NON-NLS-1$
+                "Start mode only: when true, the question is prefixed with instructions that " //$NON-NLS-1$
+                    + "let Workmate call EDT-MCP's own tools through this plugin's in-process " //$NON-NLS-1$
+                    + "bridge, so it can inspect the real project instead of answering from " //$NON-NLS-1$
+                    + "general 1C knowledge. Defaults to true for mode '" + MODE_ANSWER //$NON-NLS-1$
+                    + "' and to false for mode '" + MODE_CHAT //$NON-NLS-1$
+                    + "', where the project's own .workmate rules already carry the same " //$NON-NLS-1$
+                    + "instructions; pass true there for a project that has no such rules.") //$NON-NLS-1$
             .stringProperty(KEY_MODE,
                 "Start mode only: '" + MODE_ANSWER + "' (default) runs Workmate's tool loop " //$NON-NLS-1$ //$NON-NLS-2$
                     + "and RETURNS its answer as text: it inspects the project with its own " //$NON-NLS-1$
@@ -432,12 +435,16 @@ public class AskWorkmateTool implements IMcpTool
 
         final boolean chatMode = MODE_CHAT.equals(mode);
 
-        // The agentic chat loads the project's own .workmate rules, so it already knows
-        // about the bridge; this facade path does not, and without the preamble the model
-        // has no way to learn that EDT-MCP is reachable at all.
+        // The facade path knows nothing about the bridge, so it gets the preamble by default -
+        // without it the model has no way to learn that EDT-MCP is reachable at all. The
+        // agentic chat loads the project's own .workmate rules instead, which already carry
+        // the same instructions, so there the DEFAULT is off; an explicit true is still
+        // honoured, and that is what makes the bridge reachable from a chat opened on a
+        // project that has no .workmate rules of its own.
+        final boolean shareMcpTools =
+            JsonUtils.extractBooleanArgument(params, KEY_SHARE_MCP_TOOLS, !chatMode);
         final String jobQuestion =
-            !chatMode && JsonUtils.extractBooleanArgument(params, KEY_SHARE_MCP_TOOLS, true)
-                ? mcpBridgePreamble(projectName) + question : question;
+            shareMcpTools ? mcpBridgePreamble(projectName) + question : question;
 
         final IProject jobProject = project;
         final int jobTimeoutSeconds = timeoutSeconds;
@@ -450,7 +457,23 @@ public class AskWorkmateTool implements IMcpTool
                     {
                         if (chatMode)
                         {
-                            gateway.pushToChat(jobProject, jobQuestion, progress::add);
+                            // Not progress::add: the hand-off also reports the point after
+                            // which this job must never be published as a retryable failure,
+                            // because a retry would ask the chat the same question twice.
+                            gateway.pushToChat(jobProject, jobQuestion, new ProgressListener()
+                            {
+                                @Override
+                                public void onProgress(String message)
+                                {
+                                    progress.add(message);
+                                }
+
+                                @Override
+                                public void onCommitted()
+                                {
+                                    progress.markCommitted();
+                                }
+                            });
                             return new WorkmateResponse(chatHandoffAnswer(), null);
                         }
                         WorkmateResponse response = gateway.ask(jobProject, jobQuestion,

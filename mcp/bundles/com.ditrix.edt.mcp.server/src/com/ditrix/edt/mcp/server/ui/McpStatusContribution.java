@@ -580,12 +580,26 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         }
 
         gc.setForeground(statusCanvas.getForeground());
-        Point statusExtent = gc.textExtent(statusText);
-        gc.drawText(statusText, TEXT_X, centerY - statusExtent.y / 2, SWT.DRAW_TRANSPARENT);
 
-        Point counterExtent = gc.textExtent(counterText);
-        gc.drawText(counterText, TEXT_X + statusExtent.x + COUNTER_GAP,
-            centerY - counterExtent.y / 2, SWT.DRAW_TRANSPARENT);
+        // The counter is measured and reserved FIRST. The width hint is a request, not a
+        // promise, and the status can outgrow it on its own (a long tool name, a larger UI
+        // font, display scaling) - so whatever has to give way is the status, never the
+        // counter that the item exists to show.
+        Point counterExtent = gc.textExtent(counterText == null ? "" : counterText); //$NON-NLS-1$
+        int counterWidth = counterText == null || counterText.isEmpty() ? 0 : counterExtent.x;
+        String status = StatusTextLayout.elide(statusText,
+            StatusTextLayout.statusRoom(bounds.width, TEXT_X, COUNTER_GAP, counterWidth),
+            text -> gc.textExtent(text).x);
+
+        Point statusExtent = gc.textExtent(status);
+        gc.drawText(status, TEXT_X, centerY - statusExtent.y / 2, SWT.DRAW_TRANSPARENT);
+
+        if (counterWidth > 0)
+        {
+            gc.drawText(counterText, StatusTextLayout.counterX(TEXT_X, statusExtent.x,
+                COUNTER_GAP, counterWidth, bounds.width), centerY - counterExtent.y / 2,
+                SWT.DRAW_TRANSPARENT);
+        }
     }
 
     /**
