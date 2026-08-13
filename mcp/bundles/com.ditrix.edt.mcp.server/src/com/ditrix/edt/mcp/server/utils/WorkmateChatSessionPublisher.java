@@ -46,6 +46,16 @@ public final class WorkmateChatSessionPublisher
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean published = new AtomicBoolean();
     private final AtomicBoolean started = new AtomicBoolean();
+
+    /**
+     * Set by {@link #stop()} before it discards. Both methods are {@code synchronized}, so a
+     * publish attempt cannot straddle shutdown: either it finishes first and {@code stop()}
+     * then discards what it created, or it sees this flag and does not publish at all.
+     * {@code shutdownNow()} alone would not have prevented that - it interrupts the
+     * scheduler, it does not wait for an attempt already inside the gateway.
+     */
+    private boolean stopped;
+
     private volatile String lastFailure;
 
     /** Creates a publisher driving the shared gateway. */
@@ -88,13 +98,15 @@ public final class WorkmateChatSessionPublisher
      * snippets, so leaving it alive across an update would keep the chat calling the stopped
      * bundle's bridge and class loader instead of the newly registered one.
      */
-    public void stop()
+    public synchronized void stop()
     {
+        stopped = true;
         scheduler.shutdownNow();
-        if (published.getAndSet(false))
-        {
-            gateway.discardChatSession();
-        }
+        // Unconditionally, not only when this instance believes it published: an attempt
+        // that was in flight during shutdown may have created a session moments ago, and
+        // discarding a session that does not exist is a no-op anyway.
+        published.set(false);
+        gateway.discardChatSession();
     }
 
     /**
@@ -102,8 +114,12 @@ public final class WorkmateChatSessionPublisher
      *
      * @return {@code true} when the session is reachable under the constant id
      */
-    public boolean publishOnce()
+    public synchronized boolean publishOnce()
     {
+        if (stopped)
+        {
+            return false;
+        }
         try
         {
             gateway.ensureChatSession();

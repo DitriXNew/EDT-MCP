@@ -166,6 +166,17 @@ public final class BackgroundJobs implements AutoCloseable
         Object run(ProgressReporter progress) throws Exception; // NOSONAR arbitrary background work
     }
 
+    /**
+     * Jobs admitted whose work has not finished running yet.
+     * <p>
+     * Counted rather than derived from job STATUS on purpose: a timed-out job is published
+     * as failed immediately, but its worker thread keeps the pool slot until the work
+     * actually unwinds - and work that ignores interruption can hold it far longer. Admitting
+     * a replacement on the strength of the status alone would hand out a slot that is still
+     * occupied, which is exactly the starvation an admission limit exists to prevent.
+     */
+    private final AtomicInteger inFlight = new AtomicInteger();
+
     private final Object jobsLock = new Object();
     private final Map<String, JobRecord> jobs = new LinkedHashMap<>();
     private final int maxStoredJobs;
@@ -270,15 +281,23 @@ public final class BackgroundJobs implements AutoCloseable
                 throw new RejectedExecutionException("Background job registry is full with " //$NON-NLS-1$
                     + maxStoredJobs + " running jobs"); //$NON-NLS-1$
             }
-            if (countRunning() >= maxRunning)
+            if (inFlight.get() >= maxRunning)
             {
                 return null;
             }
             jobs.put(record.id, record);
+            inFlight.incrementAndGet();
         }
 
         FutureTask<Void> task = new FutureTask<>(() -> {
-            runWork(record, work);
+            try
+            {
+                runWork(record, work);
+            }
+            finally
+            {
+                inFlight.decrementAndGet();
+            }
             return null;
         });
         record.setWorkFuture(task);
@@ -295,19 +314,13 @@ public final class BackgroundJobs implements AutoCloseable
         {
             record.fail("Background job could not start because the registry is stopping."); //$NON-NLS-1$
             task.cancel(true);
+            inFlight.decrementAndGet();
             throw e;
         }
         return record.snapshot();
     }
 
     /** @return current job snapshot, or {@code null} when the id is unknown/evicted */
-    /** Counts running jobs; the caller must hold {@link #jobsLock}. */
-    private int countRunning()
-    {
-        return (int)jobs.values().stream()
-            .filter(record -> record.snapshot().getStatus() == Status.RUNNING)
-            .count();
-    }
 
     public JobSnapshot get(String jobId)
     {

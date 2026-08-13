@@ -865,7 +865,16 @@ public class WorkmateGateway
             }
             catch (InterruptedException e)
             {
-                claimed.compareAndSet(false, true);
+                if (!claimed.compareAndSet(false, true))
+                {
+                    // The runnable already owns delivery and is asking the question right
+                    // now. Reporting a failure here would invite a retry that asks Workmate
+                    // a second time, so record the hand-off and let the interrupt stand.
+                    Thread.currentThread().interrupt();
+                    progress.onProgress(
+                        "Delivered the question to the Workmate chat view."); //$NON-NLS-1$
+                    return;
+                }
                 throw e;
             }
             Throwable error = failure.get();

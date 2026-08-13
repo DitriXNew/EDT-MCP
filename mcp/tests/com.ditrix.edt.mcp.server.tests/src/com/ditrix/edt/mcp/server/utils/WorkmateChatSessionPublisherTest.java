@@ -12,6 +12,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.GatewayException;
@@ -82,6 +83,41 @@ public class WorkmateChatSessionPublisherTest
         publisher.start();
         publisher.stop();
         publisher.stop();
+    }
+
+    /**
+     * A session must never outlive the bundle, including one created by an attempt that was
+     * already inside the gateway when shutdown began - interrupting the scheduler does not
+     * stop that attempt.
+     */
+    @Test
+    public void testNothingIsPublishedAfterStopAndWhatWasPublishedIsDiscarded()
+    {
+        AtomicInteger discarded = new AtomicInteger();
+        AtomicInteger published = new AtomicInteger();
+        WorkmateChatSessionPublisher publisher =
+            new WorkmateChatSessionPublisher(new WorkmateGateway()
+            {
+                @Override
+                public String ensureChatSession()
+                {
+                    published.incrementAndGet();
+                    return WorkmateGateway.CHAT_SESSION_ID;
+                }
+
+                @Override
+                public void discardChatSession()
+                {
+                    discarded.incrementAndGet();
+                }
+            });
+
+        assertTrue(publisher.publishOnce());
+        publisher.stop();
+
+        assertEquals("stopping must discard the session it owns", 1, discarded.get());
+        assertFalse("a later attempt must not publish again", publisher.publishOnce());
+        assertEquals("and must not even reach the gateway", 1, published.get());
     }
 
     @Test
