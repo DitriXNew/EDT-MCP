@@ -65,7 +65,8 @@ Credentials for a registered standalone server are stored against the **applicat
 ### Prerequisites and result
 
 - Requires a **registered 1C standalone-server runtime** — a 1C:Enterprise platform **>= 8.3.23** with the standalone server (`ibsrv`/`ibcmd`), registered in EDT. The tool probes for it **before** the background Job and fails FAST with an actionable error if absent (no hang).
-- On success the result adds **`applicationKind='standaloneServer'`** and, **best-effort**, **`webUrl`** (the infobase web URL — use it for HTTP testing) and **`port`** (the ACTUAL auto-allocated web port, parsed from `webUrl`), alongside the usual `applications`, `applicationId`, and `message` fields. If EDT cannot resolve the web URL, `webUrl`/`port` are omitted — the server is still created and bound.
+- On success the result adds **`applicationKind='standaloneServer'`** and, **best-effort**, **`webUrl`** (the infobase web URL — use it for HTTP testing) and **`port`** (the ACTUAL auto-allocated web port, parsed from `webUrl`), alongside the same outcome-dependent `applications` / `applicationId` / `boundToProject` fields as the file path, and a `message`. If EDT cannot resolve the web URL, `webUrl`/`port` are omitted — the server is still created.
+- The standalone path reports the binding exactly like the file path (see "The three binding outcomes"): if the server application never appears, the call is an ERROR — and it still hands back `port`/`webUrl` (whenever EDT resolved them), because the server was registered regardless. Those two are the endpoint EDT **resolved**; the tool does not probe it.
 
 ```
 # Create an autonomous (standalone) server with a web URL:
@@ -81,8 +82,9 @@ Credentials for a registered standalone server are stored against the **applicat
 1. Resolves and validates the project and the `mode`.
 2. For `create`: probes for an available 1C platform runtime (fails fast when absent) and creates the target directory if it does not exist. For `register`: verifies the directory already contains a file infobase.
 3. For `create`: runs `IInfobaseCreationOperation.perform(...)` in a **background Eclipse Job** (up to 120 s) — it shells out to `1cv8`, never on the UI thread. For `register`: adds the reference directly via `IInfobaseManager.add(...)` (no platform launch, no Job).
-4. Associates the infobase with the project via `IInfobaseAssociationManager.associate(...)`. After this step `get_applications` returns the application.
-5. Returns the resulting application id so you can chain directly into `update_database`.
+4. Associates the infobase with the project via `IInfobaseAssociationManager.associate(...)`.
+5. **Reads the project's applications back** (a short bounded re-poll — the application surfaces asynchronously) and **reports what that read-back established**, not what was requested. Only a read-back that actually found the application reports the infobase as bound.
+6. Returns the resulting application id — whenever the platform gave the application one — so you can chain directly into `update_database`.
 
 ## Parameter details
 
@@ -97,7 +99,19 @@ Credentials for a registered standalone server are stored against the **applicat
 
 ## Result
 
-JSON with `action` (`'created'` for `create`, `'registered'` for `register`), `project`, `infobaseFile`, `infobaseName`, `applications` (same shape as `get_applications`), `applicationId` (for chaining into `update_database`), and a `message`.
+JSON with `action` (`'created'` for `create`, `'registered'` for `register`), `project`, `infobaseFile`, `infobaseName`, a `message` (on the refusal below that text is in `error` instead), and — depending on what the read-back below established — `applications` (same shape as `get_applications`; omitted when no read produced a snapshot at all), `applicationId` (for chaining into `update_database`; present whenever the application was found and the platform gave it an id) and `boundToProject`.
+
+### The three binding outcomes (issue #412)
+
+Creating the database and BINDING it to the project are two different facts, and the second one is established by the read-back — never assumed:
+
+| read-back | result | `boundToProject` |
+|---|---|---|
+| the new application was found | success, with "bound to project" in the message (and `applicationId`, whenever the platform gave the application one) | `true` |
+| the last read compared every application and none of them was it | **error** (the text is in `error`, not `message`) — the infobase exists and the payload keeps `action`, `infobaseFile`, `infobaseName`, `applications`, but the project has no application for it | `false` |
+| the comparison could not be completed — the read failed, the call was interrupted before the poll budget was spent, or an application's identity could not be read | success, message says the binding is **UNVERIFIED** and why | **absent** |
+
+The error case is not "nothing happened": the database is on disk and must not be created again. Until the application appears, `update_database` / `create_launch_config` / `debug_launch` refuse — they need an `applicationId`. Call `get_applications` to re-check; if it stays absent, the EDT error log is where to look next (the tool records that no application appeared; whether the platform logged a cause is up to it). Note that `delete_infobase` cannot clean this state up: it resolves its target only among the project's applications.
 
 ## Typical workflow
 
@@ -116,6 +130,7 @@ JSON with `action` (`'created'` for `create`, `'registered'` for `register`), `p
 - **`register` needs an existing infobase**: the path must contain a `1Cv8.1CD`; otherwise the tool errors and points you to `mode='create'`.
 - **FILE only**: passing a server/web connection string as `infobaseFile` is not supported — use the dedicated server creation tooling for that.
 - **Timeout**: the background Job waits up to 120 seconds. The tool reports an honest timeout, not a fake success.
+- **Created is not bound**: if the application never appears, the call is an ERROR even though the database was written (see "The three binding outcomes"). Branch on `boundToProject`, not on the message.
 - **Cleanup**: use `delete_infobase` to remove an infobase from the project and the EDT infobases list.
 - **State after creation**: a newly created infobase is empty — `get_applications` reports `FULL_UPDATE_REQUIRED` or similar. Call `update_database` to push the configuration into it.
 

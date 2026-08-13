@@ -392,6 +392,9 @@
           },
           "type": "array"
         },
+        "boundToProject": {
+          "type": "boolean"
+        },
         "infobaseFile": {
           "type": "string"
         },
