@@ -47,6 +47,7 @@ import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.IApplicationType;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -291,7 +292,11 @@ public class CreateInfobaseTool implements IMcpTool
                 + "from the resolved webUrl (the endpoint is read from EDT's configuration, not " //$NON-NLS-1$
                 + "probed). Absent if webUrl could not be resolved.") //$NON-NLS-1$
             .objectArrayProperty(KEY_APPLICATIONS,
-                "Applications bound to the project after creation (same shape as get_applications).") //$NON-NLS-1$
+                "Applications bound to the project after creation (same shape as get_applications). " //$NON-NLS-1$
+                + "Lists the applications the read-back could read; an application whose properties " //$NON-NLS-1$
+                + "could not be read is left out, and - unless the new application was already " //$NON-NLS-1$
+                + "matched - makes boundToProject absent. The key itself is omitted when the " //$NON-NLS-1$
+                + "applications could not be listed at all.") //$NON-NLS-1$
             .booleanProperty(KEY_BOUND_TO_PROJECT,
                 "Whether the infobase actually appeared as an application of the project, as " //$NON-NLS-1$
                 + "ESTABLISHED by the read-back that follows the association. true = the application " //$NON-NLS-1$
@@ -613,8 +618,8 @@ public class CreateInfobaseTool implements IMcpTool
         {
             return null;
         }
-        String error = InfobaseAccessSupport.storeCredentials(ibRef, credentials.user, credentials.password,
-            InfobaseAccessSupport.parseAccess(credentials.access));
+        String error = storeSafely(() -> InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
+            credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)));
         if (error != null)
         {
             return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
@@ -629,6 +634,32 @@ public class CreateInfobaseTool implements IMcpTool
                 + "only after a matching infobase user is added."; //$NON-NLS-1$
         return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
             + "' (change them later with set_infobase_credentials)." + userNote; //$NON-NLS-1$
+    }
+
+    /**
+     * Runs a credentials store and turns any exception into the message it is supposed to produce.
+     *
+     * <p>Both credential helpers promise that storing credentials never fails the creation or the
+     * registration itself — the database is already there, and a rejected password must not undo it.
+     * That promise cannot rest on the store never throwing: reading a stale application, or the
+     * secure storage refusing, would otherwise turn a completed creation into an internal tool error.
+     * Here it is structural (and logged, so a real failure stays visible).
+     *
+     * @param store the store call, returning its own error text or {@code null} on success
+     * @return the error text to report, or {@code null} when the credentials were stored
+     */
+    private static String storeSafely(java.util.function.Supplier<String> store)
+    {
+        try
+        {
+            return store.get();
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: storing the connection credentials failed", e); //$NON-NLS-1$
+            String reason = e.getMessage();
+            return (reason != null && !reason.trim().isEmpty()) ? reason : e.getClass().getSimpleName();
+        }
     }
 
     /**
@@ -2039,11 +2070,17 @@ public class CreateInfobaseTool implements IMcpTool
      */
     private static MatchResult isMatchingNewServerApp(IApplication app, String infobaseName)
     {
-        String typeId = app.getType() != null ? app.getType().getId() : null;
-        // Always decidable: the identity is the type plus the name, both plain reads that cannot
-        // half-fail, so there is no UNDECIDABLE case here.
-        return StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId)
-            && infobaseName.equals(app.getName()) ? MatchResult.MATCH : MatchResult.NO_MATCH;
+        MatchResult byType = matchesApplicationType(app, StandaloneServerSupport.WST_SERVER_APP_TYPE);
+        if (byType != MatchResult.MATCH)
+        {
+            return byType; // A readable, different type is a real miss; an unreadable one is not.
+        }
+        String name = app.getName();
+        if (name == null)
+        {
+            return MatchResult.UNDECIDABLE; // The other half of this identity could not be read.
+        }
+        return infobaseName.equals(name) ? MatchResult.MATCH : MatchResult.NO_MATCH;
     }
 
     /**
@@ -2076,8 +2113,8 @@ public class CreateInfobaseTool implements IMcpTool
                 + "application was not available from the read-back - check get_applications and " //$NON-NLS-1$
                 + "store them with set_infobase_credentials."; //$NON-NLS-1$
         }
-        String error = InfobaseAccessSupport.storeCredentials(application, credentials.user, credentials.password,
-            InfobaseAccessSupport.parseAccess(credentials.access));
+        String error = storeSafely(() -> InfobaseAccessSupport.storeCredentials(application,
+            credentials.user, credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)));
         if (error != null)
         {
             return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
@@ -2288,7 +2325,8 @@ public class CreateInfobaseTool implements IMcpTool
         /**
          * Nothing was established: the read-back failed, or was cut short before the budget was
          * spent, or it listed an application whose identity could not be compared with the new
-         * infobase. None of those is evidence of a missing application.
+         * infobase. None of those is evidence of a missing application. (A positive match already
+         * made is not undone by any of them — it is evidence in its own right, and wins.)
          */
         UNVERIFIED
     }
@@ -2302,7 +2340,17 @@ public class CreateInfobaseTool implements IMcpTool
     {
         /** This application IS the one that was just created/registered. */
         MATCH,
-        /** This application is decidably a different one. */
+        /**
+         * This application is decidably a different one.
+         *
+         * <p><strong>The rule for every matcher:</strong> {@code NO_MATCH} is an ASSERTION — both
+         * sides were read and they differ. Anything that is not an established difference (an
+         * absent or unreadable type, name or infobase reference, or a failure while reading one)
+         * is {@link #UNDECIDABLE}. This is what keeps a refusal ({@code boundToProject:false})
+         * reachable only from a comparison that actually happened; the mechanism enforces it —
+         * {@link #matchesApplicationType} is the only type test, and
+         * {@link CreateInfobaseTool#readOneApplication} is the only place an application is read.
+         */
         NO_MATCH,
         /** The comparison could not be made (missing/unreadable identity), so nothing was established. */
         UNDECIDABLE
@@ -2312,6 +2360,29 @@ public class CreateInfobaseTool implements IMcpTool
     private interface ApplicationMatcher
     {
         MatchResult match(IApplication app);
+    }
+
+    /**
+     * The ONLY type test in the read-back, shared by both matchers so neither can regress on its own:
+     * a type that is present and different is an established {@link MatchResult#NO_MATCH}, while a
+     * type that cannot be read at all is {@link MatchResult#UNDECIDABLE} — "I could not see what this
+     * is" is not "this is not it".
+     */
+    private static MatchResult matchesApplicationType(IApplication app, String expectedTypeId)
+    {
+        IApplicationType type = app.getType();
+        if (type == null)
+        {
+            return MatchResult.UNDECIDABLE;
+        }
+        // Read the id ONCE: comparing a second read would let a value that arrived null decide
+        // "different", which is the very substitution this gate exists to prevent.
+        String typeId = type.getId();
+        if (typeId == null)
+        {
+            return MatchResult.UNDECIDABLE;
+        }
+        return expectedTypeId.equals(typeId) ? MatchResult.MATCH : MatchResult.NO_MATCH;
     }
 
     /**
@@ -2326,12 +2397,15 @@ public class CreateInfobaseTool implements IMcpTool
         final BindingOutcome outcome;
         /** Why nothing was established; {@code null} unless {@link BindingOutcome#UNVERIFIED}. */
         final String unverifiedReason;
+        /** The matched application's id AS ECHOED; {@code null} when it had none. */
+        private final String appId;
 
-        ApplicationReadBack(JsonArray appsArray, IApplication app, BindingOutcome outcome,
+        ApplicationReadBack(JsonArray appsArray, IApplication app, String appId, BindingOutcome outcome,
                 String unverifiedReason)
         {
             this.appsArray = appsArray;
             this.app = app;
+            this.appId = appId;
             this.outcome = outcome;
             this.unverifiedReason = unverifiedReason;
         }
@@ -2340,10 +2414,14 @@ public class CreateInfobaseTool implements IMcpTool
          * The matched application's id, or {@code null} when nothing matched OR the platform gave the
          * application no id. A matched application with a {@code null} id is still {@link
          * BindingOutcome#BOUND}: the binding is established by the MATCH, not by the id.
+         *
+         * <p>It is the id that was ECHOED in {@code applications}, captured during the same guarded
+         * read — never re-read afterwards, so the result cannot report "no id" beside an echo that
+         * shows one (nor fail while trying).
          */
         String appId()
         {
-            return app != null ? app.getId() : null;
+            return appId;
         }
     }
 
@@ -2448,6 +2526,7 @@ public class CreateInfobaseTool implements IMcpTool
         // re-encode "could not look" as "looked and found nothing", the very confusion this fixes.
         JsonArray appsArray = null;
         IApplication[] newAppHolder = new IApplication[1];
+        String[] newAppIdHolder = new String[1];
         boolean readCompleted = false;
         boolean cutShort = false;
 
@@ -2457,15 +2536,20 @@ public class CreateInfobaseTool implements IMcpTool
         {
             JsonArray attempt = new JsonArray();
             newAppHolder[0] = null;
+            newAppIdHolder[0] = null;
 
             undecidable[0] = false;
-            readCompleted =
-                readBackApplications(appManager, project, matcher, attempt, newAppHolder, undecidable);
-            if (readCompleted)
+            readCompleted = readBackApplications(appManager, project, matcher, attempt, newAppHolder,
+                newAppIdHolder, undecidable);
+            if (readCompleted || newAppHolder[0] != null)
             {
+                // Keep the snapshot the answer actually came from. A listing that failed AFTER
+                // identifying our application still identified it - the match is positive evidence,
+                // unaffected by the later failure - and its echo must be the one reported, or the
+                // result would name an application that is missing from its own evidence.
                 appsArray = attempt;
             }
-            else
+            if (!readCompleted)
             {
                 break; // Read failed (logged) — stop re-polling; absence is NOT established.
             }
@@ -2482,11 +2566,12 @@ public class CreateInfobaseTool implements IMcpTool
 
         if (newAppHolder[0] != null)
         {
-            return new ApplicationReadBack(appsArray, newAppHolder[0], BindingOutcome.BOUND, null);
+            return new ApplicationReadBack(appsArray, newAppHolder[0], newAppIdHolder[0],
+                BindingOutcome.BOUND, null);
         }
         if (!readCompleted)
         {
-            return new ApplicationReadBack(appsArray, null, BindingOutcome.UNVERIFIED,
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
                 "the application read-back could not be completed - the failure is in the EDT " //$NON-NLS-1$
                     + "error log"); //$NON-NLS-1$
         }
@@ -2494,18 +2579,18 @@ public class CreateInfobaseTool implements IMcpTool
         {
             // Interrupted: the reads that DID run saw no application, but the budget that absorbs the
             // listener race was not spent — and nothing failed, so there is no log entry to point at.
-            return new ApplicationReadBack(appsArray, null, BindingOutcome.UNVERIFIED,
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
                 "the read-back was interrupted before its budget was spent"); //$NON-NLS-1$
         }
         if (undecidable[0])
         {
             // The last read listed an application that could not be compared with the new infobase,
             // so it was never established that none of them is ours.
-            return new ApplicationReadBack(appsArray, null, BindingOutcome.UNVERIFIED,
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
                 "one of the project's applications could not be compared with the new infobase " //$NON-NLS-1$
                     + "(an identity could not be read)"); //$NON-NLS-1$
         }
-        return new ApplicationReadBack(appsArray, null, BindingOutcome.NOT_BOUND, null);
+        return new ApplicationReadBack(appsArray, null, null, BindingOutcome.NOT_BOUND, null);
     }
 
     /**
@@ -2598,9 +2683,10 @@ public class CreateInfobaseTool implements IMcpTool
 
     /**
      * Reads the project's applications once, populating {@code appsArray} with one JSON object per
-     * application (same shape as {@code get_applications}) and storing the first application the
-     * {@code matcher} accepts in {@code newAppHolder[0]} (left {@code null} when not yet visible).
-     * Read-only.
+     * application THAT COULD BE READ (same shape as {@code get_applications}; an application that
+     * cannot be rendered is left out of the echo and makes the read undecidable) and storing the first
+     * application the {@code matcher} accepts in {@code newAppHolder[0]}, with its echoed id in
+     * {@code newAppIdHolder[0]} (both left {@code null} when not yet visible). Read-only.
      *
      * @return {@code true} if the read produced a snapshot to inspect (whether or not the new
      *         application was in it), {@code false} if reading the applications failed or produced no
@@ -2608,7 +2694,7 @@ public class CreateInfobaseTool implements IMcpTool
      */
     private static boolean readBackApplications(IApplicationManager appManager, IProject project,
             ApplicationMatcher matcher, JsonArray appsArray, IApplication[] newAppHolder,
-            boolean[] undecidable)
+            String[] newAppIdHolder, boolean[] undecidable)
     {
         try
         {
@@ -2622,29 +2708,78 @@ public class CreateInfobaseTool implements IMcpTool
             }
             for (IApplication app : applications)
             {
-                appsArray.add(toApplicationJson(appManager, app));
-                // Identify the newly created application (by infobase reference for a file
-                // infobase, by type + name for a standalone server).
-                if (newAppHolder[0] == null)
+                if (!readOneApplication(appManager, app, matcher, appsArray, newAppHolder,
+                    newAppIdHolder))
                 {
-                    MatchResult match = matcher.match(app);
-                    if (match == MatchResult.MATCH)
-                    {
-                        newAppHolder[0] = app;
-                    }
-                    else if (match == MatchResult.UNDECIDABLE)
-                    {
-                        undecidable[0] = true;
-                    }
+                    undecidable[0] = true;
                 }
             }
             return true;
         }
-        catch (ApplicationException e)
+        catch (Exception e)
         {
+            // Failing to obtain the snapshot AT ALL (the manager's own ApplicationException, or any
+            // other failure of the listing itself) means this read established nothing. Logged, then
+            // reported as UNVERIFIED rather than escaping as an internal tool failure or passing for
+            // a completed read. A single unreadable application does NOT come through here - it is
+            // confined by readOneApplication, which keeps the rest of the snapshot.
             Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
             return false;
         }
+    }
+
+    /**
+     * Reads EVERYTHING about ONE application — its echo entry and its identity — in a single guarded
+     * place, so that an application which cannot be read costs exactly that application: it is
+     * reported as undecidable and the read moves on to the rest of the snapshot. This is the whole
+     * mechanism behind the rule on {@link MatchResult#NO_MATCH}: there is no second place where a
+     * failed read of an application could be mistaken for a decided one, and no path on which such a
+     * failure escapes as an internal tool error. The failure is logged, so a real defect stays
+     * visible instead of being swallowed.
+     *
+     * @return {@code false} when this application could not be read or could not be compared, so the
+     *         caller marks the read undecidable — which decides the outcome only when no match was
+     *         established
+     */
+    private static boolean readOneApplication(IApplicationManager appManager, IApplication app,
+            ApplicationMatcher matcher, JsonArray appsArray, IApplication[] newAppHolder,
+            String[] newAppIdHolder)
+    {
+        try
+        {
+            JsonObject rendered = toApplicationJson(appManager, app);
+            appsArray.add(rendered);
+            if (newAppHolder[0] != null)
+            {
+                return true; // Already found; the rest is echo only, and decides nothing.
+            }
+            // Identify the newly created application (by infobase reference for a file infobase,
+            // by type + name for a standalone server).
+            MatchResult match = matcher.match(app);
+            if (match == MatchResult.MATCH)
+            {
+                newAppHolder[0] = app;
+                newAppIdHolder[0] = renderedId(rendered);
+            }
+            return match != MatchResult.UNDECIDABLE;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("create_infobase: could not read one of the project's applications " //$NON-NLS-1$
+                + "while looking for the new infobase", e); //$NON-NLS-1$
+            return false;
+        }
+    }
+
+    /**
+     * The id from an application's ALREADY-RENDERED echo entry ({@code null} when it has none), so the
+     * reported {@code applicationId} and the {@code applications} echo can never disagree.
+     */
+    private static String renderedId(JsonObject rendered)
+    {
+        return rendered.has("id") && !rendered.get("id").isJsonNull() //$NON-NLS-1$ //$NON-NLS-2$
+            ? rendered.get("id").getAsString() //$NON-NLS-1$
+            : null;
     }
 
     /**
@@ -2657,10 +2792,16 @@ public class CreateInfobaseTool implements IMcpTool
      */
     private static MatchResult isMatchingNewInfobaseApp(IApplication app, InfobaseReference ibRef)
     {
-        if (!(app instanceof IInfobaseApplication)
-            || !INFOBASE_APP_TYPE.equals(app.getType() != null ? app.getType().getId() : null))
+        MatchResult byType = matchesApplicationType(app, INFOBASE_APP_TYPE);
+        if (byType != MatchResult.MATCH)
         {
-            return MatchResult.NO_MATCH;
+            return byType; // A readable, different type is a real miss; an unreadable one is not.
+        }
+        if (!(app instanceof IInfobaseApplication))
+        {
+            // It claims to BE an infobase application but does not expose one, so its infobase
+            // identity cannot be read - which is not the same as being a different infobase.
+            return MatchResult.UNDECIDABLE;
         }
         InfobaseReference appRef = ((IInfobaseApplication)app).getInfobase();
         if (appRef == null)

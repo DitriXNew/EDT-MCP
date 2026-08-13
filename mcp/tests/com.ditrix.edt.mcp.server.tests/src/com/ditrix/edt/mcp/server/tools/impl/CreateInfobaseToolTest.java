@@ -22,6 +22,7 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -1275,6 +1276,274 @@ public class CreateInfobaseToolTest
             message.contains("web port 8314")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testUnreadableApplicationTypeIsUnverifiedNotAbsence() throws Exception
+    {
+        // "I could not see what this application is" is not "this is not the one". If the entry with
+        // the unreadable type IS the new infobase, calling it a miss produces exactly the false
+        // refusal this issue is about - with the verdict flipped.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        List<IApplication> untyped = Collections.singletonList(infobaseAppWithType(null));
+        when(mgr.getApplications(project)).thenReturn(untyped);
+
+        assertUnverified(readBackResult(mgr, project, false, false, null));
+    }
+
+    @Test
+    public void testUnreadableApplicationTypeIdIsUnverifiedNotAbsence() throws Exception
+    {
+        // Same rule one level down: the type object is there but yields no id.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn(null);
+        List<IApplication> untyped = Collections.singletonList(infobaseAppWithType(type));
+        when(mgr.getApplications(project)).thenReturn(untyped);
+
+        assertUnverified(readBackResult(mgr, project, false, false, null));
+    }
+
+    @Test
+    public void testUnreadableApplicationDuringTheReadIsUnverifiedNotAnInternalError() throws Exception
+    {
+        // A stale application that THROWS while being read (here: while its echo entry is built).
+        // The promised third outcome has to actually happen: not an exception out of the tool, and
+        // not a refusal.
+        //
+        // It is also CONFINED to that one application: the rest of the snapshot is still read and
+        // echoed. That is what separates "one entry is opaque" from "the read failed" - two states
+        // that would otherwise be indistinguishable, and only one of them keeps the evidence.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplication hostile = mock(IApplication.class);
+        when(hostile.getId()).thenReturn("hostile"); //$NON-NLS-1$
+        when(hostile.getName()).thenReturn("Hostile"); //$NON-NLS-1$
+        when(hostile.getType()).thenThrow(new IllegalStateException("proxy is detached")); //$NON-NLS-1$
+        List<IApplication> snapshot = Arrays.asList(hostile, unrelatedApp("readable")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(snapshot);
+
+        // Must not throw: the read-back has to CLASSIFY the failure, not propagate it.
+        JsonObject json = readBackResult(mgr, project, false, false, null);
+
+        assertUnverified(json);
+        assertTrue("the rest of the snapshot must survive one opaque entry", //$NON-NLS-1$
+            json.has("applications")); //$NON-NLS-1$
+        assertEquals("the readable application is still there; only the opaque one is missing", //$NON-NLS-1$
+            1, json.get("applications").getAsJsonArray().size()); //$NON-NLS-1$
+        assertEquals("readable", json.get("applications").getAsJsonArray().get(0) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject().get("id").getAsString()); //$NON-NLS-1$
+        assertTrue("the reason must be the failed COMPARISON, not a failed listing", //$NON-NLS-1$
+            json.get("message").getAsString() //$NON-NLS-1$
+                .contains("could not be compared with the new infobase")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnrenderableApplicationIsUnverifiedNotAbsence() throws Exception
+    {
+        // An application that cannot even be rendered was still an application: reporting the read
+        // as complete-and-empty would state exactly what it failed to check. The listing succeeded,
+        // so the (empty) echo is honest - but the outcome must be unverified, and the message has to
+        // say that one application could not be read, or the empty echo would be read as "none".
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplication hostile = mock(IApplication.class);
+        when(hostile.getId()).thenThrow(new IllegalStateException("proxy is detached")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(hostile));
+
+        JsonObject json = readBackResult(mgr, project, false, false, null);
+
+        assertUnverified(json);
+        assertTrue("the message must not leave an empty echo to speak for itself", //$NON-NLS-1$
+            json.get("message").getAsString() //$NON-NLS-1$
+                .contains("could not be compared with the new infobase")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerUnreadableTypeIsUnverifiedNotAbsence() throws Exception
+    {
+        // The mirror path shares the type gate, so it must inherit the same answer.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplication untyped = mock(IApplication.class);
+        when(untyped.getId()).thenReturn("srv"); //$NON-NLS-1$
+        when(untyped.getName()).thenReturn(RB_INFOBASE);
+        when(untyped.getType()).thenReturn(null);
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(untyped));
+
+        String raw = CreateInfobaseTool.buildStandaloneServerResult(readBackContext(mgr, project), 8314,
+            "http://localhost:8314/base", false, false, //$NON-NLS-1$
+            new CreateInfobaseTool.Credentials(null, null, null));
+
+        assertUnverified(JsonParser.parseString(raw).getAsJsonObject());
+    }
+
+    @Test
+    public void testStandaloneServerUnreadableNameIsUnverifiedNotAbsence() throws Exception
+    {
+        // The other half of the server's identity: right type, unreadable name.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.wst-server"); //$NON-NLS-1$
+        IApplication nameless = mock(IApplication.class);
+        when(nameless.getId()).thenReturn("srv"); //$NON-NLS-1$
+        when(nameless.getName()).thenReturn(null);
+        when(nameless.getType()).thenReturn(type);
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(nameless));
+
+        String raw = CreateInfobaseTool.buildStandaloneServerResult(readBackContext(mgr, project), 8314,
+            "http://localhost:8314/base", false, false, //$NON-NLS-1$
+            new CreateInfobaseTool.Credentials(null, null, null));
+
+        assertUnverified(JsonParser.parseString(raw).getAsJsonObject());
+    }
+
+    @Test
+    public void testUnreadableIdOfTheFoundApplicationStillReportsTheBinding() throws Exception
+    {
+        // The MATCH established the binding; losing the id echo afterwards must not turn a
+        // successful call into an internal failure.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+        InfobaseReference reference = fileRef(RB_CONNECTION);
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getName()).thenReturn(RB_INFOBASE);
+        when(app.getType()).thenReturn(type);
+        when(app.getInfobase()).thenReturn(reference);
+        when(app.getId()).thenReturn("app-x").thenThrow(new IllegalStateException("detached")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<IApplication> found = Collections.singletonList(app);
+        when(mgr.getApplications(project)).thenReturn(found);
+
+        JsonObject json = readBackResult(mgr, project, false, false, null);
+
+        assertTrue(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("the match established the binding", //$NON-NLS-1$
+            json.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("the id echoed by the first (successful) read is the one reported", //$NON-NLS-1$
+            "app-x", json.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCredentialStoreFailureIsANoteNotAFailedCreation() throws Exception
+    {
+        // The credentials note is documented as never failing the registration - the server is
+        // already registered, so a store that throws must not undo that. The promise has to hold by
+        // construction, not by the store happening not to throw.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplication hostile = mock(IApplication.class);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.wst-server"); //$NON-NLS-1$
+        when(hostile.getName()).thenReturn(RB_INFOBASE);
+        when(hostile.getType()).thenReturn(type);
+        // The store reads the application; a stale one throws instead of answering.
+        when(hostile.getId()).thenReturn("srv") //$NON-NLS-1$
+            .thenThrow(new IllegalStateException("proxy is detached")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(hostile));
+
+        String raw = CreateInfobaseTool.buildStandaloneServerResult(readBackContext(mgr, project), 8314,
+            "http://localhost:8314/base", false, true, //$NON-NLS-1$
+            new CreateInfobaseTool.Credentials("Admin", "secret", null)); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject json = JsonParser.parseString(raw).getAsJsonObject();
+
+        assertTrue("a failed credentials store must not undo the registration", //$NON-NLS-1$
+            json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("and it must be reported, not swallowed", //$NON-NLS-1$
+            json.get("message").getAsString().contains("credentials were NOT stored")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testComparisonItselfThrowingIsUnverified() throws Exception
+    {
+        // The echo renders fine and the COMPARISON is what throws - the path the previous test could
+        // not reach, because there the identity failed while being rendered.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getId()).thenReturn("rendersFine"); //$NON-NLS-1$
+        when(app.getName()).thenReturn("RendersFine"); //$NON-NLS-1$
+        when(app.getType()).thenReturn(type);
+        when(app.getInfobase()).thenThrow(new IllegalStateException("proxy is detached")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(app));
+
+        JsonObject json = readBackResult(mgr, project, false, false, null);
+
+        assertUnverified(json);
+        assertTrue("the entry rendered, so the echo keeps it", json.has("applications")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, json.get("applications").getAsJsonArray().size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReportedApplicationIdIsTheOneEchoed() throws Exception
+    {
+        // The id is captured from the echo entry during the same guarded read, so the two can never
+        // disagree - and reading it cannot fail later, after the binding was already established.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        InfobaseReference reference = fileRef(RB_CONNECTION);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getName()).thenReturn(RB_INFOBASE);
+        when(app.getType()).thenReturn(type);
+        when(app.getInfobase()).thenReturn(reference);
+        // A second read of the id answers DIFFERENTLY: only an implementation that reports the id it
+        // echoed can pass, so re-reading the application later would be caught here.
+        when(app.getId()).thenReturn("app-echo").thenReturn("different"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<IApplication> found = Collections.singletonList(app);
+        when(mgr.getApplications(project)).thenReturn(found);
+
+        JsonObject json = readBackResult(mgr, project, false, false, null);
+
+        assertEquals("app-echo", json.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(json.get("applications").getAsJsonArray().get(0).getAsJsonObject() //$NON-NLS-1$
+            .get("id").getAsString(), json.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAMatchSurvivesAListingThatFailsAfterIt() throws Exception
+    {
+        // The listing yields our application and THEN breaks. The match is positive evidence that the
+        // later failure cannot undo - and the echo reported must be the one the match came from, or
+        // the result would name an application missing from its own evidence.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplication matching = matchingInfobaseApp("app-then-boom"); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(new java.util.AbstractList<IApplication>()
+        {
+            @Override
+            public IApplication get(int index)
+            {
+                if (index == 0)
+                {
+                    return matching;
+                }
+                throw new IllegalStateException("the listing broke after the first entry"); //$NON-NLS-1$
+            }
+
+            @Override
+            public int size()
+            {
+                return 2;
+            }
+        });
+
+        JsonObject json = readBackResult(mgr, project, false, false, null);
+
+        assertTrue("a positive match is not undone by a later failure", //$NON-NLS-1$
+            json.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("app-then-boom", json.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the echo must be the snapshot the match came from", //$NON-NLS-1$
+            json.has("applications")); //$NON-NLS-1$
+        assertEquals("app-then-boom", json.get("applications").getAsJsonArray().get(0) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject().get("id").getAsString()); //$NON-NLS-1$
+    }
+
     // -------------------- #412 helpers --------------------
 
     /** The infobase directory the read-back tests report (absolute, so it is platform-independent). */
@@ -1302,6 +1571,35 @@ public class CreateInfobaseToolTest
     private static InfobaseReference infobaseRef()
     {
         return fileRef(RB_CONNECTION);
+    }
+
+    /**
+     * The one assertion every "could not read an identity" case has to satisfy: the call SUCCEEDS
+     * (a failed comparison is not evidence of a missing application), it makes no binding claim
+     * either way, and it is not the refusal - that separation is the entire point of the change.
+     */
+    private static void assertUnverified(JsonObject json)
+    {
+        assertTrue("an inability to compare must not refuse the call", //$NON-NLS-1$
+            json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("unverified must never become the refusal", json.has("error")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("boundToProject must be ABSENT: nothing was established", //$NON-NLS-1$
+            json.has("boundToProject")); //$NON-NLS-1$
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue("the message must name the state", message.contains("UNVERIFIED")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("and must not claim the binding", message.contains(BOUND_CLAIM)); //$NON-NLS-1$
+    }
+
+    /** An infobase-named application carrying the given (possibly null) type. */
+    private static IInfobaseApplication infobaseAppWithType(IApplicationType type)
+    {
+        InfobaseReference reference = fileRef(RB_CONNECTION);
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getId()).thenReturn("untyped"); //$NON-NLS-1$
+        when(app.getName()).thenReturn("Untyped"); //$NON-NLS-1$
+        when(app.getType()).thenReturn(type);
+        when(app.getInfobase()).thenReturn(reference);
+        return app;
     }
 
     /** A FILE infobase reference carrying the given connection string. */
