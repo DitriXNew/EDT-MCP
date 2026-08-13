@@ -262,6 +262,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     @Override
+    protected boolean mutatesModel(Map<String, String> params)
+    {
+        // A preview writes nothing, so it has no export of its own to wait for. Letting it wait
+        // anyway would only expose it to refusal by unrelated background export work.
+        return JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
+    }
+
+    @Override
     protected String executeOnUiThread(Map<String, String> params)
     {
         String err = JsonUtils.requireArguments(params, McpKeys.PROJECT_NAME, "fqn"); //$NON-NLS-1$

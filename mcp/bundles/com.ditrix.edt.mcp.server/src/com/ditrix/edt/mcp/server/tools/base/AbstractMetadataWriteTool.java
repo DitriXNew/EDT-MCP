@@ -17,9 +17,14 @@ import org.eclipse.ui.PlatformUI;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Base class for metadata write tools that mutate the EDT model
@@ -38,6 +43,19 @@ import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
  */
 public abstract class AbstractMetadataWriteTool implements IMcpTool
 {
+    /**
+     * How long to wait for a write's {@code .mdo} export to reach disk before refusing.
+     * <p>
+     * The same value {@code rename_metadata_object} already uses to let the pipeline settle, and
+     * the headroom is measured rather than guessed: on a healthy workspace the bytes land 0.02s
+     * (create) to 0.15s (delete) after the tool returns, so this is ~400x the observed worst case,
+     * and it is 6x the 10s the e2e suite polls for - a window CI has been seen to exceed.
+     */
+    private static final long EXPORT_DEADLINE_MS = 60_000L;
+
+    /** The result member every tool sets to say whether it succeeded. */
+    private static final String KEY_SUCCESS = "success"; //$NON-NLS-1$
+
     @Override
     public ResponseType getResponseType()
     {
@@ -73,7 +91,191 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             }
         });
 
-        return resultRef.get();
+        // Deliberately AFTER syncExec returns, i.e. off the UI thread: the export runs on EDT's
+        // derived-data pipeline, and waiting for it while holding the UI thread is how a headless
+        // MCP call turns into a hung workbench.
+        return awaitDiskExport(params, resultRef.get());
+    }
+
+    /**
+     * Turns a model change whose export has not reached disk into a refusal.
+     * <p>
+     * A write tool that answers "done" while its {@code .mdo} export is still queued makes the
+     * caller's next step unsafe: the two files a top-object change touches (the object's own
+     * {@code .mdo} and the owning {@code Configuration.mdo}) are separate export tasks with no
+     * ordering between them, so the working tree passes through a state where the configuration
+     * references an object whose file is already gone. An agent that commits there commits a
+     * broken configuration.
+     * <p>
+     * The refusal is not a false alarm: it fires only once the wait has actually been made and has
+     * failed to establish that the queue drained, so the disk is not known to be what the response
+     * would have claimed. It says outright that nothing was undone, because the alternative -
+     * staying silent about work that already happened - is the failure this whole path exists to
+     * prevent.
+     *
+     * @param params the tool parameters
+     * @param result the JSON the tool produced
+     * @return {@code result} unchanged, or an actionable error when the export is still pending
+     */
+    String awaitDiskExport(Map<String, String> params, String result)
+    {
+        if (result == null || !mutatesModel(params))
+        {
+            return result;
+        }
+        String projectName = exportProjectName(params, result);
+        if (projectName == null || projectName.isEmpty())
+        {
+            return result;
+        }
+        if (exportEnvironment().waitForDiskExport(projectName, EXPORT_DEADLINE_MS)
+            != BuildUtils.DiskExportState.PENDING)
+        {
+            return result;
+        }
+        // Every clause here is kept to what PENDING actually establishes. It says "not confirmed",
+        // not "timed out", because PENDING also covers a wait that failed outright rather than
+        // running out of time; it says the files MAY be inconsistent, not that they are, because an
+        // unconfirmed export is unknown rather than known-bad; and it says "nothing was rolled
+        // back" rather than "the model change stands", because this base class is also inherited by
+        // a tool that reports on disk without changing the model at all.
+        return ToolResult.error("The operation completed, but its export to disk was not confirmed " //$NON-NLS-1$
+            + "within a " + (EXPORT_DEADLINE_MS / 1000) + "s budget, so the files of project '" //$NON-NLS-1$ //$NON-NLS-2$
+            + projectName + "' may not be consistent on disk: an object's own .mdo can already be " //$NON-NLS-1$
+            + "written or deleted while Configuration.mdo still holds the old collection. Nothing was " //$NON-NLS-1$
+            + "rolled back. Do not commit the working tree in this state. Check the project with " //$NON-NLS-1$
+            + "list_projects, wait for it to report ready, then use resync_to_disk to write out what " //$NON-NLS-1$
+            + "is still pending.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether this call changes the model, and therefore has an export whose completion has to be
+     * established before answering. A preview / report-only call has nothing queued of its own, so
+     * making it wait would only let unrelated background work refuse it.
+     *
+     * @param params the tool parameters
+     * @return {@code true} to await the export (the default)
+     */
+    protected boolean mutatesModel(Map<String, String> params)
+    {
+        return true;
+    }
+
+    /**
+     * The project whose export queue must drain, which is NOT always the one named in the
+     * parameters: {@code adopt_metadata_object} takes the BASE configuration by contract and writes
+     * into the EXTENSION, so a barrier keyed blindly on {@code projectName} would wait for a
+     * project that has nothing queued and pass while the real target is still exporting.
+     * <p>
+     * The default reads {@code projectName}; a subclass whose target differs reports it through a
+     * key it already puts in its own result.
+     *
+     * @param params the tool parameters
+     * @param result the JSON the tool produced
+     * @return the project name to wait for, or {@code null} to skip the wait
+     */
+    private String exportProjectName(Map<String, String> params, String result)
+    {
+        String key = exportProjectResultKey();
+        if (key != null)
+        {
+            String reported = readSuccessString(result, key);
+            if (reported != null)
+            {
+                return reported;
+            }
+        }
+        return readSuccessString(result, null) == null ? null : params.get(McpKeys.PROJECT_NAME);
+    }
+
+    /**
+     * Reads a string member of a SUCCESSFUL tool result.
+     * <p>
+     * Success is decided by the explicit {@code success} boolean rather than by "the payload
+     * parsed", because an error is a well-formed JSON object too - treating one as a write would
+     * make a rejected argument wait out the whole deadline and then be re-reported as a disk
+     * problem.
+     *
+     * @param result the JSON the tool produced
+     * @param member the member to read, or {@code null} to only test for success
+     * @return the member's value, {@code ""} when {@code member} is {@code null} and the result is
+     *     a success, or {@code null} when the result is not a successful JSON object
+     */
+    private static String readSuccessString(String result, String member)
+    {
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(result);
+            if (!parsed.isJsonObject())
+            {
+                return null;
+            }
+            JsonObject object = parsed.getAsJsonObject();
+            JsonElement success = object.get(KEY_SUCCESS);
+            if (success == null || !success.isJsonPrimitive() || !success.getAsJsonPrimitive().isBoolean()
+                || !success.getAsBoolean())
+            {
+                return null;
+            }
+            if (member == null)
+            {
+                return ""; //$NON-NLS-1$
+            }
+            JsonElement value = object.get(member);
+            return value != null && value.isJsonPrimitive() ? value.getAsString() : null;
+        }
+        catch (RuntimeException e)
+        {
+            // A payload we cannot read is not evidence of a disk problem, and the mutation already
+            // happened - degrade to "do not gate", never to a refusal built on a guess.
+            Activator.logError("Could not read the result of " + "a metadata write while checking its export", e); //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
+        }
+    }
+
+    /**
+     * The result key naming the project whose export must drain, when it is not the one in
+     * {@code projectName}.
+     *
+     * @return the result key, or {@code null} to use {@code projectName} (the default)
+     */
+    protected String exportProjectResultKey()
+    {
+        return null;
+    }
+
+    /**
+     * Seam so the export barrier can be exercised without a live derived-data pipeline. It takes
+     * the project NAME rather than an {@link IProject} so the workspace lookup lives behind it too
+     * - otherwise the decision could not be tested without a running workspace, which is exactly
+     * the part worth pinning.
+     */
+    @FunctionalInterface
+    interface IExportEnvironment
+    {
+        /**
+         * @param projectName the name of the project whose export queue to drain
+         * @param timeoutMs the deadline in milliseconds
+         * @return how the wait ended
+         */
+        BuildUtils.DiskExportState waitForDiskExport(String projectName, long timeoutMs);
+    }
+
+    /** The production environment: resolve the project, then run the bounded platform wait. */
+    private static final IExportEnvironment PLATFORM_EXPORT_ENVIRONMENT = (projectName, timeoutMs) -> {
+        IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
+        // An absent project has no queue of its own; reporting PENDING for it would refuse a call
+        // over a condition that cannot be cured by waiting.
+        return project.exists() ? BuildUtils.waitForDiskExport(project, timeoutMs)
+            : BuildUtils.DiskExportState.UNOBSERVABLE;
+    };
+
+    /**
+     * @return the environment the export barrier runs against; overridden only by tests
+     */
+    IExportEnvironment exportEnvironment()
+    {
+        return PLATFORM_EXPORT_ENVIRONMENT;
     }
 
     /**

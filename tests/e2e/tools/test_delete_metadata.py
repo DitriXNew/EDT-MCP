@@ -35,6 +35,8 @@ from harness import (
     assert_no_diff,
     assert_tree_unchanged,
     assert_diff_contains,
+    assert_disk_lacks,
+    assert_disk_path_gone,
     poll_disk_path_gone,
     poll_disk_lacks,
     poll_disk_contains,
@@ -65,13 +67,12 @@ def _list_catalogs():
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_confirm_deletes_top_object_gone_from_model_and_disk():
-    # Settle first, for the reason the disk assertions below make visible. This test failed once on
-    # a CI runner whose derived-data queue was badly backed up (the very next test then spent 2222s
-    # never reaching ready): the model read-back passed and the object's own .mdo was gone, but the
-    # Configuration.mdo rewrite had not landed inside poll_disk_lacks's 10s. That is the export
-    # queued behind other work, not a delete that failed - so drain the queue before starting,
-    # rather than widen the poll and call a backlog "normal".
-    settle_or_fail("this delete (its Configuration.mdo export is asserted within 10s)")
+    # Settle first, so this measures the delete rather than a backlog it inherited. The instinct
+    # that produced this line was right and is now enforced on the PRODUCT side too: draining the
+    # queue before starting is what the test can do, and draining its own export before answering
+    # is what the tool now does (#406). The assertions below are immediate precisely because of
+    # that second half - they would be unfair, not merely strict, without it.
+    settle_or_fail("this delete (its Configuration.mdo export is asserted with no polling at all)")
     assert_contains(_list_commonmodules(), "Calc", "baseline: CommonModule.Calc must exist")
 
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": "CommonModule.Calc", "confirm": True})
@@ -81,13 +82,26 @@ def test_confirm_deletes_top_object_gone_from_model_and_disk():
         "confirm=true must take the execute branch (action=executed): %r" % (r.structured,)
     assert r.structured.get("fqn") == "CommonModule.Calc", "must echo the target fqn"
 
+    # The disk assertions come FIRST, before any other MCP call, and that ordering is load-bearing
+    # (#406). They are checked with no polling at all: delete_metadata now waits for its own .mdo
+    # export to drain before answering, so both files must ALREADY be right the instant it returns.
+    # Anything in between - even one read-only round trip like the model read-back below - is time
+    # the broken asynchronous export could have used to finish, which is exactly how this assertion
+    # would quietly stop testing anything. Measured pre-fix lag was 0.02-0.15s, i.e. the same order
+    # as one MCP round trip, so "immediately" has to mean immediately.
+    #
+    # Why both files: they are SEPARATE export tasks with no ordering between them, so a build that
+    # answers early leaves the tree in a state where Configuration.mdo still references an object
+    # whose own file is already gone - and an agent that commits there commits a broken
+    # configuration. A poll waits that window out and calls it green.
+    assert_disk_path_gone("src/CommonModules/Calc/Calc.mdo",
+                          ctx="delete must remove the object's own .mdo from disk")
+    assert_disk_lacks("src/Configuration/Configuration.mdo", "CommonModule.Calc",
+                      ctx="delete must remove the Configuration.mdo collection reference")
+
     after = _list_commonmodules()
     assert_not_contains(after, "| Calc ", "CommonModule.Calc must be GONE from the model")
     assert_contains(after, "OK", "sibling CommonModule.OK must survive a targeted delete")
-    poll_disk_path_gone("src/CommonModules/Calc/Calc.mdo",
-                        ctx="delete must remove the object's own .mdo from disk")
-    poll_disk_lacks("src/Configuration/Configuration.mdo", "CommonModule.Calc",
-                    ctx="delete must remove the Configuration.mdo collection reference")
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")

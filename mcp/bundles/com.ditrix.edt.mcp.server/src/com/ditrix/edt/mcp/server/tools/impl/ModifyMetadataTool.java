@@ -439,7 +439,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "{cells, merges, areas, columnWidths, rowHeights}") //$NON-NLS-1$
             .objectProperty(KEY_DCS, "For a DCS (Report Data Composition Schema) content change: the " //$NON-NLS-1$
                 + "applied counts object {dataSources, dataSets, fields, parameters}") //$NON-NLS-1$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue to drain before answering, so on success the write has run; a write " //$NON-NLS-1$
+                    + "failure inside the platform is logged there and not reported here") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
             .stringProperty("destination", //$NON-NLS-1$

@@ -106,8 +106,21 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "FQN of the adopted object in the extension") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_EXTENSION_PROJECT, "The extension the object was adopted into") //$NON-NLS-1$
             .stringProperty(KEY_OBJECT_BELONGING, "ADOPTED (the object is now an adopted copy)") //$NON-NLS-1$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk", false) //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue of the EXTENSION project to drain before answering, so on success the " //$NON-NLS-1$
+                    + "write has run; a write failure inside the platform is logged there and not reported " //$NON-NLS-1$
+                    + "here", false) //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected String exportProjectResultKey()
+    {
+        // projectName is the BASE configuration by contract, but adoption writes into the
+        // EXTENSION - so the export to wait for is the one reported in the result, not the
+        // one that was asked for.
+        return KEY_EXTENSION_PROJECT;
     }
 
     @Override

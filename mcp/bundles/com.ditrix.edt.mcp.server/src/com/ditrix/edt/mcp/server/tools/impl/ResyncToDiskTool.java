@@ -206,8 +206,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .booleanProperty("success", "Whether the export succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.PROJECT_NAME, "The project that was re-synchronized") //$NON-NLS-1$
             .integerProperty("objectsExported", //$NON-NLS-1$
-                "Number of top objects whose .mdo was (re)written - the missing subset by default, " //$NON-NLS-1$
-                    + "every object when fullExport=true") //$NON-NLS-1$
+                "Number of top objects queued for (re)writing - the missing subset by default, every " //$NON-NLS-1$
+                    + "object when fullExport=true. The tool waits for the export queue to drain before " //$NON-NLS-1$
+                    + "answering, so on success the writes have run; a write failure inside the platform " //$NON-NLS-1$
+                    + "is logged there and not reported here") //$NON-NLS-1$
             .integerProperty("totalTopObjects", "Total metadata top objects walked in the BM model") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_FULL_EXPORT, "Whether a full export of every top object was requested") //$NON-NLS-1$
             .integerProperty("missingBeforeCount", "Top objects that had no .mdo on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
