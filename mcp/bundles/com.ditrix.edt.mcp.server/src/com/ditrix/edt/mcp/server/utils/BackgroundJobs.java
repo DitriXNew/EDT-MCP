@@ -314,23 +314,32 @@ public final class BackgroundJobs implements AutoCloseable
             inFlight.incrementAndGet();
         }
 
-        FutureTask<Void> task = new FutureTask<Void>(() -> {
-            runWork(record, work);
-            return null;
-        })
-        {
-            @Override
-            protected void done()
+        // The slot is given back by whichever side can PROVE the worker thread is free: the
+        // callable when it unwinds, or the cancelling side when the callable will never run.
+        // Neither alone is enough - a callable that ignores interruption keeps its thread long
+        // after cancellation, and a task cancelled in the queue never reaches its callable.
+        record.onSlotRelease(inFlight::decrementAndGet);
+
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            if (record.beginWork())
             {
-                // Exactly once, on EVERY terminal transition - including a cancel that lands
-                // before a worker thread picks the task up. Releasing the slot from the
-                // callable instead would leak it in that case: FutureTask.run() returns
-                // without running the callable when the task is already cancelled, so the
-                // admission would never be given back and the limit would shrink for good.
-                inFlight.decrementAndGet();
+                try
+                {
+                    runWork(record, work);
+                }
+                finally
+                {
+                    record.releaseSlot();
+                }
             }
-        };
+            return null;
+        });
         record.setWorkFuture(task);
+        if (!record.isRunning())
+        {
+            // Already terminal before it could be submitted (a budget of a millisecond or two).
+            record.cancelWork();
+        }
 
         try
         {
@@ -343,8 +352,8 @@ public final class BackgroundJobs implements AutoCloseable
         catch (RejectedExecutionException e)
         {
             record.fail("Background job could not start because the registry is stopping."); //$NON-NLS-1$
-            // The slot comes back through the task's done() hook, which this cancel triggers.
-            task.cancel(true);
+            // Nothing will run this task, so the cancelling side is the one that owes the slot.
+            record.cancelWork();
             throw e;
         }
         return record.snapshot();
@@ -552,6 +561,14 @@ public final class BackgroundJobs implements AutoCloseable
         private String errorMessage;
         private Future<?> workFuture;
         private ScheduledFuture<?> deadlineFuture;
+        /** Gives the admission slot back; see {@link #releaseSlot()}. */
+        private Runnable slotRelease;
+        private boolean slotReleased;
+        /** Set once the callable is executing, together with the thread executing it. */
+        private boolean workStarted;
+        private Thread worker;
+        /** Set when the work was cancelled before its callable could start. */
+        private boolean cancelledBeforeStart;
 
         JobRecord(String id, String initialProgress)
         {
@@ -579,10 +596,48 @@ public final class BackgroundJobs implements AutoCloseable
         synchronized void setWorkFuture(Future<?> future)
         {
             workFuture = future;
-            if (status != Status.RUNNING)
+        }
+
+        /** @param release runs exactly once, when the worker thread is provably free */
+        void onSlotRelease(Runnable release)
+        {
+            synchronized (this)
             {
-                future.cancel(true);
+                slotRelease = release;
             }
+        }
+
+        /** Gives the admission slot back, at most once however many sides call it. */
+        void releaseSlot()
+        {
+            Runnable release;
+            synchronized (this)
+            {
+                if (slotReleased || slotRelease == null)
+                {
+                    return;
+                }
+                slotReleased = true;
+                release = slotRelease;
+            }
+            release.run();
+        }
+
+        /**
+         * Marks the callable as running on the current thread.
+         *
+         * @return {@code false} when the job was cancelled before this point, in which case the
+         *         work must NOT run - its slot has already been accounted for by the canceller
+         */
+        synchronized boolean beginWork()
+        {
+            if (cancelledBeforeStart)
+            {
+                return false;
+            }
+            workStarted = true;
+            worker = Thread.currentThread();
+            return true;
         }
 
         synchronized void setDeadlineFuture(ScheduledFuture<?> future)
@@ -674,17 +729,39 @@ public final class BackgroundJobs implements AutoCloseable
             return true;
         }
 
+        /**
+         * Stops the work, and settles who owes the admission slot in the same step.
+         * <p>
+         * A running callable is INTERRUPTED rather than cancelled through its future: cancelling
+         * it would let the task report itself finished while the callable still owns the worker
+         * thread, and the slot would be handed to a replacement job that then has nowhere to
+         * run. Work that has not started is cancelled outright, and then the slot is owed by
+         * this side - the callable that would have released it will never execute.
+         */
         void cancelWork()
         {
-            Future<?> future;
+            Thread running;
+            Future<?> future = null;
             synchronized (this)
             {
-                future = workFuture;
+                running = workStarted ? worker : null;
+                if (running == null)
+                {
+                    cancelledBeforeStart = true;
+                    future = workFuture;
+                }
+            }
+            if (running != null)
+            {
+                // Its own finally gives the slot back once it actually unwinds.
+                running.interrupt();
+                return;
             }
             if (future != null)
             {
-                future.cancel(true);
+                future.cancel(false);
             }
+            releaseSlot();
         }
 
         void await(long waitMs)

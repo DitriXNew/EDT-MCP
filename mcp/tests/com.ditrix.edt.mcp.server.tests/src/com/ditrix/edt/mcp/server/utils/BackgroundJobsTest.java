@@ -149,6 +149,58 @@ public class BackgroundJobsTest
     }
 
     /**
+     * The mirror of the queued-cancellation case: work that ignores interruption still OWNS its
+     * worker thread after the job is failed. Handing the admission slot to a replacement then
+     * promises a thread that does not exist, and the replacement waits in the queue instead of
+     * running - which is the starvation the limit exists to prevent.
+     */
+    @Test
+    public void testTimedOutWorkKeepsItsSlotUntilTheCallableActuallyExits() throws Exception
+    {
+        // ONE worker thread, so "admitted" and "actually running" cannot be confused.
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
+        {
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            JobSnapshot started = jobs.start(50L, 1, "start", progress -> { //$NON-NLS-1$
+                entered.countDown();
+                while (release.getCount() > 0)
+                {
+                    try
+                    {
+                        release.await();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        // Deliberately ignores the interrupt: the thread stays occupied.
+                        Thread.interrupted();
+                    }
+                }
+                return "eventually"; //$NON-NLS-1$
+            });
+            assertNotNull(started);
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            assertEquals(Status.FAILED, jobs.await(started.getId(), 5_000L).getStatus());
+
+            assertNull("a slot was handed out while its worker thread was still busy", //$NON-NLS-1$
+                jobs.start(60_000L, 1, "start", progress -> "second")); //$NON-NLS-1$ //$NON-NLS-2$
+
+            release.countDown();
+            JobSnapshot admitted = null;
+            long until = System.currentTimeMillis() + 5_000L;
+            while (admitted == null && System.currentTimeMillis() < until)
+            {
+                admitted = jobs.start(60_000L, 1, "start", progress -> "third"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (admitted == null)
+                {
+                    Thread.sleep(20L);
+                }
+            }
+            assertNotNull("the slot never came back after the work unwound", admitted); //$NON-NLS-1$
+        }
+    }
+
+    /**
      * A job can be cancelled while its task is still QUEUED - the timeout fires before a
      * worker picks it up. {@code FutureTask.run()} then returns without ever running the
      * callable, so a slot released from inside the callable would never come back and the
