@@ -469,9 +469,9 @@ public class AskWorkmateTool implements IMcpTool
                                 }
 
                                 @Override
-                                public void onCommitted()
+                                public boolean onTryCommit()
                                 {
-                                    progress.markCommitted();
+                                    return progress.tryCommit();
                                 }
                             });
                             return new WorkmateResponse(chatHandoffAnswer(), null);

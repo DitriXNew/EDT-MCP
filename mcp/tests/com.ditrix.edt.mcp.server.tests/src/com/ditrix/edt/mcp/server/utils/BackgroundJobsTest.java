@@ -15,6 +15,7 @@ import static org.junit.Assert.fail;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -91,7 +92,7 @@ public class BackgroundJobsTest
             CountDownLatch committed = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
             JobSnapshot started = jobs.start(50L, "start", progress -> { //$NON-NLS-1$
-                progress.markCommitted();
+                assertTrue(progress.tryCommit());
                 committed.countDown();
                 release.await();
                 return "handed over"; //$NON-NLS-1$
@@ -109,6 +110,41 @@ public class BackgroundJobsTest
             JobSnapshot finished = jobs.await(started.getId(), 5_000L);
             assertEquals(Status.DONE, finished.getStatus());
             assertEquals("handed over", finished.getResult()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The other half of the same race: when the deadline got there FIRST, the work must be
+     * told so and skip the step it was about to take - otherwise the caller is handed a
+     * failure while the action happens anyway.
+     */
+    @Test
+    public void testWorkArrivingAfterTheDeadlineIsRefusedTheCommit() throws Exception
+    {
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
+        {
+            CountDownLatch decided = new CountDownLatch(1);
+            AtomicBoolean allowed = new AtomicBoolean(true);
+            JobSnapshot started = jobs.start(50L, "start", progress -> { //$NON-NLS-1$
+                try
+                {
+                    // The deadline interrupts the worker, which is how this returns early.
+                    Thread.sleep(10_000L);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.interrupted();
+                }
+                allowed.set(progress.tryCommit());
+                decided.countDown();
+                return "not asked"; //$NON-NLS-1$
+            });
+            assertNotNull(started);
+
+            assertEquals(Status.FAILED, jobs.await(started.getId(), 5_000L).getStatus());
+            assertTrue(decided.await(5, TimeUnit.SECONDS));
+            assertTrue("a job the deadline already failed must refuse the commit", //$NON-NLS-1$
+                !allowed.get());
         }
     }
 

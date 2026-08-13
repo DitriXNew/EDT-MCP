@@ -159,20 +159,28 @@ public final class BackgroundJobs implements AutoCloseable
         void add(String message);
 
         /**
-         * Declares that the work has passed the point where it can still be abandoned, so the
-         * deadline must stop reporting a retryable failure for it.
+         * Takes the job past the point where it can still be abandoned, in ONE step with the
+         * deadline: either this wins and the deadline can no longer publish a retryable
+         * failure, or the job is already terminal and the work must NOT go through with it.
          * <p>
          * Work that hands something to another thread - EDT's SWT thread, a remote service -
          * cannot take it back once it is handed over. Publishing "timed out, start a new job"
-         * for such a job invites a retry that performs the SAME action a second time. After
-         * this call the total budget can still be exceeded, but the outcome is whatever the
-         * work reports, not a manufactured failure.
+         * for such a job invites a retry that performs the SAME action a second time. Asking
+         * first, and only then checking whether the job is still alive, has the same problem
+         * from the other end: the deadline may already have failed the job. Hence one call,
+         * made immediately BEFORE the irreversible step, whose answer decides whether that
+         * step happens at all.
          * <p>
-         * The work stays responsible for terminating on its own: nothing cancels it afterwards.
+         * After it succeeds the total budget can still be exceeded, and the outcome is then
+         * whatever the work reports; the work stays responsible for terminating on its own,
+         * because nothing cancels it any more.
+         *
+         * @return {@code true} when the job is still running and is now committed
          */
-        default void markCommitted()
+        default boolean tryCommit()
         {
-            // Nothing to do for work that can always be abandoned.
+            // Work that can always be abandoned simply proceeds.
+            return true;
         }
     }
 
@@ -455,9 +463,9 @@ public final class BackgroundJobs implements AutoCloseable
                 }
 
                 @Override
-                public void markCommitted()
+                public boolean tryCommit()
                 {
-                    record.markCommitted();
+                    return record.tryCommit();
                 }
             });
             record.complete(result);
@@ -480,20 +488,16 @@ public final class BackgroundJobs implements AutoCloseable
     private static void timeOut(JobRecord record, long timeoutMs)
     {
         String timeout = formatSeconds(timeoutMs);
-        if (record.isCommitted())
-        {
-            // The work has handed the request over and cannot take it back. Failing the job
-            // now would report a retryable error for something that is still on its way, and
-            // the retry would perform the same action twice - so the budget is allowed to
-            // overrun and the work reports its own outcome.
-            record.addProgress("The total timeoutSeconds budget of " + timeout //$NON-NLS-1$
+        // Committed-or-fail is decided under the record's own lock. Reading the flag first and
+        // failing afterwards would leave a window in which the work commits in between, and
+        // the job would be published as a retryable failure for a request already on its way.
+        if (record.failUnlessCommitted(
+            "Job exceeded its total timeoutSeconds budget of " //$NON-NLS-1$
+                + timeout + ". Start a new job with a larger timeoutSeconds value, or check " //$NON-NLS-1$
+                + "Workmate and network status.", //$NON-NLS-1$
+            "The total timeoutSeconds budget of " + timeout //$NON-NLS-1$
                 + " expired after the request was already handed over, so it is left to " //$NON-NLS-1$
-                + "finish instead of being reported as failed."); //$NON-NLS-1$
-            return;
-        }
-        if (record.fail("Job exceeded its total timeoutSeconds budget of " //$NON-NLS-1$
-            + timeout + ". Start a new job with a larger timeoutSeconds value, or check " //$NON-NLS-1$
-            + "Workmate and network status.")) //$NON-NLS-1$
+                + "finish instead of being reported as failed.")) //$NON-NLS-1$
         {
             record.cancelWork();
         }
@@ -560,14 +564,16 @@ public final class BackgroundJobs implements AutoCloseable
             return status == Status.RUNNING;
         }
 
-        synchronized void markCommitted()
+        synchronized boolean tryCommit()
         {
+            if (status != Status.RUNNING)
+            {
+                // The deadline (or anything else) already published a terminal outcome, so the
+                // caller must not go through with the irreversible step it was about to take.
+                return false;
+            }
             committed = true;
-        }
-
-        synchronized boolean isCommitted()
-        {
-            return committed;
+            return true;
         }
 
         synchronized void setWorkFuture(Future<?> future)
@@ -621,9 +627,33 @@ public final class BackgroundJobs implements AutoCloseable
 
         boolean fail(String message)
         {
+            return fail(message, null);
+        }
+
+        /**
+         * Fails the job unless the work has committed, deciding both under ONE lock.
+         *
+         * @param message failure to publish when the job can still be abandoned
+         * @param committedNote progress line to record instead when it cannot
+         * @return {@code true} when the job was actually failed
+         */
+        boolean failUnlessCommitted(String message, String committedNote)
+        {
+            return fail(message, committedNote);
+        }
+
+        private boolean fail(String message, String committedNote)
+        {
             ScheduledFuture<?> deadline;
             synchronized (this)
             {
+                if (committedNote != null && committed)
+                {
+                    // The request is already on its way and cannot be taken back, so the
+                    // budget is allowed to overrun and the work publishes its own outcome.
+                    addProgress(committedNote);
+                    return false;
+                }
                 if (status != Status.RUNNING)
                 {
                     return false;

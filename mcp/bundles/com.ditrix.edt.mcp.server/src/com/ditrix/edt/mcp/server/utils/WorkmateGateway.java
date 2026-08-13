@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.ui.PlatformUI;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
@@ -114,13 +115,18 @@ public class WorkmateGateway
         void onProgress(String message);
 
         /**
-         * Reports that the request has been handed over and can no longer be withdrawn, so
-         * the caller must stop treating a later timeout as a retryable failure - a retry
-         * would ask Workmate the same question twice.
+         * Asks whether the irreversible step may still be taken, and marks it as taken.
+         * <p>
+         * The caller stops treating a later timeout as a retryable failure - a retry would ask
+         * Workmate the same question twice - and a {@code false} answer means the caller has
+         * ALREADY published a failure, so the question must not be sent at all.
+         *
+         * @return {@code true} when the adapter may proceed
          */
-        default void onCommitted()
+        default boolean onTryCommit()
         {
-            // Callers that cannot retry anyway have nothing to do here.
+            // Callers that cannot retry anyway have nothing to lose either way.
+            return true;
         }
     }
 
@@ -669,6 +675,33 @@ public class WorkmateGateway
     }
 
     /**
+     * Returns the running workbench's display, or {@code null} when there is none.
+     * <p>
+     * Deliberately not {@code Display.getDefault()}: that CREATES a display when none exists,
+     * and on a background worker during shutdown the created one has no event loop, so anything
+     * posted to it waits forever.
+     *
+     * @return a live workbench display, or {@code null}
+     */
+    private static Display workbenchDisplay()
+    {
+        try
+        {
+            if (!PlatformUI.isWorkbenchRunning())
+            {
+                return null;
+            }
+            Display display = PlatformUI.getWorkbench().getDisplay();
+            return display == null || display.isDisposed() ? null : display;
+        }
+        catch (RuntimeException e)
+        {
+            // A workbench that is tearing down can throw rather than answer.
+            return null;
+        }
+    }
+
+    /**
      * Reports whether a Workmate JShell session has already been closed.
      * <p>
      * Tolerant on purpose: when the field cannot be read the session is treated as ALIVE,
@@ -837,6 +870,18 @@ public class WorkmateGateway
             // Chat.chat(...) calls IUI.showView(...) before dispatching, so it must start on the
             // SWT thread. A null AIContext is what Workmate itself tolerates - it wraps the value
             // in Optional.ofNullable - and it means "no editor selection", which is exactly our case.
+            //
+            // The workbench's display, and never Display.getDefault(): this runs on a background
+            // worker, and getDefault() CREATES a display when none exists. During shutdown that
+            // would build a fresh display on the worker thread with no event loop behind it, so
+            // the asyncExec below would never run and the hand-off would hang until its timeout.
+            Display display = workbenchDisplay();
+            if (display == null)
+            {
+                throw GatewayException.notReady("the EDT workbench UI is gone (EDT is closing " //$NON-NLS-1$
+                    + "or running headless), so the chat view cannot be opened"); //$NON-NLS-1$
+            }
+
             AtomicReference<Throwable> failure = new AtomicReference<>();
             CountDownLatch delivered = new CountDownLatch(1);
             // ONE claim decides whether the question is asked, taken by whoever gets there
@@ -846,19 +891,23 @@ public class WorkmateGateway
             // read "not abandoned", this thread can then time out, and the question is
             // asked anyway, after the caller was told it failed and possibly retried.
             AtomicBoolean claimed = new AtomicBoolean(false);
-            Display.getDefault().asyncExec(() -> {
+            display.asyncExec(() -> {
                 if (!claimed.compareAndSet(false, true))
                 {
                     return;
                 }
-                // Winning the claim IS the point of no return, and it is announced from here
-                // rather than from the waiting thread on purpose: the waiter only learns that
-                // it lost the claim when its wait runs out, and the job's own budget can
-                // expire long before that - which is exactly when a manufactured "timed out,
-                // start a new job" would send this question to Workmate a second time.
-                progress.onCommitted();
                 try
                 {
+                    // The point of no return, taken from HERE rather than from the waiting
+                    // thread: the waiter only learns that it lost the claim when its wait runs
+                    // out, and the job's own budget can expire long before that - exactly when
+                    // a manufactured "timed out, start a new job" would send this question to
+                    // Workmate a second time. A refusal means the caller already published a
+                    // failure, so the question must not be asked at all.
+                    if (!progress.onTryCommit())
+                    {
+                        return;
+                    }
                     askQuestion.invoke(chat, aiContext, question);
                 }
                 catch (Exception | LinkageError e)

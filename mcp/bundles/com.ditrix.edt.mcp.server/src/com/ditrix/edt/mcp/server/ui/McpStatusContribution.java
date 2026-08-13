@@ -129,6 +129,11 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         font = new Font(originalFont.getDevice(), fontData);
         statusCanvas.setFont(font);
 
+        // An empty Canvas has nothing to compute a preferred size from, so SWT answers with
+        // its default 64x64 - and the trim would size the whole status bar to that. Ask for
+        // exactly what is painted instead: the taller of the text and the indicator.
+        canvasGd.heightHint = measureContentHeight();
+
         statusCanvas.addPaintListener(this::paintStatus);
 
         createPopupMenu();
@@ -155,6 +160,30 @@ public class McpStatusContribution extends WorkbenchWindowControlContribution
         startUpdateThread();
         
         return container;
+    }
+
+    /**
+     * Height the canvas actually needs: the painted text, or the indicator when that is taller.
+     *
+     * @return height in pixels
+     */
+    private int measureContentHeight()
+    {
+        int imageHeight = currentImage != null && !currentImage.isDisposed()
+            ? currentImage.getBounds().height : 0;
+        GC gc = new GC(statusCanvas);
+        try
+        {
+            if (font != null && !font.isDisposed())
+            {
+                gc.setFont(font);
+            }
+            return Math.max(gc.getFontMetrics().getHeight(), imageHeight);
+        }
+        finally
+        {
+            gc.dispose();
+        }
     }
 
     private void createStatusImages(Display display)

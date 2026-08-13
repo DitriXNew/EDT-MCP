@@ -570,7 +570,7 @@ public class AskWorkmateToolTest
             public void pushToChat(IProject project, String question, ProgressListener progress)
                 throws GatewayException
             {
-                progress.onCommitted();
+                assertTrue(progress.onTryCommit());
                 entered.countDown();
                 try
                 {
