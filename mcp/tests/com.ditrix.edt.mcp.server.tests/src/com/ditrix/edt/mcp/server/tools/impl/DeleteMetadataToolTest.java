@@ -15,6 +15,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
@@ -23,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
@@ -37,10 +40,14 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.reference.MetadataReferenceService;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
@@ -54,6 +61,29 @@ import com.ditrix.edt.mcp.server.utils.XdtoWriter;
  */
 public class DeleteMetadataToolTest
 {
+    @Test
+    public void testMdClassDeleteRefusesNullModelBeforeCallingEdtRefactoring()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        IBmModelManager modelManager = mock(IBmModelManager.class);
+        when(modelManager.getModel(project)).thenReturn(null);
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        MdObject object = mock(MdObject.class);
+        BmModelResolver.Resolution resolution = BmModelResolver.resolve(project, modelManager);
+
+        String json = new DeleteMetadataTool().prepareMdClassDelete(project, "CommonModule.Calc", //$NON-NLS-1$
+            object, true, false, refactoringService, resolution);
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("BM model is not available for project 'TestConfiguration'. Nothing was " //$NON-NLS-1$
+            + "deleted. Use list_projects to check the project state, then retry delete_metadata " //$NON-NLS-1$
+            + "when the project is ready.", result.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        verify(refactoringService, never()).createMdObjectDeleteRefactoring(
+            org.mockito.ArgumentMatchers.anyCollection());
+    }
+
     @Test
     public void testNameConstant()
     {

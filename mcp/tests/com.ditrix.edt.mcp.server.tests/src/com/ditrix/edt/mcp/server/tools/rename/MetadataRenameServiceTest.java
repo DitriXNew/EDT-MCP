@@ -6,14 +6,20 @@
 
 package com.ditrix.edt.mcp.server.tools.rename;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
@@ -24,6 +30,13 @@ import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
 
@@ -37,8 +50,9 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
  * {@code formRenameIneligibility}, {@code designerChildRefusal} and
  * {@code duplicateNameRefusal}. Their only public entry
  * ({@code rename}) needs a live EDT project, an {@code IFormRefactoringService} and a BM
- * transaction, none of which exist headlessly, and production shape is not bent for testability -
- * so no test seam was added. The cost is stated rather than hidden: RENAMING one of those methods
+ * transaction, none of which exist headlessly. The mdclass null-model refusal uses the small
+ * package-visible creation seam that keeps EDT out of the test. For the reflective tests, RENAMING
+ * one of those methods
  * breaks these tests with a {@code NoSuchMethodException} instead of a compile error, and the
  * refusal wording is pinned only because it is asserted here.
  * <p>
@@ -51,6 +65,34 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormMemberRef;
  */
 public class MetadataRenameServiceTest
 {
+    @Test
+    public void testMdClassRenameRefusesNullDependentModelBeforeCallingEdtRefactoring()
+    {
+        IProject project = mock(IProject.class);
+        IProject dependentProject = mock(IProject.class);
+        when(dependentProject.getName()).thenReturn("DependentConfiguration"); //$NON-NLS-1$
+        IBmModelManager modelManager = mock(IBmModelManager.class);
+        when(modelManager.getModel(dependentProject)).thenReturn(null);
+        IMdRefactoringService refactoringService = mock(IMdRefactoringService.class);
+        MdObject object = mock(MdObject.class);
+        BmModelResolver.Resolution resolution =
+            BmModelResolver.resolve(dependentProject, modelManager);
+
+        String json = new MetadataRenameService().prepareMdClassRename(project,
+            "CommonModule.Calc", "Calculator", object, false, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
+            refactoringService, resolution);
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("BM model is not available for project 'DependentConfiguration'. Nothing was " //$NON-NLS-1$
+            + "renamed. Use list_projects to check the project state, then retry " //$NON-NLS-1$
+            + "rename_metadata_object when the project is ready.", //$NON-NLS-1$
+            result.get("error").getAsString()); //$NON-NLS-1$
+        verify(refactoringService, never()).createMdObjectRenameRefactoring(
+            org.mockito.ArgumentMatchers.any(MdObject.class),
+            org.mockito.ArgumentMatchers.anyString());
+    }
+
     /** Cyrillic 'Spravochnik' - the Russian TYPE token for a Catalog. */
     private static final String RU_CATALOG =
         fromCp(0x0421, 0x043f, 0x0440, 0x0430, 0x0432, 0x043e, 0x0447, 0x043d, 0x0438, 0x043a);
