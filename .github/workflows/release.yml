@@ -51,6 +51,9 @@ jobs:
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
         run: |
+          # pipefail: without it the `if` below reads tee's status, not Maven's, so a
+          # real compile/test failure would exit 0 and the job would go green on a red build.
+          set -o pipefail
           # edt.1c.ru intermittently 502s / resets while Tycho mirrors the EDT p2 platform
           # (most often on a cold cache). Retry, but ONLY on those transient network errors —
           # fail fast on a real compile/test failure.
