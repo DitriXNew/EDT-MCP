@@ -8,9 +8,11 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -35,6 +37,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.GsonProvider;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -137,7 +140,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     /**
      * Total time budget (ms) to wait for the post-export {@code .mdo} flush to be
      * visible on the filesystem before counting a file as still missing.
-     * {@link BmTransactions#forceExportToDisk} runs the platform serializer
+     * {@link BmTransactions#forceExportToDisk} hands the objects to the platform serializer
      * synchronously, but a just-restored file can still lag a separate on-disk
      * existence check by a beat (OS/filesystem write-visibility, plus any
      * UI-scheduled tail of the export), so the re-check polls within this budget
@@ -161,17 +164,14 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             + "and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to " //$NON-NLS-1$
             + "src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS " //$NON-NLS-1$
             + "any unsaved in-memory model edits. Walks EVERY top metadata object of the " //$NON-NLS-1$
-            + "configuration (all kinds), reports the objects whose .mdo is missing on disk " //$NON-NLS-1$
-            + "(missingBefore), and force-exports that missing subset so the files are " //$NON-NLS-1$
-            + "restored (fullExport=true re-exports every object instead - requires " //$NON-NLS-1$
-            + "overwriteDiskEdits=true to confirm, as it overwrites on-disk edits). Fixes " //$NON-NLS-1$
-            + "'object file does not exist' failures from update_database / XML import caused " //$NON-NLS-1$
-            + "by an accumulated desync. Dangling/orphaned references in Configuration.mdo " //$NON-NLS-1$
-            + "(unresolved proxies shown by get_project_errors as md-reference-intergrity " //$NON-NLS-1$
-            + "'lost reference' warnings that block update_database / XML import) are " //$NON-NLS-1$
-            + "REPORTED by default (danglingFound + danglingDetails); set " //$NON-NLS-1$
-            + "cleanDanglingReferences=true to REMOVE them - destructive: rewrites " //$NON-NLS-1$
-            + "Configuration.mdo. " //$NON-NLS-1$
+            + "configuration (all kinds), reports the objects whose .mdo is missing on disk, and " //$NON-NLS-1$
+            + "force-exports that missing subset so the files are restored. Fixes 'object file does " //$NON-NLS-1$
+            + "not exist' failures from update_database / XML import caused by an accumulated " //$NON-NLS-1$
+            + "desync. Dangling/orphaned references in Configuration.mdo (the md-reference-intergrity " //$NON-NLS-1$
+            + "'lost reference' warnings get_project_errors shows, which block update_database / XML " //$NON-NLS-1$
+            + "import) are REPORTED by default. Two opt-in modes are destructive: re-exporting EVERY " //$NON-NLS-1$
+            + "object instead of the missing subset overwrites on-disk edits, and REMOVING the " //$NON-NLS-1$
+            + "dangling references rewrites Configuration.mdo. " //$NON-NLS-1$
             + "Full parameters and examples: call get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
 
@@ -209,8 +209,12 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .booleanProperty("success", "Whether the export succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.PROJECT_NAME, "The project that was re-synchronized") //$NON-NLS-1$
             .integerProperty("objectsExported", //$NON-NLS-1$
-                "Number of top objects whose .mdo was (re)written - the missing subset by default, " //$NON-NLS-1$
-                    + "every object when fullExport=true") //$NON-NLS-1$
+                "Number of top objects queued for (re)writing - the missing subset by default, every " //$NON-NLS-1$
+                    + "object when fullExport=true. The tool waits for the export queue to drain before " //$NON-NLS-1$
+                    + "answering, so a success normally means the writes have already run - but that " //$NON-NLS-1$
+                    + "establishes the queue is empty, not that the bytes are correct (a platform-side " //$NON-NLS-1$
+                    + "write failure is logged inside EDT), and the wait is skipped where the export " //$NON-NLS-1$
+                    + "state cannot be observed") //$NON-NLS-1$
             .integerProperty("totalTopObjects", "Total metadata top objects walked in the BM model") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_FULL_EXPORT, "Whether a full export of every top object was requested") //$NON-NLS-1$
             .integerProperty("missingBeforeCount", "Top objects that had no .mdo on disk before the export") //$NON-NLS-1$ //$NON-NLS-2$
@@ -227,6 +231,195 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
             .build();
+    }
+
+    @Override
+    protected Collection<String> exportProjectsToAwait(Map<String, String> params, JsonObject result)
+    {
+        // A project that is already in sync exports nothing and reports objectsExported=0. That is
+        // a genuine no-op success, so there is no export of ours to confirm; waiting would only
+        // expose a healthy call to refusal by unrelated background export work. Dangling-reference
+        // cleanup DOES re-export Configuration, and it reports its own non-zero count, so the two
+        // are asked together rather than assuming the export list is the only writer.
+        boolean queued = !"0".equals(resultString(result, "objectsExported")) //$NON-NLS-1$ //$NON-NLS-2$
+            || !"0".equals(resultString(result, "danglingRemovedCount")); //$NON-NLS-1$ //$NON-NLS-2$
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        return queued && projectName != null && !projectName.isEmpty()
+            ? Collections.singletonList(projectName) : Collections.<String> emptyList();
+    }
+
+    /**
+     * @return the revalidation delegate; overridden only by tests, so the ORDER of the drain and
+     *     the rebuild can be observed without a live workspace
+     */
+    UnaryOperator<String> revalidator()
+    {
+        return CleanProjectTool::cleanProject;
+    }
+
+    /**
+     * Runs the optional post-export revalidation and folds its warning into the result.
+     * <p>
+     * Deliberately here rather than in {@code executeOnUiThread}: {@code revalidate=true} asks for
+     * a rebuild THAT SEES THE EXPORT, and inside the UI-thread body the export is still queued. A
+     * local wait there would not do either - it would block the UI thread on EDT's own pipeline,
+     * which is the deadlock this whole barrier is arranged to avoid. Running after the barrier
+     * costs no second wait: the barrier has already done the waiting there was to do.
+     * <p>
+     * It is SKIPPED when the barrier could not observe the export at all. That state means the
+     * bytes are UNKNOWN, not known-stale - but a rebuild is only worth running on bytes known to
+     * be current, so running anyway could reproduce the defect this move fixes, with a different
+     * cause and no way to tell afterwards.
+     *
+     * @param params the tool parameters
+     * @param result the JSON produced so far
+     * @param drainEstablished whether the export was observed to finish
+     * @return the result, with {@code revalidateWarning} added when the revalidation reported one
+     *     or was skipped
+     */
+    private String revalidateAfterExport(Map<String, String> params, String result,
+        boolean drainEstablished)
+    {
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        if (projectName == null || projectName.isEmpty()
+            || !JsonUtils.extractBooleanArgument(params, KEY_REVALIDATE, false))
+        {
+            return result;
+        }
+        if (!drainEstablished)
+        {
+            return withRevalidateWarning(result, "Revalidation was skipped: the export to disk " //$NON-NLS-1$
+                + "could not be confirmed, and a rebuild started from unconfirmed bytes could " //$NON-NLS-1$
+                + "report on a stale state. Re-run resync_to_disk with revalidate=true once the " //$NON-NLS-1$
+                + "project reports ready."); //$NON-NLS-1$
+        }
+        // Reached only on a SUCCESS envelope (the base class does not call this otherwise), and a
+        // failed export answers with an error - so "the export succeeded" is already established.
+        String warning = runOptionalRevalidation(projectName, true, true, revalidator());
+        return warning == null ? result : withRevalidateWarning(result, warning);
+    }
+
+    /**
+     * Adds {@code revalidateWarning} to a result, leaving it untouched when it cannot be parsed.
+     *
+     * @param result the JSON produced so far
+     * @param warning the warning to attach
+     * @return the result with the warning attached
+     */
+    private static String withRevalidateWarning(String result, String warning)
+    {
+        try
+        {
+            JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+            json.addProperty("revalidateWarning", warning); //$NON-NLS-1$
+            return GsonProvider.get().toJson(json);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Could not attach a revalidation warning", e); //$NON-NLS-1$
+            return result;
+        }
+    }
+
+    @Override
+    protected String refreshAfterExportAwait(Map<String, String> params, String result,
+        boolean drainEstablished)
+    {
+        // Runs AFTER the export barrier, and off the UI thread. Revalidation first: it is the step
+        // whose whole point is to read the exported bytes, so it must not be ordered behind a
+        // best-effort report refresh that might return early.
+        String revalidated = revalidateAfterExport(params, result, drainEstablished);
+
+        // This tool REPORTS on disk, and it sampled disk inside executeOnUiThread - before the
+        // export queue had drained. Anything it found "still missing" there may exist by the time
+        // the caller reads the answer, so the sample is retaken now that the wait has finished.
+        // Reporting the earlier moment would describe a state that no longer exists.
+        String projectName = params.get(McpKeys.PROJECT_NAME);
+        if (projectName == null || projectName.isEmpty())
+        {
+            return revalidated;
+        }
+        try
+        {
+            JsonObject json = JsonParser.parseString(revalidated).getAsJsonObject();
+            JsonElement before = json.get("missingBefore"); //$NON-NLS-1$
+            if (before == null || !before.isJsonArray() || before.getAsJsonArray().isEmpty())
+            {
+                return revalidated;
+            }
+            List<String> candidates = new ArrayList<>();
+            before.getAsJsonArray().forEach(e -> candidates.add(e.getAsString()));
+            // The listed set is CAPPED at MAX_LISTED_FQNS, so on a large desync it is a subset,
+            // and a subset cannot support a verdict about the WHOLE. Such a report is therefore
+            // LABELLED rather than recomputed: silently returning the pre-barrier numbers was a
+            // defect of its own (the caller was told files were absent that the barrier had in
+            // fact waited out), but recomputing from the subset and publishing its count as the
+            // project's would be worse - a response contradicting itself.
+            JsonElement beforeCount = json.get("missingBeforeCount"); //$NON-NLS-1$
+            boolean truncated = beforeCount != null && beforeCount.getAsInt() != candidates.size();
+
+            // A TRUNCATED list cannot support a verdict about the whole project, and the structured
+            // fields are documented as whole-project figures - so they are NOT overwritten from a
+            // subset. Writing the subset's count into stillMissingCount would produce a response
+            // that contradicts itself: missingBeforeCount 600 next to stillMissingCount 0 while
+            // 100 unlisted files are still absent. The caveat is added FIRST, before any early
+            // return, so it cannot be skipped by the "nothing changed" path below. It needs no
+            // project either, so it is settled before the workspace is touched.
+            if (truncated)
+            {
+                // Worded to SUPERSEDE, not merely to add: the summary above says "still missing
+                // after export", and leaving that to stand next to a staleness note would make the
+                // message argue with itself.
+                json.addProperty(McpKeys.MESSAGE, resultString(json, McpKeys.MESSAGE)
+                    + " Correction to the figures above: missingBefore/stillMissing list at most " //$NON-NLS-1$
+                    + MAX_LISTED_FQNS + " entries while " + beforeCount.getAsInt() //$NON-NLS-1$
+                    + " object(s) were missing, so stillMissing/stillMissingCount are the values " //$NON-NLS-1$
+                    + "sampled at the earlier check and were NOT re-read afterwards. They may or " //$NON-NLS-1$
+                    + "may not still hold; re-run resync_to_disk to get a current figure."); //$NON-NLS-1$
+                return GsonProvider.get().toJson(json);
+            }
+
+            // Fully qualified: the base class has its own nested ProjectContext, which shadows
+            // the shared resolver inside every subclass.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context = com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            if (!context.exists())
+            {
+                // `revalidated`, not `result`: the revalidation may already have attached a warning,
+                // and every other exit from here preserves it. Returning the pre-revalidation
+                // payload would drop exactly the news the caller needs.
+                return revalidated;
+            }
+            List<String> stillMissing = findMissingMdoFiles(context.project(), candidates);
+            // Compared as a SET, not by size: one file arriving while another disappears leaves the
+            // count equal and the named entries wrong, which is the failure this refresh exists to
+            // prevent rather than one it may reproduce.
+            JsonElement previous = json.get("stillMissing"); //$NON-NLS-1$
+            List<String> previousMissing = new ArrayList<>();
+            if (previous != null && previous.isJsonArray())
+            {
+                previous.getAsJsonArray().forEach(e -> previousMissing.add(e.getAsString()));
+            }
+            if (new LinkedHashSet<>(previousMissing).equals(new LinkedHashSet<>(stillMissing)))
+            {
+                return revalidated;
+            }
+            json.add("stillMissing", GsonProvider.get().toJsonTree(stillMissing)); //$NON-NLS-1$
+            json.addProperty("stillMissingCount", stillMissing.size()); //$NON-NLS-1$
+            json.addProperty(McpKeys.MESSAGE,
+                buildMessage(true, json.get("objectsExported").getAsInt(), //$NON-NLS-1$
+                    json.get(KEY_FULL_EXPORT).getAsBoolean(), candidates.size(), stillMissing.size(),
+                    json.get("danglingFound").getAsInt(), //$NON-NLS-1$
+                    json.get("danglingRemovedCount").getAsInt() > 0, //$NON-NLS-1$
+                    json.get(KEY_CLEAN_DANGLING_REFERENCES).getAsBoolean()));
+            return GsonProvider.get().toJson(json);
+        }
+        catch (RuntimeException e)
+        {
+            // A result we cannot restate is still a valid result; never fail the call over the
+            // freshness of a report field.
+            Activator.logError("Could not refresh the resync disk report after the export wait", e); //$NON-NLS-1$
+            return revalidated;
+        }
     }
 
     @Override
@@ -322,10 +515,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         DanglingResult dangling =
             cleanDanglingReferences(ctx.config, bmModel, ctx.project, cleanDangling);
 
-        // Step 6 (optional, best-effort): refresh stale validation markers. Only run
-        // when the export actually succeeded - a failed export must not then trigger a
-        // full clean build.
-        String revalidateWarning = runOptionalRevalidation(projectName, revalidate, exported);
+        // Step 6 (optional, best-effort) does NOT happen here. Revalidation rebuilds FROM DISK,
+        // and at this point the export it is supposed to validate is still queued - so running it
+        // now would rebuild from the previous bytes and report on them, which is precisely the
+        // guarantee the caller asked for by passing revalidate=true. It runs in
+        // refreshAfterExportAwait instead, after the export barrier. That is also the thread
+        // clean_project normally runs on: CleanProjectTool implements IMcpTool directly, so its
+        // own calls are off the UI thread, and this was the odd one out.
 
         // The force-export swallows failures and returns false (unresolved
         // services/project, or the export threw). `exported` is true when the export
@@ -359,12 +555,9 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             result.put("danglingWarning", dangling.warning); //$NON-NLS-1$
         }
-        if (revalidateWarning != null)
-        {
-            result.put("revalidateWarning", revalidateWarning); //$NON-NLS-1$
-        }
         result.put(McpKeys.MESSAGE, buildMessage(exported, exported ? exportFqns.size() : 0, fullExport,
-            missingBefore.size(), stillMissing.size(), dangling, cleanDangling));
+            missingBefore.size(), stillMissing.size(), dangling.found, dangling.removedFromModel,
+            cleanDangling));
         return result.toJson();
     }
 
@@ -1100,7 +1293,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
     /** Builds a concise human-readable summary of the outcome. */
     private static String buildMessage(boolean exported, int objectsExported, boolean fullExport,
-        int missingBefore, int stillMissing, DanglingResult dangling, boolean cleanDangling)
+        int missingBefore, int stillMissing, int danglingFound, boolean danglingRemovedFromModel,
+        boolean cleanDangling)
     {
         StringBuilder sb = new StringBuilder();
         if (!exported)
@@ -1130,18 +1324,18 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         }
         // Dangling-reference summary.
         sb.append(' ');
-        if (dangling.found == 0)
+        if (danglingFound == 0)
         {
             sb.append("No dangling references in Configuration.mdo."); //$NON-NLS-1$
         }
-        else if (dangling.removedFromModel)
+        else if (danglingRemovedFromModel)
         {
-            sb.append("Removed ").append(dangling.found) //$NON-NLS-1$
+            sb.append("Removed ").append(danglingFound) //$NON-NLS-1$
                 .append(" dangling reference(s) from Configuration.mdo."); //$NON-NLS-1$
         }
         else
         {
-            sb.append("Found ").append(dangling.found) //$NON-NLS-1$
+            sb.append("Found ").append(danglingFound) //$NON-NLS-1$
                 .append(" dangling reference(s) in Configuration.mdo"); //$NON-NLS-1$
             sb.append(cleanDangling
                 ? " (not removed - see danglingWarning)." //$NON-NLS-1$

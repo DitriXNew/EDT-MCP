@@ -60,6 +60,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
+import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -115,6 +116,50 @@ public class GetProjectErrorsToolTest
     public void testCheckIdMatchesBothNull()
     {
         assertFalse(GetProjectErrorsTool.checkIdMatches(null, null, "anything")); //$NON-NLS-1$
+    }
+
+    // ========== checkIdMatchesExact (pure) ==========
+    // Used by apply_quick_fix, a mutation locator: unlike checkIdMatches, a substring must NOT
+    // match, since a loose needle could silently pick the wrong check to auto-fix.
+
+    @Test
+    public void testCheckIdMatchesExactBySymbolicId()
+    {
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "ql-temp-table-index")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactByShortUid()
+    {
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "SU23")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactCaseInsensitive()
+    {
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact("Su23", null, "su23")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(GetProjectErrorsTool.checkIdMatchesExact(null, "QL-Temp-Table", "ql-temp-table")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactRejectsSubstring()
+    {
+        // The exact bug this guards: "doc" must NOT match "doc-comment-parameter-section" here,
+        // even though the loose checkIdMatches used by get_project_errors would allow it.
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU1", "doc-comment-parameter-section", "doc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU23", null, "su2")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactNoMatch()
+    {
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact("SU23", "ql-temp-table-index", "zzz")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testCheckIdMatchesExactBothNull()
+    {
+        assertFalse(GetProjectErrorsTool.checkIdMatchesExact(null, null, "anything")); //$NON-NLS-1$
     }
 
     // ========== unresolvedPlaceholder ==========
@@ -188,7 +233,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.foo"), null, shown, filteredOut); //$NON-NLS-1$
+            singleton("catalog.foo"), null, null, shown, filteredOut); //$NON-NLS-1$
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -205,7 +250,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, shown, filteredOut);
+            Collections.emptySet(), null, null, shown, filteredOut);
 
         assertNotNull(error);
         assertEquals("<unresolved: Proj>", error.objectPresentation); //$NON-NLS-1$
@@ -225,7 +270,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, shown, filteredOut);
+            Collections.emptySet(), null, null, shown, filteredOut);
 
         assertNotNull(error);
         assertEquals("Catalog.Foo", error.objectPresentation); //$NON-NLS-1$
@@ -243,11 +288,111 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.foo"), null, shown, filteredOut); //$NON-NLS-1$
+            singleton("catalog.foo"), null, null, shown, filteredOut); //$NON-NLS-1$
 
         assertNull(error);
         assertEquals(0, shown[0]);
         assertEquals(0, filteredOut[0]);
+    }
+
+    // ========== buildIfMatches: hasQuickFix ==========
+
+    @Test
+    public void testHasQuickFixTrueWhenCheckHasARegisteredFix()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("doc-comment-parameter-section"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        when(fixRepository.hasFixes(uid)).thenReturn(true);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertTrue(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenCheckHasNoRegisteredFix()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("no-fix-check"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        when(fixRepository.hasFixes(uid)).thenReturn(false);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenFixRepositoryIsNull()
+    {
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("doc-comment-parameter-section"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, null, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenCheckUidCannotBeResolved()
+    {
+        // No checkRepository -> resolveCheckUid returns null -> hasQuickFix must be false, not an NPE.
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), null, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
+    }
+
+    @Test
+    public void testHasQuickFixFalseWhenFixRepositoryThrows()
+    {
+        // A repository hiccup on this one marker must degrade to hasQuickFix=false, not abort the
+        // whole buildIfMatches call - the try/catch guard this test pins (mirrors how the
+        // object-presentation resolution just above already degrades instead of aborting).
+        Marker marker = marker(MarkerSeverity.MINOR, "SU23", "msg", "Proj"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
+        CheckUid uid = checkUid("doc-comment-parameter-section"); //$NON-NLS-1$
+        ICheckRepository checkRepository = mock(ICheckRepository.class);
+        when(checkRepository.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
+        IFixRepository fixRepository = mock(IFixRepository.class);
+        when(fixRepository.hasFixes(uid)).thenThrow(new RuntimeException("repository unavailable")); //$NON-NLS-1$
+        int[] shown = {0};
+        int[] filteredOut = {0};
+
+        ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
+            Collections.emptySet(), checkRepository, fixRepository, shown, filteredOut);
+
+        assertNotNull(error);
+        assertFalse(error.hasQuickFix);
     }
 
     // ========== buildIfMatches: filters ==========
@@ -261,7 +406,7 @@ public class GetProjectErrorsToolTest
         int[] filteredOut = {0};
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, MarkerSeverity.MAJOR, null,
-            Collections.emptySet(), null, shown, filteredOut);
+            Collections.emptySet(), null, null, shown, filteredOut);
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -275,7 +420,7 @@ public class GetProjectErrorsToolTest
         when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.foo"), null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            singleton("catalog.foo"), null, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNotNull(error);
     }
@@ -287,7 +432,7 @@ public class GetProjectErrorsToolTest
         when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            singleton("catalog.bar"), null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            singleton("catalog.bar"), null, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNull(error);
     }
@@ -299,7 +444,7 @@ public class GetProjectErrorsToolTest
         when(marker.getObjectPresentation()).thenReturn("Catalog.Foo"); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, "su2",
-            Collections.emptySet(), null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            Collections.emptySet(), null, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNotNull(error);
     }
@@ -321,7 +466,7 @@ public class GetProjectErrorsToolTest
         when(repo.getUidForShortUid(eq("SU23"), any(IProject.class))).thenReturn(uid); //$NON-NLS-1$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, "temp",
-            Collections.emptySet(), repo, new int[]{0}, new int[]{0}); //$NON-NLS-1$
+            Collections.emptySet(), repo, null, new int[]{0}, new int[]{0}); //$NON-NLS-1$
 
         assertNotNull(error);
         assertEquals("SU23", error.checkCode); //$NON-NLS-1$
@@ -337,7 +482,7 @@ public class GetProjectErrorsToolTest
 
         // checkId does not match -> null before the presentation is read; no counter touched.
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, "zzz",
-            Collections.emptySet(), null, shown, filteredOut); //$NON-NLS-1$
+            Collections.emptySet(), null, null, shown, filteredOut); //$NON-NLS-1$
 
         assertNull(error);
         assertEquals(0, shown[0]);
@@ -487,7 +632,7 @@ public class GetProjectErrorsToolTest
             "platform:/resource/Proj/src/CommonModules/MyModule/Module.bsl#/0", "13")); //$NON-NLS-1$ //$NON-NLS-2$
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, new int[]{0}, new int[]{0});
+            Collections.emptySet(), null, null, new int[]{0}, new int[]{0});
 
         assertNotNull(error);
         assertEquals("CommonModules/MyModule/Module.bsl", error.modulePath); //$NON-NLS-1$
@@ -503,7 +648,7 @@ public class GetProjectErrorsToolTest
         // getExtraInfo() is left unstubbed -> returns null -> no locator.
 
         ErrorInfo error = GetProjectErrorsTool.buildIfMatches(marker, null, null,
-            Collections.emptySet(), null, new int[]{0}, new int[]{0});
+            Collections.emptySet(), null, null, new int[]{0}, new int[]{0});
 
         assertNotNull(error);
         assertNull(error.modulePath);

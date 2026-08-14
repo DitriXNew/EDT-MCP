@@ -44,7 +44,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - ⚡ **Interruptible Operations** - Cancel long-running operations and send signals to AI agent
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection, with a toolbar toggle to hide groups temporarily
-- ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
+- ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects, their members and managed-form elements with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
 ## Installation
@@ -356,6 +356,101 @@ Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
 
 </details>
 
+## 1C:Workmate in-process bridge
+
+When 1C:Workmate (`com.e1c.edt.ai*` 1.0.5) runs in the same EDT JVM, integration
+works in both directions:
+
+- `ask_workmate` starts Workmate's full conversation/tool loop in a bounded
+  background job and returns a pollable `jobId`, so the MCP transport request
+  does not stay open for the full cloud round-trip. The Workmate bundles remain
+  optional and are loaded only at runtime through OSGi/reflection; they are not
+  part of this project's target platform. **The tool ships disabled** — it sends
+  the question to an external cloud service and Workmate may change the
+  configuration with its own tools — so enable it under
+  *Preferences → EDT MCP Server → Tools* first.
+- The OSGi service `com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge` lets
+  Workmate/JShell list and call EDT-MCP tools without importing EDT-MCP packages.
+  `callTool` goes through the same dispatcher as MCP `tools/call` and returns its
+  JSON-RPC response.
+
+Two details decide whether this actually works, both measured against Workmate
+1.0.5:
+
+- **The skill.** `ConversationFacade` defaults to `raw`, under which the cloud
+  answers from the model alone — one assistant message, no tool call, no look at
+  the project. `ask_workmate` therefore sends `custom` (the skill Workmate's own
+  autopilot uses), which runs the full tool loop. Override with `skillName` only
+  if you know the name is accepted; the cloud refuses most others outright.
+- **The question carries the bridge.** Workmate's chat reads a project's
+  `.workmate` rules, but this Java path does not, so `ask_workmate` prefixes the
+  question with the bridge instructions and the list of tool NAMES (full
+  descriptions stay behind `get_tool_guide`, which it calls when it needs one).
+  Pass `shareMcpTools=false` to send the question verbatim instead.
+
+The same instance is published under the JDK types `BiFunction<String,String,String>`
+(`callTool`) and `Supplier<String>` (`listTools`), both carrying the service property
+`edt.mcp.bridge=v1`. Prefer that alias: it needs no reflection and no access to the
+bridge package, which matters for callers whose rules forbid unproven Java API - such
+as Workmate's JShell tool.
+
+```java
+// Take the context from an ALWAYS-ACTIVE bundle, not from EDT-MCP's own: this bundle
+// uses lazy activation, so `Platform.getBundle("com.ditrix.edt.mcp.server")
+// .getBundleContext()` can hand back null and the next line then fails with
+// "because ctx is null". OSGi services are global, so any live context finds this one.
+var bundleContext = org.osgi.framework.FrameworkUtil
+    .getBundle(org.eclipse.core.runtime.Platform.class).getBundleContext();
+var references = bundleContext.getServiceReferences(
+    java.util.function.BiFunction.class, "(edt.mcp.bridge=v1)");
+if (references.isEmpty()) {
+    throw new IllegalStateException("EDT-MCP bridge service is not registered");
+}
+var mcp = bundleContext.getService(references.iterator().next());
+System.out.println(mcp.apply("get_edt_version", "{}"));
+```
+
+A consumer that prefers the named contract can still resolve it by string name and
+invoke it reflectively:
+
+```java
+var serviceReference = bundleContext.getServiceReference(
+    "com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge");
+var bridgeService = bundleContext.getService(serviceReference);
+try {
+    var callTool = bridgeService.getClass().getMethod(
+        "callTool", String.class, String.class);
+    System.out.println((String) callTool.invoke(
+        bridgeService, "get_edt_version", "{}"));
+} finally {
+    bundleContext.ungetService(serviceReference);
+}
+```
+
+### Letting Workmate's chat use the bridge
+
+Workmate's agentic chat holds its `JShell` tool but **not** `JShellSession`, and
+`JShell` rejects every call whose `repl_session_id` it cannot resolve. The chat can
+therefore execute code but cannot obtain the one value executing code requires.
+
+EDT-MCP breaks that deadlock: shortly after startup it registers a JShell session
+under the constant id **`edt-mcp`** (retried in the background while Workmate comes
+up, and again if Workmate ever evicts it). Together with `jshell_edt_canonical_imports`
+— a fixed entry in Workmate's own scenario catalogue — both values JShell demands are
+constants, so a project's rules can name them literally and nothing has to be passed
+around at runtime:
+
+```
+repl_session_id = "edt-mcp"
+manual_ids      = ["jshell_edt_canonical_imports"]
+```
+
+[`tests/TestConfiguration/.workmate/WORKMATE.md`](tests/TestConfiguration/.workmate/WORKMATE.md)
+is a working example of such a rules file; copy it into `<project>/.workmate/` to give
+the chat the same access in your own configuration. Note that the chat cannot reach the
+HTTP endpoint at all — `java.net.URL`, `java.net.Socket` and `ProcessBuilder` are on
+Workmate's restricted-types list — so the in-process bridge is its only route.
+
 ## Multi-EDT Proxy
 
 Running more than one EDT instance at once? [`edt-mcp-proxy`](proxy/) is a standalone router that exposes a single, stable MCP endpoint on `:8764` and forwards each call to the right EDT-MCP instance by `projectName`, discovering live instances in the background. It ships as `edt-mcp-proxy-<version>.jar` alongside the plugin archive in every [release](https://github.com/DitriXNew/EDT-MCP/releases). See [proxy/README.md](proxy/README.md) for setup, CLI options and configuration.
@@ -370,7 +465,7 @@ with `python docs/generate_tool_docs.py`.
 <!-- TOOLS-INDEX:START -->
 <!-- generated by docs/generate_tool_docs.py — do not edit by hand -->
 
-**85 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
+**87 tools**, grouped by toolset. Full per-tool pages under [docs/tools/](docs/tools/).
 
 ### Core
 
@@ -401,15 +496,15 @@ with `python docs/generate_tool_docs.py`.
 | [`create_launch_config`](docs/tools/create_launch_config.md) | Create a 1C:EDT runtime-client launch configuration (thin/thick/web). The SAME config works for both run and debug (mode is chosen at launch time by debug_la… |
 | [`create_metadata`](docs/tools/create_metadata.md) | Create a metadata node addressed by a 1C full-name FQN: a top-level object (Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, Inf… |
 | [`delete_launch_config`](docs/tools/delete_launch_config.md) | Delete a 1C:EDT launch configuration by name (runtime client or Attach). Destructive: guarded by a confirm-preview - call without confirm to preview (no chan… |
-| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata node (object or member, including a FORM object 'Type.Object.Form.Name', a FORM member - item / attribute / command / handler - an XDTO pac… |
+| [`delete_metadata`](docs/tools/delete_metadata.md) | Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass MEMBER (attribute / tabular section / dimension / resource / enum value), a… |
 | [`export_common_picture`](docs/tools/export_common_picture.md) | Export a 1C CommonPicture (общая картинка) as PNG and list its picture variants (dpi, theme, interface variant, direction, template flag, glyph size). Resolv… |
 | [`get_configuration_properties`](docs/tools/get_configuration_properties.md) | Get 1C:Enterprise configuration properties (name, synonym, comment, script variant, compatibility mode, etc.) |
 | [`get_subsystem_content`](docs/tools/get_subsystem_content.md) | Get one 1C subsystem's content: properties, its metadata objects (Type/Name/Synonym/FQN) and child subsystems, identified by FQN (e.g. 'Subsystem.Sales.Subsy… |
 | [`list_common_pictures`](docs/tools/list_common_pictures.md) | List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, p… |
 | [`list_configurations`](docs/tools/list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before debug_launch / run_yaxu… |
 | [`list_subsystems`](docs/tools/list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
-| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of a metadata node (object or member, including a FORM member - item / attribute / command) addressed by a 1C full-name FQN, as properties=[{n… |
-| [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object or attribute, cascading the change across all references in BSL code, forms, and other metadata. Use the two-phase workflow: call wi… |
+| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of a metadata node - an object, a member, or a FORM member (item / attribute / command / handler) - addressed by a 1C full-name FQN, as proper… |
+| [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ### Code
 
@@ -449,12 +544,13 @@ with `python docs/generate_tool_docs.py`.
 
 ### Testing
 
-> YAXUnit unit testing: run and debug test suites.
+> YAXUnit unit testing and 1C:Workmate assistance.
 
 | Tool | Description |
 |------|-------------|
+| [`ask_workmate`](docs/tools/ask_workmate.md) | Start or poll a background question to the 1C:Workmate plugin without holding an MCP request open for the full cloud conversation. Requires a compatible Work… *(not enabled by default)* |
 | [`debug_yaxunit_tests`](docs/tools/debug_yaxunit_tests.md) | Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect. Prefer… |
-| [`run_yaxunit_tests`](docs/tools/run_yaxunit_tests.md) | Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. Polls for up to `timeout` seconds, then returns the report or **Pending** (… |
+| [`run_yaxunit_tests`](docs/tools/run_yaxunit_tests.md) | Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. The whole call is bounded by `timeout` (default and maximum 45s, larger val… |
 
 ### Profiling
 
@@ -501,6 +597,7 @@ with `python docs/generate_tool_docs.py`.
 
 | Tool | Description |
 |------|-------------|
+| [`apply_quick_fix`](docs/tools/apply_quick_fix.md) | Apply EDT's official quick-fix (auto-fix) to one validation marker — the headless counterpart of the 'Quick Fix' action in the problems view. Address the mar… |
 | [`build_external_objects`](docs/tools/build_external_objects.md) | Build (compile to disk) the external data processors/reports of an EDT external-object project to .epf/.erf files. Build ONE object with objectName, or ALL o… |
 | [`clean_project`](docs/tools/clean_project.md) | Clean EDT project and trigger full revalidation. Direction: DISK -> MODEL - re-imports the on-disk src/ .mdo files into the in-memory model. Refreshes files… |
 | [`create_git_branch`](docs/tools/create_git_branch.md) | Create a new local git branch, optionally check it out, and optionally attach an EXISTING infobase (application, from get_applications) to the new branch's c… |

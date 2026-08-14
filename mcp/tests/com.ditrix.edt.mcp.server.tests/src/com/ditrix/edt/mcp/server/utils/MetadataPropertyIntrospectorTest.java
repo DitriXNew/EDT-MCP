@@ -28,9 +28,12 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.StandardCommand;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.ValueKind;
 
@@ -331,6 +334,125 @@ public class MetadataPropertyIntrospectorTest
             MdClassFactory.eINSTANCE.createCommandGroup());
         assertFalse("suppressObject must stay excluded (not MdObject / CommandGroup typed)", //$NON-NLS-1$
             names.contains("suppressObject")); //$NON-NLS-1$
+    }
+
+    // ---- contained AdjustableBoolean flags (issue #382) -----------------------------------------
+    //
+    // A form attribute's view / edit, a form item's userVisible and a form command's use are NOT
+    // boolean attributes: each is a SINGLE-VALUED CONTAINMENT reference to the mdclass
+    // AdjustableBoolean - an object holding the flag itself (`common`) next to optional per-role
+    // overrides (`for`). The generic containment-ref filter would drop them, so they are classified
+    // explicitly, and BY TARGET TYPE rather than by name so one rule covers every such flag.
+
+    @Test
+    public void testAContainedAdjustableBooleanIsTheAdjustableBooleanKind()
+    {
+        // Driven through the REAL metamodel: StandardCommand declares `contains AdjustableBoolean
+        // visible`, the very shape the form model uses for view / edit / userVisible / use.
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        PropertyInfo visible = MetadataPropertyIntrospector.find(command, "visible"); //$NON-NLS-1$
+        assertNotNull("a contained AdjustableBoolean must be assignable", visible); //$NON-NLS-1$
+        assertTrue("visible must be the ADJUSTABLE_BOOLEAN kind", //$NON-NLS-1$
+            visible.valueKind == ValueKind.ADJUSTABLE_BOOLEAN);
+        assertTrue("...so it must be listed as an assignable property", //$NON-NLS-1$
+            MetadataPropertyIntrospector.assignableNames(command).contains("visible")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAdjustableBooleanCurrentValueRendersTheNestedCommonFlag()
+    {
+        // The wire boolean addresses the nested `common` flag, so that is what "Current" must show:
+        // nothing at all while the flag object is absent, then each polarity as the boolean a caller
+        // would write back.
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        assertNull("an unset AdjustableBoolean renders no current value", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(command, "visible").currentValue); //$NON-NLS-1$
+
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.setCommon(true);
+        command.setVisible(flag);
+        assertEquals("common = true must render as true", "true", //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyIntrospector.find(command, "visible").currentValue); //$NON-NLS-1$
+
+        flag.setCommon(false);
+        assertEquals("common = false must render as false, not as an absent value", "false", //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyIntrospector.find(command, "visible").currentValue); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAManyAdjustableBooleanReferenceIsNotClassified()
+    {
+        // The rule admits the SINGLE-valued flag only - a list of AdjustableBooleans is not one flag
+        // a wire boolean can address.
+        assertNull("a many AdjustableBoolean reference must not be assignable", //$NON-NLS-1$
+            MetadataPropertyIntrospector.findFeature(
+                newFlagHolder(MdClassPackage.Literals.ADJUSTABLE_BOOLEAN, true, true), "flag")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANonContainmentAdjustableBooleanReferenceIsNotClassified()
+    {
+        // A reference that merely POINTS at an AdjustableBoolean owns no flag of its own: writing
+        // through it would rewrite an object whose owner is somewhere else entirely.
+        assertNull("a non-containment AdjustableBoolean reference must not be assignable", //$NON-NLS-1$
+            MetadataPropertyIntrospector.findFeature(
+                newFlagHolder(MdClassPackage.Literals.ADJUSTABLE_BOOLEAN, false, false), "flag")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAContainedUnrelatedTypeIsNotClassified()
+    {
+        // The pin that keeps the rule from widening into "any single contained mdclass object":
+        // ForRoleType is the AdjustableBoolean's OWN `for` element type and still is not one.
+        assertNull("a contained non-AdjustableBoolean must stay unassignable", //$NON-NLS-1$
+            MetadataPropertyIntrospector.findFeature(
+                newFlagHolder(MdClassPackage.Literals.FOR_ROLE_TYPE, true, false), "flag")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASubtypeOfAdjustableBooleanIsStillClassified()
+    {
+        // Admitted by isSuperTypeOf, not by identity, so a specialization of the type stays
+        // recognized. The subtype is SYNTHETIC and only declares the real EClass as its supertype (a
+        // plain, non-containment reference); the real EClass is never added to a synthetic package,
+        // which would reparent it out of MdClassPackage for the whole JVM.
+        EClass subtype = EcoreFactory.eINSTANCE.createEClass();
+        subtype.setName("SpecializedAdjustableBoolean"); //$NON-NLS-1$
+        subtype.getESuperTypes().add(MdClassPackage.Literals.ADJUSTABLE_BOOLEAN);
+
+        PropertyInfo flag =
+            MetadataPropertyIntrospector.findFeature(newFlagHolder(subtype, true, false), "flag"); //$NON-NLS-1$
+        assertNotNull("a subtype of AdjustableBoolean must still be assignable", flag); //$NON-NLS-1$
+        assertTrue("...as the ADJUSTABLE_BOOLEAN kind", //$NON-NLS-1$
+            flag.valueKind == ValueKind.ADJUSTABLE_BOOLEAN);
+    }
+
+    /**
+     * A synthetic holder carrying ONE reference named {@code flag} of the given target type and shape,
+     * so the classification rule can be probed on each axis it tests (target type, containment,
+     * cardinality). The target EClass is only REFERRED to, never added to the holder's package:
+     * EClassifier containment is single-parent, so adding a real mdclass EClass would reparent it out
+     * of MdClassPackage for the whole JVM.
+     */
+    private static EObject newFlagHolder(EClass target, boolean containment, boolean many)
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("flaglike"); //$NON-NLS-1$
+        pkg.setNsPrefix("flaglike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/flaglike"); //$NON-NLS-1$
+
+        EReference flag = f.createEReference();
+        flag.setName("flag"); //$NON-NLS-1$
+        flag.setEType(target);
+        flag.setContainment(containment);
+        flag.setUpperBound(many ? -1 : 1);
+
+        EClass holder = f.createEClass();
+        holder.setName("FlagHolder"); //$NON-NLS-1$
+        holder.getEStructuralFeatures().add(flag);
+        pkg.getEClassifiers().add(holder);
+        return pkg.getEFactoryInstance().create(holder);
     }
 
     // ---- extInfo-aware overloads (issue #235) ---------------------------------------------------

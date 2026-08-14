@@ -14,9 +14,22 @@ RESPONSE SHAPE
 --------------
 JSON tool (getResponseType() == JSON); payload in r.structured:
   success path: {"success": true, "action": "created", "project", "infobaseFile",
-                 "infobaseName", "applications": [...], ["applicationId": "..."],
-                 "message"}
-  error path:   {"success": false, "error": "..."}
+                 "infobaseName", ["applications": [...]], ["applicationId": "..."],
+                 ["boundToProject": true], "message"}
+  error path:   {"success": false, "error": "..."} - and, for the not-bound refusal below,
+                the same action/infobaseFile/infobaseName/applications payload plus
+                "boundToProject": false
+
+  boundToProject (issue #412) reports what the post-association read-back ESTABLISHED,
+  and the tool never claims the binding on its own: true = the application was found;
+  false = the poll budget was spent and the LAST read compared every application without
+  finding it, which is reported as an ERROR that
+  still carries action/infobaseFile/infobaseName/applications (the database exists, so
+  the refusal must not read as "nothing happened"); ABSENT = the comparison could not be
+  completed (the read failed, the call was interrupted before the poll budget was spent,
+  or an application's identity was unreadable), so the call stays successful and the
+  message says UNVERIFIED. The applications echo itself is omitted when no read produced
+  a snapshot at all.
 
 CI / HEADLESS STRATEGY (IMPORTANT)
 -----------------------------------
@@ -228,8 +241,9 @@ def test_live_create_verify_delete_roundtrip():
 
     This test:
     1. Creates a new FILE infobase at a temp directory.
-    2. Verifies it appears in get_applications as type …type.infobase with an
-       applicationId in the result.
+    2. Verifies it appears in get_applications as type …type.infobase, and that the
+       create result's applicationId — echoed whenever the platform gave the
+       application one — matches it.
     3. Removes it via delete_infobase (preview, then confirm).
     4. Verifies it is gone from get_applications.
     5. Cleans up the temp directory.

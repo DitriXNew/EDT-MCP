@@ -10,6 +10,7 @@ import static org.junit.Assert.*;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -741,14 +742,47 @@ public class MetadataTypeUtilsTest
         // listing these by hand is exactly the "enumerate the fixes" habit that let the same drift
         // through twice, so they are checked through their resolver like everything else.
         Map<String, String> notAddressed = new LinkedHashMap<>();
-        // The only genuine exceptions: CONTENT segments of a marker location. They are translated so
-        // the filter can match a location, but no address is ever parsed with them as a segment.
+        // The only genuine exceptions: CONTENT segments of a marker location. They are NOT consumers
+        // of the address grammar at all - they are translated so the filter can match a location,
+        // and no parser ever reads them as a kind segment. Recorded here as a DECISION and checked
+        // below (no consumer may accept them), because "nothing pins these" and "nothing needs to"
+        // look identical in silence, and this catalogue has already been drifted through twice.
         notAddressed.put("Module", "a CONTENT segment of a marker location (CommonModule.X.Module), "
             + "never an address segment - it is translated for matching only");
         notAddressed.put("Package", "the CONTENT of an XDTO package (XDTOPackage.P.Package) - a "
             + "marker location segment; XDTO members are answered as objectsUnsupported");
 
-        for (String canonical : MetadataTypeUtils.nestedKindCanonicalTokens())
+        // The consumers that keep their OWN token list, each publishing it so the reverse direction
+        // - a token the CONSUMER accepts and this catalogue does not publish - can be pinned by
+        // EQUALITY. Declared by hand, like MDCLASS_RESOLVED_KINDS and for the same reason: deriving
+        // the list of pinned consumers from the consumers themselves would let a consumer that
+        // stopped publishing switch off its own check.
+        Map<String, Set<String>> consumerTokens = new LinkedHashMap<>();
+        // Subsystem: the predicate answers from the TOP-LEVEL type catalogue, a list independent of
+        // the nested-kind catalogue tested here - so the two really can drift in either direction.
+        consumerTokens.put("Subsystem", lowercased(SubsystemUtils.acceptedTypeTokens()));
+        // Predefined: three literals written out in the writer (the 'e' and the 'yo' spelling are
+        // enumerated on purpose rather than yo-normalized), so likewise an independent list.
+        consumerTokens.put("Predefined", lowercased(PredefinedWriter.acceptedKindTokens()));
+
+        // A declared kind must still BE in the catalogue. Without this the checks below are keyed by
+        // a walk over the catalogue, so deleting a kind from it takes the kind's own equality check
+        // away with it: the consumer would keep accepting 'Subsystem' addresses the filter can no
+        // longer translate, and the pin would go quiet at exactly the moment it is needed. Same
+        // self-confirmation MDCLASS_RESOLVED_KINDS is written by hand to avoid, one catalogue over.
+        Set<String> publishedKinds = MetadataTypeUtils.nestedKindCanonicalTokens();
+        for (String declared : consumerTokens.keySet())
+        {
+            assertTrue("a consumer is pinned against kind '" + declared + "', which the catalogue no "
+                + "longer publishes - the kind was removed, not the pin", publishedKinds.contains(declared));
+        }
+        for (String declared : KIND_SPECIFIC_TOKEN_OWNERS)
+        {
+            assertTrue("a kind-specific predicate is pinned against kind '" + declared + "', which the "
+                + "catalogue no longer publishes", publishedKinds.contains(declared));
+        }
+
+        for (String canonical : publishedKinds)
         {
             List<Predicate<String>> applicable = owners.get(canonical);
             if (applicable == null)
@@ -798,7 +832,133 @@ public class MetadataTypeUtilsTest
                 assertEquals("form parser and catalogue must accept EXACTLY the same tokens for "
                     + canonical, published, formTokens);
             }
+            // 3. ...and the consumers that keep a list of their own (Subsystem, Predefined). Same
+            // shape, same direction, same reason: until this block existed those kinds were pinned
+            // only from catalogue to consumer, so a token the consumer knew and the catalogue did
+            // not publish went unseen - the exact half of the invariant three review findings were
+            // about.
+            //
+            // The positive control - that the published set is what the parser REALLY accepts, not
+            // a second literal that merely agrees with the catalogue - is the forward loop above:
+            // once the sets are equal, every token the consumer publishes has already been run
+            // through the consumer's own predicate there. A separate loop over consumerSet would
+            // add no mutation it could be the first to catch.
+            Set<String> consumerSet = consumerTokens.get(canonical);
+            if (consumerSet != null)
+            {
+                assertEquals("consumer and catalogue must accept EXACTLY the same tokens for "
+                    + canonical, published, consumerSet);
+            }
+            // Every published kind must have a verdict on the REVERSE direction, not just on the
+            // forward one. Two ways to earn it: the consumer publishes its own token set and the
+            // sets are compared for equality (the three blocks above - resolver, form parser, own
+            // list), or it keeps no set at all because it asks this very catalogue
+            // (CATALOG_DERIVED_KINDS). A kind with neither is the silent gap this issue was about,
+            // and it fails here until it is classified.
+            boolean reversePinned = resolverTokens.containsKey(canonical) || formKind != null
+                || consumerSet != null;
+            assertTrue("no reverse-direction check for '" + canonical + "': its consumer must "
+                + "publish the tokens it accepts, or be declared as reading the catalogue directly",
+                reversePinned || CATALOG_DERIVED_KINDS.containsKey(canonical));
         }
+
+        // The predicates that answer for ONE kind must select EXACTLY that kind's aliases out of
+        // everything this catalogue publishes - not merely accept all of them (the forward loop) and
+        // not merely be equal to a set (the equality above, which a predicate rewritten around its
+        // own set escapes). This is the only check available at all for Form and Handler, whose
+        // predicates keep no set to compare: they ask this catalogue directly.
+        //
+        // SCOPE, stated because it is narrower than "the derivation is pinned": the probe universe
+        // is the published tokens, so a predicate that additionally accepts a token belonging to NO
+        // kind (a hardcoded 'LegacyHandler') is NOT seen here. Enumerating a set the consumer does
+        // not have is impossible, and copying one out of this catalogue would compare the catalogue
+        // with itself. That residue is listed as uncovered rather than papered over.
+        Set<String> universe = new TreeSet<>();
+        for (String canonical : publishedKinds)
+        {
+            universe.addAll(lowercased(MetadataTypeUtils.nestedKindAliases(canonical)));
+        }
+        for (String canonical : KIND_SPECIFIC_TOKEN_OWNERS)
+        {
+            List<Predicate<String>> applicable = owners.get(canonical);
+            assertNotNull("a kind-specific predicate must still be declared as an owner: " + canonical,
+                applicable);
+            Set<String> own = lowercased(MetadataTypeUtils.nestedKindAliases(canonical));
+            assertFalse("a pinned kind must still have spellings, or this compares two empty sets: "
+                + canonical, own.isEmpty());
+            for (Predicate<String> owner : applicable)
+            {
+                Set<String> selected = new TreeSet<>();
+                for (String token : universe)
+                {
+                    if (owner.test(token))
+                    {
+                        selected.add(token);
+                    }
+                }
+                assertEquals("a kind-specific predicate must select EXACTLY its own kind's aliases "
+                    + "out of everything the catalogue publishes: " + canonical, own, selected);
+            }
+        }
+
+        // ...and the content-only segments, stated rather than implied: no consumer of the address
+        // grammar may read them as a kind. Leaving them out of `owners` said the same thing by
+        // saying nothing, which is indistinguishable from having forgotten them.
+        for (String canonical : notAddressed.keySet())
+        {
+            for (String token : lowercased(MetadataTypeUtils.nestedKindAliases(canonical)))
+            {
+                String why = "'" + token + "' is a content-only segment (" + canonical
+                    + "), so no address parser may accept it as a kind";
+                assertNull(why, FormElementWriter.kindForToken(token));
+                assertFalse(why, FormElementWriter.isFormToken(token));
+                assertFalse(why, FormElementWriter.isHandlerToken(token));
+                assertFalse(why, SubsystemUtils.isSubsystemTypeToken(token));
+                assertFalse(why, predefinedTokenAccepted(token));
+                assertNull(why, MetadataNodeResolver.featureNameForKind(token));
+            }
+        }
+    }
+
+    /**
+     * Kinds whose consumer keeps NO token list of its own - it asks the nested-kind catalogue
+     * directly - mapped to the seam that makes that true.
+     *
+     * <p>Set equality is not available for these, and pretending otherwise would be worse than not
+     * checking: the only set to compare the catalogue with would be a copy of the catalogue. They
+     * are pinned by the kind-specific partition check instead, and listed here so a kind can never
+     * reach that weaker treatment by omission - it has to be written down.</p>
+     */
+    private static final Map<String, String> CATALOG_DERIVED_KINDS;
+    static
+    {
+        Map<String, String> derived = new LinkedHashMap<>();
+        derived.put("Form", "FormElementWriter.isFormToken -> isNestedKind -> resolveNestedKind");
+        derived.put("Handler", "FormElementWriter.isHandlerToken -> isNestedKind -> resolveNestedKind");
+        CATALOG_DERIVED_KINDS = Collections.unmodifiableMap(derived);
+    }
+
+    /**
+     * Kinds whose owner predicate answers for THAT kind alone, so it can be pinned by partition:
+     * over everything the catalogue publishes it must select exactly this kind's aliases.
+     *
+     * <p>Declared, not derived: the resolver predicate ({@code featureNameForKind != null}) answers
+     * for all sixteen mdclass kinds at once and would fail a partition check by design, so the set
+     * cannot be inferred from {@code owners} - and inferring it from the catalogue would let a
+     * deleted kind take its own check away.</p>
+     */
+    private static final Set<String> KIND_SPECIFIC_TOKEN_OWNERS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList("Form", "Handler", "Subsystem", "Predefined")));
+
+    /** The same tokens, lowercased with {@link Locale#ROOT} so two sets can be compared. */
+    private static Set<String> lowercased(Collection<String> tokens)
+    {
+        Set<String> lower = new TreeSet<>();
+        for (String token : tokens)
+        {
+            lower.add(token.toLowerCase(Locale.ROOT));
+        }
+        return lower;
     }
 
     /**

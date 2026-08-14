@@ -6,39 +6,82 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceDelta;
+import org.eclipse.core.resources.IResourceProxy;
+import org.eclipse.core.resources.IResourceProxyVisitor;
+import org.eclipse.core.runtime.Path;
 import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
+
+import com.ditrix.edt.mcp.server.utils.PreLaunchChangeTracker.PrepareSnapshot;
 
 /**
  * Unit tests for {@link PreLaunchChangeTracker}.
  *
  * <p>All tests run headless (no OSGi runtime). The listener-installation is never
- * exercised — we seed state directly via the package-visible test helpers
- * ({@link PreLaunchChangeTracker#markDirtyForTest} /
- * {@link PreLaunchChangeTracker#markPreparedForTest} /
- * {@link PreLaunchChangeTracker#resetForTest}) and drive
- * {@link PreLaunchChangeTracker#deltaMakesProjectDirty} through Mockito mocks of
- * {@link IResourceDelta} and {@link IResource}. The live workspace-listener
- * install path needs the Eclipse runtime and is an integration concern; only the
- * pure, mockable parts are asserted here.
+ * exercised — the workspace-listener signal is seeded directly via
+ * {@link PreLaunchChangeTracker#markDirty}, and the two halves of the
+ * persistent gate (what the project's content currently hashes to, and what was
+ * recorded as prepared) are driven through the package-visible seams
+ * {@link PreLaunchChangeTracker#setFingerprinterForTest} /
+ * {@link PreLaunchChangeTracker#setStoreForTest}. The store used here is an
+ * in-memory map that deliberately OUTLIVES
+ * {@link PreLaunchChangeTracker#simulatePluginRestartForTest}, exactly as the
+ * workspace metadata outlives an EDT restart — that is what lets the restart
+ * scenarios be asserted in process.
+ *
+ * <p>The delta classifier is driven through Mockito mocks of
+ * {@link IResourceDelta} / {@link IResource}, and the content walk through mocked
+ * {@link IResourceProxy} visits. The live workspace-listener install path needs the
+ * Eclipse runtime and is an integration concern; only the pure, mockable parts are
+ * asserted here.
  */
 public class PreLaunchChangeTrackerTest
 {
+    /** What each project's content currently fingerprints to (the "sources"). */
+    private final Map<String, String> content = new HashMap<>();
+
+    /** Survives {@code simulatePluginRestartForTest} — models the workspace metadata. */
+    private final MapStore store = new MapStore();
+
+    /** Counts disk syncs, and lets a test make one "discover" an offline edit. */
+    private final List<String> diskSyncs = new ArrayList<>();
+
+    @Before
+    public void setUp()
+    {
+        PreLaunchChangeTracker.setStoreForTest(store);
+        PreLaunchChangeTracker.setFingerprinterForTest(project -> content.get(project.getName()));
+        PreLaunchChangeTracker.setDiskSyncForTest(project -> {
+            diskSyncs.add(project.getName());
+            return true;
+        });
+    }
+
     @After
     public void tearDown()
     {
@@ -46,37 +89,116 @@ public class PreLaunchChangeTrackerTest
     }
 
     // =========================================================================
-    // isDirty — never-prepared (conservative first-launch rule)
+    // isDirty — nothing recorded as prepared yet
     // =========================================================================
 
     @Test
     public void testNeverPreparedIsDirty()
     {
-        // A project that has never been through a successful prepare is always
-        // treated as dirty — conservative first-launch rule.
+        // No prepared-content marker at all: the project may have been edited by
+        // anyone at any time, so it must be recomputed.
         IProject project = mockProject("Config");
-        assertTrue("never-prepared project must be dirty", PreLaunchChangeTracker.isDirty(project));
+        content.put("Config", "fp-1");
+        assertTrue("never-prepared project must be dirty", isDirty(project));
     }
 
     @Test
     public void testNullProjectIsNotDirty()
     {
-        assertFalse("null project must not be dirty", PreLaunchChangeTracker.isDirty(null));
+        assertFalse("null project must not be dirty", isDirty(null));
+    }
+
+    @Test
+    public void testUnreadableContentIsDirty()
+    {
+        // The fingerprinter could not read the project (closed, I/O failure): we
+        // cannot prove it is unchanged, so it must be recomputed.
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+        assertFalse("prepared at fp-1", isDirty(project));
+
+        content.remove("Config"); // fingerprinter now returns null
+        assertTrue("an unreadable project must be dirty", isDirty(project));
     }
 
     // =========================================================================
-    // isDirty — after markPrepared (clean baseline)
+    // isDirty — after a successful prepare
     // =========================================================================
 
     @Test
     public void testPreparedProjectIsClean()
     {
         IProject project = mockProject("Config");
-        java.util.List<IProject> list = Collections.singletonList(project);
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(list);
-        PreLaunchChangeTracker.markPrepared(list, snapshot);
+        content.put("Config", "fp-1");
+        prepare(project);
         assertFalse("a prepared project with no subsequent change must be clean",
-            PreLaunchChangeTracker.isDirty(project));
+            isDirty(project));
+    }
+
+    /**
+     * The regression this gate was rebuilt for: the "prepared" mark must be a
+     * property of the CONTENT, not of the running plugin instance. After a restart
+     * of EDT (modelled by dropping the in-memory session state while the workspace
+     * metadata stays) an unchanged project must NOT trigger a full recompute.
+     */
+    @Test
+    public void testPreparedProjectStaysCleanAcrossPluginRestart()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+
+        assertFalse("an unchanged project must stay clean across an EDT restart",
+            isDirty(project));
+    }
+
+    /**
+     * The other direction, and the stale-{@code .cfe} half of the guarantee: a
+     * source change made while the plugin was NOT running (no resource delta was
+     * ever observed) must still be seen, because the content no longer matches what
+     * was recorded as prepared.
+     */
+    @Test
+    public void testContentChangedWhilePluginWasDownIsDirty()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        content.put("Config", "fp-2"); // somebody edited the sources meanwhile
+
+        assertTrue("a project edited while the plugin was down must be dirty",
+            isDirty(project));
+    }
+
+    @Test
+    public void testFileChangeAfterPrepareRedirties()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+        assertFalse("clean after prepare", isDirty(project));
+
+        PreLaunchChangeTracker.markDirty("Config");
+        assertTrue("dirty after a file change", isDirty(project));
+    }
+
+    @Test
+    public void testMarkPreparedClearsDirtyFlag()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+        PreLaunchChangeTracker.markDirty("Config");
+        assertTrue("dirty after explicit mark", isDirty(project));
+
+        prepare(project);
+        assertFalse("markPrepared must clear the dirty flag",
+            isDirty(project));
     }
 
     @Test
@@ -87,38 +209,19 @@ public class PreLaunchChangeTrackerTest
         PreLaunchChangeTracker.markPrepared(Collections.singletonList(null), null);
     }
 
-    // =========================================================================
-    // isDirty — after markPrepared then markDirtyForTest (file change re-dirties)
-    // =========================================================================
-
     @Test
-    public void testFileChangeAfterPrepareRedirties()
+    public void testMarkPreparedWithoutSnapshotCertifiesNothing()
     {
+        // A caller that has no snapshot cannot tell WHICH content state was
+        // prepared, so nothing may be recorded — and any earlier record must go.
         IProject project = mockProject("Config");
-        java.util.List<IProject> list = Collections.singletonList(project);
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(list);
-        PreLaunchChangeTracker.markPrepared(list, snapshot);
-        assertFalse("clean after prepare", PreLaunchChangeTracker.isDirty(project));
+        content.put("Config", "fp-1");
+        prepare(project);
+        assertFalse("clean after a real prepare", isDirty(project));
 
-        PreLaunchChangeTracker.markDirtyForTest("Config");
-        assertTrue("dirty after a file change", PreLaunchChangeTracker.isDirty(project));
-    }
-
-    @Test
-    public void testMarkPreparedClearsDirtyFlag()
-    {
-        IProject project = mockProject("Config");
-        PreLaunchChangeTracker.markDirtyForTest("Config");
-        // Seed it as prepared too so it is in the prepared set (otherwise it's
-        // dirty solely because it's never-prepared, not because of the dirty flag).
-        PreLaunchChangeTracker.markPreparedForTest("Config");
-        PreLaunchChangeTracker.markDirtyForTest("Config");
-        assertTrue("dirty after explicit mark", PreLaunchChangeTracker.isDirty(project));
-
-        java.util.List<IProject> list = Collections.singletonList(project);
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(list);
-        PreLaunchChangeTracker.markPrepared(list, snapshot);
-        assertFalse("markPrepared must clear the dirty flag", PreLaunchChangeTracker.isDirty(project));
+        PreLaunchChangeTracker.markPrepared(Collections.singletonList(project), null);
+        assertTrue("a snapshot-less markPrepared must not certify the content",
+            isDirty(project));
     }
 
     // =========================================================================
@@ -130,18 +233,17 @@ public class PreLaunchChangeTrackerTest
     {
         IProject projectA = mockProject("Config");
         IProject projectB = mockProject("Extension");
+        content.put("Config", "cfg-1");
+        content.put("Extension", "ext-1");
 
-        // Prepare both first so neither is "never-prepared".
-        java.util.List<IProject> both = Arrays.asList(projectA, projectB);
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(both);
-        PreLaunchChangeTracker.markPrepared(both, snapshot);
-        assertFalse("Config must be clean", PreLaunchChangeTracker.isDirty(projectA));
-        assertFalse("Extension must be clean", PreLaunchChangeTracker.isDirty(projectB));
+        prepare(projectA, projectB);
+        assertFalse("Config must be clean", isDirty(projectA));
+        assertFalse("Extension must be clean", isDirty(projectB));
 
-        // Mark only one dirty.
-        PreLaunchChangeTracker.markDirtyForTest("Extension");
-        assertFalse("Config must remain clean", PreLaunchChangeTracker.isDirty(projectA));
-        assertTrue("Extension must be dirty", PreLaunchChangeTracker.isDirty(projectB));
+        // Only the extension changed.
+        content.put("Extension", "ext-2");
+        assertFalse("Config must remain clean", isDirty(projectA));
+        assertTrue("Extension must be dirty", isDirty(projectB));
     }
 
     @Test
@@ -149,55 +251,316 @@ public class PreLaunchChangeTrackerTest
     {
         IProject projectA = mockProject("Config");
         IProject projectB = mockProject("Extension");
+        content.put("Config", "cfg-1");
+        content.put("Extension", "ext-1");
 
-        java.util.List<IProject> both = Arrays.asList(projectA, projectB);
-        Map<String, Long> snapshotBoth = PreLaunchChangeTracker.snapshotDirty(both);
-        PreLaunchChangeTracker.markPrepared(both, snapshotBoth);
-        PreLaunchChangeTracker.markDirtyForTest("Config");
-        PreLaunchChangeTracker.markDirtyForTest("Extension");
+        prepare(projectA, projectB);
+        content.put("Config", "cfg-2");
+        content.put("Extension", "ext-2");
 
         // Prepare only Config.
-        java.util.List<IProject> onlyA = Collections.singletonList(projectA);
-        Map<String, Long> snapshotA = PreLaunchChangeTracker.snapshotDirty(onlyA);
-        PreLaunchChangeTracker.markPrepared(onlyA, snapshotA);
-        assertFalse("Config must be clean after its own prepare", PreLaunchChangeTracker.isDirty(projectA));
-        assertTrue("Extension must still be dirty (not in the prepare call)", PreLaunchChangeTracker.isDirty(projectB));
+        prepare(projectA);
+        assertFalse("Config must be clean after its own prepare",
+            isDirty(projectA));
+        assertTrue("Extension must still be dirty (not in the prepare call)",
+            isDirty(projectB));
     }
 
     // =========================================================================
-    // Ordering-race regression (Finding 1): a new dirty event arriving DURING
-    // recompute must not be silently cleared by the subsequent markPrepared.
+    // snapshot — the scope-wide view the recompute partition uses
+    // =========================================================================
+
+    @Test
+    public void testSnapshotReportsDirtyScope()
+    {
+        IProject projectA = mockProject("Config");
+        IProject projectB = mockProject("Extension");
+        content.put("Config", "cfg-1");
+        content.put("Extension", "ext-1");
+        prepare(projectA, projectB);
+        content.put("Extension", "ext-2");
+
+        PrepareSnapshot snapshot =
+            PreLaunchChangeTracker.snapshot(Arrays.asList(projectA, projectB));
+
+        assertFalse("unchanged project must not be in the dirty set",
+            snapshot.isDirty(projectA));
+        assertTrue("changed project must be in the dirty set", snapshot.isDirty(projectB));
+    }
+
+    @Test
+    public void testSnapshotSeesAChangeThatLandsAfterItWasTaken()
+    {
+        // The caller partitions the scope AFTER taking the snapshot. A change that
+        // lands in that window must be recomputed by THIS launch, not deferred.
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PrepareSnapshot snapshot =
+            PreLaunchChangeTracker.snapshot(Collections.singletonList(project));
+        assertFalse("clean when the snapshot was taken", snapshot.isDirty(project));
+
+        PreLaunchChangeTracker.markDirty("Config");
+        assertTrue("a change after the snapshot must still force this recompute",
+            snapshot.isDirty(project));
+    }
+
+    @Test
+    public void testSnapshotSkipsClosedProjects()
+    {
+        IProject closed = mock(IProject.class);
+        when(closed.getName()).thenReturn("Closed");
+        when(closed.exists()).thenReturn(true);
+        when(closed.isOpen()).thenReturn(false);
+
+        PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(Arrays.asList(closed, null));
+        assertFalse("a closed project must not be judged dirty", snapshot.isDirty(closed));
+    }
+
+    // =========================================================================
+    // Disk visibility - the tree must describe the disk before it is believed
+    // =========================================================================
+
+    /**
+     * The whole gate reads the workspace's SAVED tree. Sources changed while EDT was
+     * not running (a {@code git checkout} on a closed workspace) leave that tree
+     * carrying the old timestamps, and no OS monitor reports them - so unless the
+     * project is synced with disk first, the stored fingerprint matches and a launch
+     * is certified against sources nobody has looked at.
+     */
+    @Test
+    public void testOfflineEditIsSeenBecauseTheTreeIsSyncedFirst()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        // EDT goes down; somebody checks out another branch; EDT comes back. The
+        // in-memory state is gone, the tree still says fp-1 - until the sync runs.
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        diskSyncs.clear(); // count only what the new session does
+        PreLaunchChangeTracker.setDiskSyncForTest(syncedProject -> {
+            diskSyncs.add(syncedProject.getName());
+            content.put(syncedProject.getName(), "fp-2"); // the refresh sees the edit
+            return true;
+        });
+
+        assertTrue("a change made while EDT was down must be seen after the disk sync",
+            isDirty(project));
+        assertEquals("the sync must have run", 1, diskSyncs.size());
+    }
+
+    @Test
+    public void testTreeIsSyncedOncePerSessionAndAgainAfterRestart()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+
+        prepare(project);
+        prepare(project);
+        assertEquals("one sync per project per session", 1, diskSyncs.size());
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        prepare(project);
+        assertEquals("a new session must sync again", 2, diskSyncs.size());
+    }
+
+    @Test
+    public void testUnsyncableProjectIsTreatedAsChanged()
+    {
+        // The refresh timed out or failed: we cannot prove the tree describes the
+        // disk, so a matching fingerprint must NOT be trusted.
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        PreLaunchChangeTracker.setDiskSyncForTest(syncedProject -> false);
+
+        assertTrue("an unproven tree must cost a recompute, not grant a certificate",
+            isDirty(project));
+    }
+
+    @Test
+    public void testAFailedSyncIsRetriedOnTheNextLaunch()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        PreLaunchChangeTracker.setDiskSyncForTest(syncedProject -> {
+            diskSyncs.add(syncedProject.getName());
+            return false;
+        });
+
+        isDirty(project);
+        isDirty(project);
+        assertEquals("a project that could not be synced must be retried", 2, diskSyncs.size());
+    }
+
+    /**
+     * A project that is closed and reopened gets its tree rebuilt from saved state,
+     * and an open may be answered by a merely SCHEDULED refresh
+     * ({@code IResource.BACKGROUND_REFRESH}). A sync recorded before that says
+     * nothing about the tree we would read now, so it must not be reused.
+     */
+    @Test
+    public void testReopeningAProjectForcesANewDiskSync()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+        assertEquals("synced once", 1, diskSyncs.size());
+
+        PreLaunchChangeTracker.visitDelta(
+            projectDelta("Config", IResourceDelta.CHANGED, IResourceDelta.OPEN));
+
+        prepare(project);
+        assertEquals("a reopened project must be synced again", 2, diskSyncs.size());
+    }
+
+    @Test
+    public void testAnOrdinaryProjectDeltaDoesNotForceANewDiskSync()
+    {
+        // Marker/description churn on the project node is not a tree replacement;
+        // re-syncing on it would put the refresh back on every launch.
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        PreLaunchChangeTracker.visitDelta(
+            projectDelta("Config", IResourceDelta.CHANGED, IResourceDelta.MARKERS));
+
+        prepare(project);
+        assertEquals("an ordinary project delta must not re-sync", 1, diskSyncs.size());
+    }
+
+    /**
+     * Pins the WIRING, not the seam: with the production bindings in place, the gate
+     * itself must reach the real refresh. Without this, replacing the production
+     * {@code diskSync} with something that answers "synced" without doing anything
+     * would leave every other test in this file green.
+     */
+    @Test
+    public void testTheGateUsesTheRealRefreshWithProductionBindings() throws Exception
+    {
+        PreLaunchChangeTracker.resetForTest(); // drop the test seams installed in setUp
+        IProject project = mockProject("Config");
+        stubWalk(project); // production fingerprinter walks an empty tree
+
+        PreLaunchChangeTracker.snapshot(Collections.singletonList(project));
+
+        verify(project).refreshLocal(org.mockito.ArgumentMatchers.eq(IResource.DEPTH_INFINITE),
+            org.mockito.ArgumentMatchers.any());
+    }
+
+    /**
+     * Pins the production mechanism, not the seam: the sync must actually refresh the
+     * project from the file system, and must report a failure as a failure.
+     */
+    @Test
+    public void testProductionDiskSyncRefreshesTheProjectFromDisk() throws Exception
+    {
+        IProject project = mockProject("Config");
+
+        assertTrue("a completed refresh means the tree describes the disk",
+            PreLaunchChangeTracker.refreshFromDisk(project));
+        verify(project).refreshLocal(org.mockito.ArgumentMatchers.eq(IResource.DEPTH_INFINITE),
+            org.mockito.ArgumentMatchers.any());
+
+        IProject failing = mockProject("Failing");
+        org.mockito.Mockito.doThrow(new org.eclipse.core.runtime.CoreException(
+            org.eclipse.core.runtime.Status.error("boom"))).when(failing)
+            .refreshLocal(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.any());
+        assertFalse("a refresh that failed must not certify anything",
+            PreLaunchChangeTracker.refreshFromDisk(failing));
+    }
+
+    /**
+     * A refresh still running when its deadline elapses has proven NOTHING about the
+     * tree — cancellation is cooperative, so the work may well continue. Accepting it
+     * would hand a certificate to a project whose disk state is still unknown.
+     */
+    @Test
+    public void testARefreshThatOutlivesItsDeadlineIsNotProof() throws Exception
+    {
+        IProject slow = mockProject("Slow");
+        doAnswer(invocation -> {
+            Thread.sleep(800);
+            return null;
+        }).when(slow).refreshLocal(anyInt(), any());
+        PreLaunchChangeTracker.setDiskSyncTimeoutForTest(50L);
+
+        assertFalse("a refresh that outlived its deadline must not be accepted as proof",
+            PreLaunchChangeTracker.refreshFromDisk(slow));
+    }
+
+    // =========================================================================
+    // Ordering-race regression: a new dirty event arriving DURING recompute must
+    // not be silently cleared by the subsequent markPrepared — and must not be
+    // certified as prepared content either.
     // =========================================================================
 
     @Test
     public void testDirtyEventDuringRecomputeKeepsProjectDirty()
     {
-        // Setup: project has been prepared once (not never-prepared).
+        // Setup: project has been prepared once at fp-1.
         IProject project = mockProject("Config");
-        PreLaunchChangeTracker.markPreparedForTest("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
 
-        // Step 1: project is dirty before the recompute starts.
-        PreLaunchChangeTracker.markDirtyForTest("Config");
-        assertTrue("project must be dirty before snapshot", PreLaunchChangeTracker.isDirty(project));
+        // Step 1: a change lands, so the next launch recomputes.
+        content.put("Config", "fp-2");
+        PreLaunchChangeTracker.markDirty("Config");
+        assertTrue("project must be dirty before snapshot", isDirty(project));
 
         // Step 2: snapshot is taken (simulates what recomputeAndSettleIfDirty does).
-        java.util.List<IProject> scope = Collections.singletonList(project);
-        Map<String, Long> snapshot = PreLaunchChangeTracker.snapshotDirty(scope);
-        assertNotNull("snapshot must capture the dirty entry", snapshot.get("Config"));
+        List<IProject> scope = Collections.singletonList(project);
+        PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(scope);
+        assertNotNull("snapshot must capture the dirty entry",
+            PreLaunchChangeTracker.getDirtyGenerationForTest("Config"));
 
         // Step 3: a NEW dirty event arrives DURING the recompute (higher generation).
-        PreLaunchChangeTracker.markDirtyForTest("Config");
-        Long genAfterNewChange = PreLaunchChangeTracker.getDirtyGenerationForTest("Config");
-        assertNotNull("DIRTY map must still hold the new generation", genAfterNewChange);
-        assertTrue("new generation must be higher than snapshot", genAfterNewChange > snapshot.get("Config"));
+        content.put("Config", "fp-3");
+        PreLaunchChangeTracker.markDirty("Config");
 
         // Step 4: markPrepared is called with the STALE snapshot.
         PreLaunchChangeTracker.markPrepared(scope, snapshot);
 
         // The project must STILL be dirty — the conditional remove must have failed
         // because the stored generation is now higher than the snapshot.
-        assertTrue("project must remain dirty after a change-during-recompute", PreLaunchChangeTracker.isDirty(project));
-        assertNotNull("DIRTY map entry must not have been removed", PreLaunchChangeTracker.getDirtyGenerationForTest("Config"));
+        assertTrue("project must remain dirty after a change-during-recompute",
+            isDirty(project));
+        assertNotNull("DIRTY map entry must not have been removed",
+            PreLaunchChangeTracker.getDirtyGenerationForTest("Config"));
+    }
+
+    /**
+     * The persistent half of the same race: the content state that re-dirtied
+     * mid-recompute was never fully prepared, so it must not be recorded — otherwise
+     * the next EDT session (whose in-memory dirty map is empty) would read it as
+     * prepared and ship a stale {@code .cfe}.
+     */
+    @Test
+    public void testChangeDuringRecomputeIsNotCertifiedAcrossRestart()
+    {
+        IProject project = mockProject("Config");
+        content.put("Config", "fp-1");
+        prepare(project);
+
+        content.put("Config", "fp-2");
+        PreLaunchChangeTracker.markDirty("Config");
+        List<IProject> scope = Collections.singletonList(project);
+        PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(scope);
+        // A change lands while the recompute is running.
+        PreLaunchChangeTracker.markDirty("Config");
+        PreLaunchChangeTracker.markPrepared(scope, snapshot);
+
+        assertNull("the unfinished content state must not be recorded as prepared",
+            store.values.get("Config"));
+
+        PreLaunchChangeTracker.simulatePluginRestartForTest();
+        assertTrue("a restart must not turn an unfinished prepare into a clean project",
+            isDirty(project));
     }
 
     // =========================================================================
@@ -226,6 +589,182 @@ public class PreLaunchChangeTrackerTest
 
         assertTrue("first CAS must win", firstWon.get());
         assertFalse("second CAS must NOT win — only one Job must be scheduled", secondWon.get());
+    }
+
+    // =========================================================================
+    // Content fingerprint — the walk and its folding
+    // =========================================================================
+
+    @Test
+    public void testFingerprintIgnoresDerivedFiles()
+    {
+        // Build output is produced BY the recompute; counting it as "the user
+        // changed something" would make every launch dirty forever.
+        IProject project = mockProject("Config");
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false));
+        String withoutDerived = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        // A derived FOLDER must prune its whole subtree, including files that are
+        // not themselves flagged derived.
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false),
+            proxy("/Config/bin", 5L, IResource.FOLDER, true),
+            proxy("/Config/bin/a.cfe", 77L, IResource.FILE, false));
+        String withDerived = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        assertEquals("derived output must not change the fingerprint", withoutDerived, withDerived);
+    }
+
+    /**
+     * When the project folder IS the repository root, {@code .git} is part of the
+     * resource tree and every ordinary Git operation rewrites files in it. Those
+     * files are not 1C sources, and letting them count would force a full recompute
+     * after a mere {@code git status}.
+     */
+    @Test
+    public void testFingerprintIgnoresTheGitStore()
+    {
+        IProject project = mockProject("Config");
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false));
+        String withoutGit = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false),
+            proxy("/Config/.git", 1L, IResource.FOLDER, false),
+            proxy("/Config/.git/index", 999L, IResource.FILE, false));
+        String withGit = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        assertEquals("the git store must not change the fingerprint", withoutGit, withGit);
+    }
+
+    @Test
+    public void testGitStoreChangeDoesNotDirtyTheProject()
+    {
+        // Same rule on the other signal: a write inside .git is not a source change.
+        IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.CONTENT, false);
+        when(delta.getFullPath()).thenReturn(new Path("/Config/.git/index"));
+        assertFalse("a write inside the git store must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+
+        IResourceDelta source = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.CONTENT, false);
+        when(source.getFullPath()).thenReturn(new Path("/Config/src/a.bsl"));
+        assertTrue("a source write must still make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(source));
+    }
+
+    @Test
+    public void testFingerprintFollowsModificationStamp()
+    {
+        IProject project = mockProject("Config");
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false));
+        String before = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        stubWalk(project, proxy("/Config/src/a.bsl", 11L, IResource.FILE, false));
+        String after = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        assertNotEquals("an edited file must change the fingerprint", before, after);
+    }
+
+    @Test
+    public void testFingerprintFollowsAddedAndRenamedFiles()
+    {
+        IProject project = mockProject("Config");
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false));
+        String one = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        stubWalk(project, proxy("/Config/src/a.bsl", 10L, IResource.FILE, false),
+            proxy("/Config/src/b.bsl", 10L, IResource.FILE, false));
+        String two = PreLaunchChangeTracker.computeContentFingerprint(project);
+        assertNotEquals("an added file must change the fingerprint", one, two);
+
+        stubWalk(project, proxy("/Config/src/renamed.bsl", 10L, IResource.FILE, false));
+        String renamed = PreLaunchChangeTracker.computeContentFingerprint(project);
+        assertNotEquals("a renamed file must change the fingerprint", one, renamed);
+    }
+
+    @Test
+    public void testFingerprintIgnoresFoldersAndVisitOrder()
+    {
+        // IContainer member order is not part of the API contract, so the token
+        // must not depend on it (otherwise a project would look "changed" for free).
+        IProject project = mockProject("Config");
+        stubWalk(project, proxy("/Config/src", 1L, IResource.FOLDER, false),
+            proxy("/Config/src/a.bsl", 10L, IResource.FILE, false),
+            proxy("/Config/src/b.bsl", 20L, IResource.FILE, false));
+        String forward = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        stubWalk(project, proxy("/Config/src/b.bsl", 20L, IResource.FILE, false),
+            proxy("/Config/src", 99L, IResource.FOLDER, false),
+            proxy("/Config/src/a.bsl", 10L, IResource.FILE, false));
+        String shuffled = PreLaunchChangeTracker.computeContentFingerprint(project);
+
+        assertEquals("visit order and folder stamps must not change the fingerprint",
+            forward, shuffled);
+    }
+
+    // =========================================================================
+    // Production store — the half that actually outlives the plugin
+    // =========================================================================
+
+    /**
+     * The gate is only restart-proof if the mark is written to storage that
+     * outlives the session. A SESSION property would compile and pass every
+     * gate-logic test above while re-introducing exactly the bug this replaced,
+     * so the choice of a PERSISTENT property is pinned here.
+     */
+    @Test
+    public void testProductionStoreUsesAPersistentProperty() throws Exception
+    {
+        IProject project = mockProject("Config");
+        when(project.getPersistentProperty(PreLaunchChangeTracker.FINGERPRINT_PROPERTY))
+            .thenReturn("fp-1");
+        PreLaunchChangeTracker.PersistentPropertyStore productionStore =
+            new PreLaunchChangeTracker.PersistentPropertyStore();
+
+        assertEquals("load must read the persistent property", "fp-1",
+            productionStore.load(project));
+
+        productionStore.save(project, "fp-2");
+        verify(project).setPersistentProperty(PreLaunchChangeTracker.FINGERPRINT_PROPERTY, "fp-2");
+
+        productionStore.clear(project);
+        verify(project).setPersistentProperty(PreLaunchChangeTracker.FINGERPRINT_PROPERTY, null);
+    }
+
+    @Test
+    public void testProductionStoreSurvivesAFailingProject() throws Exception
+    {
+        // A store that cannot answer must make the project look UNPREPARED (one
+        // extra recompute), never prepared, and must never throw into the chain.
+        IProject project = mockProject("Config");
+        when(project.getPersistentProperty(PreLaunchChangeTracker.FINGERPRINT_PROPERTY))
+            .thenThrow(new org.eclipse.core.runtime.CoreException(
+                org.eclipse.core.runtime.Status.error("boom")));
+        PreLaunchChangeTracker.PersistentPropertyStore productionStore =
+            new PreLaunchChangeTracker.PersistentPropertyStore();
+
+        assertNull("an unreadable marker must read as absent", productionStore.load(project));
+    }
+
+    @Test
+    public void testFileTokenSeparatesPathAndStamp()
+    {
+        assertNotEquals("path must participate",
+            PreLaunchChangeTracker.fileToken("/p/a.bsl", 1L),
+            PreLaunchChangeTracker.fileToken("/p/b.bsl", 1L));
+        assertNotEquals("stamp must participate",
+            PreLaunchChangeTracker.fileToken("/p/a.bsl", 1L),
+            PreLaunchChangeTracker.fileToken("/p/a.bsl", 2L));
+        assertEquals("same path and stamp must give the same token",
+            PreLaunchChangeTracker.fileToken("/p/a.bsl", 1L),
+            PreLaunchChangeTracker.fileToken("/p/a.bsl", 1L));
+    }
+
+    @Test
+    public void testCombineSeparatesFileCount()
+    {
+        // Two files whose tokens cancel out in the xor must still differ from one
+        // file: the count is part of the fold.
+        assertNotEquals(PreLaunchChangeTracker.combine(1L, 5L, 5L),
+            PreLaunchChangeTracker.combine(2L, 5L, 5L));
     }
 
     // =========================================================================
@@ -306,6 +845,26 @@ public class PreLaunchChangeTrackerTest
         // A derived file with CONTENT changes must never be counted as user content.
         IResourceDelta delta = mockFileDelta(IResourceDelta.CHANGED, IResourceDelta.CONTENT, true);
         assertFalse("CHANGED+CONTENT on a derived file must NOT make the project dirty",
+            PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
+    }
+
+    @Test
+    public void testFileInsideADerivedFolderIsNotDirty()
+    {
+        // The file itself carries NO derived bit — only its folder does. Reading it
+        // as a source change would re-dirty the project on every single build, so
+        // the recompute would never be skipped no matter what the fingerprint says.
+        IResource resource = mock(IResource.class);
+        when(resource.getType()).thenReturn(IResource.FILE);
+        when(resource.isDerived()).thenReturn(false);
+        when(resource.isDerived(IResource.CHECK_ANCESTORS)).thenReturn(true);
+
+        IResourceDelta delta = mock(IResourceDelta.class);
+        when(delta.getResource()).thenReturn(resource);
+        when(delta.getKind()).thenReturn(IResourceDelta.CHANGED);
+        when(delta.getFlags()).thenReturn(IResourceDelta.CONTENT);
+
+        assertFalse("build output under a derived folder must NOT make the project dirty",
             PreLaunchChangeTracker.deltaMakesProjectDirty(delta));
     }
 
@@ -406,12 +965,114 @@ public class PreLaunchChangeTrackerTest
     }
 
     @Test
-    public void testPrepInFlightExpiredAfterExpiryTime()
+    public void testPrepInFlightCancelledBeforeItRanIsReplaceable() throws Exception
+    {
+        // The regression this closes: requiring `done` to expire an entry left a job that was
+        // cancelled while still QUEUED with neither a live carrier nor `done`. It fell between
+        // the two and became IMMORTAL — every later call for that project+application saw
+        // "already started", scheduled no replacement, and returned Pending forever.
+        //
+        // Driven deterministically, no threads: a job scheduled far in the future is in the
+        // scheduler (sleeping) and has definitely not entered its body; cancelling it takes it
+        // off the scheduler in exactly the state the bug is about.
+        org.eclipse.core.runtime.jobs.Job queued =
+            new org.eclipse.core.runtime.jobs.Job("prep-cancelled-while-queued") //$NON-NLS-1$
+            {
+                @Override
+                protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+                {
+                    return org.eclipse.core.runtime.Status.OK_STATUS;
+                }
+            };
+        LaunchLifecycleUtils.PrepInFlight entry =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        try
+        {
+            queued.schedule(10 * 60 * 1000L);
+            entry.trackScheduledJob(queued);
+
+            assertFalse("a job still in the scheduler must NOT be replaced — that is the honest "
+                + "long-running preparation this expiry was narrowed for", entry.isExpired());
+            assertFalse("the body never ran, so the entry cannot be done", entry.done);
+
+            queued.cancel();
+
+            assertTrue("a job that left the scheduler without ever entering its body must be "
+                + "replaceable at once — waiting on it would be waiting forever",
+                entry.isExpired());
+        }
+        finally
+        {
+            queued.cancel();
+        }
+    }
+
+    @Test
+    public void testPrepInFlightThatNeverGotACarrierIsNotImmortal()
+    {
+        // The rarer route to the same immortality: the thread that won the scheduling CAS dies
+        // before it can build and hand over the job, so the entry has no carrier, is not done,
+        // and nothing will ever change either. The hand-over follows the CAS within
+        // microseconds, so still having no carrier a whole expiry window later means it never
+        // got one — and the entry must become replaceable rather than block the key forever.
+        long veryOld = System.currentTimeMillis() - (11 * 60 * 1000L);
+        LaunchLifecycleUtils.PrepInFlight orphaned =
+            new LaunchLifecycleUtils.PrepInFlight(veryOld);
+        orphaned.started.set(true);
+
+        assertFalse("no carrier was ever handed over", orphaned.hasTrackedCarrier());
+        assertTrue("an entry that never got a carrier must not block its key forever",
+            orphaned.isExpired());
+
+        // ...while the hand-over window itself is still protected: a FRESH carrier-less entry is
+        // one whose job is about to be scheduled, and evicting it would duplicate the work.
+        LaunchLifecycleUtils.PrepInFlight justCreated =
+            new LaunchLifecycleUtils.PrepInFlight(System.currentTimeMillis());
+        justCreated.started.set(true);
+        assertFalse("a brand-new entry is inside the hand-over window and must be left alone",
+            justCreated.isExpired());
+    }
+
+    @Test
+    public void testPrepInFlightExpiredAfterExpiryTimeOnceItHasFinished()
     {
         // Seed with a start time well in the past (> INFLIGHT_EXPIRY_MS = 10 min).
         long veryOld = System.currentTimeMillis() - (11 * 60 * 1000L);
         LaunchLifecycleUtils.PrepInFlight entry = new LaunchLifecycleUtils.PrepInFlight(veryOld);
-        assertTrue("an entry older than 10 min must be expired", entry.isExpired());
+
+        // #357: age alone no longer expires an entry. A preparation that is STILL RUNNING must
+        // survive — replacing it would only queue a second job behind the per-infobase monitor
+        // the first one holds (a caller polling a legitimately long recompute would stack up one
+        // more on every retry). "Still running" is modelled the way production observes it: by a
+        // carrier that is in the scheduler, NOT by the absence of one.
+        org.eclipse.core.runtime.jobs.Job live =
+            new org.eclipse.core.runtime.jobs.Job("still-running-preparation") //$NON-NLS-1$
+            {
+                @Override
+                protected org.eclipse.core.runtime.IStatus run(
+                    org.eclipse.core.runtime.IProgressMonitor monitor)
+                {
+                    return org.eclipse.core.runtime.Status.OK_STATUS;
+                }
+            };
+        try
+        {
+            live.schedule(10 * 60 * 1000L);
+            entry.trackScheduledJob(live);
+            assertFalse("an old but still-running preparation must NOT be replaced",
+                entry.isExpired());
+
+            // Finished: the job has left the scheduler and the body completed.
+            live.cancel();
+            entry.done = true;
+            assertTrue("an entry older than 10 min that has FINISHED must be expired",
+                entry.isExpired());
+        }
+        finally
+        {
+            live.cancel();
+        }
     }
 
     @Test
@@ -446,6 +1107,24 @@ public class PreLaunchChangeTrackerTest
     // Helpers
     // =========================================================================
 
+    /**
+     * The gate as production asks it: take the scope snapshot and read its verdict
+     * for that project. There is no separate single-project predicate — one code
+     * path, so a test cannot pass against a rule production does not use.
+     */
+    private static boolean isDirty(IProject project)
+    {
+        return PreLaunchChangeTracker.snapshot(Collections.singletonList(project)).isDirty(project);
+    }
+
+    /** Runs a full successful prepare cycle (snapshot then markPrepared) for the scope. */
+    private static void prepare(IProject... projects)
+    {
+        List<IProject> scope = Arrays.asList(projects);
+        PrepareSnapshot snapshot = PreLaunchChangeTracker.snapshot(scope);
+        PreLaunchChangeTracker.markPrepared(scope, snapshot);
+    }
+
     private static IProject mockProject(String name)
     {
         IProject project = mock(IProject.class);
@@ -455,10 +1134,73 @@ public class PreLaunchChangeTrackerTest
         return project;
     }
 
+    /**
+     * Makes {@code project.accept(visitor, flags)} replay the given proxies as a
+     * depth-first walk that HONOURS the visitor's return value: when a container
+     * proxy is answered with {@code false}, every later proxy under its path is
+     * skipped. Without that, a test could not tell "the folder itself contributed
+     * nothing" from "its whole subtree was pruned" — which is the actual contract
+     * for derived output and the Git store.
+     */
+    private static void stubWalk(IProject project, IResourceProxy... proxies)
+    {
+        try
+        {
+            doAnswer(invocation -> {
+                IResourceProxyVisitor visitor = invocation.getArgument(0);
+                List<String> pruned = new ArrayList<>();
+                for (IResourceProxy proxy : Arrays.asList(proxies))
+                {
+                    String path = proxy.requestFullPath().toString();
+                    if (pruned.stream().anyMatch(prefix -> path.startsWith(prefix + "/")))
+                    {
+                        continue; // inside a subtree the visitor refused to descend into
+                    }
+                    if (!visitor.visit(proxy))
+                    {
+                        pruned.add(path);
+                    }
+                }
+                return null;
+            }).when(project).accept(any(IResourceProxyVisitor.class), anyInt());
+        }
+        catch (org.eclipse.core.runtime.CoreException e)
+        {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static IResourceProxy proxy(String path, long stamp, int type, boolean derived)
+    {
+        IResourceProxy proxy = mock(IResourceProxy.class);
+        when(proxy.getType()).thenReturn(type);
+        when(proxy.isDerived()).thenReturn(derived);
+        when(proxy.getModificationStamp()).thenReturn(stamp);
+        when(proxy.requestFullPath()).thenReturn(new Path(path));
+        when(proxy.getName()).thenReturn(new Path(path).lastSegment());
+        return proxy;
+    }
+
     /** Mocks an {@link IResourceDelta} for a FILE resource. */
     private static IResourceDelta mockFileDelta(int kind, int flags, boolean derived)
     {
         return mockResourceDelta(kind, flags, IResource.FILE, derived);
+    }
+
+    /** Mocks a PROJECT-level delta for the listener-body tests. */
+    private static IResourceDelta projectDelta(String name, int kind, int flags)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        when(project.getType()).thenReturn(IResource.PROJECT);
+        when(project.exists()).thenReturn(true);
+        when(project.isOpen()).thenReturn(true);
+
+        IResourceDelta delta = mock(IResourceDelta.class);
+        when(delta.getResource()).thenReturn(project);
+        when(delta.getKind()).thenReturn(kind);
+        when(delta.getFlags()).thenReturn(flags);
+        return delta;
     }
 
     private static IResourceDelta mockResourceDelta(int kind, int flags, int resourceType,
@@ -466,12 +1208,39 @@ public class PreLaunchChangeTrackerTest
     {
         IResource resource = mock(IResource.class);
         when(resource.getType()).thenReturn(resourceType);
-        when(resource.isDerived()).thenReturn(derived);
+        // Ancestor-aware: build output inside a derived FOLDER carries no derived
+        // bit of its own, and the classifier must not read it as a source change.
+        when(resource.isDerived(IResource.CHECK_ANCESTORS)).thenReturn(derived);
 
         IResourceDelta delta = mock(IResourceDelta.class);
         when(delta.getResource()).thenReturn(resource);
         when(delta.getKind()).thenReturn(kind);
         when(delta.getFlags()).thenReturn(flags);
         return delta;
+    }
+
+    /** In-memory {@link PreLaunchChangeTracker.FingerprintStore} standing in for the workspace metadata. */
+    private static final class MapStore
+        implements PreLaunchChangeTracker.FingerprintStore
+    {
+        final Map<String, String> values = new HashMap<>();
+
+        @Override
+        public String load(IProject project)
+        {
+            return values.get(project.getName());
+        }
+
+        @Override
+        public void save(IProject project, String fingerprint)
+        {
+            values.put(project.getName(), fingerprint);
+        }
+
+        @Override
+        public void clear(IProject project)
+        {
+            values.remove(project.getName());
+        }
     }
 }

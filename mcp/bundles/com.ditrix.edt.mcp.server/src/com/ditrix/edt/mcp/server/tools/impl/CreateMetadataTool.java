@@ -287,7 +287,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("kind", "EClass of the created node (e.g. 'Catalog', 'CatalogAttribute')") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("name", "Programmatic name of the created node") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty(KEY_PERSISTED, "Whether the change was exported to disk") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
+                "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
+                    + "export queue to drain before answering, so a success normally means the write has "
+                    + "already run - but that establishes the queue is empty, not that the bytes are "
+                    + "correct (a platform-side write failure is logged inside EDT), and the wait is "
+                    + "skipped where the export state cannot be observed") //$NON-NLS-1$
             .stringArrayProperty(KEY_APPLIED,
                 "Names of the optional attributes actually applied (XDTO package member create only)") //$NON-NLS-1$
             .stringProperty(KEY_SYNONYM, "Display name written, when a synonym property was provided") //$NON-NLS-1$

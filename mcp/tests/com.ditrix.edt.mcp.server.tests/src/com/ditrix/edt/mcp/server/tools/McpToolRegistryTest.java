@@ -8,8 +8,13 @@ package com.ditrix.edt.mcp.server.tools;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.After;
 import org.junit.Before;
@@ -176,6 +181,78 @@ public class McpToolRegistryTest
         registry.clear();
         assertEquals(0, registry.getToolCount());
         assertNull(registry.getTool("x"));
+    }
+
+    // === Bulk replacement ===
+
+    @Test
+    public void testReplaceAllPublishesTheWholeCatalogueAndDropsTheOldOne()
+    {
+        registry.register(new StubTool("old_tool")); //$NON-NLS-1$
+
+        registry.replaceAll(Arrays.asList(new StubTool("tool_a"), new StubTool("tool_b"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(2, registry.getToolCount());
+        assertNull("the previous catalogue must be gone", registry.getTool("old_tool")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(registry.getTool("tool_a")); //$NON-NLS-1$
+        assertNotNull(registry.getTool("tool_b")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testReplaceAllIgnoresNullEntriesAndAcceptsNoCatalogue()
+    {
+        registry.replaceAll(Arrays.asList(new StubTool("kept"), null, new StubTool(null))); //$NON-NLS-1$
+        assertEquals(1, registry.getToolCount());
+
+        registry.replaceAll(null);
+        assertEquals(0, registry.getToolCount());
+    }
+
+    /**
+     * A server restart republishes the catalogue while clients - and the in-process bridge -
+     * keep reading it. Filling the live registry tool by tool would let them see it empty or
+     * half-populated and be told that a registered tool does not exist.
+     */
+    @Test
+    public void testConcurrentReadersNeverSeeAPartialCatalogue() throws Exception
+    {
+        List<IMcpTool> catalogue = new ArrayList<>();
+        for (int i = 0; i < 60; i++)
+        {
+            catalogue.add(new StubTool("tool_" + i)); //$NON-NLS-1$
+        }
+        registry.replaceAll(catalogue);
+
+        AtomicInteger smallestSeen = new AtomicInteger(Integer.MAX_VALUE);
+        AtomicBoolean vanished = new AtomicBoolean();
+        AtomicBoolean stop = new AtomicBoolean();
+        Thread reader = new Thread(() -> {
+            while (!stop.get())
+            {
+                smallestSeen.getAndUpdate(seen -> Math.min(seen, registry.getToolCount()));
+                if (registry.getTool("tool_0") == null) //$NON-NLS-1$
+                {
+                    vanished.set(true);
+                }
+            }
+        }, "registry-reader"); //$NON-NLS-1$
+        reader.start();
+        try
+        {
+            for (int round = 0; round < 200; round++)
+            {
+                registry.replaceAll(catalogue);
+            }
+        }
+        finally
+        {
+            stop.set(true);
+            reader.join(5_000L);
+        }
+
+        assertFalse("a registered tool read as unknown during a republish", vanished.get()); //$NON-NLS-1$
+        assertEquals("a reader observed a partially published catalogue", //$NON-NLS-1$
+            catalogue.size(), smallestSeen.get());
     }
 
     // === Stub Tool ===

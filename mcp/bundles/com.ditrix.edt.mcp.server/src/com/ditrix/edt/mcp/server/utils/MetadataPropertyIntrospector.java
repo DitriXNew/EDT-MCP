@@ -43,6 +43,12 @@ import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
  */
 public final class MetadataPropertyIntrospector
 {
+    /**
+     * The {@code AdjustableBoolean} flag the wire boolean of an {@link ValueKind#ADJUSTABLE_BOOLEAN}
+     * property addresses. Its sibling {@code for} list (per-role overrides) is left untouched.
+     */
+    public static final String COMMON_FEATURE = "common"; //$NON-NLS-1$
+
     /** The kind of value an assignable property takes - drives validation and rendering. */
     public enum ValueKind
     {
@@ -68,7 +74,20 @@ public final class MetadataPropertyIntrospector
          * form (see {@link StyleValueBuilder}). It is a single-valued containment reference - excluded
          * from the generic containment-ref filter, so it is classified explicitly.
          */
-        STYLE_VALUE
+        STYLE_VALUE,
+        /**
+         * A contained {@link com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean AdjustableBoolean}:
+         * a flag the designer stores as a nested object ({@code common}) that MAY additionally carry
+         * per-role / per-functional-option overrides ({@code for}). On the wire it is a plain boolean
+         * addressing {@code common}; the {@code for} overrides are preserved untouched.
+         *
+         * <p>Like {@link #STYLE_VALUE} this is a single-valued containment reference, so the generic
+         * containment filter would drop it - it is classified explicitly. Classifying it by its TARGET
+         * TYPE rather than by feature name covers every such flag with one rule: a form attribute's
+         * {@code view} / {@code edit} (issue #382), a form item's {@code userVisible}, a form command's
+         * {@code use}.</p>
+         */
+        ADJUSTABLE_BOOLEAN
     }
 
     /** The introspected schema of one assignable property. */
@@ -419,6 +438,10 @@ public final class MetadataPropertyIntrospector
         {
             return ValueKind.STYLE_VALUE;
         }
+        if (isAdjustableBoolean(feature))
+        {
+            return ValueKind.ADJUSTABLE_BOOLEAN;
+        }
         if (feature instanceof EAttribute)
         {
             return classifyAttribute((EAttribute)feature);
@@ -543,6 +566,48 @@ public final class MetadataPropertyIntrospector
         return owner != null && MdClassPackage.Literals.STYLE_ITEM.isSuperTypeOf(owner);
     }
 
+    /**
+     * Whether {@code feature} is a contained {@code AdjustableBoolean} flag - the designer's
+     * "flag plus optional per-role overrides" shape (issue #382).
+     *
+     * <p>The test is on the reference's TARGET TYPE, not on its name: one rule then covers every such
+     * flag wherever it is declared - a form attribute's {@code view} / {@code edit}, a form item's
+     * {@code userVisible}, a form command's {@code use} - instead of a name list that silently misses
+     * the next one. Subtypes are admitted too, so a specialization of the type stays recognized.</p>
+     */
+    private static boolean isAdjustableBoolean(EStructuralFeature feature)
+    {
+        if (!(feature instanceof EReference))
+        {
+            return false;
+        }
+        EReference ref = (EReference)feature;
+        EClass target = ref.getEReferenceType();
+        return ref.isContainment() && !ref.isMany() && target != null
+            && MdClassPackage.Literals.ADJUSTABLE_BOOLEAN.isSuperTypeOf(target);
+    }
+
+    /**
+     * Renders an {@code AdjustableBoolean}'s current value: the nested {@code common} flag, which is
+     * what the wire boolean addresses. The sibling {@code for} overrides are NOT rendered - they are
+     * neither readable nor writable through this property, and showing them would suggest otherwise.
+     */
+    private static String renderAdjustableBoolean(Object value)
+    {
+        if (!(value instanceof EObject))
+        {
+            return null;
+        }
+        EObject adjustable = (EObject)value;
+        EStructuralFeature common = adjustable.eClass().getEStructuralFeature(COMMON_FEATURE);
+        if (common == null)
+        {
+            return null;
+        }
+        Object flag = adjustable.eGet(common);
+        return flag == null ? null : String.valueOf(flag);
+    }
+
     private static EEnum enumTypeOf(EStructuralFeature feature)
     {
         if (feature instanceof EAttribute)
@@ -612,6 +677,8 @@ public final class MetadataPropertyIntrospector
                     return renderReferenceList(value);
                 case STYLE_VALUE:
                     return renderStyleValue(value);
+                case ADJUSTABLE_BOOLEAN:
+                    return renderAdjustableBoolean(value);
                 default:
                     return String.valueOf(value);
             }

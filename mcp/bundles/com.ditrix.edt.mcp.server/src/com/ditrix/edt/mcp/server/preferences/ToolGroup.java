@@ -27,7 +27,7 @@ public enum ToolGroup
 
     PROBLEMS("problems", "Errors & Problems", //$NON-NLS-1$ //$NON-NLS-2$
         "Error reporting and workspace markers (bookmarks, tasks)", //$NON-NLS-1$
-        "get_problem_summary", "get_project_errors", "get_markers"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "get_problem_summary", "get_project_errors", "get_markers", "apply_quick_fix"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     CODE_INTELLIGENCE("codeIntelligence", "Code Intelligence", //$NON-NLS-1$ //$NON-NLS-2$
         "Content assist, documentation, metadata browsing, and references", //$NON-NLS-1$
@@ -39,10 +39,10 @@ public enum ToolGroup
         "get_tags", "get_objects_by_tags"), //$NON-NLS-1$ //$NON-NLS-2$
 
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
-        "Application management, database update, launch, termination, and testing", //$NON-NLS-1$
+        "Application management, database update, launch, termination, testing, and Workmate", //$NON-NLS-1$
         "get_applications", "list_configurations", "create_launch_config", "delete_launch_config", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "create_infobase", "delete_infobase", "update_database", "debug_launch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "terminate_launch", "run_yaxunit_tests"), //$NON-NLS-1$ //$NON-NLS-2$
+        "terminate_launch", "run_yaxunit_tests", "ask_workmate"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     DEBUG("debug", "Debugging", //$NON-NLS-1$ //$NON-NLS-2$
         "Breakpoints, stepping, variables, expression evaluation, and profiling", //$NON-NLS-1$

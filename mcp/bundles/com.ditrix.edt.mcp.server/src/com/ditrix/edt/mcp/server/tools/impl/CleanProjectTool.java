@@ -413,6 +413,8 @@ public class CleanProjectTool implements IMcpTool
         {
         case TIMED_OUT:
             return timeoutError(info.name, timeoutMs);
+        case TIMED_OUT_BEFORE_START:
+            return notStartedError(info.name, timeoutMs);
         case INTERRUPTED:
             return ToolResult.error("Project clean was interrupted while waiting for the clean build" //$NON-NLS-1$
                 + onProject(info.name) + ". The clean may still be running in EDT — check the " //$NON-NLS-1$
@@ -421,8 +423,15 @@ public class CleanProjectTool implements IMcpTool
             return ToolResult.error("The clean build" + onProject(info.name) + " was cancelled before " //$NON-NLS-1$ //$NON-NLS-2$
                 + "it started, so nothing was cleaned. Retry; if it keeps happening, EDT is shutting " //$NON-NLS-1$
                 + "down or another operation is cancelling background jobs.").toJson(); //$NON-NLS-1$
-        default:
+        case COMPLETED:
             break;
+        default:
+            // Fail CLOSED on an outcome added to BoundedJob later. The old 'default: break' fell
+            // through to the no-error path below, which would report a clean that never happened
+            // as a success — the exact failure mode this switch exists to prevent.
+            return ToolResult.error("The clean build" + onProject(info.name) + " ended in an " //$NON-NLS-1$ //$NON-NLS-2$
+                + "unrecognised state (" + result.getOutcome() + "), so whether it ran is unknown. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Check the project with list_projects before relying on the model.").toJson(); //$NON-NLS-1$
         }
 
         Throwable failure = result.getFailure();
@@ -433,6 +442,28 @@ public class CleanProjectTool implements IMcpTool
             return ToolResult.error(failure.getMessage()).toJson();
         }
         return null;
+    }
+
+    /**
+     * Builds the error for a clean the deadline caught while it was still QUEUED.
+     *
+     * <p>Deliberately NOT the {@link #timeoutError} text: that one warns the model may be
+     * mid-rebuild, which is exactly wrong here — cancelling a queued clean stops it from ever
+     * starting, so the project is untouched and there is nothing to poll for.
+     *
+     * @param projectName the project whose clean never started (may be {@code null})
+     * @param timeoutMs   the bound that elapsed, in milliseconds
+     * @return the error JSON
+     */
+    private static String notStartedError(String projectName, long timeoutMs)
+    {
+        long seconds = Math.max(1, Math.round(timeoutMs / 1000.0));
+        return ToolResult.error("The clean build" + onProject(projectName) + " did not START " //$NON-NLS-1$ //$NON-NLS-2$
+            + "within " + seconds + (seconds == 1 ? " second" : " seconds") + ": the deadline " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + "elapsed while it was still queued, and cancelling it kept it from starting. " //$NON-NLS-1$
+            + "NOTHING was cleaned and the project is untouched. EDT's job scheduler is " //$NON-NLS-1$
+            + "saturated — retry when it is less busy, or pass a larger '" + KEY_TIMEOUT //$NON-NLS-1$
+            + "' (seconds).").toJson(); //$NON-NLS-1$
     }
 
     /**

@@ -11,11 +11,14 @@ Python stdlib only. No third-party dependencies.
 """
 
 import hashlib
+import http.client
 import json
+import math
 import os
 import re
 import socket
 import subprocess
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -78,13 +81,36 @@ MODEL_SETTLE_TIMEOUT = int(os.environ.get(
     "E2E_MODEL_SETTLE_TIMEOUT",
     str(max(int(os.environ.get("E2E_PROJECT_READY_TIMEOUT", "180")), 300))))
 
-# reset_model's POST-CONDITION probe: an object the committed fixture always has and no
-# test may leave renamed or deleted (a rename test that targets it must be reverted by the
-# same reset). Resolving it is the only direct evidence that clean_project's re-import
-# actually landed — 'clean_project ok' + 'project ready' can both hold while the model
-# still carries the previous test's write (see reset_model). Override with
-# E2E_BASELINE_PROBE_FQN if the fixture's canonical object is ever renamed.
-BASELINE_PROBE_FQN = os.environ.get("E2E_BASELINE_PROBE_FQN", "Catalog.Catalog")
+# reset_model's POST-CONDITION probe: objects the committed fixture always has and no test
+# may leave renamed or deleted (a rename test that targets one must be reverted by the same
+# reset). Resolving them is the only direct evidence that clean_project's re-import actually
+# landed — 'clean_project ok' + 'project ready' can both hold while the model still carries
+# the previous test's write (see reset_model).
+#
+# It has to be a LIST, and the list has to include what the suite actually RENAMES. A single
+# Catalog probe could not see the one residue that really leaks: rename_metadata_object
+# renames CommonModule.Calc -> Compute, and a probe that only asks for a Catalog answers
+# "baseline is back" while the renamed common module is still in the model. The next tests to
+# depend on model/disk agreement then fail far from the cause — a resync exporting the stale
+# model over the clean tree, or a module whose IFile no longer resolves. So probe the
+# canonical Catalog AND the common modules the write/rename tests touch.
+#
+# Override the whole set with E2E_BASELINE_PROBE_FQN (comma-separated) if the fixture's
+# canonical objects are ever renamed.
+BASELINE_PROBE_FQNS = [
+    fqn.strip() for fqn in os.environ.get(
+        "E2E_BASELINE_PROBE_FQN",
+        "Catalog.Catalog,CommonModule.Calc,CommonModule.OK").split(",")
+    if fqn.strip()
+]
+
+# Kept as the single-value alias some tests/messages still read.
+BASELINE_PROBE_FQN = BASELINE_PROBE_FQNS[0]
+
+# get_metadata_details reports a PER-OBJECT failure under this heading inside an otherwise
+# SUCCESSFUL response, so it is how the probe tells "the model answered" from "the model answered
+# that my probe objects are gone". It is the tool's documented structural marker for the section.
+_DETAILS_ERROR_HEADING = "## Errors"
 
 # How many full revert + clean_project cycles reset_model may spend getting the model back
 # to the baseline before it gives up and stops the run. >1 because the lost race it recovers
@@ -92,6 +118,17 @@ BASELINE_PROBE_FQN = os.environ.get("E2E_BASELINE_PROBE_FQN", "Catalog.Catalog")
 # what that export wrote and re-imports it. Not a timeout knob — each cycle re-does the work,
 # it does not merely wait longer. Override with E2E_MODEL_RESET_ATTEMPTS.
 MODEL_RESET_ATTEMPTS = int(os.environ.get("E2E_MODEL_RESET_ATTEMPTS", "3"))
+
+# Within ONE such cycle, the two ways it can fail have SEPARATE budgets, because they are
+# separate failures with separate diagnoses and separate fixes:
+#   * the project never reports ready, so clean_project would only be refused — waiting is the
+#     only remedy, and the fix is a longer E2E_MODEL_SETTLE_TIMEOUT;
+#   * clean_project itself keeps coming back isError — waiting does not help, EDT does.
+# Sharing one budget let three failed settles consume the whole allowance and then report
+# "clean_project did not succeed in 3 attempts" — a verdict on a call that had never been made,
+# and an abort that had never once tried the thing it was aborting over.
+MODEL_CLEAN_ATTEMPTS = int(os.environ.get("E2E_MODEL_CLEAN_ATTEMPTS", "3"))
+MODEL_SETTLE_ATTEMPTS = int(os.environ.get("E2E_MODEL_SETTLE_ATTEMPTS", "3"))
 
 # Transient "Project is building ... Please wait and retry" refusal: when a call arrives
 # while EDT is still recomputing derived data (heaviest right after a big write-metadata
@@ -103,6 +140,45 @@ MODEL_RESET_ATTEMPTS = int(os.environ.get("E2E_MODEL_RESET_ATTEMPTS", "3"))
 BUILDING_RETRY_TIMEOUT = int(os.environ.get("E2E_BUILDING_RETRY_TIMEOUT", "120"))
 # The server's derived-data "still building, retry" refusal, in any response channel.
 _BUILDING_REFUSAL_RE = re.compile(r"Project is building|Please wait and retry", re.IGNORECASE)
+
+# The longest ONE logical call() can take: the retry loop keeps re-issuing a building refusal for
+# BUILDING_RETRY_TIMEOUT, the attempt in flight when that elapses still gets its full CALL_TIMEOUT,
+# and the backoff sleep before it is capped at 10s. Budgeting a clean_project at CALL_TIMEOUT alone
+# understates all three.
+_LOGICAL_CALL_CEILING = math.ceil(CALL_TIMEOUT) + BUILDING_RETRY_TIMEOUT + 10
+
+# The longest wait_for_project_ready(MODEL_SETTLE_TIMEOUT) can actually take. Its deadline gates
+# the START of each poll, so the poll in flight when the budget runs out still gets its own full
+# ceiling, plus the 2s sleep between polls. Budgeting the settle at MODEL_SETTLE_TIMEOUT alone
+# understates it - and understating it here is not conservative, it is the opposite: the budget
+# would run out early and cut off a clean_project attempt the pre-change code always made.
+_SETTLE_CEILING = MODEL_SETTLE_TIMEOUT + _LOGICAL_CALL_CEILING + 2
+
+# One settle plus one clean_project: the MCP part of a revert+clean iteration, which is all of it
+# that can plausibly run long. The git revert between them is local and unbounded only in theory.
+_RESET_CYCLE_CEILING = _SETTLE_CEILING + _LOGICAL_CALL_CEILING
+
+# Wall-clock budget for ONE revert+clean cycle. It exists for one purpose: to stop the SEPARATE
+# attempt counters above from multiplying iterations. By count alone the worst case doubled, from
+# CLEAN iterations to CLEAN+SETTLE ones, which is time the single shared budget never had.
+#
+# Sized at the full CLEAN_ATTEMPTS cycles so that in the ORDINARY failure - clean_project simply
+# being refused, settle after settle succeeding - every configured attempt starts with room to
+# spare and the budget is never what ends the cycle. It is NOT a promise that the counters always
+# win: interleave a settle failure before each refused clean and the time runs out first (with the
+# defaults, 612+922+612+922 = 3068 against a 2766 budget), which is the trade being made on
+# purpose - the counters alone permit CLEAN+SETTLE iterations, roughly twice what the single shared
+# budget ever had. What must not happen is that the abort then LIES about it, and it does not:
+# _clean_failure_cause names the budget when the budget is what stopped it.
+#
+# A budget, NOT a hard stop. Neither a settle nor a clean_project can be cancelled once started and
+# the deadline is only checked where an iteration BEGINS, so the cycle can overrun it by the one
+# iteration already under way - worst case CLEAN_ATTEMPTS+1 cycles, against CLEAN_ATTEMPTS before
+# the split and CLEAN_ATTEMPTS+SETTLE_ATTEMPTS without a budget at all. The pathological case was
+# already above run_all's --test-timeout before this branch (on CI one cycle alone can approach
+# 35 minutes); this narrows the regression rather than pretending to close it.
+MODEL_RESET_BUDGET = int(os.environ.get(
+    "E2E_MODEL_RESET_BUDGET", str(MODEL_CLEAN_ATTEMPTS * _RESET_CYCLE_CEILING)))
 
 # MCP protocol version this client speaks (sent as the MCP-Protocol-Version header,
 # per the 2025-11-25 Streamable HTTP transport spec).
@@ -296,16 +372,48 @@ def _arm_timeout_latch():
 
 
 def abort_further_calls(reason):
-    """Refuse every SUBSEQUENT MCP call, whatever is still holding the wire.
+    """Refuse every SUBSEQUENT MCP call AND every fixture reset, whatever is still holding the wire.
 
     Armed by a call timeout and by the orchestrator when it abandons a timed-out worker. Both
     mean the same thing: something we cannot cancel is still working, and every later request -
     a test's own teardown, a reset_model still in flight on the abandoned thread - would race it.
     Refusing at the ONE place they all pass through beats hoping each caller checks a flag.
-    """
+
+    The git tree is frozen by the SAME act, because it is the same fact: a `git checkout` while
+    EDT may still be exporting races a write we cannot see. Deriving both from one condition is
+    the point - keeping two flags in step across two threads is how the window reopens.
+
+    @return freeze_fixtures()'s verdict: False when a fixture reset was still running and did not
+            finish within FIXTURE_FREEZE_WAIT, which the caller should say out loud"""
     global _TIMED_OUT, _ABORT_REASON
     _TIMED_OUT = True
     _ABORT_REASON = reason
+    return freeze_fixtures()
+
+
+# Failures that mean the request MAY have reached the server and its outcome is UNKNOWN - the only
+# ones that justify stopping the run over a write. Deliberately not "any exception":
+#   * a body we could not build (json.dumps on a bad argument) never left this process;
+#   * a response we could not parse DID arrive, so nothing is still in flight;
+# neither leaves work running that a cleanup could race, and aborting a suite over either would be
+# a false alarm. http.client's own exceptions are listed because a truncated body (IncompleteRead)
+# is not an OSError and is exactly the uncertain case.
+_UNCERTAIN_TRANSPORT_ERRORS = (E2ECallTimeout, OSError, http.client.HTTPException)
+
+
+def calls_aborted():
+    """Has the latch been armed - i.e. is something uncancellable believed to be still running?
+
+    The orchestrator asks after every test. A test can arm it without failing in a way the runner
+    would otherwise recognise (a mutating request that died on the wire errors that ONE test), and
+    from that moment every later call is refused anyway - so continuing would only manufacture
+    cascade failures against tests that did nothing wrong."""
+    return _TIMED_OUT
+
+
+def abort_reason():
+    """Why calls are being refused, in words fit to print. Meaningless unless calls_aborted()."""
+    return _ABORT_REASON
 
 
 def _call_timeout_message(cause):
@@ -339,12 +447,272 @@ def call(tool, arguments):
     expiry the building refusal is returned so the test fails loudly rather than hanging."""
     deadline = time.time() + BUILDING_RETRY_TIMEOUT
     attempt = 0
+    # Record the attempt BEFORE issuing it, once for the whole retry loop. If the request dies
+    # without a parseable answer (connection reset, truncated body, timeout), the server may
+    # still have committed the write — recording only on the way out left the shortcut believing
+    # nothing happened, so it skipped the reset and the next test inherited the mutation. An
+    # unknown outcome counts as a mutation; a REFUSAL that was actually read back takes it back.
+    _record_attempt(tool)
     while True:
-        result = Result(_post("tools/call", {"name": tool, "arguments": arguments}))
+        try:
+            raw = _post("tools/call", {"name": tool, "arguments": arguments})
+        except _UNCERTAIN_TRANSPORT_ERRORS:
+            # A MUTATING request that died IN FLIGHT is the same situation as one that timed out,
+            # and gets the same treatment. The socket is gone; the server-side handler is not
+            # necessarily gone with it, and it may still be committing the write. Cleaning up on top
+            # of that - git-reverting the fixture, then clean_project - RACES it: the late commit or
+            # export lands on the restored tree and leaks into the next test. So arm the same latch
+            # a timeout arms, which also freezes the fixtures, and let the run stop. Reading a write
+            # back is what makes it safe to undo; nothing else does.
+            if tool in MODEL_MUTATION_TOOLS and not _TIMED_OUT:
+                abort_further_calls(
+                    "a %s request died in flight, so the server may still be executing it" % tool)
+            raise
+        result = Result(raw)
         if not _is_transient_building(result) or time.time() >= deadline:
+            _record_outcome(tool, result.is_error)
             return result
         attempt += 1
         time.sleep(min(2 * attempt, 10))
+
+
+# ── Model-reset shortcut: don't pay for a reset when nothing was changed ──────────────
+#
+# The write-metadata cleanup (reset_fixture + reset_model) dominates the whole suite: 331
+# tests, ~3560 s, ~11 s each, while the tool call itself is a fraction of a second. Most of
+# those tests are NEGATIVE - they hand a write tool a bad argument and assert the refusal -
+# and refusing changes nothing, so the clean_project they pay for re-imports a model that
+# never moved.
+#
+# The shortcut is decided on EVIDENCE, never on a guess about what a tool "probably" did:
+# after the test the fixture must be git-clean AND the model's top-object inventory must
+# equal the snapshot taken before the suite ran. Failing either, the full reset runs. On top
+# of that, a test that invoked one of the DEEP tools always pays in full - those mutate
+# broadly enough (cascades, cross-object rewrites, whole-configuration import) that an
+# unchanged inventory is not evidence of an unchanged model.
+DEEP_MUTATION_TOOLS = frozenset({
+    "rename_metadata_object", "delete_metadata", "adopt_metadata_object",
+    "update_database", "import_configuration_from_xml", "resync_to_disk",
+    "clean_project", "create_project", "delete_project",
+})
+
+# Tools that change the BM model. A SUCCESSFUL call to any of them forfeits the shortcut
+# outright, whatever the later evidence says.
+#
+# Because the evidence has a blind spot, and this closes it: a metadata write can succeed
+# with persisted=false — the transaction changed the in-memory model while the fixture stays
+# git-clean — and a NESTED change (an attribute added to an existing catalog) leaves the
+# top-object inventory identical. Both probes then report "pristine" while the next test
+# inherits an in-memory child. A refusal changes nothing, so negative tests — the ones the
+# shortcut is actually for — still qualify.
+# Kept honest by test_mutation_set_ratchet.py: a tool that extends AbstractMetadataWriteTool on
+# the Java side and is missing here fails the suite. Hand-maintained membership silently rots -
+# apply_quick_fix landed on master mutating the model, and this set did not know about it.
+MODEL_MUTATION_TOOLS = frozenset({
+    "create_metadata", "modify_metadata", "write_module_source", "write_predefined_items",
+    "apply_quick_fix", "build_external_objects",
+    # Writers whose write happens OUTSIDE our code: both call LanguageTool through reflection, so
+    # no marker in this repository's sources can reveal them. The ratchet pins them by name for
+    # exactly that reason - see _REFLECTIVE_WRITERS in test_mutation_set_ratchet.py.
+    "generate_translation_strings", "translate_configuration",
+}) | DEEP_MUTATION_TOOLS
+
+_CALLED_TOOLS = set()
+_BASELINE_INVENTORY = None
+_BASELINE_DETAILS = None
+
+# A mutating call that SUCCEEDED. One is enough to forfeit the shortcut for the whole test.
+_MUTATION_CONFIRMED = False
+# Mutating calls issued whose outcome was never read back (connection reset, truncated body,
+# timeout). The server may well have committed them, so while this is non-zero the model counts
+# as moved. A call that throws never reaches _record_outcome, so it stays counted - which is
+# the point.
+#
+# It is deliberately NOT per-test. An unknown outcome is not a fact about the test that issued
+# it, it is a fact about the MODEL, and it stays true until something re-establishes the
+# baseline. Clearing it in begin_test_calls() (as the per-test counters are) threw away exactly
+# the evidence it was collected for: the test that issued the call would reset in full - fine -
+# but a test that did NOT declare kind='write-metadata' gets no reset at all, and the next
+# write test would then start from a cleared counter and happily take the shortcut over a model
+# carrying an uncommitted write. So only a VERIFIED restore clears it (see _mark_model_synced),
+# and until then every write test pays in full: slower, never wrong.
+_MUTATIONS_UNRESOLVED = 0
+
+
+def _record_attempt(tool):
+    """Called ONCE per logical call, before the request goes out."""
+    global _MUTATIONS_UNRESOLVED
+    _CALLED_TOOLS.add(tool)
+    if tool in MODEL_MUTATION_TOOLS:
+        _MUTATIONS_UNRESOLVED += 1
+
+
+def _record_outcome(tool, is_error):
+    """Called once the server's answer has actually been read."""
+    global _MUTATIONS_UNRESOLVED, _MUTATION_CONFIRMED
+    if tool not in MODEL_MUTATION_TOOLS:
+        return
+    _MUTATIONS_UNRESOLVED = max(0, _MUTATIONS_UNRESOLVED - 1)
+    if not is_error:
+        _MUTATION_CONFIRMED = True
+
+
+def _mark_model_synced():
+    """Called ONLY where the model was just proven to be back on the baseline.
+
+    That proof (reset_model / final_cleanup verifying _baseline_is_back) is what retires an
+    unknown outcome: whatever the abandoned request may or may not have committed, the model has
+    since been re-imported from the clean disk and checked. Nothing else may clear it."""
+    global _MUTATIONS_UNRESOLVED
+    _MUTATIONS_UNRESOLVED = 0
+
+
+def _model_may_have_moved():
+    """True when a write succeeded, or when one was issued and its fate is unknown."""
+    return _MUTATION_CONFIRMED or _MUTATIONS_UNRESOLVED > 0
+
+
+def mutations_unresolved():
+    """Was a mutating call issued whose outcome nobody ever read? (public: the orchestrator asks)
+
+    It is the one piece of this evidence a test's DECLARED kind cannot be trusted to cover. A test
+    declares kind='write-metadata' when it means to write, and the orchestrator resets those; a
+    request that died on the wire is by definition not what the test meant to do, and it can hit a
+    test of any kind. So this question is asked of every test, not just the declared writers."""
+    return _MUTATIONS_UNRESOLVED > 0
+
+
+def begin_test_calls():
+    """Start recording what a test invokes (the orchestrator calls this per test).
+
+    Resets only what is genuinely per-test. _MUTATIONS_UNRESOLVED is not - see its comment."""
+    global _MUTATION_CONFIRMED
+    _CALLED_TOOLS.clear()
+    _MUTATION_CONFIRMED = False
+
+
+def _top_object_inventory():
+    """A stable, cheap fingerprint of the model's top-level metadata objects.
+
+    One call. It sees exactly the mutations a git-clean tree can still hide: an object
+    created, deleted or renamed IN MEMORY without reaching disk. Returns None when it cannot
+    be read, which callers must treat as "no evidence" (and therefore reset in full).
+
+    A TIMEOUT is not "no evidence" and must not be swallowed: E2ECallTimeout means the request
+    may STILL BE RUNNING server-side and it arms the global latch, so absorbing it here would
+    let the run continue and pin the latched failure on the next innocent test - or start a git
+    reset while EDT is still writing. It propagates, like every other probe's."""
+    try:
+        r = call("get_metadata_objects", {"projectName": PROJECT, "limit": 1000})
+    except E2ECallTimeout:
+        raise
+    except Exception:
+        return None
+    if r.is_error or not (r.text or "").strip():
+        return None
+    return "\n".join(sorted(line.strip() for line in r.text.splitlines() if line.strip()))
+
+
+def _probe_details():
+    """The DETAIL text of BASELINE_PROBE_FQNS, or None when it cannot be read AS EVIDENCE.
+
+    None means "no evidence", and every caller treats it as such. The distinction that matters is
+    that an EMPTY body is also no evidence: an unexplained blank answer is not a fingerprint, and
+    the one thing it must never do is become the thing later answers are compared against - a
+    stored "" makes any later blank-but-not-error response compare EQUAL and certify a model
+    nobody read.
+
+    A TIMEOUT propagates, like every other probe's: it arms the global latch and means the request
+    may still be running server-side, so absorbing it here would let the run continue and pin the
+    latched failure on the next innocent test."""
+    try:
+        r = call("get_metadata_details",
+                 {"projectName": PROJECT, "objectFqns": list(BASELINE_PROBE_FQNS)})
+    except E2ECallTimeout:
+        raise
+    except Exception:
+        return None
+    if r.is_error:
+        return None
+    text = (r.text or "").strip()
+    if not text:
+        return None
+    # is_error is NOT the whole story. get_metadata_details reports a PER-OBJECT failure inside a
+    # SUCCESSFUL response - a "## Errors" section saying "Object not found" - so a body in which
+    # every probe object is missing arrives as a perfectly good result. Storing that as the
+    # baseline would make the model's WORST state canonical, and every later reset would then be
+    # certified by reproducing it. A body that reports a probe object missing is not evidence.
+    #
+    # Matched as an anchored HEADING, not as free text anywhere in the document. The heading is the
+    # tool's documented structural marker for this condition, while a bare substring search would
+    # also fire on a fixture object that merely MENTIONS it - in a synonym, a comment, a module
+    # body - and that false positive is expensive: it would drop the detail brace for good and
+    # then fail every reset's post-condition.
+    if any(line.lstrip().startswith(_DETAILS_ERROR_HEADING) for line in text.splitlines()):
+        return None
+    return text
+
+
+def snapshot_model_baseline():
+    """Record the pristine fingerprints once, before the first test runs.
+
+    Two of them, because they answer different questions: the INVENTORY sees a top object that
+    appeared, vanished or was renamed, while the DETAIL of the probed objects sees a change
+    INSIDE one - a property, a child, a synonym - which the inventory cannot. Together they are
+    what makes "the model did not move" an observation rather than an assumption.
+
+    Either may come back unreadable, and then it is simply not recorded - the shortcut degrades to
+    the evidence that IS available (and to no shortcut at all when the inventory is missing). What
+    it must not do is record something unusable AS the baseline; see _probe_details.
+
+    @return (inventory_captured, details_captured) so the caller can say which brace it lost."""
+    global _BASELINE_INVENTORY, _BASELINE_DETAILS
+    _BASELINE_INVENTORY = _top_object_inventory()
+    _BASELINE_DETAILS = _probe_details()
+    return (_BASELINE_INVENTORY is not None, _BASELINE_DETAILS is not None)
+
+
+def model_is_pristine():
+    """Is there POSITIVE evidence that the model still matches the committed baseline?
+
+    False whenever the evidence is missing or ambiguous - the caller then does the full
+    reset, so a wrong answer here costs time, never correctness.
+
+    SETTLE FIRST, then look. A metadata write's disk export is ASYNC: read git the moment the
+    test returns and a write that has not flushed yet reads as "clean", the reset is skipped,
+    and the export lands later - inside some LATER test, which then fails for a change it
+    never made. That is not hypothetical; skipping the settle did exactly this to
+    modify_metadata::test_subsystem_content_reject_subsystem_member. reset_model settles for
+    the same reason before it reverts, and the settle is the cheap half of it - the expensive
+    half is the clean_project this shortcut is trying to avoid."""
+    if _BASELINE_INVENTORY is None or _model_may_have_moved():
+        return False
+    if _CALLED_TOOLS & DEEP_MUTATION_TOOLS:
+        return False
+    try:
+        # Its VERDICT matters, not just that it ran: it returns False on timeout, meaning EDT is
+        # still building. The whole reason to settle here is that a pending async export would
+        # otherwise land after the git/inventory snapshots and leak into a later test - so a
+        # settle that did not finish is exactly the case where the evidence must not be trusted.
+        if not wait_for_project_ready():
+            return False
+    except E2ECallTimeout:
+        raise
+    except Exception:
+        return False
+    try:
+        if all_fixtures_status().strip():
+            return False
+    except E2EAssertion:
+        # git itself failed (locked index, filesystem hiccup). all_fixtures_status refuses to read
+        # that as "clean", and rightly so - but here a raise would fail the finished test over its
+        # cleanup. It is simply no evidence, and no evidence means the full reset.
+        return False
+    if _top_object_inventory() != _BASELINE_INVENTORY:
+        return False
+    # Third brace, and the one the other two cannot give: a change INSIDE an object leaves both
+    # the tree and the top-object list identical.
+    return _BASELINE_DETAILS is None or _baseline_is_back()
 
 
 def _notify(method, params):
@@ -448,10 +816,31 @@ def wait_for_project_ready(timeout=None):
     return False
 
 
+def settle_or_fail(what):
+    """Wait for the project to be ready, and FAIL the test if it never is.
+
+    The precondition form of wait_for_project_ready, and the only one a test should use. Calling
+    the bare function and dropping its answer is a trap that has now been walked into twice in
+    this suite: the settle gets added precisely because a still-building EDT breaks the test, and
+    then the code proceeds into that exact state when the wait expires - looking fixed, behaving
+    as before. There is no sensible way to continue from a False here, so it is not a decision a
+    caller should be offered.
+
+    Failing (rather than skipping) is deliberate: a project that cannot reach ready within the
+    ready timeout is a broken environment, and a run that quietly skipped its way past that would
+    report green over tests nobody executed.
+
+    @param what a short phrase naming what was about to run, for the message
+    """
+    if not wait_for_project_ready():
+        _fail("the project never reported ready, so EDT is still recomputing derived data - %s "
+              "would be measuring that recompute, not itself." % what)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # git fixture (TestConfiguration is the committed baseline; on-disk truth = git)
 # ──────────────────────────────────────────────────────────────────────────────
-def _git(*args):
+def _git(*args, timeout=None):
     # Decode git output as UTF-8 explicitly. With bare text=True, Python uses the
     # platform locale codepage (cp125x on Windows), which mangles UTF-8 content in
     # `git diff` — Cyrillic BSL bodies came back as mojibake and substring checks
@@ -466,7 +855,7 @@ def _git(*args):
     # emits the raw UTF-8 bytes, which this explicit utf-8 decoding handles.
     return subprocess.run(
         ["git", "-C", REPO_ROOT, "-c", "core.quotepath=false", *args],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
     )
 
 
@@ -489,16 +878,80 @@ def _reset_rel(rel):
     _git("clean", "-fd", rel)
 
 
+# Held for the duration of a git fixture reset, and by whoever freezes the fixtures. It is what
+# makes "may I touch the tree?" and "I am touching the tree" ONE decision instead of two.
+#
+# A plain flag cannot do that. The abandoning thread sets it while the abandoned worker is between
+# its own check and its `git checkout` - a window a slow settle makes seconds wide - and the worker
+# then resets a tree the main thread has just declared untouchable, racing writes the server may
+# still be performing. Re-reading the flag closer to the git call only makes the window smaller.
+#
+# The lock is held only across the git commands (fast and local), never across an MCP call, so
+# freeze_fixtures() waits for at most one reset and cannot deadlock behind a wedged EDT.
+_FIXTURE_LOCK = threading.RLock()
+_FIXTURES_FROZEN = False
+
+# How long freeze_fixtures() waits for a reset already in progress. Three local git commands, so
+# anything beyond this is a stall (a locked index, an unresponsive filesystem), not slowness - and
+# then reporting it beats blocking the thread that has to write the run's summary.
+FIXTURE_FREEZE_WAIT = float(os.environ.get("E2E_FIXTURE_FREEZE_WAIT", "60"))
+
+# Ceiling on a git STATUS read (see _git_checked). Not applied to the reverting commands: a
+# checkout/clean can legitimately take a while on a big change, while a scoped status cannot.
+GIT_STATUS_TIMEOUT = float(os.environ.get("E2E_GIT_STATUS_TIMEOUT", "120"))
+
+
+def freeze_fixtures():
+    """Forbid every later fixture reset, and wait out any that is already running.
+
+    Called when a worker is abandoned: from that moment nobody - the abandoned worker included -
+    may touch the tree, because the server may still be writing to it.
+
+    The wait is BOUNDED, and the flag is set either way. git subprocesses have no timeout of their
+    own, so a `git checkout` stalled on a locked index or an unresponsive filesystem would hold the
+    lock indefinitely - and this is called from the main thread on the per-test timeout path, i.e.
+    exactly where blocking forever means the run never prints its summary or writes its JUnit
+    report. Setting the flag is a plain assignment and needs no lock; what the lock buys is the
+    guarantee that no reset is IN PROGRESS when we return, and that guarantee is reported rather
+    than waited for indefinitely.
+
+    @return True if no fixture reset is running any more, False if one is stuck and the caller
+            should treat the tree as being touched by somebody else"""
+    global _FIXTURES_FROZEN
+    _FIXTURES_FROZEN = True
+    if not _FIXTURE_LOCK.acquire(timeout=FIXTURE_FREEZE_WAIT):
+        return False
+    _FIXTURE_LOCK.release()
+    return True
+
+
+def fixtures_frozen():
+    """Whether the fixtures have been declared untouchable (see freeze_fixtures)."""
+    return _FIXTURES_FROZEN
+
+
 def reset_fixture():
-    """Hard reset the BASE fixture to HEAD. Called before EVERY test (never trust the prev)."""
-    _reset_rel(PROJECT_REL)
+    """Hard reset the BASE fixture to HEAD. Called before EVERY test (never trust the prev).
+
+    @return True if the reset ran, False if the fixtures are frozen and it was refused."""
+    with _FIXTURE_LOCK:
+        if _FIXTURES_FROZEN:
+            return False
+        _reset_rel(PROJECT_REL)
+        return True
 
 
 def reset_all_fixtures():
     """Hard reset EVERY fixture path (base + extension) to HEAD — used by the end-of-run
-    cleanup so the whole working tree returns to the committed baseline."""
-    for rel in ALL_FIXTURE_RELS:
-        _reset_rel(rel)
+    cleanup so the whole working tree returns to the committed baseline.
+
+    @return True if the reset ran, False if the fixtures are frozen and it was refused."""
+    with _FIXTURE_LOCK:
+        if _FIXTURES_FROZEN:
+            return False
+        for rel in ALL_FIXTURE_RELS:
+            _reset_rel(rel)
+        return True
 
 
 def _status_porcelain():
@@ -506,7 +959,7 @@ def _status_porcelain():
     # first porcelain line (status column "XY" -> " M file" becomes "M file"), which
     # shifts the fixed-width `line[3:]` path slice by one and breaks path parsing in
     # assert_diff_contains / assert_diff_paths. Leading whitespace is significant here.
-    return _git("status", "--porcelain", "--", PROJECT_REL).stdout.rstrip("\r\n")
+    return _git_checked("status", "--porcelain", "--", PROJECT_REL).stdout.rstrip("\r\n")
 
 
 def diff():
@@ -518,30 +971,139 @@ def read_disk(relpath):
         return f.read()
 
 
+# ── Markdown table parsing (this project's OWN presentation contract) ──────────
+#
+# Splits on a '|' COLUMN DELIMITER but never on an escaped '\|'. This mirrors the
+# production writer: MarkdownUtils.escapeForTable turns a literal '|' inside a cell's
+# own text into '\|' precisely so it cannot be mistaken for a delimiter. A naive
+# str.split("|") does not know about that escape, so it cuts an escaped cell at the
+# WRONG point: the row then yields MORE cells than the table has columns, and a caller
+# filtering on an exact column count silently DROPS that row - a real row, quietly
+# invisible to the test. Any e2e test parsing a table this project rendered must go
+# through here (see CLAUDE.md pre-push item #10). Covered by test_markdown_table.py.
+_MD_CELL_SPLIT = re.compile(r"(?<!\\)\|")
+
+
+def split_markdown_row(line):
+    r"""Splits one rendered '| c1 | c2 | ... |' table row into its cell strings.
+
+    Delimiters are unescaped '|' only; each returned cell is stripped and has its
+    '\|' escapes turned back into a literal '|', so a cell's value equals the text
+    production was given. Returns [] for a line that is not a table row.
+    """
+    if line is None:
+        return []
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    parts = _MD_CELL_SPLIT.split(stripped)
+    # A well-formed row's OUTER delimiters produce an empty string before the first and
+    # after the last real cell - drop those two BY POSITION, never by stripping '|'
+    # characters off the ends (that would eat a genuine trailing '\|' in the last cell).
+    if len(parts) >= 2 and parts[0] == "" and parts[-1] == "":
+        parts = parts[1:-1]
+    return [p.strip().replace("\\|", "|") for p in parts]
+
+
 def _baseline_is_back():
     """Did the model actually return to the committed baseline? (reset post-condition)
 
     'clean_project returned ok' and 'the project reports ready' are both SIGNALS, not
     proof: they say EDT finished the work it knew about, not that the model now matches
-    the committed fixture. Only reading the model says that. So probe the one object every
-    baseline is guaranteed to have and no test is allowed to leave renamed or deleted —
-    if BASELINE_PROBE_FQN resolves, the re-import landed.
+    the committed fixture. Only reading the model says that. So probe the objects every
+    baseline is guaranteed to have and no test is allowed to leave renamed or deleted — if
+    ALL of BASELINE_PROBE_FQNS resolve, the re-import landed.
 
-    Best-effort by construction: any failure to read it counts as 'not back' and the caller
+    Probing ALL of them, not one, is the point: the residue that actually leaks is a RENAMED
+    COMMON MODULE (rename_metadata_object turns CommonModule.Calc into Compute), and a probe
+    that only asked for a Catalog reported "baseline is back" while that rename was still in
+    the model. One request carries the whole list, so the stronger check costs nothing.
+
+    Existence is not enough, so the DETAIL is compared. "The FQN still resolves" says only that
+    the object was not renamed or deleted - a changed property, a new child attribute, an edited
+    synonym all leave every probed name resolving, and the reset was then declared successful
+    over a model that had not come back. When a baseline snapshot was taken (suite start), the
+    probe answers only if the details match it byte for byte; without one it degrades to the
+    existence check it used to be.
+
+    Best-effort by construction: any failure to read them counts as 'not back' and the caller
     retries the whole revert+clean cycle. A call TIMEOUT still propagates (see call()).
     """
-    try:
-        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [BASELINE_PROBE_FQN]})
-    except E2ECallTimeout:
-        raise
-    except Exception:
+    # _probe_details already rejects everything that is not positive evidence - a blank body, a
+    # tool error, and a per-object "not found" reported inside a successful one - so there is
+    # nothing left to re-check here: either it handed back a real fingerprint or it handed back
+    # nothing.
+    text = _probe_details()
+    if text is None:
         return False
-    # Require POSITIVE evidence: a non-error result whose body actually says something and
-    # does not report the object missing. An empty body must not read as "baseline is back" —
-    # that is an unexplained response, and treating it as proof is how a stale model slips
-    # through into the next test.
-    text = (r.text or "").strip()
-    return (not r.is_error) and bool(text) and "not found" not in text.lower()
+    return _BASELINE_DETAILS is None or text == _BASELINE_DETAILS
+
+
+def _revert_and_clean(project, revert):
+    """One revert + clean_project cycle for `project`, with SEPARATE budgets for its two failures.
+
+    Settling and cleaning fail for different reasons and are fixed differently (see
+    MODEL_CLEAN_ATTEMPTS / MODEL_SETTLE_ATTEMPTS), so a settle that never reports ready must not
+    consume the allowance for a call it prevented from ever being made.
+
+    Bounded by MODEL_RESET_BUDGET as well as by the counters, so the split cannot spend more wall
+    clock than the single shared budget could - see that constant.
+
+    @param revert the disk revert to re-run once the project has settled - the base fixture for a
+           per-test reset, every fixture for the end-of-run cleanup
+    @return (cleaned, clean_attempts, settle_failures) - the counts are the diagnosis material
+            the caller turns into a message, so an abort always names what actually ran out."""
+    clean_attempts = 0
+    settle_failures = 0
+    deadline = time.time() + MODEL_RESET_BUDGET
+    while (clean_attempts < MODEL_CLEAN_ATTEMPTS and settle_failures < MODEL_SETTLE_ATTEMPTS
+           and time.time() < deadline):
+        # Settle BEFORE the revert: out-wait the recompute (so the clean is accepted) and
+        # give any lagging disk export time to land, so the revert below is the last write.
+        # A settle that TIMED OUT means the export may still be in flight, so reverting now
+        # would not be the last write: retry the whole cycle instead of building on it. The
+        # verification the caller does afterwards is what finally decides.
+        if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
+            settle_failures += 1
+            continue
+        # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
+        # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
+        revert()
+        # Counted BEFORE the call, so an attempt that dies on the way out still spends its
+        # budget - otherwise a repeatable transport failure loops here forever.
+        clean_attempts += 1
+        try:
+            if not call("clean_project", {"projectName": project}).is_error:
+                return (True, clean_attempts, settle_failures)
+        except E2ECallTimeout:
+            # The one failure a best-effort catch must NOT swallow: the server is still running
+            # that call, so retrying - or reporting success - hides it from the runner, the only
+            # place that can stop the run before the next test reads a model it is still writing.
+            raise
+        except Exception:
+            # Best-effort - UNLESS this failure already stopped the run. A clean_project that dies
+            # in flight arms the global latch inside call(), and looping on from a latched harness
+            # is pointless: the next request is refused anyway. It is refused IMMEDIATELY, so this
+            # costs no wall clock either way - what it costs is the diagnosis, because the abort
+            # then gets attributed to whichever call trips over the latch next instead of to the
+            # one that actually died. Re-raise and keep the cause attached to its effect.
+            if calls_aborted():
+                raise
+    return (False, clean_attempts, settle_failures)
+
+
+def _clean_failure_cause(clean_attempts, settle_failures):
+    """Name the budget that actually ran out, for the abort message."""
+    exhausted = (clean_attempts >= MODEL_CLEAN_ATTEMPTS or settle_failures >= MODEL_SETTLE_ATTEMPTS)
+    if clean_attempts == 0:
+        return ("the project never reported ready (%d settle attempts of %ds each%s), so "
+                "clean_project was never even accepted for an attempt"
+                % (settle_failures, MODEL_SETTLE_TIMEOUT,
+                   "" if exhausted else "; the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
+    return ("clean_project was refused in all %d attempts%s%s"
+            % (clean_attempts,
+               " (plus %d settle timeouts)" % settle_failures if settle_failures else "",
+               "" if exhausted else ", and the %ds reset budget ran out first" % MODEL_RESET_BUDGET))
 
 
 def reset_model():
@@ -576,32 +1138,14 @@ def reset_model():
     what makes this correct: the failure is a lost write-back race, not slowness.
     """
     for _ in range(MODEL_RESET_ATTEMPTS):
-        cleaned = False
-        for _ in range(3):
-            # Settle BEFORE the revert: out-wait the recompute (so the clean is accepted) and
-            # give any lagging disk export time to land, so the revert below is the last write.
-            wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
-            # Re-revert: undo whatever that late export wrote over the orchestrator's revert.
-            # Cheap local git and idempotent, so doing it on the first pass too costs nothing.
-            reset_fixture()
-            try:
-                if not call("clean_project", {"projectName": PROJECT}).is_error:
-                    cleaned = True
-                    break
-            except E2ECallTimeout:
-                # The one failure a best-effort catch must NOT swallow: the server is still running
-                # that call, so retrying - or reporting success - hides it from the runner, the only
-                # place that can stop the run before the next test reads a model it is still writing.
-                raise
-            except Exception:
-                pass
+        cleaned, clean_attempts, settle_failures = _revert_and_clean(PROJECT, reset_fixture)
         if not cleaned:
-            # Three refusals in a row: the model still carries the finished test's write, and the next
-            # test would read it. That is the cascade this reset exists to prevent, so stop the run
-            # instead of continuing on a model we know is stale.
+            # The model still carries the finished test's write, and the next test would read it.
+            # That is the cascade this reset exists to prevent, so stop the run instead of
+            # continuing on a model we know is stale.
             raise E2EModelResetFailed(
-                "clean_project did not succeed in 3 attempts, so the in-memory model still carries "
-                "the last test's write. Continuing would hand it to the next test.")
+                "%s, so the in-memory model still carries the last test's write. Continuing would "
+                "hand it to the next test." % _clean_failure_cause(clean_attempts, settle_failures))
         # Final settle: clean_project's revalidation re-triggers derived data; make sure the
         # next test starts on a fully-indexed model regardless of which branch above we took.
         # A negative result here is the same hazard as the exhausted-retries branch above (the
@@ -611,6 +1155,9 @@ def reset_model():
                 "clean_project succeeded, but the final settle did not report the project ready "
                 "within %ds, so the model is not guaranteed to be back in sync." % MODEL_SETTLE_TIMEOUT)
         if _baseline_is_back():
+            # The one place entitled to say the model is verifiably home again - which is also
+            # what retires a write whose outcome was never read back. See _mark_model_synced.
+            _mark_model_synced()
             return
     # Every attempt reported success and the model STILL does not match the baseline. Continuing
     # would hand the previous test's mutation to the next one (exactly the cascade this reset
@@ -622,13 +1169,38 @@ def reset_model():
         "test's write." % (BASELINE_PROBE_FQN, MODEL_RESET_ATTEMPTS))
 
 
+def _git_checked(*args):
+    """Run git and REFUSE to interpret a failure as an answer.
+
+    `_git` never looks at the return code, so a `git status` that failed - a locked index, a
+    filesystem hiccup, a broken repo - comes back with empty stdout, which every caller reads
+    as "the tree is clean". That false positive is the worst possible direction: it lets the
+    reset shortcut skip over a genuinely dirty tree and lets the end-of-run gate certify a run
+    that left changes behind.
+
+    It is also BOUNDED, unlike the reverting commands. This is the read the end-of-run gate makes
+    after every test has finished: a `git status` that never returns (an unresponsive filesystem,
+    the same one that can wedge a reset) would hang the run with no summary and no JUnit report.
+    A status scoped to a fixture path takes well under a second, so the ceiling only ever fires on
+    a stall - and a stall is exactly the thing that has to become a message rather than a hang."""
+    try:
+        r = _git(*args, timeout=GIT_STATUS_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise E2EAssertion("git %s did not return within %gs - the working tree cannot be read"
+                           % (" ".join(args), GIT_STATUS_TIMEOUT)) from None
+    if r.returncode != 0:
+        raise E2EAssertion("git %s failed (rc=%s): %s"
+                           % (" ".join(args), r.returncode, (r.stderr or "").strip()[:300]))
+    return r
+
+
 def all_fixtures_status():
     """Porcelain status across EVERY fixture path (base + extension). The end-of-run gate
     uses this so a session that leaves ANY fixture dirty is VISIBLE — 'no diff' then means
     the run touched nothing it should not have."""
     parts = []
     for rel in ALL_FIXTURE_RELS:
-        s = _git("status", "--porcelain", "--", rel).stdout.rstrip("\r\n")
+        s = _git_checked("status", "--porcelain", "--", rel).stdout.rstrip("\r\n")
         if s:
             parts.append(s)
     return "\n".join(parts)
@@ -639,11 +1211,12 @@ def final_cleanup():
     nothing behind).
 
     Reverts BOTH fixtures on disk, then clean_projects BOTH, with the SAME retry-until-synced
-    contract as reset_model() (wait for the project to settle, THEN clean_project, retried up
-    to 3 times each): call() only raises on a TIMEOUT, so a clean_project that came back with
-    isError (e.g. the derived-data pipeline outlived BUILDING_RETRY_TIMEOUT and the server
-    refused it) used to be swallowed by a bare `except Exception: pass`, silently declaring an
-    unsynchronised model clean. The clean_project is the part that defeats the autosave
+    contract as reset_model() - literally the same code, _revert_and_clean: wait for the project
+    to settle, THEN clean_project, each with its own budget. call() only raises on a TIMEOUT, so a
+    clean_project that came back with isError (e.g. the derived-data pipeline outlived
+    BUILDING_RETRY_TIMEOUT and the server refused it) must not be swallowed by a bare
+    `except Exception: pass` - that silently declares an unsynchronised model clean. The
+    clean_project is the part that defeats the autosave
     resurrection: it tears down EDT's in-memory model and re-imports it from the now-clean disk
     (synchronously — the call blocks on the project restart + derived-data rebuild), so a STALE
     model (e.g. a manual edit made in the EDT editor, or a metadata write whose model change was
@@ -655,31 +1228,22 @@ def final_cleanup():
     itself re-touched (e.g. a CRLF/marker touch). Run at startup AND at the end."""
     reset_all_fixtures()
     for proj in (PROJECT, TESTS_PROJECT):
-        cleaned = False
-        for _ in range(3):
-            wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT)
-            try:
-                if not call("clean_project", {"projectName": proj}).is_error:
-                    cleaned = True
-                    break
-            except E2ECallTimeout:
-                # The one failure a best-effort catch must NOT swallow: the server is still running
-                # that call, so retrying - or reporting success - hides it from the runner, the only
-                # place that can stop the run before the next test reads a model it is still writing.
-                raise
-            except Exception:
-                pass
+        cleaned, clean_attempts, settle_failures = _revert_and_clean(proj, reset_all_fixtures)
         if not cleaned:
             raise E2EModelResetFailed(
-                "clean_project did not succeed in 3 attempts for project %r, so its in-memory "
-                "model may still carry an unsynchronised change - reporting this run clean would "
-                "be a lie." % proj)
+                "%s for project %r, so its in-memory model may still carry an unsynchronised "
+                "change - reporting this run clean would be a lie."
+                % (_clean_failure_cause(clean_attempts, settle_failures), proj))
     if not wait_for_project_ready(timeout=MODEL_SETTLE_TIMEOUT):
         raise E2EModelResetFailed(
             "clean_project succeeded for every project, but the final settle did not report "
             "every project ready within %ds, so the model is not guaranteed to be back in "
             "sync." % MODEL_SETTLE_TIMEOUT)
     reset_all_fixtures()
+    # Deliberately NOT _mark_model_synced() here. This function cleans and settles but never
+    # VERIFIES the baseline came back (that is reset_model's _baseline_is_back), and only a
+    # verified restore may retire an unknown outcome. Clearing it on a weaker signal is how the
+    # flag would come to mean "we tried" instead of "we checked".
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -890,6 +1454,49 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
           % (rel_path, substr, ctx, last[:700]))
 
 
+def assert_disk_path_gone(rel_path, ctx=""):
+    """A path under the fixture is ALREADY gone — checked once, with no polling.
+
+    PRECONDITION, and it is not optional: only for a path THIS call already dealt with — either it
+    removed the path itself and synchronously (a form's resource folder goes through IFolder.delete),
+    or it SUBMITTED the export that removes it (create_metadata / modify_metadata / the specialized
+    delete branches call forceExportToDisk, then the #406 barrier waits, so submission
+    happens-before the wait). The barrier only WAITS, so it is ordered with an export only when the
+    same call queued it — otherwise it can truthfully observe a quiet export segment before the
+    work has been queued at all.
+
+    The generic delete path now submits too, but only for the CONTAINER of the deleted node (#408).
+    The deleted object's OWN file is not covered: EDT builds a save task by looking the FQN up in
+    the transaction, so an FQN that no longer resolves yields no task, and nobody but the
+    refactoring can schedule that removal. Poll for it — which is what
+    test_confirm_deletes_top_object_gone_from_model_and_disk does, right next to an immediate
+    assertion on the container's file."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    if os.path.exists(full):
+        _fail("expected %s to be gone from disk the moment the call returned, but it is still "
+              "there - the tool answered before its export reached disk [%s]" % (rel_path, ctx))
+
+
+def assert_disk_lacks(rel_path, substr, ctx=""):
+    """One named fixture file EXISTS and does not contain substr — checked once, no polling.
+
+    Requiring the file to exist is deliberate, and is the difference from poll_disk_lacks:
+    that helper treats a MISSING file as satisfying "lacks", so it would also pass while the
+    owning file is mid-rewrite. Here the file must be present AND already correct.
+
+    Same precondition as assert_disk_path_gone: only for a file whose export this call submitted —
+    which, for the generic delete path, is the CONTAINER's file and not the deleted object's own."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    if not os.path.exists(full):
+        _fail("expected %s to exist and no longer mention %r, but the file is missing [%s]"
+              % (rel_path, substr, ctx))
+    with open(full, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    if substr in content:
+        _fail("expected %s to no longer contain %r the moment the call returned - the tool "
+              "answered before its export reached disk [%s]" % (rel_path, substr, ctx))
+
+
 def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
     """Poll until a fixture file no longer contains substr (e.g. a removed collection
     reference). A missing file also satisfies 'lacks'. Polls because the on-disk edit
@@ -905,6 +1512,54 @@ def poll_disk_lacks(rel_path, substr, timeout=10, ctx=""):
             return
         time.sleep(0.5)
     _fail("expected %s to no longer contain %r [%s]" % (rel_path, substr, ctx))
+
+
+def poll_disk_count(rel_path, substr, expected, timeout=10, stable_for=1.0, ctx=""):
+    """Poll until ONE named fixture file has held substr EXACTLY `expected` times for `stable_for`.
+
+    The COUNT sibling of poll_disk_contains, for the "written exactly once" class of assertion (an
+    idempotent re-add must not duplicate a row), where presence is not enough: the count itself is
+    the claim, so the failure message has to carry the count - a bare
+    `read_disk(f).count(x) == n` reports neither the number it saw nor the file, and "must NOT
+    duplicate" then describes a count of 0 just as readily as a count of 2.
+
+    WHY THE DWELL, and not "return on the first matching read": in the case this exists for, the
+    expected count is ALREADY true before the call under test - the row was written by the previous
+    step. A first-sample poll is therefore satisfied by the PRE-call contents and never observes
+    what the call did, so a regression that eventually writes a second row would pass. Requiring the
+    count to HOLD for `stable_for` closes that: a late duplicate resets the dwell, the count settles
+    at 2, `expected` is never reached again and the call fails with the count it actually saw.
+
+    This is a dwell, not a proof that an export happened - the write under test may legitimately be
+    a no-op that rewrites nothing, so demanding evidence of a rewrite would fail those cases
+    spuriously. Pick `stable_for` longer than the export lag you care about.
+
+    A missing file keeps polling (and resets the dwell): the export may not have created it yet."""
+    full = os.path.join(PROJECT_DIR, rel_path)
+    deadline = time.time() + timeout
+    last = ""
+    actual = None
+    stable_since = None
+    while time.time() < deadline:
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                last = f.read()
+            actual = last.count(substr)
+        except FileNotFoundError:
+            last = "(file does not exist yet)"
+            actual = None
+        if actual == expected:
+            if stable_since is None:
+                stable_since = time.time()
+            if time.time() - stable_since >= stable_for:
+                return
+        else:
+            stable_since = None
+        time.sleep(0.1)
+    _fail("expected %s to contain %r exactly %d time(s) held for %.1fs, last saw %s [%s]; "
+          "it holds:\n%s"
+          % (rel_path, substr, expected, stable_for,
+             "no file" if actual is None else "%d" % actual, ctx, last[:700]))
 
 
 # ──────────────────────────────────────────────────────────────────────────────

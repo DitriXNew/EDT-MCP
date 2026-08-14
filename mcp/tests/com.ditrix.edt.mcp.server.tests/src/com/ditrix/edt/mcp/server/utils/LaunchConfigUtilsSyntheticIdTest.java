@@ -48,9 +48,11 @@ public class LaunchConfigUtilsSyntheticIdTest
     public void testSyntheticServerApplicationId()
     {
         // ServerApplication.<app> is minted by DebugServerTargetSupport for 1C debug-server
-        // targets; per the contract it cannot be resolved through IApplicationManager, so the
-        // single classification authority must know this prefix too (the DB-update preflight
-        // must skip it instead of failing with 'Application not found').
+        // targets, MIRRORING the id real standalone-server applications carry — so unlike the
+        // two ':'-prefixed forms it can name a genuine IApplicationManager application. It is
+        // still classified here because the single authority drives the DB-update preflight
+        // SKIP, which a server application needs for its own reason (the update has to go
+        // through the launch delegate, not our programmatic path).
         assertTrue(LaunchConfigUtils.isSyntheticApplicationId(
             DebugServerTargetSupport.SERVER_APP_ID_PREFIX + "SampleConfiguration")); //$NON-NLS-1$
         assertTrue(LaunchConfigUtils.isSyntheticApplicationId("ServerApplication.App")); //$NON-NLS-1$

@@ -134,6 +134,22 @@ public final class PlatformHelpService
     }
 
     /**
+     * Whether the syntax helper has a page for this type at all - asked before committing to a name,
+     * when the caller has two to choose from. A metadata TYPE SET is normally documented under its
+     * own name ({@code CatalogObject.<Catalog name>}), but not always: {@code Characteristic} has no
+     * page while the generic type behind it ({@code CharacteristicsDescription}) does, and asking
+     * under the set would silently lose every description. The node is cached, so the probe costs
+     * nothing beyond the lookup the following read would do anyway.
+     *
+     * @param typeName the English or Russian type name
+     * @return {@code true} when a page exists for it
+     */
+    public boolean documents(String typeName)
+    {
+        return !off && findTypeNode(typeName) != null;
+    }
+
+    /**
      * The documentation of a TYPE itself.
      *
      * @param typeName the English or Russian type name
@@ -332,11 +348,26 @@ public final class PlatformHelpService
             PlatformDocTree tree = docProvider().getTree(version);
             if (tree != null && tree.getRootNode() != null)
             {
-                found = searchByName(tree.getRootNode(), typeName, 0);
+                found = searchByName(tree.getRootNode(), typeName, 0, false);
+                if (found == null)
+                {
+                    // A metadata TYPE SET is filed under a QUALIFIED page name - the help documents
+                    // CatalogObject as "CatalogObject.<Catalog name>" - so an exact search finds
+                    // nothing for the very name a caller asks with (issue #355). Only ever a SECOND
+                    // pass: an exact page must always win, or a type could lose its own description
+                    // to a same-prefixed neighbour.
+                    found = searchByName(tree.getRootNode(), typeName, 0, true);
+                }
             }
         }
-        catch (Exception e) // NOSONAR optional enrichment, see valueOf
+        catch (Exception | LinkageError e) // NOSONAR optional enrichment, see valueOf
         {
+            // LinkageError too, not just Exception. Every OTHER path into this walk goes through
+            // read(), which absorbs both because the platform.doc package is an OPTIONAL import - on
+            // an EDT that ships a binary-incompatible one, the first touch of a helper type raises
+            // NoClassDefFoundError. The `documents` probe calls this method DIRECTLY, outside read(),
+            // so without widening the catch here an Error would escape and turn a perfectly usable
+            // model-only lookup into a failed request.
             Activator.logInfo("Platform help tree could not be walked: " + e); //$NON-NLS-1$
         }
         typeNodes.put(key, found);
@@ -390,8 +421,13 @@ public final class PlatformHelpService
     /**
      * Depth-limited search for a node whose name matches, preferring a node that HAS children (a
      * type's page has members under it; a same-named leaf elsewhere in the tree does not).
+     *
+     * @param qualified when {@code true}, also accepts a page whose name is {@code name} followed by
+     *            a dot - how the help files a metadata type set ({@code CatalogObject.<Catalog
+     *            name>}). Reserved for a second pass, so an exact page always wins.
      */
-    private PlatformDocTreeNode searchByName(PlatformDocTreeNode node, String name, int depth)
+    private PlatformDocTreeNode searchByName(PlatformDocTreeNode node, String name, int depth,
+        boolean qualified)
     {
         if (depth > MAX_TYPE_SCAN_DEPTH)
         {
@@ -400,7 +436,8 @@ public final class PlatformHelpService
         PlatformDocTreeNode leafMatch = null;
         for (PlatformDocTreeNode child : children(node))
         {
-            if (nameMatches(child, name) && isTypePage(child))
+            if ((nameMatches(child, name) || (qualified && qualifiedNameMatches(child, name)))
+                && isTypePage(child))
             {
                 if (child.hasChildren())
                 {
@@ -408,13 +445,37 @@ public final class PlatformHelpService
                 }
                 leafMatch = child;
             }
-            PlatformDocTreeNode deeper = searchByName(child, name, depth + 1);
+            PlatformDocTreeNode deeper = searchByName(child, name, depth + 1, qualified);
             if (deeper != null)
             {
                 return deeper;
             }
         }
         return leafMatch;
+    }
+
+    /**
+     * Whether a node is the page of {@code name} filed under a QUALIFIED title - the help names the
+     * page of a metadata type set after the set plus the metadata object it is parameterized by
+     * ({@code CatalogObject.<Catalog name>} / {@code СправочникОбъект.<Имя справочника>}). The dot is
+     * required, so {@code Catalog} never claims {@code CatalogObject}'s page.
+     */
+    private boolean qualifiedNameMatches(PlatformDocTreeNode node, String name)
+    {
+        for (String candidate : nodeNames(node))
+        {
+            if (candidate == null)
+            {
+                continue;
+            }
+            String trimmed = candidate.trim();
+            if (trimmed.length() > name.length() + 1 && trimmed.charAt(name.length()) == '.'
+                && trimmed.regionMatches(true, 0, name, 0, name.length()))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The node's children, never {@code null}. */
@@ -425,11 +486,10 @@ public final class PlatformHelpService
     }
 
     /**
-     * Whether a node carries the given member/type name. The tree's node names are localized and a
-     * method node is often named with its signature ("Sign(...)"), so the comparison accepts the
-     * name followed by a bracket as well as an exact match.
+     * The names a node answers to: its localized title plus both element names. Empty when the node
+     * cannot be read at all - a failure here degrades to "no documentation", never to an error.
      */
-    private boolean nameMatches(PlatformDocTreeNode node, String name)
+    private List<String> nodeNames(PlatformDocTreeNode node)
     {
         List<String> candidates = new ArrayList<>();
         try
@@ -440,9 +500,19 @@ public final class PlatformHelpService
         }
         catch (Exception e) // NOSONAR optional enrichment, see valueOf
         {
-            return false;
+            return List.of();
         }
-        for (String candidate : candidates)
+        return candidates;
+    }
+
+    /**
+     * Whether a node carries the given member/type name. The tree's node names are localized and a
+     * method node is often named with its signature ("Sign(...)"), so the comparison accepts the
+     * name followed by a bracket as well as an exact match.
+     */
+    private boolean nameMatches(PlatformDocTreeNode node, String name)
+    {
+        for (String candidate : nodeNames(node))
         {
             if (candidate == null)
             {

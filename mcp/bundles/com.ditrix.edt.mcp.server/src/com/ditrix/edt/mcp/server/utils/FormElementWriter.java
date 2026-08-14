@@ -7,9 +7,11 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -665,6 +667,15 @@ public final class FormElementWriter
      * for a name that is not a column; an item that predates the retype must not be left in the exact
      * shape the creator forbids (issue #295 review).</p>
      *
+     * <p>Scans the PERSISTED descendants only. What this guard exists to prevent is a dangling
+     * binding in the SAVED form, and a path that only a computed containment leads to cannot become
+     * one: in this metamodel those containments are {@code transient}, so the element is never
+     * written to {@code Form.form} and is recomputed after any edit. Refusing on such a match would
+     * be worse than useless - the caller is told to delete or re-point an element that
+     * {@code findFormItem} no longer addresses at all, an error they cannot act on. (The exact rule,
+     * and why {@code derived} alone would not have justified this, is on
+     * {@link PersistedContents#of}.) Issue #350.</p>
+     *
      * @param attribute the form attribute about to be retyped
      * @return the offending item names, empty when nothing binds below it
      */
@@ -688,12 +699,14 @@ public final class FormElementWriter
             return broken;
         }
         List<String> columns = attributeColumnNames(attribute);
-        // eAllContents, not a hand-rolled recursion: it visits the WHOLE form without a depth budget
-        // that could silently stop before the item that would have blocked the retype, and without a
-        // StackOverflowError on a pathological tree.
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        // PersistedContents.descendants, not eAllContents and not a hand-rolled recursion: it keeps
+        // everything the old walk gave here - EVERY descendant regardless of EClass (a dataPath can
+        // sit on an unnamed property holder, so a form-item filter would lose real matches),
+        // depth-first in metamodel order, no depth budget that could silently stop before the item
+        // that would have blocked the retype, and no StackOverflowError on a pathological tree - and
+        // drops only the computed branches, which cannot hold an authored binding.
+        for (EObject item : PersistedContents.descendants(formModel))
         {
-            EObject item = it.next();
             String[] segments = dataPathSegments(item);
             if (segments.length > prefix.size() && startsWithIgnoreCase(segments, prefix)
                 && !containsIgnoreCase(columns, segments[prefix.size()]))
@@ -711,6 +724,10 @@ public final class FormElementWriter
      * {@link #createTable} refuses to build: without this the tool was stricter about CREATING a form
      * than about editing one into the same state (issue #295 review).
      *
+     * <p>Scans the PERSISTED descendants only, for the reason spelled out on
+     * {@link #itemsBoundBelowAttribute}: a computed table is not an authored binding, so skipping it
+     * cannot leave a stranded one in the saved form (issue #350).</p>
+     *
      * @param attribute the form attribute about to be retyped
      * @return the offending item names, empty when nothing needs its rows
      */
@@ -727,9 +744,10 @@ public final class FormElementWriter
         {
             return consumers;
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        // The EClass test below picks the MATCHES; the walk itself must still descend through
+        // everything (a table lives inside groups), so it filters by persistence, never by type.
+        for (EObject item : PersistedContents.descendants(formModel))
         {
-            EObject item = it.next();
             String[] segments = dataPathSegments(item);
             // EQUAL to the address, not merely starting with it: a table bound BELOW the member does
             // not consume the member's own rows.
@@ -1906,12 +1924,10 @@ public final class FormElementWriter
         setBooleanFeature(attr, FEATURE_MAIN, true);
         setBooleanFeature(attr, FEATURE_SAVED_DATA, true);
         // The designer's predefined Object attribute also carries view/edit = common("use"), so the
-        // generated attribute is byte-identical to a designer-built object form (issue #208). Both are
-        // AdjustableBoolean references, so reuse the existing guarded helper (it creates the reference
-        // type, sets common = true, and guards isAbstract()/isMany() - the abstract guard matters since
-        // the declared AdjustableBoolean type may be abstract on the live stand).
-        setAdjustableBooleanFeature(attr, FEATURE_VIEW);
-        setAdjustableBooleanFeature(attr, FEATURE_EDIT);
+        // generated attribute is byte-identical to a designer-built object form (issue #208). These are
+        // the same AbstractFormAttribute defaults every other new attribute needs, so they come from the
+        // one shared helper rather than a copy that can drift out of step (issue #382).
+        applyFormAttributeDefaults(attr);
         addToList(content, FEATURE_ATTRIBUTES, attr);
     }
 
@@ -2245,6 +2261,7 @@ public final class FormElementWriter
         setStringFeature(attr, FEATURE_NAME, name);
         setIntFeature(attr, FEATURE_ID, nextAttributeId(formModel));
         setDefaultValueType(attr);
+        applyFormAttributeDefaults(attr);
         applyTitle(attr, titleLanguage, title);
         addToList(formModel, FEATURE_ATTRIBUTES, attr);
         recordKind(attr, createdKind);
@@ -2299,6 +2316,7 @@ public final class FormElementWriter
         setStringFeature(column, FEATURE_NAME, name);
         setIntFeature(column, FEATURE_ID, nextAttributeId(formModel));
         setDefaultValueType(column);
+        applyFormAttributeDefaults(column);
         applyTitle(column, titleLanguage, title);
         addToList(owner, FEATURE_COLUMNS, column);
         recordKind(column, createdKind);
@@ -2761,6 +2779,144 @@ public final class FormElementWriter
         }
         applied.add("dynamicList"); //$NON-NLS-1$
         return extInfo;
+    }
+
+    // ---- the form-attribute <extInfo> that its VALUE TYPE decides -------------------------------
+    //
+    // Nine platform value types do not stand alone on a form attribute: each pairs with a concrete
+    // FormAttributeExtInfo whose absence leaves the attribute half-built (issue #369). The pairing
+    // below is a faithful copy of the platform's own ExtInfoManagementService.createAttributeExtInfo,
+    // keyed by EClass NAME so this bundle still needs no compile-time form-model dependency.
+
+    /** The {@code ValueListExtInfo} classifier - the only pairing that also seeds a nested type. */
+    private static final String ECLASS_VALUE_LIST_EXT_INFO = "ValueListExtInfo"; //$NON-NLS-1$
+
+    /** {@code ValueListExtInfo}'s own type feature: the type of the list's ITEMS. */
+    private static final String FEATURE_ITEM_VALUE_TYPE = "itemValueType"; //$NON-NLS-1$
+
+    /**
+     * A form attribute's value-type CATEGORY &rarr; the concrete {@code FormAttributeExtInfo} classifier
+     * the platform pairs with it, copied from {@code ExtInfoManagementService.createAttributeExtInfo}.
+     * A category not listed here takes NO ext-info (a String / reference / composite attribute), which
+     * is why the sync CLEARS a stale one rather than leaving it: the platform does the same.
+     */
+    private static final Map<String, String> ATTRIBUTE_EXT_INFO_BY_TYPE_CATEGORY =
+        buildAttributeExtInfoMap();
+
+    private static Map<String, String> buildAttributeExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("DynamicList", ECLASS_DYNAMIC_LIST_EXT_INFO); //$NON-NLS-1$
+        m.put("ValueList", ECLASS_VALUE_LIST_EXT_INFO); //$NON-NLS-1$
+        m.put("Planner", "PlannerExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SpreadsheetDocument", "SpreadsheetDocumentExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Chart", "ChartExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("Dendrogram", "DendrogramExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GanttChart", "GanttChartExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GeographicalSchema", "GeographicalSchemaExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The platform TYPE is spelled GraphicalSchema, its ext-info EClass GraphicalScheme. Not a
+        // typo on either side - the two spellings really do differ in the platform model.
+        m.put("GraphicalSchema", "GraphicalSchemeExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return Collections.unmodifiableMap(m);
+    }
+
+    /**
+     * Brings the form attribute's {@code <extInfo>} in line with the value type it now carries - the
+     * step that turns a bare {@code valueType} set into the attribute the designer would have written
+     * (issue #369). Mirrors {@code ExtInfoManagementService.setExtInfo(tx, attribute, type, version)}:
+     * a SINGLE-typed attribute whose type category is one of the nine gets that category's ext-info,
+     * anything else gets none, and an ext-info of the wrong EClass is replaced (a composite or
+     * re-typed attribute must not keep the previous type's ext-info).
+     *
+     * <p>Only the ext-info OBJECT is written. The platform additionally attaches a nested BM top object
+     * for seven of the nine (the Chart / GanttChart / Dendrogram / Planner / SpreadsheetDocument /
+     * GeographicalSchema / GraphicalScheme the ext-info points at), but that object is BM-only: the
+     * designer's own {@code .form} serializes those ext-infos EMPTY (verified against production
+     * configurations), and EDT materializes the nested object lazily when the element is first edited.
+     * Writing it here would add nothing to the file and would need four more model factories.</p>
+     *
+     * <p>A {@code FormAttributeColumn} carries a {@code valueType} but no {@code extInfo} feature, so
+     * it is a no-op there - the caller may pass any form member.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier is created from)
+     * @param attribute the form member whose value type has just been set, re-fetched inside the tx
+     * @return the EClass name of the ext-info now on the attribute, or {@code null} when it carries none
+     */
+    public static String syncAttributeExtInfo(EObject formModel, EObject attribute)
+    {
+        EStructuralFeature extInfoFeature = attribute.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
+        {
+            return null;
+        }
+        String classifier = ATTRIBUTE_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(attribute));
+        EObject current = singleReference(attribute, FEATURE_EXT_INFO);
+        if (classifier == null)
+        {
+            if (current != null)
+            {
+                attribute.eSet(extInfoFeature, null);
+            }
+            return null;
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created = replaceExtInfoClassifier(formModel, attribute, extInfoFeature, classifier);
+        if (created == null)
+        {
+            return null;
+        }
+        if (ECLASS_VALUE_LIST_EXT_INFO.equals(classifier))
+        {
+            // The designer writes <itemValueType/> - an EMPTY TypeDescription, i.e. "items of any
+            // type". Seeding it keeps the file byte-shaped like a designer-authored one and gives
+            // modify_metadata a live holder to set the item type on later.
+            ensureEmptyTypeDescription(created);
+        }
+        return created.eClass().getName();
+    }
+
+    /**
+     * The English type CATEGORY of a SINGLE-typed member's value type (the name up to the first dot,
+     * e.g. {@code CatalogRef} of {@code CatalogRef.Goods}), or {@code null} when the member declares no
+     * type or more than one. Single-typed is the platform's own precondition: a composite attribute
+     * takes no ext-info ({@code createAttributeExtInfo} returns null unless {@code types.size() == 1}).
+     * The name is read through {@link McoreUtil#getTypeName}, which answers the ENGLISH name for a
+     * platform PROXY as well as for a resolved type - so an attribute typed with the Russian spelling
+     * classifies identically.
+     */
+    private static String singleValueTypeCategory(EObject member)
+    {
+        EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
+        if (feature == null || !(member.eGet(feature) instanceof EObject))
+        {
+            return null;
+        }
+        List<EObject> types = referenceList((EObject)member.eGet(feature), "types"); //$NON-NLS-1$
+        if (types.size() != 1 || !(types.get(0) instanceof TypeItem))
+        {
+            return null;
+        }
+        String name = McoreUtil.getTypeName((TypeItem)types.get(0));
+        if (name == null || name.isEmpty())
+        {
+            return null;
+        }
+        int dot = name.indexOf('.');
+        return dot < 0 ? name : name.substring(0, dot);
+    }
+
+    /** Gives {@code holder}'s {@code itemValueType} a fresh empty {@code TypeDescription} if it has none. */
+    private static void ensureEmptyTypeDescription(EObject holder)
+    {
+        EStructuralFeature feature = holder.eClass().getEStructuralFeature(FEATURE_ITEM_VALUE_TYPE);
+        if (!(feature instanceof EReference) || holder.eGet(feature) instanceof EObject)
+        {
+            return;
+        }
+        holder.eSet(feature, McoreFactory.eINSTANCE.createTypeDescription());
     }
 
     /**
@@ -3317,7 +3473,7 @@ public final class FormElementWriter
     }
 
     /**
-     * Finds a form item by name anywhere in the form-item tree (the same all-containment walk
+     * Finds a form item by name anywhere in the form-item tree (the same persisted-containment walk
      * {@code findItem} uses: items, command bars, context menus, tooltips), REJECTING an ambiguous
      * name (more than one match) with a clear error rather than silently picking the first match.
      * Returns the unique match, or {@code null} when none exists.
@@ -3339,21 +3495,24 @@ public final class FormElementWriter
         return matches.isEmpty() ? null : matches.get(0);
     }
 
-    /** Collects every {@code FormItem} in the tree whose name matches (case-insensitive). */
+    /**
+     * Collects every {@code FormItem} in the AUTHORED tree whose name matches (case-insensitive),
+     * over the same persisted-containment walk (and for the same reasons) as {@link #findItemIn} -
+     * so the ambiguity verdict is passed on exactly the items the by-name search can return.
+     */
     private static void collectItemsByName(EObject container, String name, EClass formItem,
         List<EObject> out)
     {
-        for (EObject child : container.eContents())
+        Deque<EObject> pending = new ArrayDeque<>();
+        pushFormItems(container, formItem, pending);
+        while (!pending.isEmpty())
         {
-            if (!formItem.isInstance(child))
+            EObject item = pending.pop();
+            if (name.equalsIgnoreCase(stringFeature(item, FEATURE_NAME)))
             {
-                continue;
+                out.add(item);
             }
-            if (name.equalsIgnoreCase(stringFeature(child, FEATURE_NAME)))
-            {
-                out.add(child);
-            }
-            collectItemsByName(child, name, formItem, out);
+            pushFormItems(item, formItem, pending);
         }
     }
 
@@ -4108,7 +4267,9 @@ public final class FormElementWriter
     private static void setExtInfoClassifier(EObject formModel, EObject item, String classifier)
     {
         EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
-        if (!(feature instanceof EReference))
+        // A null classifier means "this type pairs with no extInfo" (a ContextMenu / AutoCommandBar /
+        // Navigator group): leave the slot alone rather than resolving a classifier called null.
+        if (classifier == null || !(feature instanceof EReference))
         {
             return;
         }
@@ -4191,19 +4352,176 @@ public final class FormElementWriter
     }
 
     /**
-     * The concrete extInfo classifier NAME for an element whose {@code extInfo} slot is EMPTY, or
-     * {@code null} when it cannot be derived without an instance. Generalizes
-     * {@link #groupExtInfoClassifierFor}: a {@code FormGroup}'s concrete extInfo matches its
-     * {@code type} literal (defaulting to a {@code UsualGroup} when the type is unset). Other kinds
-     * already carry their extInfo from creation, so the reuse branch of {@link #resolveExtInfoEClass}
-     * covers them and this returns {@code null} for them.
+     * The concrete extInfo classifier NAME a form ITEM's current {@code type} literal implies, or
+     * {@code null} when the item's kind has no {@code type}-driven pairing (a Table, whose extInfo
+     * follows its dataPath) or its type pairs with no extInfo at all (a ContextMenu / AutoCommandBar /
+     * Navigator / ... group, and a {@code None} field).
+     *
+     * <p>THE single source of the item pairing, faithful to the platform's own
+     * {@code ExtInfoManagementService.createFieldExtInfo / createDecorationExtInfo / createGroupExtInfo
+     * / createAdditionExtInfo}. It answers two questions at once: which class to CREATE for an empty
+     * slot ({@link #resolveExtInfoEClass}), and which class a live instance must be REPLACED by when
+     * the type changed under it ({@link #syncItemExtInfo}).</p>
      */
     private static String extInfoClassifierNameFor(EObject element)
     {
-        if (ECLASS_FORM_GROUP.equals(element.eClass().getName()))
+        String eClassName = element.eClass().getName();
+        String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
+        if (ECLASS_FORM_GROUP.equals(eClassName))
         {
-            String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
+            // An unset type still means UsualGroup - the platform's own default group shape.
             return groupExtInfoClassifierFor(typeLiteral != null ? typeLiteral : TYPE_LITERAL_USUAL_GROUP);
+        }
+        if (ECLASS_FORM_FIELD.equals(eClassName))
+        {
+            return FIELD_EXT_INFO_BY_TYPE.get(typeLiteral);
+        }
+        if (ECLASS_DECORATION.equals(eClassName))
+        {
+            return DECORATION_EXT_INFO_BY_TYPE.get(typeLiteral);
+        }
+        if (ECLASS_ADDITION.equals(eClassName))
+        {
+            return ADDITION_EXT_INFO_BY_TYPE.get(typeLiteral);
+        }
+        return null;
+    }
+
+    /** {@code ManagedFormFieldType} literal &rarr; its {@code FieldExtInfo} classifier. */
+    private static final Map<String, String> FIELD_EXT_INFO_BY_TYPE = buildFieldExtInfoMap();
+
+    private static Map<String, String> buildFieldExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("InputField", ECLASS_INPUT_FIELD_EXT_INFO); //$NON-NLS-1$
+        m.put("LabelField", "LabelFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CheckBoxField", "CheckBoxFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CalendarField", "CalendarFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ChartField", "ChartFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("DendrogramField", "DendrogramFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("FormattedDocumentField", "FormattedDocFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GanttChartField", "GanttChartFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The four pairings whose two sides are NOT the same word. Each is the platform's, verbatim.
+        m.put("GeographicalSchemaField", "GeographicalMapFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("GraphicalSchemaField", "FlowchartFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("HTMLDocumentField", "HtmlFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PictureField", "ImageFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ProgressBarField", "ProgressBarFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("RadioButtonField", "RadioButtonsFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SpreadsheetDocumentField", "SpreadSheetDocFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TextDocumentField", "TextDocFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TrackBarField", "TrackBarFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PlannerField", "PlannerFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PeriodField", "PeriodFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("PDFDocumentField", "PDFDocumentFieldExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // 'None' is deliberately absent: the platform's switch has no case for it either, so a
+        // type-less field carries no extInfo.
+        return Collections.unmodifiableMap(m);
+    }
+
+    /** {@code ManagedFormDecorationType} literal &rarr; its {@code DecorationExtInfo} classifier. */
+    private static final Map<String, String> DECORATION_EXT_INFO_BY_TYPE = Collections.unmodifiableMap(
+        decorationExtInfoMap());
+
+    private static Map<String, String> decorationExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put(TYPE_LITERAL_LABEL, ECLASS_LABEL_DECORATION_EXT_INFO);
+        m.put("Picture", "PictureDecorationExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return m;
+    }
+
+    /** {@code ManagedFormAdditionType} literal &rarr; its {@code AdditionExtInfo} classifier. */
+    private static final Map<String, String> ADDITION_EXT_INFO_BY_TYPE = Collections.unmodifiableMap(
+        additionExtInfoMap());
+
+    private static Map<String, String> additionExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("SearchStringAddition", "SearchStringAdditionExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ViewStatusAddition", "ViewStatusAdditionExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("SearchControlAddition", "SearchControlAdditionExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return m;
+    }
+
+    /**
+     * Brings a form ITEM's {@code <extInfo>} in line with the {@code type} it now carries - the item
+     * twin of {@link #syncAttributeExtInfo}, mirroring the platform's
+     * {@code ExtInfoManagementService.setExtInfo(item, type, version)}. A {@code type} is a
+     * CLASSIFIER, not a cosmetic flag: a Picture decoration needs a {@code PictureDecorationExtInfo}, a
+     * CheckBoxField a {@code CheckBoxFieldExtInfo}. Leaving the previous type's ext-info behind is the
+     * silent inconsistency this closes - the item read back as its new type while its nested holder
+     * still described the old one, and every extInfo property then resolved against the wrong EClass.
+     *
+     * <p>Three outcomes, exactly as the platform has them: the paired class is CREATED when the slot is
+     * empty, REPLACED when a live instance is of another class, and CLEARED when the new type pairs
+     * with none (a ContextMenu / AutoCommandBar / Navigator / RowActionsPanel /
+     * SelectedItemsActionsPanel group). Unlike {@link #ensureExtInfo} - which never clobbers, because
+     * its callers only mean to reach INTO the holder - this one is authoritative about the class,
+     * because the type just changed.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier comes from)
+     * @param item the form item whose {@code type} has just been set, re-fetched inside the tx
+     * @return the EClass name of the ext-info now on the item, or {@code null} when it carries none
+     */
+    public static String syncItemExtInfo(EObject formModel, EObject item)
+    {
+        EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(feature instanceof EReference) || feature.isMany())
+        {
+            return null;
+        }
+        String classifier = extInfoClassifierNameFor(item);
+        EObject current = singleReference(item, FEATURE_EXT_INFO);
+        if (classifier == null)
+        {
+            // A kind with no type-driven pairing (a Table) must keep what it has; a TYPE that pairs
+            // with none must lose it. Only the latter has a type literal to have decided that.
+            if (current != null && enumLiteralOf(item, FEATURE_TYPE) != null)
+            {
+                item.eSet(feature, null);
+                return null;
+            }
+            return current == null ? null : current.eClass().getName();
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created = replaceExtInfoClassifier(formModel, item, feature, classifier);
+        return created == null ? null : created.eClass().getName();
+    }
+
+    /**
+     * Swaps {@code element}'s {@code extInfo} to a fresh instance of {@code classifier}, and never
+     * leaves the PREVIOUS type's holder behind.
+     *
+     * <p>{@link #setExtInfoClassifier} is best-effort: on a platform version whose form EPackage does
+     * not know the classifier it does nothing at all. Reading the slot back after it would then answer
+     * the STALE ext-info - the one describing the type the element no longer has - and the caller would
+     * report that class as if it were the new pairing, persisting a value-type/ext-info mismatch under
+     * a success. So the result is VERIFIED against the requested classifier, and a slot that could not
+     * be re-created is CLEARED: no ext-info is what the platform itself produces for a pairing it
+     * cannot make, and it is the only answer here that does not lie.</p>
+     *
+     * @param formModel the editable content form (owns the form EPackage the classifier comes from)
+     * @param element the form member whose ext-info is being re-paired
+     * @param extInfoFeature the member's resolved single-valued {@code extInfo} reference
+     * @param classifier the concrete ext-info EClass name the new type pairs with (never {@code null})
+     * @return the fresh ext-info of {@code classifier}, or {@code null} when it could not be created
+     */
+    private static EObject replaceExtInfoClassifier(EObject formModel, EObject element,
+        EStructuralFeature extInfoFeature, String classifier)
+    {
+        setExtInfoClassifier(formModel, element, classifier);
+        EObject created = singleReference(element, FEATURE_EXT_INFO);
+        if (created != null && classifier.equals(created.eClass().getName()))
+        {
+            return created;
+        }
+        if (created != null)
+        {
+            element.eSet(extInfoFeature, null);
         }
         return null;
     }
@@ -4853,7 +5171,16 @@ public final class FormElementWriter
         return TYPE_LITERAL_USUAL_GROUP;
     }
 
-    /** The concrete extInfo EClass name matching a group type literal (FormObjectFactory's pairs). */
+    /**
+     * The concrete extInfo EClass name matching a group type literal (FormObjectFactory's pairs), or
+     * {@code null} for the five group types the platform pairs with NO extInfo at all - ContextMenu,
+     * AutoCommandBar, Navigator, RowActionsPanel, SelectedItemsActionsPanel ({@code
+     * ExtInfoManagementService.createGroupExtInfo} has no case for them). They must answer null rather
+     * than fall into the UsualGroup default: {@link #syncItemExtInfo} would otherwise hand a
+     * ContextMenu a {@code UsualGroupExtInfo} it must not carry.
+     * <p>UsualGroup stays the default for an UNSET / unrecognized literal - a group with no type is a
+     * usual group, which is what the create path relies on.
+     */
     private static String groupExtInfoClassifierFor(String groupTypeLiteral)
     {
         switch (groupTypeLiteral)
@@ -4870,6 +5197,12 @@ public final class FormElementWriter
                 return "CommandBarExtInfo"; //$NON-NLS-1$
             case TYPE_LITERAL_BUTTON_GROUP:
                 return "ButtonGroupExtInfo"; //$NON-NLS-1$
+            case "ContextMenu": //$NON-NLS-1$
+            case "AutoCommandBar": //$NON-NLS-1$
+            case "Navigator": //$NON-NLS-1$
+            case "RowActionsPanel": //$NON-NLS-1$
+            case "SelectedItemsActionsPanel": //$NON-NLS-1$
+                return null;
             default:
                 return ECLASS_USUAL_GROUP_EXT_INFO;
         }
@@ -4887,6 +5220,54 @@ public final class FormElementWriter
     }
 
     // ---- the form-wide id allocation ------------------------------------------------------------
+    //
+    // Two questions live here, and they have DIFFERENT answers. Conflating them is the mistake this
+    // block exists to prevent, so both answers are written down.
+    //
+    // 1. "Which ids are TAKEN?" -> the WHOLE LIVE FORM MODEL, computed branches included.
+    //    The platform's own allocator, FormIdentifierService.getMaxId (bundle
+    //    com._1c.g5.v8.dt.form), scans EcoreUtil.getAllContents(form, true) - the same unconditional
+    //    walk as eAllContents(), which descends into transient containments - and filters with
+    //    exactly FormItem / AbstractFormAttribute / FormCommand, reading exactly getId(). So the
+    //    max* scans below stay WIDE on purpose. This is not indifference to the computed branches:
+    //    AutoCommandBar, SelectedItemsActionsPanel and RowActionsPanel are FormItem subtypes, so the
+    //    objects behind the layouter-only containments carry real ids. Those containments are
+    //    CommandBarHolder.topCommandBar / bottomCommandBar / fABCommandBar,
+    //    SelectedItemsActionsPanelHolder.selectedItemsActionsPanel and
+    //    RowActionsPanelHolder.rowActionsPanel - all five declared "contains transient" (the last
+    //    two are additionally commented "// layouter only"; being transient is the part that matters
+    //    here). (CommandBarHolder.autoCommandBar, by contrast, is PERSISTED and reached by both
+    //    passes. Every command-bar holder declares one - a Table's is numbered like any other item;
+    //    only the instance owned by the form ROOT carries the -1 sentinel.) Narrowing the ITEM
+    //    ceiling would hand out an id the platform considers reserved.
+    //    For attributes and commands the ceiling is wide for PARITY, not for a measurable effect:
+    //    nothing transient reaches an AbstractFormAttribute or a FormCommand in the shipped
+    //    metamodel, so narrowing those two would be observationally identical today. They stay wide
+    //    so all three id spaces answer "which ids are taken" the same way the platform does.
+    //
+    // 2. "Which objects may be RENUMBERED?" -> the PERSISTED AUTHORED GRAPH ONLY.
+    //    The platform draws this line in a different place, and does so consistently. Its
+    //    form-invalid-item-id diagnostic (InvalidItemIdCheck, bundle com.e1c.dt.check.form) and its
+    //    merge-time repair (FormComparisonParticipant.checkUniqueItemIds) both collect their targets
+    //    with FormItemIterator, which follows autoCommandBar, contextMenu, extendedTooltip, items,
+    //    autoTable and the Additions - every one of them persisted - and never the transient bars or
+    //    panels. Its command and attribute repairs are narrower still, addressing
+    //    FormPackage.Literals.FORM__FORM_COMMANDS and FORM__ATTRIBUTES outright. Only then does it
+    //    allocate a replacement through the WIDE getNext*Id. Wide read, narrow write.
+    //
+    // Hence the shape below: the max* scans use eAllContents(), the three normalizeForm*Ids collect
+    // their targets through PersistedContents.descendants. Writing into a computed branch would be
+    // wrong twice over - it mutates an object that is never serialized, and, when a layouter item
+    // and an authored item collide on an id, it lets visit order decide which of the two is
+    // renumbered, so an ephemeral object can durably renumber authored content in Form.form.
+    //
+    // Only the FormItem pair makes this observable: no transient containment reaches an
+    // AbstractFormAttribute or a FormCommand (FormStandardCommand, the inferred one, extends Command
+    // and NOT FormCommand, and declares no id at all), so for those two the narrow collection is
+    // parity with the platform rather than a change in numbering.
+    //
+    // Verified against the shipped model/Form.xcore of EDT 2026.1.2+2 and 2026.2.0+289, which are
+    // identical on every declaration named above.
 
     /**
      * The next free form-attribute id = max existing {@code AbstractFormAttribute} id across the whole
@@ -4949,6 +5330,17 @@ public final class FormElementWriter
         return max;
     }
 
+    /**
+     * WIDE on purpose - question 1 of the block comment above: {@code eAllContents()} mirrors the
+     * platform's own {@code FormIdentifierService.getMaxId}, which scans
+     * {@code EcoreUtil.getAllContents(form, true)}.
+     *
+     * <p>For the command space this is PARITY rather than a measurable difference: the inferred
+     * {@code FormStandardCommand} is not a {@code FormCommand} and carries no {@code id}, and no
+     * other transient containment reaches one, so a narrowed scan would return the same number on
+     * any form the shipped metamodel can produce. It stays wide so that all three id spaces answer
+     * "which ids are taken" exactly as the platform does.</p>
+     */
     private static int maxCommandId(EObject formModel, EClass commandClass)
     {
         int max = 0;
@@ -4963,6 +5355,7 @@ public final class FormElementWriter
         return max;
     }
 
+    /** WIDE on purpose - see {@link #maxCommandId} and the block comment above. */
     private static int maxAttributeId(EObject formModel, EClass attributeClass)
     {
         int max = 0;
@@ -4989,7 +5382,13 @@ public final class FormElementWriter
         return reference != null && !reference.eIsProxy() ? reference : null;
     }
 
-    /** The next free form-item id = max existing {@code FormItem} id across the whole form + 1. */
+    /**
+     * The next free form-item id = max existing {@code FormItem} id across the whole form + 1.
+     * WIDE on purpose - see {@link #maxCommandId} and the block comment above. This is the one id
+     * space where the computed branches actually carry ids: the layouter's {@code AutoCommandBar},
+     * {@code SelectedItemsActionsPanel} and {@code RowActionsPanel} are {@code FormItem}s reachable
+     * only through transient containments, and the platform counts them as taken.
+     */
     private static int nextItemId(EObject formModel)
     {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
@@ -5016,6 +5415,13 @@ public final class FormElementWriter
      * the model. The designer allocates these ids through {@code getNextAttributeId}; attributes and
      * attribute columns share this attribute id space, but it is intentionally independent from
      * {@code FormItem.id}.
+     *
+     * <p>The ceiling is read WIDE and the repair targets are collected NARROW - see the block
+     * comment above. The platform repairs attribute ids by addressing
+     * {@code FormPackage.Literals.FORM__ATTRIBUTES} and the explicit column features outright, so
+     * only persisted attributes are eligible to be renumbered. No transient containment reaches an
+     * {@code AbstractFormAttribute} in the shipped metamodel, so this is parity with the platform
+     * rather than a change in the numbers produced.</p>
      * Package-visible for the headless unit test.
      */
     static void normalizeFormAttributeIds(EObject formModel)
@@ -5033,9 +5439,8 @@ public final class FormElementWriter
         {
             max = Math.max(max, maxAttributeIdForAllocation(extensionForm, attributeClass));
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        for (EObject obj : PersistedContents.descendants(formModel))
         {
-            EObject obj = it.next();
             if (!attributeClass.isInstance(obj))
             {
                 continue;
@@ -5065,6 +5470,14 @@ public final class FormElementWriter
      * Repairs the form-wide {@code FormCommand.id} invariant before validation/export sees the model.
      * The designer allocates these ids through {@code getNextCommandId}; commands have their own id
      * space, independent from form items and form attributes.
+     *
+     * <p>The ceiling is read WIDE and the repair targets are collected NARROW - see the block
+     * comment above. The platform repairs command ids by addressing
+     * {@code FormPackage.Literals.FORM__FORM_COMMANDS} outright. The inferred
+     * {@code FormStandardCommand} behind the transient {@code FormStandardCommandSource.commands}
+     * is NOT a {@code FormCommand} - it extends {@code Command} directly and declares no {@code id}
+     * - so it never entered this loop even before the narrowing; this is parity with the platform
+     * rather than a change in the numbers produced.</p>
      * Package-visible for the headless unit test.
      */
     static void normalizeFormCommandIds(EObject formModel)
@@ -5082,9 +5495,8 @@ public final class FormElementWriter
         {
             max = Math.max(max, maxCommandIdForAllocation(extensionForm, commandClass));
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        for (EObject obj : PersistedContents.descendants(formModel))
         {
-            EObject obj = it.next();
             if (!commandClass.isInstance(obj))
             {
                 continue;
@@ -5113,8 +5525,24 @@ public final class FormElementWriter
     /**
      * Repairs the form-wide {@code FormItem.id} invariant before validation/export sees the model.
      * The form root's predefined {@code autoCommandBar} has the platform sentinel {@code -1}; every
-     * other form item, including designer auto-children such as {@code contextMenu} and
-     * {@code extendedTooltip}, gets a positive id unique in the same form-wide space.
+     * other PERSISTED form item, including designer auto-children such as {@code contextMenu} and
+     * {@code extendedTooltip}, gets a positive id unique in the same form-wide space. Items that
+     * exist only behind a computed containment are left exactly as the layouter made them - they are
+     * counted when the ceiling is computed, but never rewritten.
+     *
+     * <p>This is the pair where the wide/narrow split is observable, so the two jobs run as two
+     * separate passes - see the block comment above. The ceiling comes from a WIDE pass, because the
+     * layouter's {@code AutoCommandBar}, {@code SelectedItemsActionsPanel} and
+     * {@code RowActionsPanel} are {@code FormItem}s that hold real ids behind transient
+     * containments and the platform counts them as taken. The repair targets come from a NARROW
+     * pass, because the platform's own validation and repair paths (its {@code form-invalid-item-id}
+     * diagnostic and its merge-time {@code checkUniqueItemIds}) judge and rewrite only what
+     * {@code FormItemIterator} yields, and that follows persisted children only. Renumbering a computed item would write into an object that
+     * is never serialized, and - worse - on an id collision between a layouter item and an authored
+     * one it would let visit order decide which of the two keeps its id.
+     *
+     * <p>The form root's own {@code autoCommandBar} is a PERSISTED containment, so it stays visible
+     * to the narrow pass and keeps its {@code -1} sentinel.</p>
      * Package-visible for the headless unit test.
      */
     static void normalizeFormItemIds(EObject formModel)
@@ -5128,19 +5556,13 @@ public final class FormElementWriter
 
         EClass formItemClass = (EClass)formItem;
         EObject rootAutoCommandBar = singleReference(formModel, FEATURE_AUTO_COMMAND_BAR);
+        int max = maxItemId(formModel, formItemClass, rootAutoCommandBar);
         List<EObject> items = new ArrayList<>();
-        int max = 0;
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        for (EObject obj : PersistedContents.descendants(formModel))
         {
-            EObject obj = it.next();
-            if (!formItemClass.isInstance(obj))
+            if (formItemClass.isInstance(obj))
             {
-                continue;
-            }
-            items.add(obj);
-            if (obj != rootAutoCommandBar)
-            {
-                max = Math.max(max, intFeature(obj, FEATURE_ID));
+                items.add(obj);
             }
         }
 
@@ -5155,6 +5577,36 @@ public final class FormElementWriter
         {
             max = assignItemId(item, rootAutoCommandBar, seen, max);
         }
+    }
+
+    /**
+     * The highest {@code FormItem.id} anywhere in the LIVE form - the ceiling
+     * {@link #normalizeFormItemIds} numbers up from. WIDE on purpose: this answers "which ids are
+     * taken", which the platform decides over the whole live model
+     * ({@code FormIdentifierService.getMaxId} scans {@code EcoreUtil.getAllContents(form, true)}),
+     * so the layouter items behind transient containments must be counted here even though they are
+     * never eligible for renumbering.
+     *
+     * <p>{@code rootAutoCommandBar} is excluded because it carries the platform sentinel
+     * {@code -1} rather than an allocated id.</p>
+     *
+     * @param formModel the form root to scan
+     * @param formItemClass the resolved {@code FormItem} EClass
+     * @param rootAutoCommandBar the form root's own command bar, or {@code null}
+     * @return the highest id found, or {@code 0} when the form holds no numbered item
+     */
+    private static int maxItemId(EObject formModel, EClass formItemClass, EObject rootAutoCommandBar)
+    {
+        int max = 0;
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (formItemClass.isInstance(obj) && obj != rootAutoCommandBar)
+            {
+                max = Math.max(max, intFeature(obj, FEATURE_ID));
+            }
+        }
+        return max;
     }
 
     /**
@@ -5239,6 +5691,20 @@ public final class FormElementWriter
     public static EObject findFormCommand(EObject formModel, String name)
     {
         return findByName(referenceList(formModel, FEATURE_FORM_COMMANDS), name);
+    }
+
+    /**
+     * Finds a COLUMN of a collection-typed form attribute by programmatic name, or {@code null}.
+     * A column lives in its owner's own {@code columns} namespace - not the form-wide item tree - so
+     * a name check for a column has to be made here rather than against the items (issue #381).
+     *
+     * @param attribute the OWNING form attribute, tx-bound
+     * @param name the column's programmatic name
+     * @return the column, or {@code null} when the attribute has no such column
+     */
+    public static EObject findColumn(EObject attribute, String name)
+    {
+        return findByName(referenceList(attribute, FEATURE_COLUMNS), name);
     }
 
     /**
@@ -5994,11 +6460,28 @@ public final class FormElementWriter
     }
 
     /**
-     * Depth-first search of ALL contained {@code FormItem}s for an item by its (form-wide unique)
-     * programmatic name. Walks every containment that holds form items - the {@code items} tree, the
-     * auto command bars (form- and table-level), context menus, extended tooltips - not just
-     * {@code items}, by filtering {@code eContents()} to {@code FormItem} instances (the same filter
-     * {@code nextItemId} uses).
+     * Depth-first search of the AUTHORED {@code FormItem} tree for an item by its (form-wide unique)
+     * programmatic name. Walks every PERSISTED containment that holds form items - the {@code items}
+     * tree, the {@code autoCommandBar} (form- and table-level), context menus, extended tooltips, the
+     * table additions - by filtering {@link PersistedContents} to {@code FormItem} instances.
+     *
+     * <p>Deliberately NOT {@code eContents()}: that list evaluates the derived and transient
+     * containments too, and in this metamodel they are computations, not empty slots. Measured on an
+     * EDT 2026.2 catalog item form, the computed containments across the whole item tree handed back
+     * 24 objects - the BSL {@code ContextDef}, the 22 inferred standard commands, the global
+     * command-source marker - and not one of them was a {@code FormItem}.</p>
+     *
+     * <p>That is one form, not a proof. What makes the narrowing safe in general is PERSISTENCE: a
+     * form write lands in {@code Form.form}, so an element the model does not persist - the
+     * layouter-only {@code topCommandBar} / {@code bottomCommandBar} / {@code fABCommandBar} and the
+     * {@code SelectedItemsActionsPanel} / {@code RowActionsPanel} pair, should EDT ever fill them -
+     * is one no caller could have created and no edit could keep. Resolving such an element would
+     * only make a vanishing write look successful (issue #350).</p>
+     *
+     * <p>Traversal is an explicit stack, not recursion - a {@code StackOverflowError} is an
+     * {@link Error} no {@code catch (Exception)} above would stop. It carries NO node budget on
+     * purpose: a truncated search would answer "not found" for an item that exists, and the callers
+     * turn that into a duplicate name or a wrong-target edit.</p>
      */
     private static EObject findItem(EObject root, String name)
     {
@@ -6012,23 +6495,40 @@ public final class FormElementWriter
 
     private static EObject findItemIn(EObject container, String name, EClass formItem)
     {
-        for (EObject child : container.eContents())
+        Deque<EObject> pending = new ArrayDeque<>();
+        pushFormItems(container, formItem, pending);
+        while (!pending.isEmpty())
         {
-            if (!formItem.isInstance(child))
+            EObject item = pending.pop();
+            if (name.equalsIgnoreCase(stringFeature(item, FEATURE_NAME)))
             {
-                continue;
+                return item;
             }
-            if (name.equalsIgnoreCase(stringFeature(child, FEATURE_NAME)))
-            {
-                return child;
-            }
-            EObject nested = findItemIn(child, name, formItem);
-            if (nested != null)
-            {
-                return nested;
-            }
+            pushFormItems(item, formItem, pending);
         }
         return null;
+    }
+
+    /**
+     * Pushes the {@code FormItem}s among {@code parent}'s PERSISTED children so they pop in metamodel
+     * order, keeping the walks above depth-first, left to right. The single place both form-item
+     * searches learn what a child is, so they cannot drift apart.
+     *
+     * @param parent the object whose containments to follow
+     * @param formItem the {@code FormItem} EClass of the form instance's own EPackage
+     * @param pending the traversal stack
+     */
+    private static void pushFormItems(EObject parent, EClass formItem, Deque<EObject> pending)
+    {
+        List<EObject> children = PersistedContents.of(parent);
+        for (int i = children.size() - 1; i >= 0; i--)
+        {
+            EObject child = children.get(i);
+            if (formItem.isInstance(child))
+            {
+                pending.push(child);
+            }
+        }
     }
 
     private static EObject findByName(EList<EObject> list, String name)
@@ -6085,9 +6585,9 @@ public final class FormElementWriter
 
     /**
      * Fills a contained {@code AdjustableBoolean} feature ({@code userVisible} on a visual item,
-     * {@code use} on a command, {@code view} / {@code edit} on the main object attribute) with a fresh
-     * instance whose {@code common} flag is set - what the platform factory's
-     * {@code newAdjustableBoolean} produces. A no-op when the feature is absent.
+     * {@code use} on a command, {@code view} / {@code edit} on a form attribute) with an instance whose
+     * {@code common} flag is set - what the platform factory's {@code newAdjustableBoolean} produces.
+     * A no-op when the feature is absent.
      * <p>
      * When the declared reference type is ABSTRACT (the {@code AdjustableBoolean} EReference type may be
      * abstract on a live stand - the EFactory cannot instantiate it directly), a CONCRETE instantiable
@@ -6098,24 +6598,75 @@ public final class FormElementWriter
      */
     private static void setAdjustableBooleanFeature(EObject owner, String featureName)
     {
+        setAdjustableBooleanFeature(owner, featureName, true);
+    }
+
+    /**
+     * The {@link #setAdjustableBooleanFeature(EObject, String)} variant that writes an explicit
+     * {@code common} value, so {@code modify_metadata} can turn an {@code AdjustableBoolean} feature
+     * OFF as well as on (issue #382).
+     * <p>
+     * An ALREADY PRESENT instance is reused and only its {@code common} flag is rewritten. Replacing it
+     * with a fresh one would silently drop the sibling {@code for} list - the per-role / per-functional
+     * option overrides the designer writes next to {@code common} - turning a flag edit into a quiet
+     * loss of adjustment data. A new instance is created only when the feature is genuinely unset.
+     *
+     * @param owner the object carrying the feature
+     * @param featureName the {@code AdjustableBoolean} feature's name
+     * @param common the value for the nested {@code common} flag
+     * @return {@code true} when the feature was written, {@code false} when it is absent or its type
+     *     cannot be instantiated (both left untouched, unattended-safe)
+     */
+    public static boolean setAdjustableBooleanFeature(EObject owner, String featureName, boolean common)
+    {
         EStructuralFeature feature = owner.eClass().getEStructuralFeature(featureName);
         if (!(feature instanceof EReference) || feature.isMany())
         {
-            return;
+            return false;
+        }
+        Object existing = owner.eGet(feature);
+        if (existing instanceof EObject)
+        {
+            // Reuse: keep the sibling 'for' overrides, rewrite only the common flag.
+            setBooleanFeature((EObject)existing, FEATURE_COMMON, common);
+            return true;
         }
         EClass declared = ((EReference)feature).getEReferenceType();
         if (declared == null || declared.getEPackage() == null)
         {
-            return;
+            return false;
         }
         EClass concrete = declared.isAbstract() ? concreteSubtype(declared) : declared;
         if (concrete == null)
         {
-            return;
+            return false;
         }
         EObject adjustable = concrete.getEPackage().getEFactoryInstance().create(concrete);
-        setBooleanFeature(adjustable, FEATURE_COMMON, true);
+        setBooleanFeature(adjustable, FEATURE_COMMON, common);
         owner.eSet(feature, adjustable);
+        return true;
+    }
+
+    /**
+     * Applies the designer's {@code AbstractFormAttribute} presentation defaults - {@code view} and
+     * {@code edit}, each an {@code AdjustableBoolean} with {@code common = true} - to a newly created
+     * form attribute or attribute column.
+     * <p>
+     * The platform REQUIRES these blocks: an attribute written without them makes the configuration
+     * unloadable, the XDTO reader rejecting the generated {@code Form.xml} (issue #382). Every
+     * GUI-created attribute carries them, so a new one must too.
+     * <p>
+     * Both features are declared on {@code AbstractFormAttribute}, the common supertype of
+     * {@code FormAttribute} and {@code FormAttributeColumn}, which is why this single helper serves the
+     * attribute, the column and the seeded main object attribute alike - one point of judgment rather
+     * than three call sites free to drift apart.
+     *
+     * @param attribute the freshly created form attribute or attribute column
+     */
+    private static void applyFormAttributeDefaults(EObject attribute)
+    {
+        setAdjustableBooleanFeature(attribute, FEATURE_VIEW);
+        setAdjustableBooleanFeature(attribute, FEATURE_EDIT);
     }
 
     /**

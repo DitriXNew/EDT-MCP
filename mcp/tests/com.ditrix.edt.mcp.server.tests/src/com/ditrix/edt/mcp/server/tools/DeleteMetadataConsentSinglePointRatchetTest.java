@@ -204,6 +204,16 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         "BmTransactions#forceExportToDisk", //$NON-NLS-1$
         "IFolder#delete"); //$NON-NLS-1$
 
+    /**
+     * The export-submission seam (#408). It is NOT in {@link #MUTATIONS} and could not be: that
+     * list is only consulted for calls LEAVING the analysed classes, and this one is a nest member,
+     * so the walk follows it instead of judging it - straight into an abstract interface method
+     * with no body, while the production implementation sits behind a field the linear scan does
+     * not connect to the call site. That is a hole the same shape as the one #331 was about, so it
+     * gets its own check below rather than a comment.
+     */
+    private static final String EXPORT_SUBMIT = "DeleteMetadataTool$ExportSubmitter#submit"; //$NON-NLS-1$
+
     /** The XDTO branch's target lookup: it has to run BEFORE the gate, not after it. */
     private static final String XDTO_BRANCH = "performXdtoMemberDelete"; //$NON-NLS-1$
 
@@ -261,6 +271,34 @@ public class DeleteMetadataConsentSinglePointRatchetTest
                 + "authorized (issue #331).", //$NON-NLS-1$
                 nest.firstOffsetOf(node, SELF + '#' + GATE) >= 0);
         }
+    }
+
+    /**
+     * The export submission of #408 writes to disk, so it belongs behind the gate like every other
+     * write - and it is invisible to the walk above, for the reason recorded on
+     * {@link #EXPORT_SUBMIT}. Checked here by the one thing the scan CAN see: which methods call
+     * the seam, and whether any of them is reachable without the gate's callback.
+     */
+    @Test
+    public void theExportSubmissionSeamIsUnreachableWithoutTheGate()
+    {
+        Nest nest = readTool();
+        Analysis analysis = analyse(nest, SELF);
+
+        Set<String> callers = nest.methodsCalling(EXPORT_SUBMIT);
+        // Positive control, same reason as the MUTATIONS one: a target that no longer occurs would
+        // make this test pass by describing nothing.
+        assertTrue("'" + EXPORT_SUBMIT + "' is not called anywhere in " + SELF //$NON-NLS-1$ //$NON-NLS-2$
+            + ": this check would be guarding a name that is not there. Update EXPORT_SUBMIT to " //$NON-NLS-1$
+            + "whatever the delete now queues its export through.", !callers.isEmpty()); //$NON-NLS-1$
+
+        Set<String> ungatedCallers = new TreeSet<>(callers);
+        ungatedCallers.retainAll(analysis.ungated);
+        assertTrue("these methods queue a .mdo export and are reachable from " + ENTRY //$NON-NLS-1$
+            + "() without passing through the gate's callback, so the export - and the write it " //$NON-NLS-1$
+            + "makes the caller trust - happens whether or not consent was granted: " //$NON-NLS-1$
+            + ungatedCallers + ". Queue it from inside the DeleteWrite callback, next to the " //$NON-NLS-1$
+            + "mutation it exports (issue #331 / #408).", ungatedCallers.isEmpty()); //$NON-NLS-1$
     }
 
     @Test

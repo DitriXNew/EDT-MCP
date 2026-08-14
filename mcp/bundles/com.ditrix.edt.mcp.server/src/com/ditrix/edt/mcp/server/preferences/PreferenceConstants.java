@@ -84,12 +84,16 @@ public final class PreferenceConstants
      */
     public static final String PREF_TOOL_PREFS_MIGRATION = "mcpToolPrefsMigration"; //$NON-NLS-1$
 
-    /** Migration version this build applies: 1 = the 'git' tool ships disabled. */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 1;
+    /**
+     * Migration version this build applies: 1 = the 'git' tool ships disabled; 2 = a stored
+     * Analysis Only / Code Review preset (saved before {@code apply_quick_fix} existed) gains it in
+     * its disabled set, so an upgrading user's read-only preset stays read-only.
+     */
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 3;
 
     /** Default: all tools enabled (empty string = no disabled tools) */
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
-    public static final String DEFAULT_DISABLED_TOOLS = "git"; //$NON-NLS-1$
+    public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
 
     // === Progressive tool disclosure (dynamic toolsets) ===
 

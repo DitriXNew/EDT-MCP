@@ -222,8 +222,9 @@ public class MetadataTypeBuilderTest
     {
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         JsonObject item = json("{\"kind\":\"nonsense\"}").getAsJsonObject(); //$NON-NLS-1$
-        // the unknown-kind branch never touches `provider` (checked only after both normalizePrimitive
-        // returns null and platformSimpleTypeCandidates returns an empty array), so null is safe here.
+        // A null provider is safe here: the unknown-kind branch is reached only after the platform
+        // probe (issue #369) has answered "no such type", and that probe treats a missing provider as
+        // "resolves nothing" rather than failing.
         String err = MetadataTypeBuilder.addType(td, item, "nonsense", null, //$NON-NLS-1$
             MdClassFactory.eINSTANCE.createConfiguration(), false,
             MetadataTypeBuilder.TypeTarget.METADATA);
@@ -449,5 +450,167 @@ public class MetadataTypeBuilderTest
             extErr.contains("Cannot resolve the reference target")); //$NON-NLS-1$
         assertTrue("an extension project must get the adopt hint", //$NON-NLS-1$
             extErr.contains("adopt_metadata_object")); //$NON-NLS-1$
+    }
+
+    // ---- the form-attribute platform-type vocabulary (issue #369) --------------------------------
+    //
+    // A form attribute's type is not a short fixed list: a production configuration uses ~30 distinct
+    // platform types on form attributes (ValueList, SpreadsheetDocument, Chart, StandardPeriod, ...).
+    // The builder therefore asks the PLATFORM whether the kind names a type, instead of carrying a
+    // catalogue that will always lag. These tests pin that probe and both of its gates.
+
+    /** A provider that knows exactly {@code name} - the shape the real one has for a real type. */
+    private static IEObjectProvider providerKnowing(String name, Type answer)
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        // The real provider THROWS for a name it does not know (AbstractEObjectProvider.createProxy),
+        // it does not return null - so the probe must survive the throw, not just a null.
+        Mockito.doThrow(new IllegalArgumentException("Can't create proxy for unknown name")) //$NON-NLS-1$
+            .when(provider).createProxy(Mockito.anyString());
+        Mockito.doReturn(answer).when(provider).createProxy(name);
+        return provider;
+    }
+
+    private static String addKind(String kind, IEObjectProvider provider, TypeDescription td,
+        MetadataTypeBuilder.TypeTarget target)
+    {
+        JsonObject item = json("{\"kind\":\"" + kind + "\"}").getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        return MetadataTypeBuilder.addType(td, item, kind, provider,
+            MdClassFactory.eINSTANCE.createConfiguration(), false, target);
+    }
+
+    @Test
+    public void testFormAttributeAcceptsAnyPlatformTypeTheVersionKnows()
+    {
+        // ValueList is issue #369 itself: a type every real configuration uses, which the old fixed
+        // vocabulary called "Unknown type kind".
+        Type valueList = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind("ValueList", providerKnowing("ValueList", valueList), td, //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(err);
+        assertEquals(1, td.getTypes().size());
+        assertSame(valueList, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testFormAttributeAcceptsTheRussianSpellingOfAPlatformType()
+    {
+        // The platform type provider indexes every type under BOTH names, so the Russian spelling
+        // resolves through the SAME probe - this bundle carries no ru->en alias table for it.
+        // SpisokZnachenij = ValueList.
+        String ruValueList = new String(new int[] {0x0421, 0x043f, 0x0438, 0x0441, 0x043e, 0x043a,
+            0x0417, 0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439}, 0, 14);
+        Type valueList = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind(ruValueList, providerKnowing(ruValueList, valueList), td,
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNull(err);
+        assertSame(valueList, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testStoredMetadataRefusesAFormOnlyPlatformType()
+    {
+        Type spreadsheet = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind("SpreadsheetDocument", //$NON-NLS-1$
+            providerKnowing("SpreadsheetDocument", spreadsheet), td, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull("a stored metadata feature must refuse a form-only platform type", err); //$NON-NLS-1$
+        assertTrue(err.contains("SpreadsheetDocument")); //$NON-NLS-1$
+        assertTrue("the refusal must point at the form attribute FQN shape", //$NON-NLS-1$
+            err.contains("Form.FormName.Attribute")); //$NON-NLS-1$
+        assertFalse("a RECOGNIZED type must not be reported as unknown - that wording sent " //$NON-NLS-1$
+            + "callers hunting a spelling mistake that was not there (issue #369)", //$NON-NLS-1$
+            err.contains("Unknown type kind")); //$NON-NLS-1$
+        assertTrue("nothing may be added when the kind is refused", td.getTypes().isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDcsParameterRefusesAFormOnlyPlatformTypeInItsOwnWords()
+    {
+        Type chart = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind("Chart", providerKnowing("Chart", chart), td, //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+
+        assertNotNull(err);
+        assertTrue(err.contains("data-composition parameter")); //$NON-NLS-1$
+        assertFalse("a DCS parameter is neither stored nor served by ValueStorage, so it must not " //$NON-NLS-1$
+            + "repeat the stored-metadata advice", err.contains("ValueStorage")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testDynamicListKindRefusedEvenOnAFormAttribute()
+    {
+        // DynamicList resolves like any other platform type, but a list is not just a value type -
+        // it needs its query, which the queryText property owns (and which prompts its own consent).
+        Type dynamicList = McoreFactory.eINSTANCE.createType();
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind("DynamicList", providerKnowing("DynamicList", dynamicList), td, //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNotNull("a bare DynamicList type spec would build a list with no query", err); //$NON-NLS-1$
+        assertTrue("the refusal must name the property that DOES build one", //$NON-NLS-1$
+            err.contains("queryText")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testIsDynamicListKind()
+    {
+        assertTrue(MetadataTypeBuilder.isDynamicListKind("DynamicList")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isDynamicListKind("dynamiclist")); //$NON-NLS-1$
+        // DinamicheskijSpisok = DynamicList
+        assertTrue(MetadataTypeBuilder.isDynamicListKind(new String(new int[] {0x0414, 0x0438, 0x043d,
+            0x0430, 0x043c, 0x0438, 0x0447, 0x0435, 0x0441, 0x043a, 0x0438, 0x0439, 0x0421, 0x043f,
+            0x0438, 0x0441, 0x043e, 0x043a}, 0, 18)));
+        assertFalse(MetadataTypeBuilder.isDynamicListKind("ValueList")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isDynamicListKind(null));
+    }
+
+    @Test
+    public void testATypeTheVersionDoesNotKnowStaysUnknown()
+    {
+        // The probe must not turn every typo into "a real type on the wrong target": a name the
+        // platform does not know is still an unknown kind, and the message still lists the vocabulary.
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind("NoSuchPlatformType", //$NON-NLS-1$
+            providerKnowing("ValueList", McoreFactory.eINSTANCE.createType()), td, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertNotNull(err);
+        assertTrue(err.contains("Unknown type kind")); //$NON-NLS-1$
+        assertTrue("the message is the only inventory an agent has - it must say a form attribute " //$NON-NLS-1$
+            + "takes platform type names too", err.contains("ValueList")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testCuratedKindsKeepTheirOwnGateAheadOfTheProbe()
+    {
+        // ValueTable is BOTH a curated collection kind and a resolvable platform type. The curated
+        // branch must win, so the stored-metadata refusal keeps its collection wording (and its
+        // "refused before any platform call" guarantee) instead of the generic form-only one.
+        IEObjectProvider provider = providerKnowing("ValueTable", McoreFactory.eINSTANCE.createType()); //$NON-NLS-1$
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        String err = addKind("ValueTable", provider, td, MetadataTypeBuilder.TypeTarget.METADATA); //$NON-NLS-1$
+
+        assertNotNull(err);
+        assertTrue("the collection wording must survive the platform probe", //$NON-NLS-1$
+            err.contains("IN-MEMORY collection")); //$NON-NLS-1$
+        Mockito.verify(provider, Mockito.never()).createProxy(Mockito.anyString());
     }
 }

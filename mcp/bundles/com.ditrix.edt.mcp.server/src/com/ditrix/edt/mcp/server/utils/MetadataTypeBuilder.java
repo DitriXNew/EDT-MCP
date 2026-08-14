@@ -53,6 +53,15 @@ import com.google.gson.JsonObject;
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
  * {@code {"kind":"CatalogRef", "ref":"Name"}}. The {@code types} list may mix several (a composite
  * type). The shape is validated before any platform call, so a malformed spec fails fast.
+ * <p>
+ * On a {@link TypeTarget#FORM_ATTRIBUTE} the vocabulary is not a fixed list: ANY type name the
+ * platform version knows is accepted (ValueList, SpreadsheetDocument, Chart, GanttChart, Dendrogram,
+ * Planner, GeographicalSchema, GraphicalSchema, StandardPeriod, TypeDescription, Picture, Color,
+ * FormattedString, DataCompositionSettingsComposer, ...), in EITHER language - the platform type
+ * provider indexes each type under both its English and its Russian name, so no alias table is kept
+ * here (issue #369). Those types live only in a form's data, so every other target refuses them with
+ * {@code formOnlyTypeRefusal}. {@code DynamicList} is refused even on a form attribute: it needs its
+ * query too, which {@code modify_metadata}'s {@code queryText} path owns.
  */
 public final class MetadataTypeBuilder
 {
@@ -431,9 +440,93 @@ public final class MetadataTypeBuilder
             return addSimplePlatformType(td, provider, simpleTypeCandidates);
         }
 
+        // Any OTHER type the platform knows for this version - ValueList, SpreadsheetDocument, Chart,
+        // StandardPeriod, TypeDescription, ... (issue #369). The provider indexes every type under BOTH
+        // its English and its Russian name, so the bilingual spelling resolves with no alias table here.
+        TypeItem platformType = tryCreateTypeItem(provider, kind);
+        if (platformType != null)
+        {
+            if (isDynamicListKind(kind))
+            {
+                return dynamicListKindRefusal(kind);
+            }
+            if (typeTarget != TypeTarget.FORM_ATTRIBUTE)
+            {
+                return formOnlyTypeRefusal(kind, typeTarget);
+            }
+            td.getTypes().add(platformType);
+            return null;
+        }
+
         return "Unknown type kind '" + kind + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$ //$NON-NLS-2$
             + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), or a " //$NON-NLS-1$
-            + "reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
+            + "reference ({kind:'Ref', ref:'Type.Name'}). On a FORM attribute any platform type name " //$NON-NLS-1$
+            + "also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., English or " //$NON-NLS-1$
+            + "Russian) - this one names no type this platform version knows."; //$NON-NLS-1$
+    }
+
+    /** The platform pseudo-type name a form list attribute carries, in both languages. */
+    private static final String RU_DYNAMIC_LIST = MetadataLanguageUtils.cp(0x0414, 0x0438, 0x043d, 0x0430,
+        0x043c, 0x0438, 0x0447, 0x0435, 0x0441, 0x043a, 0x0438, 0x0439, 0x0421, 0x043f, 0x0438, 0x0441,
+        0x043e, 0x043a); // DinamicheskijSpisok
+
+    /**
+     * Whether {@code kind} names the {@code DynamicList} pseudo-type. It resolves like any other platform
+     * type, but a dynamic list is NOT just a value type: it also needs its {@code DynamicListExtInfo}
+     * query settings, which {@code modify_metadata}'s {@code queryText} / {@code mainTable} path owns
+     * (and which prompts its own conversion consent). Building it from a bare {@code type} spec would
+     * produce a list with no query, so the spec refuses it and names the property that does the job.
+     *
+     * @param kind the raw {@code kind} token from the spec
+     * @return {@code true} for the dynamic-list pseudo-type in either language
+     */
+    static boolean isDynamicListKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        String k = kind.trim();
+        return DYNAMIC_LIST_TYPE.equalsIgnoreCase(k) || RU_DYNAMIC_LIST.equalsIgnoreCase(k);
+    }
+
+    /** The refusal of a bare {@code DynamicList} type spec, naming the property that builds one. */
+    private static String dynamicListKindRefusal(String kind)
+    {
+        return "Type kind '" + kind + "' is the dynamic-list pseudo-type, which a bare type spec " //$NON-NLS-1$ //$NON-NLS-2$
+            + "cannot build: a dynamic list also needs its query. Convert the form attribute with the " //$NON-NLS-1$
+            + "'queryText' property instead (optionally with 'customQuery' / 'mainTable'), e.g. " //$NON-NLS-1$
+            + "{name:'queryText', value:'SELECT Ref FROM Catalog.Products'}."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of a platform type this version DOES know but which this tool builds only for a FORM
+     * attribute (SpreadsheetDocument, Chart, ValueList, StandardPeriod, ...). Worded per TARGET like
+     * {@link #collectionKindRefusal}, and worded as a statement about what this TOOL builds rather than
+     * about what the platform can store: the reachable set here is the whole platform type system, so a
+     * blanket "the database cannot hold this" would over-claim for its edges. What every target can say
+     * truthfully is where the type IS accepted.
+     * <p>
+     * The type is named as RECOGNIZED (it is) rather than as unknown - the "Unknown type kind" wording
+     * sent callers hunting for a spelling mistake that was not there (issue #369).
+     *
+     * @param kind the requested kind, as the caller spelled it
+     * @param typeTarget what the type description was being built for
+     * @return the actionable refusal
+     */
+    private static String formOnlyTypeRefusal(String kind, TypeTarget typeTarget)
+    {
+        if (typeTarget == TypeTarget.DCS_PARAMETER)
+        {
+            return "Type kind '" + kind + "' is a platform value this tool does not build for a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "data-composition parameter: a FORM attribute (fqn " //$NON-NLS-1$
+                + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts it. Give " //$NON-NLS-1$
+                + "the parameter a primitive or a reference type instead."; //$NON-NLS-1$
+        }
+        return "Type kind '" + kind + "' is a platform value this tool builds only for a FORM attribute " //$NON-NLS-1$ //$NON-NLS-2$
+            + "(fqn 'Type.Object.Form.FormName.Attribute.Name'), not for a stored metadata feature. Set " //$NON-NLS-1$
+            + "it on a form attribute; a stored feature takes String / Number / Boolean / Date / " //$NON-NLS-1$
+            + "ValueStorage / UUID or a reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
     }
 
     /**
@@ -489,9 +582,17 @@ public final class MetadataTypeBuilder
         return "Could not create the platform type. Tried: " + String.join(", ", candidates) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
-    /** Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any failure. */
+    /**
+     * Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any
+     * failure - including a {@code null} provider, which the unknown-kind probe reaches when a caller
+     * has none (the tests exercise the refusal branches without one).
+     */
     private static TypeItem tryCreateTypeItem(IEObjectProvider provider, String name)
     {
+        if (provider == null)
+        {
+            return null;
+        }
         try
         {
             EObject proxy = provider.createProxy(name);

@@ -31,6 +31,7 @@ import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
@@ -39,6 +40,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessorForm;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
@@ -858,6 +860,109 @@ public class ModifyMetadataToolTest
         assertNull("a type change with no extInfo prop must be allowed", //$NON-NLS-1$
             ModifyMetadataTool.formTypeExtInfoComboError(group,
                 Collections.singletonList(prop("type", "Pages")))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testComboRejectsAttributeValueTypeChangeWithExtInfoProp()
+    {
+        // The attribute half of the same hazard (issue #369 review). A form ATTRIBUTE has no `type`
+        // feature, so normalizeFormProperty rewrites its `type` to `valueType` BEFORE this guard reads
+        // the name - and a guard that only knew the enum spelling let the batch through. It is not
+        // theoretical: `type: SpreadsheetDocument` + `itemValueType` on a ValueList attribute applied
+        // the item type to the ValueListExtInfo, reported it as applied, and then dropped it when the
+        // re-pairing replaced the holder.
+        EPackage pkg = buildAttributeLikePackage();
+        EObject attribute = newAttributeWithExtInfo(pkg);
+
+        String err = ModifyMetadataTool.formTypeExtInfoComboError(attribute, Arrays.asList(
+            prop("type", "SpreadsheetDocument"), prop("itemValueType", "String"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNotNull("combining an attribute retype with an extInfo prop must be rejected", err); //$NON-NLS-1$
+        assertTrue("the error must point at making the type change separately", //$NON-NLS-1$
+            err.contains("separate call")); //$NON-NLS-1$
+
+        assertNotNull("the reverse order must be rejected identically", //$NON-NLS-1$
+            ModifyMetadataTool.formTypeExtInfoComboError(attribute, Arrays.asList(
+                prop("itemValueType", "String"), prop("type", "SpreadsheetDocument")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        // The already-normalized spelling must be caught too - a caller may send `valueType` itself.
+        assertNotNull("the valueType spelling must be caught as well", //$NON-NLS-1$
+            ModifyMetadataTool.formTypeExtInfoComboError(attribute, Arrays.asList(
+                prop("valueType", "SpreadsheetDocument"), prop("itemValueType", "String")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testComboAllowsAttributeValueTypeChangeAlone()
+    {
+        // Setting the value type on its own is the NORMAL path and must stay allowed - the whole
+        // point of the re-pairing is that a lone retype fixes its own ext-info.
+        EPackage pkg = buildAttributeLikePackage();
+        EObject attribute = newAttributeWithExtInfo(pkg);
+
+        assertNull("a lone attribute retype must be allowed", //$NON-NLS-1$
+            ModifyMetadataTool.formTypeExtInfoComboError(attribute,
+                Collections.singletonList(prop("type", "SpreadsheetDocument")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a retype batched with a DIRECT feature must be allowed", //$NON-NLS-1$
+            ModifyMetadataTool.formTypeExtInfoComboError(attribute, Arrays.asList(
+                prop("type", "SpreadsheetDocument"), prop("main", "true")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
+     * A FormAttribute-shaped package: NO {@code type} feature (so {@code normalizeFormProperty}
+     * rewrites {@code type} to {@code valueType}, exactly as the real form model forces), a
+     * {@code valueType}, and a ValueList-like extInfo carrying {@code itemValueType}.
+     */
+    private static EPackage buildAttributeLikePackage()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("attrlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("attrlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.test/attrlike/369"); //$NON-NLS-1$
+
+        // Both type features carry the REAL mcore TypeDescription EClass: the introspector classifies a
+        // TYPE_DESCRIPTION by its target's NAME, so an EObject-typed stand-in would be classified as
+        // "not assignable" and the extInfo routing this test is about would never happen.
+        EClass typeDescription = McorePackage.Literals.TYPE_DESCRIPTION;
+
+        EClass extInfo = f.createEClass();
+        extInfo.setName("ValueListExtInfo"); //$NON-NLS-1$
+        EReference itemValueType = f.createEReference();
+        itemValueType.setName("itemValueType"); //$NON-NLS-1$
+        itemValueType.setEType(typeDescription);
+        itemValueType.setContainment(true);
+        extInfo.getEStructuralFeatures().add(itemValueType);
+        pkg.getEClassifiers().add(extInfo);
+
+        EClass attribute = f.createEClass();
+        attribute.setName("FormAttribute"); //$NON-NLS-1$
+        EReference valueType = f.createEReference();
+        valueType.setName("valueType"); //$NON-NLS-1$
+        valueType.setEType(typeDescription);
+        valueType.setContainment(true);
+        EAttribute main = f.createEAttribute();
+        main.setName("main"); //$NON-NLS-1$
+        main.setEType(EcorePackage.Literals.EBOOLEAN);
+        EReference extInfoRef = f.createEReference();
+        extInfoRef.setName("extInfo"); //$NON-NLS-1$
+        extInfoRef.setEType(extInfo);
+        extInfoRef.setContainment(true);
+        attribute.getEStructuralFeatures().add(valueType);
+        attribute.getEStructuralFeatures().add(main);
+        attribute.getEStructuralFeatures().add(extInfoRef);
+        pkg.getEClassifiers().add(attribute);
+
+        return pkg;
+    }
+
+    /** A synthetic FormAttribute with its ValueList-like extInfo already attached. */
+    private static EObject newAttributeWithExtInfo(EPackage pkg)
+    {
+        EClass attributeClass = (EClass)pkg.getEClassifier("FormAttribute"); //$NON-NLS-1$
+        EClass extInfoClass = (EClass)pkg.getEClassifier("ValueListExtInfo"); //$NON-NLS-1$
+        EObject attribute = pkg.getEFactoryInstance().create(attributeClass);
+        attribute.eSet(attributeClass.getEStructuralFeature("extInfo"), //$NON-NLS-1$
+            pkg.getEFactoryInstance().create(extInfoClass));
+        return attribute;
     }
 
     @Test
@@ -1735,6 +1840,78 @@ public class ModifyMetadataToolTest
                 MetadataLanguageUtils.cp(0x0422, 0x0430, 0x0431, 0x043b, 0x0438, 0x0446, 0x0430, 0x0417,
                     0x043d, 0x0430, 0x0447, 0x0435, 0x043d, 0x0438, 0x0439), // TablicaZnachenij
                 "DocumentRef.Invoice"))); //$NON-NLS-1$
+    }
+
+    // ===== a contained AdjustableBoolean flag is prepared as a plain boolean (#382) ===============
+    //
+    // A form attribute's view / edit (and a form item's userVisible, a form command's use) is not a
+    // boolean attribute but a CONTAINED AdjustableBoolean whose nested `common` flag the wire boolean
+    // addresses. The generic containment-ref filter used to drop it, so the property was not
+    // assignable at all; it is now classified as its own kind and validated like a boolean. Driven
+    // through formRetypeVerdict - the one headless entry into the SAME preparation the write runs.
+
+    @Test
+    public void testANonBooleanAdjustableFlagValueIsRefused()
+    {
+        String verdict = neverAsking().formRetypeVerdict(null, null, attributeWithAnAdjustableFlag(),
+            Collections.singletonList(prop("view", "maybe")), report()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("a non-boolean value for an AdjustableBoolean flag must be refused", verdict); //$NON-NLS-1$
+        assertTrue("the refusal must name the bad value and the property: " + verdict, //$NON-NLS-1$
+            verdict.contains("'maybe' is not a valid boolean for 'view'")); //$NON-NLS-1$
+        assertTrue("...and say what IS valid: " + verdict, //$NON-NLS-1$
+            verdict.contains("Use true or false")); //$NON-NLS-1$
+        // The flag is a CONTAINMENT reference: were it still dropped by the generic containment
+        // filter the refusal would be the "not assignable" one - a different defect entirely.
+        assertFalse("the flag must be assignable, not refused as unknown: " + verdict, //$NON-NLS-1$
+            verdict.contains("is not assignable")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBothPolaritiesOfAnAdjustableFlagAreAccepted()
+    {
+        // modify_metadata must be able to turn the flag OFF as well as on, so neither polarity may be
+        // refused by the preparation.
+        for (String value : new String[] {"true", "false"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertNull("'" + value + "' must be accepted for an AdjustableBoolean flag", //$NON-NLS-1$ //$NON-NLS-2$
+                neverAsking().formRetypeVerdict(null, null, attributeWithAnAdjustableFlag(),
+                    Collections.singletonList(prop("view", value)), report())); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * A form-attribute-like member carrying a {@code view} flag: a SINGLE-VALUED containment reference
+     * to the REAL mdclass {@code AdjustableBoolean}, the very EClass the form metamodel's {@code view}
+     * / {@code edit} / {@code userVisible} / {@code use} references target. The introspector
+     * recognizes the flag BY THAT TYPE, so a synthetic look-alike would diverge from production
+     * exactly where the recognition happens (issue #382). The real EClass is only referred to, never
+     * added to the synthetic package - that would reparent it out of MdClassPackage for the whole JVM.
+     */
+    private static EObject attributeWithAnAdjustableFlag()
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formlike"); //$NON-NLS-1$
+        pkg.setNsPrefix("formlike"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/adjustableflag"); //$NON-NLS-1$
+
+        EClass attributeClass = factory.createEClass();
+        attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+        EAttribute attributeName = factory.createEAttribute();
+        attributeName.setName("name"); //$NON-NLS-1$
+        attributeName.setEType(EcorePackage.Literals.ESTRING);
+        attributeClass.getEStructuralFeatures().add(attributeName);
+        EReference view = factory.createEReference();
+        view.setName("view"); //$NON-NLS-1$
+        view.setEType(MdClassPackage.Literals.ADJUSTABLE_BOOLEAN);
+        view.setContainment(true);
+        attributeClass.getEStructuralFeatures().add(view);
+        pkg.getEClassifiers().add(attributeClass);
+
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(attributeName, "Flag"); //$NON-NLS-1$
+        return attribute;
     }
 
     /** {name:'type', value:{types:[{kind:'ValueTable'},{kind:'Ref', ref:'Catalog.Products'}]}}. */

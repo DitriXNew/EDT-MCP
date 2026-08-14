@@ -854,4 +854,539 @@ public class BslSyntaxCheckerTest
         assertFalse("an unclosed If after a broken (non-continued) string must still be caught", //$NON-NLS-1$
             result.isValid());
     }
+    // ==================== Single-line blocks (#397, #109) ====================
+
+    @Test
+    public void testSingleLineIfRussianReportedRepro()
+    {
+        // Verbatim from #397: one \u0415\u0441\u043B\u0438 ... \u0422\u043E\u0433\u0434\u0430 ... \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438; on a single line used to be
+        // counted as an unclosed If, which then mismatched \u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B and blocked the write.
+        List<String> lines = Arrays.asList(
+            "", //$NON-NLS-1$
+            "// \u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439", //$NON-NLS-1$
+            "//", //$NON-NLS-1$
+            "&\u041F\u043E\u0441\u043B\u0435(\"\u041F\u0435\u0440\u0435\u0434\u0417\u0430\u043F\u0438\u0441\u044C\u044E\")", //$NON-NLS-1$
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0420\u0430\u0441\u0448_\u041F\u0435\u0440\u0435\u0434\u0417\u0430\u043F\u0438\u0441\u044C\u044E(\u041E\u0442\u043A\u0430\u0437)", //$NON-NLS-1$
+            "\t\u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\t\u0417\u043D\u0430\u0447\u0435\u043D\u0438\u0435\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442\u0430 = \u041F\u0440\u0435\u0434\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u043D\u043E\u0435\u0417\u043D\u0430\u0447\u0435\u043D\u0438\u0435(\"\u041F\u0435\u0440\u0435\u0447\u0438\u0441\u043B\u0435\u043D\u0438\u0435.\u0412\u0438\u0434\u044B\u0417\u043D\u0430\u0447\u0435\u043D\u0438\u0439.\u041E\u0441\u043D\u043E\u0432\u043D\u043E\u0439\");", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a single-line \u0415\u0441\u043B\u0438 must close its own block: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testSingleLineIfEnglish()
+    {
+        List<String> lines = Arrays.asList(
+            "Procedure BeforeWrite(Cancel)", //$NON-NLS-1$
+            "    If Cancel Then Return; EndIf;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testSingleLineIfWithElseRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0430 \u0422\u043E\u0433\u0434\u0430 \u0431 = 1; \u0418\u043D\u0430\u0447\u0435 \u0431 = 2; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testSingleLineForEachLoopRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u041A\u043E\u043B\u043B\u0435\u043A\u0446\u0438\u044F)", //$NON-NLS-1$
+            "    \u0414\u043B\u044F \u041A\u0430\u0436\u0434\u043E\u0433\u043E \u042D\u043B\u0435\u043C\u0435\u043D\u0442 \u0418\u0437 \u041A\u043E\u043B\u043B\u0435\u043A\u0446\u0438\u044F \u0426\u0438\u043A\u043B \u041E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u0442\u044C(\u042D\u043B\u0435\u043C\u0435\u043D\u0442); \u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testSingleLineForLoopEnglish()
+    {
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    For i = 1 To 10 Do Total = Total + i; EndDo;", //$NON-NLS-1$
+            "EndProcedure" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testSingleLineWhileLoopRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u041F\u043E\u043A\u0430 \u0445 < 10 \u0426\u0438\u043A\u043B \u0445 = \u0445 + 1; \u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testSingleLineTryRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u041F\u043E\u043F\u044B\u0442\u043A\u0430 \u0421\u0434\u0435\u043B\u0430\u0442\u044C(); \u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u0417\u0430\u043F\u0438\u0441\u0430\u0442\u044C(); \u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testNestedSingleLineIfOnOneLine()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0430 \u0422\u043E\u0433\u0434\u0430 \u0415\u0441\u043B\u0438 \u0431 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testManySingleLineIfsDoNotAccumulate()
+    {
+        // #397 reported one error per single-line \u0415\u0441\u043B\u0438 plus a cascade of mismatches above
+        // each of them; five of them in one module must still leave the stack balanced.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u041A\u043E\u043B\u043B\u0435\u043A\u0446\u0438\u044F, \u041E\u0442\u043A\u0430\u0437)", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "    \u0414\u043B\u044F \u041A\u0430\u0436\u0434\u043E\u0433\u043E \u042D\u043B\u0435\u043C\u0435\u043D\u0442 \u0418\u0437 \u041A\u043E\u043B\u043B\u0435\u043A\u0446\u0438\u044F \u0426\u0438\u043A\u043B", //$NON-NLS-1$
+            "        \u0415\u0441\u043B\u0438 \u042D\u043B\u0435\u043C\u0435\u043D\u0442 = \u041D\u0435\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0435\u043D\u043E \u0422\u043E\u0433\u0434\u0430 \u041F\u0440\u043E\u0434\u043E\u043B\u0436\u0438\u0442\u044C; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "        \u0415\u0441\u043B\u0438 \u041D\u0415 \u042D\u043B\u0435\u043C\u0435\u043D\u0442.\u0413\u043E\u0434\u0435\u043D \u0422\u043E\u0433\u0434\u0430 \u041F\u0440\u043E\u0434\u043E\u043B\u0436\u0438\u0442\u044C; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "        \u041E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u0442\u044C(\u042D\u043B\u0435\u043C\u0435\u043D\u0442);", //$NON-NLS-1$
+            "    \u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430;", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u044B\u0437\u0432\u0430\u0442\u044C\u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \"\u043D\u0435\u0442\"; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0418\u0441\u0442\u0438\u043D\u0430 \u0422\u043E\u0433\u0434\u0430 \u0417\u0430\u043F\u0438\u0441\u0430\u0442\u044C(); \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("five single-line \u0415\u0441\u043B\u0438 must not accumulate: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testClosingAndOpeningKeywordOnSameLine()
+    {
+        // The other direction of the same defect: matching stopped at the first closing
+        // keyword, so an opener sharing the line with it was never seen.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0430 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = 1;", //$NON-NLS-1$
+            "    \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438; \u0415\u0441\u043B\u0438 \u0431 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = 2;", //$NON-NLS-1$
+            "    \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testDialectsMayBeMixedOnOneLine()
+    {
+        // Neither dialect is the default: every keyword is registered in both spellings,
+        // so an English closer balances a Russian opener and vice versa.
+        List<String> lines = Arrays.asList(
+            "Procedure Test()", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 Cancel Then Return; EndIf;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testCaseInsensitiveRussian()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0420\u041E\u0426\u0415\u0414\u0423\u0420\u0410 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u0415\u0421\u041B\u0418 \u0445 \u0422\u041E\u0413\u0414\u0410 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u041E\u041D\u0415\u0426\u0415\u0421\u041B\u0418;", //$NON-NLS-1$
+            "\u041A\u041E\u041D\u0415\u0426\u041F\u0420\u041E\u0426\u0415\u0414\u0423\u0420\u042B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testSingleLineIfDoesNotHideARealImbalance()
+    {
+        // The fix must not turn the checker into a no-op: a genuinely unclosed \u0415\u0441\u043B\u0438 in the
+        // same module as valid single-line ones is still an error.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u041E\u0442\u043A\u0430\u0437)", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0418\u0441\u0442\u0438\u043D\u0430 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = 1;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("an unclosed \u0415\u0441\u043B\u0438 next to single-line ones must still be caught", //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testMissingEndIfOnASingleLineBlockIsStillCaught()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u041E\u0442\u043A\u0430\u0437)", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse(result.isValid());
+    }
+
+    // ==================== Keyword-looking text that opens no block ====================
+
+    @Test
+    public void testKeywordInsideIdentifierIsNotABlock()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u041C\u043E\u0439\u0415\u0441\u043B\u0438 = 1;", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438\u041D\u0443\u0436\u043D\u043E = 2;", //$NON-NLS-1$
+            "    _\u0415\u0441\u043B\u0438_ = 3;", //$NON-NLS-1$
+            "    IfNeeded = TryLoad();", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a keyword inside a longer identifier must not open a block: " //$NON-NLS-1$
+            + result.getErrors(), result.isValid());
+    }
+
+    @Test
+    public void testMemberAccessNamedLikeAKeywordIsNotABlock()
+    {
+        // The grammar's ExtName rule allows every one of these keywords as a member name.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430)", //$NON-NLS-1$
+            "    \u0445 = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430.\u0424\u0443\u043D\u043A\u0446\u0438\u044F;", //$NON-NLS-1$
+            "    \u0443 = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430.\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "    z = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430.\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a member name must not touch the block stack: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testSpacedMemberAccessNamedLikeAKeywordIsNotABlock()
+    {
+        // Whitespace is legal after the member-access dot, so matching only the glued
+        // form would read \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430. \u0424\u0443\u043D\u043A\u0446\u0438\u044F as a function declaration.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430)", //$NON-NLS-1$
+            "    \u0445 = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430. \u0424\u0443\u043D\u043A\u0446\u0438\u044F;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a spaced member name must not open a block: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testMemberAccessSplitAcrossLinesIsNotABlock()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430)", //$NON-NLS-1$
+            "    \u0445 = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430.", //$NON-NLS-1$
+            "        \u0424\u0443\u043D\u043A\u0446\u0438\u044F;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a member name on the line after its dot must not open a block: " //$NON-NLS-1$
+            + result.getErrors(), result.isValid());
+    }
+
+    @Test
+    public void testMemberNameCannotCloseARealBlock()
+    {
+        // The dangerous direction: if \u041E\u0431\u044A\u0435\u043A\u0442. \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438 were taken for a block closer it
+        // would pop the real \u0415\u0441\u043B\u0438 and hide the fact that it is never closed.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u041E\u0431\u044A\u0435\u043A\u0442)", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = \u041E\u0431\u044A\u0435\u043A\u0442. \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("a member name must not be able to close a real block", result.isValid()); //$NON-NLS-1$
+    }
+
+    // ==================== Preprocessor directives ====================
+
+    @Test
+    public void testPreprocessorConditionalIsNotCounted()
+    {
+        // #\u0415\u0441\u043B\u0438/#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438 select code at compile time and open no runtime block. The BSL
+        // lexer spells the prefix '#' (' '|'\t')*, so the spacing below is legal and the
+        // directive must be recognized as such however it is spaced.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "# \u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "    \u0445 = 1;", //$NON-NLS-1$
+            "#\t\u0418\u043D\u0430\u0447\u0435", //$NON-NLS-1$
+            "    \u0445 = 2;", //$NON-NLS-1$
+            "#  \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a spaced preprocessor directive must not enter the block stack: " //$NON-NLS-1$
+            + result.getErrors(), result.isValid());
+    }
+
+    @Test
+    public void testPreprocessorEndIfCannotCloseARealIf()
+    {
+        // The dangerous direction: a directive must not be able to pop a runtime block,
+        // otherwise the unclosed \u0415\u0441\u043B\u0438 below is silently reported as balanced.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0423\u0441\u043B\u043E\u0432\u0438\u0435)", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = 1;", //$NON-NLS-1$
+            "# \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("a preprocessor directive must not close a runtime If", result.isValid()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPreprocessorConditionalWrappingAWholeProcedure()
+    {
+        List<String> lines = Arrays.asList(
+            "#If Server Then", //$NON-NLS-1$
+            "Procedure ServerOnly()", //$NON-NLS-1$
+            "    x = 1;", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "#EndIf" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    public void testRegionAndExtensionDirectivesAreNotCounted()
+    {
+        // #\u041E\u0431\u043B\u0430\u0441\u0442\u044C/#Region and the extension directives #\u0412\u0441\u0442\u0430\u0432\u043A\u0430/#\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u0435 are skipped by
+        // the same rule; the spaced #\u0415\u0441\u043B\u0438 inside makes the skipping observable.
+        List<String> lines = Arrays.asList(
+            "#\u041E\u0431\u043B\u0430\u0441\u0442\u044C \u041F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u043D\u044B\u0439\u0418\u043D\u0442\u0435\u0440\u0444\u0435\u0439\u0441", //$NON-NLS-1$
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0420\u0430\u0441\u0448_\u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "#\u0412\u0441\u0442\u0430\u0432\u043A\u0430", //$NON-NLS-1$
+            "# \u0415\u0441\u043B\u0438 \u041A\u043B\u0438\u0435\u043D\u0442 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "# \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "#\u041A\u043E\u043D\u0435\u0446\u0412\u0441\u0442\u0430\u0432\u043A\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B", //$NON-NLS-1$
+            "#\u041A\u043E\u043D\u0435\u0446\u041E\u0431\u043B\u0430\u0441\u0442\u0438" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("extension and region directives must not enter the block stack: " //$NON-NLS-1$
+            + result.getErrors(), result.isValid());
+    }
+
+    // ==================== Masking still holds (#286) ====================
+
+    @Test
+    public void testLoneOpenerInsideAStringLiteralIsStillMasked()
+    {
+        // Only an OPENER is embedded, so the assertion fails if masking stops working -
+        // a balanced pair inside the string would have proved nothing.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u0422\u0435\u043A\u0441\u0442 = \"\u0415\u0441\u043B\u0438 \u041E\u0442\u043A\u0430\u0437 \u0422\u043E\u0433\u0434\u0430\";", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a keyword inside a string literal must stay masked: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testLoneCloserInsideACommentIsStillMasked()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442()", //$NON-NLS-1$
+            "    \u0445 = 1; // \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a keyword inside a comment must stay masked: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+    // ==================== Dangling member-access dot, line to line ====================
+
+    @Test
+    public void testPreprocessorDirectiveClearsADanglingDot()
+    {
+        // A dot left dangling inside one branch must not reach across the branch boundary and
+        // silence a real closing keyword after it - that would hide the unexpected \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438
+        // present in every expansion but the server one.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u041E\u0431\u044A\u0435\u043A\u0442)", //$NON-NLS-1$
+            "#\u0415\u0441\u043B\u0438 \u0421\u0435\u0440\u0432\u0435\u0440 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "    \u0445 = \u041E\u0431\u044A\u0435\u043A\u0442.", //$NON-NLS-1$
+            "#\u0418\u043D\u0430\u0447\u0435", //$NON-NLS-1$
+            "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("a dangling dot must not survive a preprocessor directive", result.isValid()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDanglingDotSurvivesABlankOrCommentLine()
+    {
+        // Blank and comment-only lines are not code, so they must NOT interrupt a member
+        // access split across lines.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430)", //$NON-NLS-1$
+            "    \u0445 = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430.", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "        // \u0432\u044B\u0431\u0438\u0440\u0430\u0435\u043C \u043F\u043E\u043B\u0435", //$NON-NLS-1$
+            "        \u0424\u0443\u043D\u043A\u0446\u0438\u044F;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("a blank or comment line must not interrupt a split member access: " //$NON-NLS-1$
+            + result.getErrors(), result.isValid());
+    }
+
+    @Test
+    public void testDanglingDotIsClearedAfterTheMemberLine()
+    {
+        // Once the member name is consumed the dot is spent: the keywords that follow are
+        // real block keywords again. A dot that stuck would swallow all three of them.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430, \u0423\u0441\u043B\u043E\u0432\u0438\u0435)", //$NON-NLS-1$
+            "    \u0445 = \u0421\u0442\u0440\u0443\u043A\u0442\u0443\u0440\u0430.", //$NON-NLS-1$
+            "        \u0424\u0443\u043D\u043A\u0446\u0438\u044F;", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0412\u043E\u0437\u0432\u0440\u0430\u0442;", //$NON-NLS-1$
+            "    \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("the dot must be spent by the member name it precedes: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testDotEndingACommentDoesNotDangle()
+    {
+        // The dot here is comment text, masked away before the line is inspected. If it were
+        // taken for a member-access dot, the unclosed \u0415\u0441\u043B\u0438 below would be silently accepted.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0423\u0441\u043B\u043E\u0432\u0438\u0435)", //$NON-NLS-1$
+            "    \u0445 = 1; // \u0441\u0442\u0440\u043E\u043A\u0430 \u0437\u0430\u043A\u0430\u043D\u0447\u0438\u0432\u0430\u0435\u0442\u0441\u044F \u0442\u043E\u0447\u043A\u043E\u0439.", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("a dot in a comment must not dangle into the next line", result.isValid()); //$NON-NLS-1$
+    }
+    // ============ Preprocessor branches carry whole statements (grammar-backed) ============
+
+    @Test
+    public void testPreprocessorBranchesEachCarryingAWholeBlockAreAccepted()
+    {
+        // The grammar admits only whole statements inside a directive, so this - each branch
+        // holding a complete block of its own - is the shape real code takes. Scanning the
+        // branches as one stream must accept it.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0423\u0441\u043B\u043E\u0432\u0438\u0435, \u041A\u043E\u043B\u043B\u0435\u043A\u0446\u0438\u044F)", //$NON-NLS-1$
+            "#\u0415\u0441\u043B\u0438 \u041A\u043B\u0438\u0435\u043D\u0442 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = 1;", //$NON-NLS-1$
+            "    \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "#\u0418\u043D\u0430\u0447\u0435", //$NON-NLS-1$
+            "    \u0414\u043B\u044F \u041A\u0430\u0436\u0434\u043E\u0433\u043E \u042D\u043B\u0435\u043C\u0435\u043D\u0442 \u0418\u0437 \u041A\u043E\u043B\u043B\u0435\u043A\u0446\u0438\u044F \u0426\u0438\u043A\u043B", //$NON-NLS-1$
+            "        \u041E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u0442\u044C(\u042D\u043B\u0435\u043C\u0435\u043D\u0442);", //$NON-NLS-1$
+            "    \u041A\u043E\u043D\u0435\u0446\u0426\u0438\u043A\u043B\u0430;", //$NON-NLS-1$
+            "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("branches each holding a whole block must be accepted: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testPreprocessorBranchesAtModuleLevelCarryWholeMethods()
+    {
+        // The module-level form takes whole Methods, so a branch never splits a procedure.
+        List<String> lines = Arrays.asList(
+            "#If Server Then", //$NON-NLS-1$
+            "Procedure OnServer() Export", //$NON-NLS-1$
+            "    x = 1;", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "#Else", //$NON-NLS-1$
+            "Function OnClient() Export", //$NON-NLS-1$
+            "    Return 1;", //$NON-NLS-1$
+            "EndFunction", //$NON-NLS-1$
+            "#EndIf" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("branches each holding a whole method must be accepted: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testNestedPreprocessorConditionals()
+    {
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0423\u0441\u043B\u043E\u0432\u0438\u0435)", //$NON-NLS-1$
+            "#\u0415\u0441\u043B\u0438 \u041A\u043B\u0438\u0435\u043D\u0442 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "#\t\u0415\u0441\u043B\u0438 \u0412\u0435\u0431\u041A\u043B\u0438\u0435\u043D\u0442 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430 \u0412\u043E\u0437\u0432\u0440\u0430\u0442; \u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438;", //$NON-NLS-1$
+            "#\t\u0418\u043D\u0430\u0447\u0435", //$NON-NLS-1$
+            "        \u041F\u043E\u043F\u044B\u0442\u043A\u0430 \u0421\u0434\u0435\u043B\u0430\u0442\u044C(); \u0418\u0441\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u0417\u0430\u043F\u0438\u0441\u0430\u0442\u044C(); \u041A\u043E\u043D\u0435\u0446\u041F\u043E\u043F\u044B\u0442\u043A\u0438;", //$NON-NLS-1$
+            "#\t\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertTrue("nested conditionals must not enter the block stack: " + result.getErrors(), //$NON-NLS-1$
+            result.isValid());
+    }
+
+    @Test
+    public void testImbalanceInsideASingleBranchIsStillCaught()
+    {
+        // Skipping the directives must not amnesty the code they wrap: the \u0415\u0441\u043B\u0438 opened in
+        // this branch is closed by nobody, in any variant.
+        List<String> lines = Arrays.asList(
+            "\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430 \u0422\u0435\u0441\u0442(\u0423\u0441\u043B\u043E\u0432\u0438\u0435)", //$NON-NLS-1$
+            "#\u0415\u0441\u043B\u0438 \u041A\u043B\u0438\u0435\u043D\u0442 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "    \u0415\u0441\u043B\u0438 \u0423\u0441\u043B\u043E\u0432\u0438\u0435 \u0422\u043E\u0433\u0434\u0430", //$NON-NLS-1$
+            "        \u0445 = 1;", //$NON-NLS-1$
+            "#\u041A\u043E\u043D\u0435\u0446\u0415\u0441\u043B\u0438", //$NON-NLS-1$
+            "\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B" //$NON-NLS-1$
+        );
+        CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("an unclosed block inside a branch must still be reported", result.isValid()); //$NON-NLS-1$
+    }
 }

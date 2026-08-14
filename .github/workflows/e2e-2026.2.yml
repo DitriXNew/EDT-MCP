@@ -15,6 +15,18 @@ permissions:
   checks: write
   pull-requests: write
 
+# Supersede, do not pile up. Sharding made one push cost FOUR runners instead of one, so a branch
+# pushed a few times in an hour can have a dozen EDT instances competing for the pool at once -
+# they then slow each ANOTHER down (EDT indexing and the derived-data drain are the first things
+# to suffer), which is both wasted minutes and a genuine source of phantom flakiness. Only the
+# newest commit's answer is worth anything on a PR, so cancel the older ones.
+#
+# Cancellation is deliberately limited to pull requests: a master push must always be allowed to
+# finish, because its result is the record for that commit and nothing supersedes it.
+concurrency:
+  group: e2e-2026.2-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   e2e:
     uses: ./.github/workflows/e2e-tests.yml

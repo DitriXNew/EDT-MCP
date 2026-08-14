@@ -6,7 +6,7 @@ it updates references in BSL code, forms and other metadata. ResponseType is
 MARKDOWN, so the tool body is in r.text (NOT r.structured).
 
 TWO-PHASE CONTRACT (RenameMetadataObjectTool + MetadataRenameService):
-  * confirm absent/false  -> PREVIEW only. Emits YAML "action: preview", a
+  * confirm absent/false  -> PREVIEW only. Emits YAML "action: preview", a contentHash, a
     "## Change Points" table and "> To execute, call with `confirm=true`."
     The model is NOT mutated.
   * confirm=true          -> EXECUTE. Performs every enabled change point. Emits
@@ -30,6 +30,11 @@ HOW THE EFFECT IS VERIFIED (two ways — the model AND the disk):
   from disk and discards the unsaved rename) AFTER each write-metadata test, so
   every test starts from the committed baseline. This test does NOT manage reset.
 
+BOUNDED WAIT (issue #365): the cascade runs on EDT's UI thread and the call waits for
+it with a deadline, exposed as `timeout` (seconds, default 420, clamped 60..3600). On
+expiry the call returns an error naming the stage the rename reached instead of hanging
+the wire. Only the wire contract is testable here — see the section near the bottom.
+
 Whole-call error matrix (server sets isError via ToolResult.error):
   - missing projectName / objectFqn / newName -> "<name> is required" (+ usage)
   - non-existent project                      -> "Project not found: <name>"
@@ -46,6 +51,9 @@ count-asserted objects): CommonModule.CascadeEn (English Name) and CommonModule.
 (Russian Name), both called from CommonModule.CascadeUser — see the cascade section.
 """
 
+import time
+import xml.etree.ElementTree as ET
+
 from harness import (
     call,
     assert_ok,
@@ -55,6 +63,11 @@ from harness import (
     assert_not_contains,
     assert_no_diff,
     poll_diff_contains,
+    poll_disk_contains,
+    poll_disk_lacks,
+    read_disk,
+    settle_or_fail,
+    split_markdown_row,
     e2e_test,
     PROJECT,
 )
@@ -63,6 +76,35 @@ from harness import (
 # ──────────────────────────────────────────────────────────────────────────────
 # Read-back helpers (model truth over the wire — the primary verification)
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _settle_before_rename():
+    """Drain EDT's derived-data queue BEFORE a test starts a real rename.
+
+    This test file is the single biggest source of red e2e runs: the common-module rename failed
+    in 4 of the last 12 master runs, always the same way ("Renaming ... did not finish within 420
+    seconds"), while passing in ~6s on the runs in between. That bimodality is the whole diagnosis
+    - it is not the rename that is slow, it is the DERIVED-DATA PIPELINE it has to drain first.
+    The orchestrator git-reverts the fixture before every test, EDT notices those files and starts
+    recomputing, and a rename fired into that recompute ends up waiting for it from inside its own
+    budget. So the deeper the PRECEDING test's diff, the likelier THIS one times out - on a cold
+    shared runner most of all.
+
+    Draining the queue before starting the clock costs seconds when there is nothing to drain and
+    removes the coin flip when there is. It is NOT a timeout bump: 420s is the tool's own budget
+    for a rename, and these failures are not renames that needed longer, they are renames that
+    started too early. (resync_to_disk's happy path had the same flake and stopped failing once it
+    got the same precondition.)
+
+    Only for tests that actually EXECUTE a rename. A refused one - a bad FQN, a missing argument,
+    a designer-owned child - never reaches the engine, so it has no pipeline to wait for and
+    settling first would just spend time to prove nothing.
+
+    Goes through settle_or_fail, which honours the wait's VERDICT. Calling the bare
+    wait_for_project_ready and dropping its answer would start the rename into the very state this
+    precondition exists to avoid - looking fixed while behaving exactly as before.
+    """
+    settle_or_fail("a rename (it waits for the derived-data drain inside its own 420s budget)")
+
 
 def _commonmodule_names(name_filter=None):
     """Return the get_metadata_objects MARKDOWN body for the commonModules family.
@@ -91,6 +133,7 @@ def _catalog_names():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_common_module_and_readback_shows_new_name():
+    _settle_before_rename()  # the flake this file is known for — see the helper
     # Rename CommonModule.Calc -> Compute. The new name deliberately shares NO
     # substring with "Calc", so an "old name absent" check on the row marker "| Calc "
     # is unambiguous. A broken/no-op rename would leave "Calc" present and "Compute"
@@ -127,6 +170,7 @@ def test_confirm_renames_common_module_and_readback_shows_new_name():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_catalog_and_readback_shows_new_name():
+    _settle_before_rename()  # executes a real rename - see the helper
     # Rename Catalog.Catalog -> Goods. New name shares no substring with "Catalog",
     # so the row-marker absence check is clean.
     r = call("rename_metadata_object", {
@@ -152,6 +196,7 @@ def test_confirm_renames_catalog_and_readback_shows_new_name():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_confirm_renames_catalog_attribute_and_details_readback_shows_new_name():
+    _settle_before_rename()  # executes a real rename - see the helper
     # Nested rename: Catalog.Catalog.Attribute.Attribute -> Title. Verified through a
     # DIFFERENT read tool (get_metadata_details full=true), whose ### Attributes table
     # lists attribute Names. The new attribute name must appear and the old one must
@@ -199,6 +244,7 @@ def test_confirm_renames_catalog_attribute_and_details_readback_shows_new_name()
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_cascade_rewrites_english_named_module_reference_in_bsl():
+    _settle_before_rename()  # executes a real rename - see the helper
     # New name "Reckoner" shares no substring with "CascadeEn", so the search
     # assertions are unambiguous. A rename that left the BSL reference untouched would
     # keep "CascadeEn.Marker" in the code and FAIL every cascade assertion below.
@@ -239,6 +285,7 @@ def test_cascade_rewrites_english_named_module_reference_in_bsl():
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
 def test_cascade_rewrites_russian_named_module_reference_in_bsl():
+    _settle_before_rename()  # executes a real rename - see the helper
     # Bilingual cascade: the renamed object has a RUSSIAN (Cyrillic) Name. A cascade
     # that mishandled the Cyrillic identifier — the exact failure mode this case exists
     # to catch — would leave the old reference and FAIL. "Вычислитель" is not a
@@ -277,6 +324,192 @@ def test_cascade_rewrites_russian_named_module_reference_in_bsl():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# The two-phase INDEX HANDLE (disableIndices) — issue #388
+#
+# A preview "#N" is a CROSS-CALL HANDLE: preview numbers the change points in one
+# walk, and the confirm call re-derives the numbering in a SECOND, independent walk
+# to resolve disableIndices. If the two walks disagree, "skip #N" silently skips a
+# DIFFERENT change point than the caller was shown — a cascade over the whole
+# configuration, applied to the wrong place.
+#
+# The pair below is what makes that testable over the wire: the SAME call shape with
+# a DIFFERENT index must produce the OPPOSITE outcome. The reference is skipped when
+# its own previewed index is passed, and rewritten when the object-rename index is
+# passed instead. Neither can pass for the wrong reason — a server that ignored
+# disableIndices, applied it to everything, or shifted the numbering by one fails one
+# half of the pair.
+#
+# SCOPE, stated honestly: these are a CONTRACT guard, not a reproduction of #388. The
+# preview branch that took the second index (the fallback row) is not reachable on this
+# fixture — measured, 18 rename previews over both projects, 31 change points, zero
+# fallback rows — so this pair is GREEN on the pre-fix build too. What proves the fix is
+# the unit ratchet, MetadataRenameNumberingParityTest, which is mutation-checked.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _change_points(preview_text):
+    """Parse the preview's Change Points table into one dict per row.
+
+    Columns: # | Type | Description | Line | Col | Default | Skippable | Project | FQN.
+    Rows are identified by a numeric first cell, so the header and separator lines are
+    skipped. Cells go through the harness' split_markdown_row — a description may carry
+    an escaped '\\|', and a naive split on every pipe would shift every later column.
+    """
+    rows = []
+    for line in preview_text.splitlines():
+        cells = split_markdown_row(line)
+        if len(cells) < 9 or not cells[0].isdigit():
+            continue
+        rows.append({
+            "index": int(cells[0]), "type": cells[1], "description": cells[2],
+            "line": cells[3], "skippable": cells[6], "project": cells[7], "fqn": cells[8],
+        })
+    return rows
+
+
+def _frontmatter_value(markdown, key):
+    """Return one scalar from the preview YAML front matter."""
+    prefix = key + ": "
+    for line in markdown.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    raise AssertionError("preview front matter has no %s:\n%s" % (key, markdown))
+
+
+def _cascade_preview_and_reference_index():
+    """Return preview rows, the BSL-ref index, and their optimistic-lock token.
+
+    The fixture gives this rename exactly one SKIPPABLE change point — the reference
+    CascadeUser makes to CascadeEn — plus the (non-skippable) object rename itself.
+    """
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        # confirm omitted -> preview
+    })
+    assert_ok(r, "preview rename CommonModule.CascadeEn -> Reckoner")
+    rows = _change_points(r.text)
+    skippable = [row for row in rows if row["skippable"] == "yes" and row["type"] == "bslRef"]
+    if len(skippable) != 1:
+        raise AssertionError(
+            "fixture precondition: the CascadeEn rename must preview exactly one skippable "
+            "bslRef change point, got %d (rows=%r)" % (len(skippable), rows))
+    content_hash = _frontmatter_value(r.text, "contentHash")
+    return rows, skippable[0]["index"], content_hash
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_disableindices_skips_the_change_point_shown_under_that_index():
+    _settle_before_rename()  # executes a real rename - see the helper
+    base = call("search_in_code", {"projectName": PROJECT,
+                                   "query": "CascadeEn.Marker", "outputMode": "files"})
+    assert_ok(base, "baseline search for CascadeEn.Marker")
+    assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
+                    "fixture precondition: CascadeUser references CascadeEn.Marker before the rename")
+
+    _rows, reference_index, content_hash = _cascade_preview_and_reference_index()
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": str(reference_index),
+        "expectedHash": content_hash,
+    })
+    assert_ok(r, "execute rename with disableIndices=%d" % reference_index)
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "1 change point(s) were skipped",
+                    "the executed report must account for the skipped change point")
+
+    # The object itself is renamed (that change point was NOT disabled)...
+    assert_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
+                    "the object rename change point was not disabled, so it must have applied")
+    # ...but the reference the caller skipped under #N is left ALONE. This is the
+    # assertion the numbering has to earn: if the confirm-side walk numbered the leaves
+    # differently, index #N would have landed on another change point and this reference
+    # would have been rewritten to Reckoner.Marker().
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser source after the partially-skipped rename")
+    assert_contains(src.text, "CascadeEn.Marker()",
+                    "the change point shown under #%d is the BSL reference, so skipping it must "
+                    "leave CascadeUser still calling CascadeEn.Marker()" % reference_index)
+    assert_not_contains(src.text, "Reckoner.Marker()",
+                        "the skipped reference must NOT have been rewritten")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_disableindices_for_another_index_leaves_the_bsl_reference_applied():
+    # The discrimination half of the pair. Same call, same fixture, but the index passed
+    # belongs to a DIFFERENT change point — the object rename itself, which the table marks
+    # Skippable=no — so the cascade must land in FULL, exactly as an undisabled rename does.
+    # Asserting the complete OPPOSITE state (old reference gone, new one present, object
+    # renamed) is what makes this a control: a weaker "the new reference exists" check would
+    # also pass on a run that duplicated the edit or skipped the object rename.
+    _settle_before_rename()  # executes a real rename - see the helper
+    rows, reference_index, content_hash = _cascade_preview_and_reference_index()
+    required = [row["index"] for row in rows
+                if row["type"] == "rename" and row["skippable"] == "no"]
+    if len(required) != 1 or required[0] == reference_index:
+        raise AssertionError(
+            "fixture precondition: expected exactly one non-skippable rename row distinct "
+            "from the reference row #%d, got %r" % (reference_index, rows))
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": str(required[0]),
+        "expectedHash": content_hash,
+    })
+    assert_ok(r, "execute rename with disableIndices=%d" % required[0])
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser source after disabling a different change point")
+    assert_contains(src.text, "Reckoner.Marker()",
+                    "disabling #%d must NOT have skipped the BSL reference — it is a different "
+                    "change point, so the reference must be rewritten" % required[0])
+    assert_not_contains(src.text, "CascadeEn",
+                        "the reference was not the skipped change point, so no trace of the old "
+                        "name may remain in CascadeUser")
+    # The object rename is NOT skippable, so it must have applied regardless of the request.
+    assert_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
+                    "the object must still be renamed")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_stale_expected_hash_refuses_before_anything_is_renamed():
+    _settle_before_rename()
+    _rows, reference_index, content_hash = _cascade_preview_and_reference_index()
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": str(reference_index),
+        "expectedHash": "stale-" + content_hash,
+    })
+
+    err = assert_error(r, "execute rename with a stale expectedHash")
+    assert_contains(err, "preview is stale",
+                    "a mismatching token must name the stale preview")
+    assert_contains(err, "Nothing was renamed",
+                    "the refusal must state that the cascade did not start")
+    assert_contains(err, "indices may now mean different change points",
+                    "the refusal must explain why re-previewing is required")
+    assert_contains(_commonmodule_names(name_filter="CascadeEn"), "| CascadeEn ",
+                    "the old object must remain after the stale-token refusal")
+    assert_not_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
+                        "the new object must not appear after the stale-token refusal")
+    assert_no_diff("a stale expectedHash must refuse before changing the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Happy path — PREVIEW (no confirm): lists change points AND does NOT mutate
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -294,6 +527,7 @@ def test_preview_lists_change_points_and_does_not_mutate_module():
     })
     assert_ok(r, "preview rename CommonModule.Calc")
     assert_contains(r.text, "action: preview", "preview must emit YAML action: preview")
+    assert_contains(r.text, "contentHash:", "preview must emit the index-lock token")
     assert_contains(r.text, "Refactoring Preview", "preview must emit the preview header")
     assert_contains(r.text, "Change Points", "preview must render the change-points table")
     assert_contains(r.text, "confirm=true", "preview must instruct how to execute (confirm=true)")
@@ -322,6 +556,187 @@ def test_preview_for_catalog_does_not_mutate_catalog():
     after = _catalog_names()
     assert_contains(after, "| Catalog ", "preview must NOT rename: 'Catalog' must still be present")
     assert_not_contains(after, "Goods", "preview must NOT create the target name 'Goods'")
+    assert_no_diff("a preview (confirm=false) must not change the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# What disableIndices ACTUALLY did (issue #394)
+#
+# The executed report used to print the SIZE OF THE REQUEST as `disabledCount`, so
+# "I asked to skip 1" and "1 was skipped" were the same sentence — and the tool said
+# it just as loudly when nothing had been skipped at all. It matters because the caller
+# is an agent deciding whether a change was left behind on purpose.
+#
+# The report now states the REAL number, and every accepted index that produced no skip comes
+# back: one that matched nothing under `unknownIndices`, one naming a point the refactoring
+# requires under `notSkippableIndices`, or one this tool cannot switch off under
+# `unsupportedIndices`. Entries that can never be indices are refused before execution.
+#
+# CommonModule.CascadeEn is the target because its change set is tiny and fully known:
+# exactly two points, `#0` the bslRef in CascadeUser (Skippable: yes) and `#1` the
+# rename itself (Skippable: no).
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_unknown_disable_index_is_not_counted_as_a_skip():
+    _settle_before_rename()  # executes a real rename - see the helper
+    # #99 does not exist (the target has 2 change points). Before #394 this printed
+    # "disabledCount: 1" and "1 change point(s) were skipped as requested" while the
+    # cascade applied in full — the report contradicted the disk.
+    _rows, _reference_index, content_hash = _cascade_preview_and_reference_index()
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": "99",
+        "expectedHash": content_hash,
+    })
+    assert_ok(r, "execute rename with an out-of-range disableIndices")
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "disabledCount: 0",
+                    "nothing was skipped, so disabledCount must be 0 — not the size of the request")
+    assert_not_contains(r.text, "were skipped as requested",
+                        "the report must not claim a skip when no change point was switched off")
+    assert_contains(r.text, "unknownIndices: [99]",
+                    "an index that matched no change point must be reported, not swallowed")
+
+    # The report's claim is checked against the DISK: the cascade really did apply.
+    src = call("read_module_source", {"projectName": PROJECT,
+                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
+    assert_ok(src, "read CascadeUser after a rename with an unknown disableIndices")
+    assert_contains(src.text, "Reckoner.Marker()",
+                    "the change point was NOT skipped, so the caller must have been rewritten")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_required_disable_index_is_reported_as_applied_not_skipped():
+    # The second way a requested index produces no skip (issue #393): it names a change
+    # point the refactoring deems mandatory. The preview prints `Skippable: no` for it and
+    # the guide promises "required ones are always applied" — so the correct outcome is that
+    # nothing is skipped, and the report has to SAY so rather than echo the request.
+    #
+    # SCOPE, stated so this test is not mistaken for more than it is: on this fixture the only
+    # `Skippable: no` row is the core rename itself, which arrives as a PLAIN (non-native)
+    # refactoring item. So what this pins is the ACCOUNTING for a required index — the
+    # native-item guard from #393 has no live reproduction here (every native item on
+    # TestConfiguration reports isOptional()==true) and is constrained headlessly instead, by
+    # MetadataRenameDisableIndicesTest.testRequiredNativeItemKeepsItsLeavesEnabled.
+    _settle_before_rename()  # executes a real rename - see the helper
+    # Establish from the PREVIEW which index is the required one rather than hard-coding it:
+    # the assertion is about the contract, and reading the number from the same table the
+    # caller reads is what makes this a test of that contract.
+    preview = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": False,
+    })
+    assert_ok(preview, "preview rename CommonModule.CascadeEn")
+    # | # | Type | Description | Line | Col | Default | Skippable | Project | FQN |
+    required = []
+    for line in preview.text.splitlines():
+        cells = split_markdown_row(line)
+        if len(cells) >= 7 and cells[0].isdigit() and cells[6] == "no":
+            required.append(cells[0])
+    if not required:
+        raise AssertionError(
+            "fixture precondition: the preview of CommonModule.CascadeEn must contain at least one "
+            "`Skippable: no` change point (the rename leaf itself); got:\n" + preview.text)
+
+    index = required[0]
+    content_hash = _frontmatter_value(preview.text, "contentHash")
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": index,
+        "expectedHash": content_hash,
+    })
+    assert_ok(r, "execute rename asking to skip a REQUIRED change point")
+    assert_contains(r.text, "action: executed", "the rename must still execute")
+    assert_contains(r.text, "disabledCount: 0",
+                    "a required change point cannot be skipped, so nothing was disabled")
+    assert_not_contains(r.text, "were skipped as requested",
+                        "the report must not claim a skip that the contract forbids")
+    assert_contains(r.text, "notSkippableIndices: [%s]" % index,
+                    "the requested-but-required index must be named in the report")
+    assert_contains(r.text, "could NOT be skipped and were left in the rename",
+                    "the report must say plainly that the change point stayed in the rename")
+    assert_contains(r.text, "errors: 0",
+                    "the rename itself must have succeeded, or the claim above is about nothing")
+
+    # The report's claim checked against the model: the required point really did go through.
+    after = _commonmodule_names(name_filter="Reckoner")
+    assert_contains(after, "| Reckoner ",
+                    "the required rename point was not skipped, so the new name must exist")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_unparsable_disable_index_token_is_refused_before_rename():
+    # A non-numeric entry can never address a preview row, so #401 refuses it before the settle,
+    # refactoring build, consent gate, or cascade. expectedHash is deliberately absent: malformed
+    # disableIndices is the first bad value and must be the refusal the caller sees.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": "abc",
+    })
+    err = assert_error(r, "execute rename with a non-numeric disableIndices")
+    assert_contains(err, "could not be read as a change-point index",
+                    "the refusal must explain why the value can never address a preview row")
+    assert_contains(err, "Nothing was renamed",
+                    "the malformed request must not start a configuration-wide cascade")
+    assert_contains(err, "current indices",
+                    "the refusal must tell the caller to read a fresh preview")
+    assert_not_contains(err, "abc", "the caller's own text must not come back")
+    assert_contains(_commonmodule_names(name_filter="CascadeEn"), "| CascadeEn ",
+                    "the original object must remain after the refusal")
+    assert_no_diff("an unparsable disableIndices must refuse without touching disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The cascade bound (issue #365)
+#
+# The rename runs on EDT's UI thread; nothing in that hand-off had an upper bound,
+# so a wedged cascade held the MCP call open until the CLIENT gave up — which aborted
+# the whole run and skipped ~188 tests. The bound now lives on our side, exposed as
+# the `timeout` parameter (seconds, clamped 60..3600).
+#
+# What is verifiable HERE is the wire contract: the parameter is accepted and the
+# rename still works with an explicit value. The expiry itself is NOT reproducible on
+# demand (it needs a wedged EDT), so it is pinned by the unit test that drives the
+# deadline through the IRenameAction seam — see RenameMetadataObjectToolTest.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_explicit_timeout_is_accepted_and_preview_still_works():
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.Calc",
+        "newName": "Compute",
+        "timeout": 900,  # inside the accepted 60..3600 range
+    })
+    assert_ok(r, "preview rename with an explicit timeout")
+    assert_contains(r.text, "action: preview", "an explicit timeout must not change the preview contract")
+    assert_no_diff("a preview (confirm=false) must not change the project on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_out_of_range_timeout_is_clamped_not_rejected():
+    # The schema promises clamping, not rejection: 1 second is below the 60s floor and
+    # must be raised, so the call behaves exactly like the default one above.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.Calc",
+        "newName": "Compute",
+        "timeout": 1,
+    })
+    assert_ok(r, "an out-of-range timeout must be clamped, not rejected")
+    assert_contains(r.text, "action: preview", "a clamped timeout must not change the preview contract")
     assert_no_diff("a preview (confirm=false) must not change the project on disk")
 
 
@@ -441,3 +856,402 @@ def test_missing_newname_errors():
     assert_error_quality(err, names=["newName"], suggests=["is required"],
                          ctx="missing newName names the param")
     assert_no_diff("a rejected rename must not change the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Managed-form ELEMENTS (issue #381)
+#
+# A form-element FQN is dispatched to its own branch BEFORE the mdclass path and
+# renamed through EDT's OWN form refactoring, so the two-phase contract, the '#'
+# indices and the confirm gate are the same ones the tests above pin. What is NOT
+# the same is the cascade: it is scoped to the form (its model plus its module),
+# which is exactly what the module test below measures rather than assumes.
+#
+# Fixture: Catalog.Catalog has form "ItemForm" carrying fields Code / Description /
+# Attribute, a Decoration1, and the designer's own children (CodeExtendedTooltip,
+# CodeContextMenu, ...) that no rename may touch directly.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_FORM = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+# The module tools address a module RELATIVE TO src/, while read_disk / poll_disk_* address
+# it relative to the PROJECT. Passing the project-relative path to write_module_source is not
+# an error - it silently writes src/src/... beside the real tree - so the two spellings are
+# named apart here rather than derived from one another.
+_FORM_MODULE_SRC_REL = "Catalogs/Catalog/Forms/ItemForm/Module.bsl"
+
+
+def _form_fqn(kind, name):
+    return "Catalog.Catalog.Form.ItemForm.%s.%s" % (kind, name)
+
+
+def _seed_form_attribute(attr):
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": _form_fqn("Attribute", attr)})
+    assert_ok(r, "seed form attribute " + attr)
+    # The seed lands BETWEEN _settle_before_rename and the rename, so a settle that expires
+    # here undoes the precondition just as surely as never having one.
+    settle_or_fail("the rename this seed precedes")
+
+
+def _seed_form_group(grp):
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": _form_fqn("Group", grp)})
+    assert_ok(r, "seed form group " + grp)
+    settle_or_fail("the rename this seed precedes")
+
+
+def _await_preview_change_point(object_fqn, new_name, marker, timeout=90):
+    """Poll the (side-effect-free) rename PREVIEW until its text contains `marker`.
+
+    `marker` should identify the SPECIFIC change point being waited for (the rendered source
+    line, say), never just its type tag: a tag is shared by unrelated change points and would
+    let the gate open on one of those instead.
+
+    Fails with the last preview attached rather than skipping: a preview without the change
+    point means the cascade would not have covered it, and that is the thing under test.
+    """
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        r = call("rename_metadata_object", {
+            "projectName": PROJECT, "objectFqn": object_fqn, "newName": new_name})
+        assert_ok(r, "preview the rename while waiting for the %s change point" % marker)
+        last = r.text
+        if marker in last:
+            return last
+        time.sleep(3)
+    raise AssertionError(
+        "the preview never listed a %s change point within %ss, so the cascade under test "
+        "was never planned; last preview:\n%s" % (marker, timeout, last))
+
+
+def _form_item_titles(name):
+    """The (languageKey, text) pairs of a form ITEM's <title> entries on disk; [] when untitled."""
+    root = ET.fromstring(read_disk(_FORM))
+    for item in root.iter("items"):
+        child = item.find("name")
+        if child is not None and child.text == name:
+            return [(t.findtext("key"), t.findtext("value")) for t in item.findall("title")]
+    raise AssertionError("form item %s is not in %s" % (name, _FORM))
+
+
+def _form_module_source():
+    """ItemForm's module, read through read_module_source.
+
+    NB that tool reads the exported FILE (BslModuleUtils.readFileLines on the IFile), so this is
+    disk truth reached over the wire - not the model. Anything asserting a change that a write has
+    to export must therefore POLL; see _poll_form_module_contains.
+    """
+    r = call("read_module_source", {
+        "projectName": PROJECT, "modulePath": _FORM_MODULE_SRC_REL})
+    assert_ok(r, "read the form module back")
+    return r.text
+
+
+def _poll_form_module_contains(substr, timeout=30, ctx=""):
+    """Poll the form module until it contains substr; returns the module text that satisfied it.
+
+    A rename exports the .form and the module SEPARATELY, so seeing the renamed element in
+    Form.form says nothing about whether Module.bsl has been written yet. Reading it once right
+    after would fail on export ordering alone - a flake that looks exactly like a missing cascade.
+    """
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        last = _form_module_source()
+        if substr in last:
+            return last
+        time.sleep(1)
+    raise AssertionError("the form module never came to contain %r within %ss [%s]; it holds:\n%s"
+                         % (substr, timeout, ctx, last))
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_form_element_preview_lists_change_points_and_does_not_mutate():
+    # The preview half of the two-phase contract on a FORM target: same YAML action, same
+    # "Change Points" table, same confirm instruction - and nothing written.
+    _seed_form_attribute("RNPreviewAttr")
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Attribute", "RNPreviewAttr"),
+        "newName": "RNPreviewAttrRenamed",
+    })
+    assert_ok(r, "preview a form-attribute rename")
+    assert_contains(r.text, "action: preview", "a form preview must emit the preview action")
+    assert_contains(r.text, "Change Points", "a form preview must render the change-points table")
+    assert_contains(r.text, "confirm=true", "a form preview must instruct how to execute")
+    # The heading and the footer are emitted UNCONDITIONALLY, so asserting them alone would also
+    # pass on a preview that found nothing to change - the exact shape a broken form branch would
+    # produce. The count and the rename row are what say the refactoring really resolved a target.
+    assert "totalChanges: 0" not in r.text, \
+        "a form preview that found no change point has not previewed anything: %r" % r.text
+    assert_contains(r.text, "RNPreviewAttrRenamed",
+                    "the change-points table must name what the rename would produce")
+    assert_contains(read_disk(_FORM), "RNPreviewAttr",
+                    "the seeded attribute must still be there under its OLD name")
+    assert_not_contains(read_disk(_FORM), "RNPreviewAttrRenamed",
+                        "a preview must not write the new name into the form")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_confirm_renames_a_form_attribute_and_the_form_on_disk_follows():
+    _settle_before_rename()  # executes a real rename - see the helper
+    _seed_form_attribute("RNAttr")
+    poll_disk_contains(_FORM, "<name>RNAttr</name>", ctx="the seeded attribute must be on disk")
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Attribute", "RNAttr"),
+        "newName": "RNAttrRenamed",
+        "confirm": True,
+    })
+    assert_ok(r, "rename a form attribute (confirm)")
+    assert_contains(r.text, "action: executed", "confirm must execute")
+    poll_disk_contains(_FORM, "<name>RNAttrRenamed</name>",
+                       ctx="the new attribute name must land in the form's .form on disk")
+    poll_disk_lacks(_FORM, "<name>RNAttr</name>",
+                    ctx="the old attribute name must be gone from the .form")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_confirm_renames_a_form_group_and_the_module_reference_follows():
+    """The CASCADE, measured rather than assumed: a form-module reference to the element
+    must be rewritten by the rename.
+
+    This is the whole reason the branch calls EDT's own form refactoring instead of writing
+    the name itself - a plain name write would leave the module's reference pointing at
+    nothing, which is worse than refusing the rename. The probe is planted and READ BACK
+    before the rename, so a module that never made it into the model fails the test here
+    instead of turning the cascade assertion vacuous.
+    """
+    grp = "RNProbeGroup"
+    _seed_form_group(grp)
+    probe = (
+        "&НаКлиенте\n"
+        "Процедура E2ERenameProbe()\n"
+        "\tЭлементы." + grp
+        + ".Видимость = "
+        "Ложь;\n"
+        "КонецПроцедуры\n"
+    )
+    w = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": _FORM_MODULE_SRC_REL,
+        "mode": "replace", "overwrite": True, "source": probe,
+    })
+    assert_ok(w, "plant a module reference to the group")
+    settle_or_fail("the cascade rename this setup precedes")
+    _poll_form_module_contains(grp, ctx="setup: the planted reference must be in the module")
+    # GATE, not a sleep: a module written seconds ago may not be in EDT's index yet, and a
+    # rename that runs first simply finds no BSL reference to rewrite. The preview is the
+    # observable that says the cascade WILL include the module, so poll it until it does.
+    # The marker is the PLANTED LINE as the preview's code context renders it - not the
+    # change-point TYPE tag `bslRef`, which several unrelated native changes also carry and
+    # which would therefore let the gate open on something else entirely.
+    _await_preview_change_point(_form_fqn("Group", grp), "RNProbeGroupRenamed",
+                                "Элементы." + grp)
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Group", grp),
+        "newName": "RNProbeGroupRenamed",
+        "confirm": True,
+    })
+    assert_ok(r, "rename the group (confirm)")
+    poll_disk_contains(_FORM, "<name>RNProbeGroupRenamed</name>",
+                       ctx="the renamed group must land in the .form")
+    # Polled, and polled SEPARATELY from the .form: the two are exported independently, so the
+    # form landing proves nothing about the module. read_module_source is a file read behind the
+    # wire (see _form_module_source), which is why a single read here would be an export-ordering
+    # race dressed up as a cascade assertion.
+    module = _poll_form_module_contains(
+        "RNProbeGroupRenamed",
+        ctx="the module reference must follow the rename - this is the cascade")
+    assert ("%s." % grp) not in module.replace("RNProbeGroupRenamed", ""), \
+        "no reference to the OLD group name may survive in the module: %r" % module
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_renaming_a_form_element_also_refreshes_its_derived_title():
+    """A form rename is NOT a name-only edit, and the guide says so because of this test.
+
+    EDT's form refactoring also refreshes the element's derived title: an untitled group renamed
+    to `RNTitleGroupRenamed` comes back titled "Rn title group renamed". That is EDT's behaviour,
+    not something this branch asks for - but the guide claimed "only this identifier changes", and
+    an unpinned doc claim is how that sentence survived being false. Pinning it here means the day
+    EDT stops doing it, the sentence gets revisited instead of quietly rotting.
+    """
+    _settle_before_rename()  # executes a real rename - see the helper
+    grp = "RNTitleGroup"
+    _seed_form_group(grp)
+    before = _form_item_titles(grp)
+    assert before == [], "the seeded group must start untitled, got %r" % (before,)
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Group", grp),
+        "newName": grp + "Renamed",
+        "confirm": True,
+    })
+    assert_ok(r, "rename the untitled group (confirm)")
+    poll_disk_contains(_FORM, "<name>%sRenamed</name>" % grp,
+                       ctx="the renamed group must land in the .form")
+    after = _form_item_titles(grp + "Renamed")
+    assert after, ("EDT is documented to derive a title on a form rename; the renamed group "
+                   "carries none, so the guide's claim needs revisiting: %r" % (after,))
+    # Not merely "a title appeared": it must be derived from the NEW name. A title carrying the
+    # old name, an empty value or arbitrary text would satisfy a non-emptiness check while making
+    # the documented behaviour something else entirely. EDT's exact casing is not pinned here -
+    # over-fitting its word-splitting would turn a cosmetic change upstream into a red test.
+    values = [text for _, text in after if text]
+    assert values, "the derived title must carry a value, got %r" % (after,)
+    assert any("renamed" in text.lower() for text in values), \
+        ("the title must be derived from the NEW name (it should read like 'Rn title group "
+         "renamed'), got %r" % (values,))
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_form_handler_address_is_refused_with_the_rebind_path():
+    # A handler FQN names an EVENT BINDING; its leaf is the event name, which the platform
+    # owns. Refusing it as "not found" would send an agent hunting for an element that is
+    # right there, so the refusal has to name the operation the caller actually wants.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "Catalog.Catalog.Form.ItemForm.Handler.OnOpen",
+        "newName": "OnOpened",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming a form event handler")
+    assert_error_quality(err, names=["handler"], suggests=["modify_metadata", "procedure"],
+                         ctx="a handler address is refused with the rebind path")
+    assert_no_diff("a refused rename must not change the project on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_bare_column_address_is_refused_with_the_owner_shape():
+    # A column belongs to a collection form ATTRIBUTE, so a bare Column.X addresses nothing.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Column", "RNBareColumn"),
+        "newName": "RNBareColumnRenamed",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming through a bare column address")
+    # The suggestion has to be a phrase the OLD generic "Object not found: <fqn>. Check the FQN
+    # format ..." could never carry: that message quotes the FQN back, so asserting on the word
+    # "Column" alone passed against the very defect this test is named for (measured by pinning
+    # the stand to the pre-fix jar).
+    assert_error_quality(err, names=["RNBareColumn"],
+                         suggests=["belongs to a collection form attribute"],
+                         ctx="a bare column address is refused with the owner-bearing shape")
+    assert_no_diff("a refused rename must not change the project on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_designer_owned_child_is_refused_and_points_at_its_owner():
+    # CodeExtendedTooltip IS addressable (an ExtendedTooltip is a Decoration), which is
+    # precisely why the refusal cannot be made by address - it is made by the resolved
+    # element's ECLASS. The fixture carries it, so nothing is seeded here.
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Decoration", "CodeExtendedTooltip"),
+        "newName": "RenamedTooltip",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming a designer-owned extended tooltip")
+    assert_error_quality(err, names=["CodeExtendedTooltip", "ExtendedTooltip"],
+                         suggests=["OWNING"],
+                         ctx="a designer-owned child is refused and points at its owner")
+    assert_no_diff("a refused rename must not change the project on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_a_name_a_sibling_already_bears_is_refused():
+    _seed_form_attribute("RNDupA")
+    _seed_form_attribute("RNDupB")
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Attribute", "RNDupA"),
+        "newName": "RNDupB",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming onto a taken sibling name")
+    assert_error_quality(err, names=["RNDupB"], suggests=["already exists"],
+                         ctx="a duplicate form-element name is refused")
+    assert_contains(read_disk(_FORM), "RNDupA",
+                    "the refused rename must leave the original name in place")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_a_missing_form_element_is_reported_as_such():
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Field", "RNNoSuchField_e2e"),
+        "newName": "Whatever",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming a form element that does not exist")
+    # "Form element not found", not the mdclass path's "Object not found": the FQN did reach the
+    # form branch and the branch is what failed to resolve it. Asserting on the bare words "not
+    # found" would be satisfied by the old code, which never reached a form at all.
+    assert_error_quality(err, names=[], suggests=["Form element not found"],
+                         ctx="a missing form element is reported by the FORM branch")
+    assert_no_diff("a refused rename must not change the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# newName must be a legal 1C identifier - ONE rule, both branches
+#
+# The verdict is the platform's own predicate (StringUtils.isValidName), applied
+# before anything is resolved, so the mdclass path and the form path answer alike.
+# Without it a rename to "Bad.Name" SUCCEEDS: the write lands, but the result is
+# addressable by no FQN (the dot is the FQN separator) and the cascade rewrites the
+# module into something that no longer parses - with the old name already gone.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_a_dotted_new_name_is_refused_on_the_mdclass_path():
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.Calc",
+        "newName": "Bad.Name",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming a module to a dotted name")
+    assert_error_quality(err, names=["Bad.Name"], suggests=["letters, digits and underscores"],
+                         ctx="a dotted new name names the bad value and states the rule")
+    assert_contains(_commonmodule_names("Calc"), "Calc",
+                    "the module must keep its original name")
+    assert_no_diff("a refused rename must not change the project on disk")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_a_dotted_new_name_is_refused_on_the_form_path_too():
+    # Same rule, other branch: one point of judgment, so the form path cannot drift.
+    _seed_form_attribute("RNBadNameAttr")
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Attribute", "RNBadNameAttr"),
+        "newName": "Bad.Name",
+        "confirm": True,
+    })
+    err = assert_error(r, "renaming a form attribute to a dotted name")
+    assert_error_quality(err, names=["Bad.Name"], suggests=["letters, digits and underscores"],
+                         ctx="the form branch refuses the same illegal name")
+    assert_contains(read_disk(_FORM), "RNBadNameAttr",
+                    "the attribute must keep its original name")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_a_cyrillic_new_name_is_accepted():
+    _settle_before_rename()  # executes a real rename - see the helper
+    # The other half: the rule must not become a blanket refusal. A Cyrillic name is legal
+    # 1C, and a hand-written ASCII rule would have passed every assertion above while
+    # rejecting half the configurations in the country.
+    _seed_form_attribute("RNCyrillicAttr")
+    new_name = "РеквизитE2E"
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": _form_fqn("Attribute", "RNCyrillicAttr"),
+        "newName": new_name,
+        "confirm": True,
+    })
+    assert_ok(r, "rename a form attribute to a Cyrillic name")
+    poll_disk_contains(_FORM, "<name>%s</name>" % new_name,
+                       ctx="a Cyrillic name is a legal 1C name and must land on disk")
