@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.eclipse.jface.preference.IPreferenceStore;
 
@@ -39,6 +40,19 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     private static final Set<String> DEVELOPMENT_V4_ADDITIONS = Set.of(
         "stop_profiling"); //$NON-NLS-1$
+
+    /*
+     * A migration predicate must describe the preset AS IT WAS WHEN THAT MIGRATION SHIPPED.
+     * ToolPreset definitions are live and grow with ToolGroup membership, so every preset name
+     * added after version 2 must also be added here or the older predicate will silently stop
+     * recognizing stores that could not yet contain it.
+     */
+    private static final Set<String> PRESET_ADDITIONS_AFTER_V2 = Stream.of(
+        ANALYSIS_ONLY_V4_ADDITIONS,
+        CODE_REVIEW_V4_ADDITIONS,
+        DEVELOPMENT_V4_ADDITIONS)
+        .flatMap(Set::stream)
+        .collect(Collectors.toUnmodifiableSet());
 
     private static final ToolSettingsService INSTANCE = new ToolSettingsService();
 
@@ -152,6 +166,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             }
             if (storedVersion < 4)
             {
+                // The v4 read-only shapes intentionally still contain apply_quick_fix. Stores that
+                // also owe v2 gained it above in this same pass against this same mutable set.
                 changed |= migrateRegroupedToolsIntoPresets(disabled);
             }
             if (changed)
@@ -186,13 +202,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * Stale/unknown names left in the stored list cannot defeat the check, which asks only whether
      * the preset's own tools are all present.
      * <p>
-     * The compared shape drops the tools a preset does not really assert: {@code apply_quick_fix}
-     * (today's presets exclude it, but the stored list predates it by definition) and everything in
+     * The compared shape is frozen at version 2. It drops {@code apply_quick_fix}, every preset name
+     * added after version 2, and everything in
      * {@link PreferenceConstants#DEFAULT_DISABLED_TOOLS}, which every preset merely inherits from
-     * the shipped defaults. Both are things the user may deliberately have switched ON - notably the
-     * opt-in {@code git} tool - and demanding them here would make an ordinary "Code Review, but I
-     * do use git" store fail the containment test and miss the migration entirely, i.e. exactly the
-     * hazard this method exists to close.
+     * the shipped defaults. These are all names a version-2 store either could not contain or may
+     * deliberately have switched ON. Demanding them here would make an ordinary historical store
+     * fail the containment test and miss the migration entirely, i.e. exactly the hazard this method
+     * exists to close.
      *
      * @param disabled the mutable stored disabled-tools set; modified in place
      * @return {@code true} when {@code apply_quick_fix} was added
@@ -206,15 +222,34 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         Set<String> optional = parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
         for (ToolPreset readOnly : new ToolPreset[] {ToolPreset.CODE_REVIEW, ToolPreset.ANALYSIS_ONLY})
         {
-            Set<String> presetShape = new LinkedHashSet<>(readOnly.getDisabledTools());
-            presetShape.remove("apply_quick_fix"); //$NON-NLS-1$
-            presetShape.removeAll(optional);
+            Set<String> presetShape = version2PresetShape(readOnly, optional);
             if (disabled.containsAll(presetShape))
             {
                 return disabled.add("apply_quick_fix"); //$NON-NLS-1$
             }
         }
         return false;
+    }
+
+    private static Set<String> version2PresetShape(ToolPreset preset, Set<String> optional)
+    {
+        Set<String> presetShape = new LinkedHashSet<>(preset.getDisabledTools());
+        presetShape.remove("apply_quick_fix"); //$NON-NLS-1$
+        presetShape.removeAll(PRESET_ADDITIONS_AFTER_V2);
+        presetShape.removeAll(optional);
+        return presetShape;
+    }
+
+    /**
+     * Test seam for the frozen version-2 predicate.
+     *
+     * @param preset the read-only preset whose version-2 shape is required
+     * @return the names a version-2 store must contain for that preset
+     */
+    static Set<String> version2PresetShapeForTest(ToolPreset preset)
+    {
+        return Set.copyOf(version2PresetShape(preset,
+            parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS)));
     }
 
     /**

@@ -8,8 +8,10 @@ package com.ditrix.edt.mcp.server.preferences;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.eclipse.jface.preference.PreferenceStore;
@@ -484,6 +486,86 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion1HistoricalCodeReviewMigratesThroughVersions2And4()
+    {
+        Set<String> historicalShape = historicalPresetShapeAtVersion1(
+            ToolPreset.CODE_REVIEW, CODE_REVIEW_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(historicalShape, 1);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("version 2 must add apply_quick_fix: " + disabled,
+            disabled.contains("apply_quick_fix")); //$NON-NLS-1$
+        assertTrue("version 4 must add every Code Review addition: " + disabled,
+            disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
+        assertEquals(ToolPreset.CODE_REVIEW, ToolPreset.matchPreset(disabled));
+    }
+
+    @Test
+    public void testVersion1HistoricalAnalysisOnlyMigratesThroughVersions2And4()
+    {
+        Set<String> historicalShape = historicalPresetShapeAtVersion1(
+            ToolPreset.ANALYSIS_ONLY, ANALYSIS_ONLY_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(historicalShape, 1);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("version 2 must add apply_quick_fix: " + disabled,
+            disabled.contains("apply_quick_fix")); //$NON-NLS-1$
+        assertTrue("version 4 must add every Analysis Only addition: " + disabled,
+            disabled.containsAll(ANALYSIS_ONLY_V4_ADDITIONS));
+        assertEquals(ToolPreset.ANALYSIS_ONLY, ToolPreset.matchPreset(disabled));
+    }
+
+    @Test
+    public void testVersion0HistoricalCodeReviewMigratesThroughEveryVersion()
+    {
+        Set<String> historicalShape = historicalPresetShapeAtVersion1(
+            ToolPreset.CODE_REVIEW, CODE_REVIEW_V4_ADDITIONS);
+        historicalShape.remove("git"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledToolsWithoutMigrationKey(historicalShape);
+        assertFalse(store.contains(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("version 1 must add git: " + disabled, disabled.contains("git")); //$NON-NLS-1$
+        assertTrue("version 2 must add apply_quick_fix: " + disabled,
+            disabled.contains("apply_quick_fix")); //$NON-NLS-1$
+        assertTrue("version 3 must add ask_workmate: " + disabled,
+            disabled.contains("ask_workmate")); //$NON-NLS-1$
+        assertTrue("version 4 must add every Code Review addition: " + disabled,
+            disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
+        assertEquals(ToolPreset.CODE_REVIEW, ToolPreset.matchPreset(disabled));
+    }
+
+    @Test
+    public void testVersion2PresetPredicatesStayFrozenAtTheirShippedShapes()
+    {
+        Set<String> codeReviewShape =
+            ToolSettingsService.version2PresetShapeForTest(ToolPreset.CODE_REVIEW);
+        Set<String> analysisOnlyShape =
+            ToolSettingsService.version2PresetShapeForTest(ToolPreset.ANALYSIS_ONLY);
+
+        assertTrue("the version 2 Code Review predicate must not require version 4 additions",
+            Collections.disjoint(codeReviewShape, CODE_REVIEW_V4_ADDITIONS));
+        assertTrue("the version 2 Analysis Only predicate must not require version 4 additions",
+            Collections.disjoint(analysisOnlyShape, ANALYSIS_ONLY_V4_ADDITIONS));
+        // The shapes that shipped at version 2, frozen by NAME rather than by size. A size alone
+        // survives a net-zero edit (one tool added, another removed) and, when it does fail, says
+        // nothing about which tool moved; comparing the sorted names makes the assertion message
+        // itself the diff. Deriving either side from the live presets would defeat the ratchet:
+        // when a preset expands, production must extend PRESET_ADDITIONS_AFTER_V2 so these
+        // historical shapes stay exactly as they are.
+        assertEquals("extend PRESET_ADDITIONS_AFTER_V2 for later Code Review additions",
+            VERSION_2_CODE_REVIEW_SHAPE, sortedNames(codeReviewShape));
+        assertEquals("extend PRESET_ADDITIONS_AFTER_V2 for later Analysis Only additions",
+            VERSION_2_ANALYSIS_ONLY_SHAPE, sortedNames(analysisOnlyShape));
+    }
+
+    @Test
     public void testMigrationToVersion4RestoresAnalysisOnlyPreset()
     {
         Set<String> oldShape = oldPresetShape(ToolPreset.ANALYSIS_ONLY,
@@ -584,15 +666,65 @@ public class ToolSettingsServiceTest
         return oldShape;
     }
 
+    /**
+     * The Code Review predicate exactly as version 2 shipped it. Frozen here so a preset change
+     * that leaks into an older migration names itself in the failure instead of moving a count.
+     */
+    private static final String VERSION_2_CODE_REVIEW_SHAPE =
+        "create_infobase, create_launch_config, create_metadata, debug_launch, debug_status"
+        + ", debug_yaxunit_tests, delete_infobase, delete_launch_config, delete_metadata"
+        + ", evaluate_expression, export_configuration_to_xml, generate_translation_strings"
+        + ", get_applications, get_profiling_results, get_translation_project_info, get_variables"
+        + ", import_configuration_from_xml, list_breakpoints, list_configurations, modify_metadata"
+        + ", remove_breakpoint, rename_metadata_object, resume, run_yaxunit_tests, set_breakpoint"
+        + ", set_variable, start_profiling, step, terminate_launch, translate_configuration"
+        + ", update_database, wait_for_break, write_module_source";
+
+    /** The Analysis Only predicate exactly as version 2 shipped it; see the field above. */
+    private static final String VERSION_2_ANALYSIS_ONLY_SHAPE =
+        "create_infobase, create_launch_config, create_metadata, debug_launch, debug_status"
+        + ", debug_yaxunit_tests, delete_infobase, delete_launch_config, delete_metadata"
+        + ", evaluate_expression, export_configuration_to_xml, generate_translation_strings"
+        + ", get_applications, get_form_layout_snapshot, get_form_screenshot, get_method_call_hierarchy"
+        + ", get_module_structure, get_profiling_results, get_symbol_info, get_template_screenshot"
+        + ", get_translation_project_info, get_variables, go_to_definition, import_configuration_from_xml"
+        + ", list_breakpoints, list_configurations, list_modules, modify_metadata, read_method_source"
+        + ", read_module_source, remove_breakpoint, rename_metadata_object, resume, run_yaxunit_tests"
+        + ", search_in_code, set_breakpoint, set_variable, start_profiling, step, terminate_launch"
+        + ", translate_configuration, update_database, validate_query, wait_for_break"
+        + ", write_module_source";
+
+    /** The set as a stable, sorted, comma-separated string, so a mismatch reads as a diff. */
+    private static String sortedNames(Set<String> names)
+    {
+        List<String> sorted = new ArrayList<>(names);
+        Collections.sort(sorted);
+        return String.join(", ", sorted);
+    }
+
+    private static Set<String> historicalPresetShapeAtVersion1(ToolPreset preset,
+        Set<String> version4Additions)
+    {
+        Set<String> historicalShape = oldPresetShape(preset, version4Additions);
+        historicalShape.remove("apply_quick_fix"); //$NON-NLS-1$
+        historicalShape.remove("ask_workmate"); //$NON-NLS-1$
+        return historicalShape;
+    }
+
     private static PreferenceStore storedDisabledTools(Set<String> disabled, int migrationVersion)
+    {
+        PreferenceStore store = storedDisabledToolsWithoutMigrationKey(disabled);
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, migrationVersion);
+        return store;
+    }
+
+    private static PreferenceStore storedDisabledToolsWithoutMigrationKey(Set<String> disabled)
     {
         PreferenceStore store = new PreferenceStore();
         store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
             PreferenceConstants.DEFAULT_DISABLED_TOOLS);
-        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
             ToolSettingsService.serializeDisabledTools(disabled));
-        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, migrationVersion);
         return store;
     }
 
