@@ -1,0 +1,22 @@
+[
+{"id":"q101","calls":[{"tool":"validate_query","args":{"projectName":"TestConfiguration","dcsMode":true}}],"expected_result":"Validation result (valid/errors list) for the attached DCS query text against TestConfiguration in DCS mode.","confidence":3},
+{"id":"q102","calls":[{"tool":"validate_xdto_package","args":{"fqn":"XDTOPackage.ОбменДанными","projectName":"TestConfiguration"}}],"expected_result":"List of validation problems (or none) for the XDTOPackage.ОбменДанными package.","confidence":5},
+{"id":"q103","calls":[{"tool":"validate_xdto_package","args":{"fqn":"XDTOPackage.ExchangeMessage","projectName":"TestConfiguration"}}],"expected_result":"Validity status/problem list for the XDTOPackage.ExchangeMessage package.","confidence":5},
+{"id":"q104","calls":[{"tool":"set_breakpoint","args":{"modulePath":"CommonModules/Расчеты/Module.bsl","lineNumber":42,"projectName":"TestConfiguration"}}],"expected_result":"A breakpointId confirming the breakpoint was set at line 42 of CommonModule.Расчеты.","confidence":4},
+{"id":"q105","calls":[{"tool":"set_breakpoint","args":{"modulePath":"Documents/SalesOrder/Ext/ObjectModule.bsl","lineNumber":15,"projectName":"TestConfiguration"}}],"expected_result":"A breakpointId confirming the breakpoint was set at line 15 of Document.SalesOrder's object module.","confidence":3},
+{"id":"q106","calls":[{"tool":"remove_breakpoint","args":{"modulePath":"CommonModules/Расчеты/Module.bsl","lineNumber":42,"projectName":"TestConfiguration"}}],"expected_result":"Confirmation that the breakpoint at line 42 of CommonModule.Расчеты was removed.","confidence":4},
+{"id":"q107","calls":[{"tool":"remove_breakpoint","args":{"breakpointId":7}}],"expected_result":"Confirmation that breakpoint id 7 was removed.","confidence":2},
+{"id":"q108","calls":[{"tool":"list_breakpoints","args":{"projectName":"TestConfiguration"}}],"expected_result":"A list of currently set breakpoints in the TestConfiguration project.","confidence":5},
+{"id":"q109","calls":[{"tool":"debug_launch","args":{"projectName":"TestConfiguration"}}],"expected_result":"The TestConfiguration application launches under the EDT debugger and a launch/session status is returned.","confidence":4},
+{"id":"q110","calls":[{"tool":"debug_launch","args":{"projectName":"TestConfiguration","launchConfigurationName":"ТолстыйКлиент","updateBeforeLaunch":true}}],"expected_result":"The client launches under debugging using the 'ТолстыйКлиент' launch configuration, with the database updated first.","confidence":4},
+{"id":"q111","calls":[{"tool":"debug_status","args":{}}],"expected_result":"A list of currently running debug sessions and their suspend/running state.","confidence":5},
+{"id":"q112","calls":[{"tool":"debug_status","args":{"applicationId":"app-1"}}],"expected_result":"Whether the debug session for application app-1 is currently paused.","confidence":5},
+{"id":"q113","calls":[{"tool":"wait_for_break","args":{"timeout":60}}],"expected_result":"The call blocks until a breakpoint (or other suspend event) is hit or the 60-second timeout elapses, then reports the suspend state.","confidence":4},
+{"id":"q114","calls":[{"tool":"wait_for_break","args":{"applicationId":"app-1"}}],"expected_result":"The call waits for a suspend event in debug session app-1 and reports it when it occurs.","confidence":5},
+{"id":"q115","calls":[{"tool":"step","args":{"kind":"into","threadId":1}}],"expected_result":"Execution steps into the next call in thread 1 and returns the new suspended location.","confidence":3},
+{"id":"q116","calls":[{"tool":"step","args":{"kind":"over","threadId":1}}],"expected_result":"Execution steps over the current line in thread 1 without entering any call, returning the new suspended location.","confidence":3},
+{"id":"q117","calls":[{"tool":"resume","args":{}}],"expected_result":"The paused debug session continues execution.","confidence":4},
+{"id":"q118","calls":[{"tool":"resume","args":{"applicationId":"app-1"}}],"expected_result":"The debug session for application app-1 continues execution.","confidence":5},
+{"id":"q119","calls":[{"tool":"get_variables","args":{}}],"expected_result":"A list of local variables and their values in the current paused debug frame.","confidence":3},
+{"id":"q120","calls":[{"tool":"get_variables","args":{"expandPath":"ПараметрыЗаписи","frameRef":2}}],"expected_result":"The expanded contents of the ПараметрыЗаписи structure within frame 2's variables.","confidence":3}
+]

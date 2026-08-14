@@ -1,0 +1,1996 @@
+[
+{
+"id": "q001",
+"ru": "Покажи какие проекты вообще открыты в моей рабочей области EDT.",
+"tool": "list_projects",
+"params": [],
+"cat": "project"
+},
+{
+"id": "q002",
+"ru": "Мне нужен список проектов в workspace в виде JSON, чтобы дальше распарсить.",
+"tool": "list_projects",
+"params": [
+"format"
+],
+"cat": "project"
+},
+{
+"id": "q003",
+"ru": "Создай новый проект конфигурации с именем ДемоУчет, режим совместимости 8.3.24, язык русский.",
+"tool": "create_project",
+"params": [
+"projectKind",
+"name"
+],
+"cat": "project"
+},
+{
+"id": "q004",
+"ru": "Заведи проект расширения РасширениеОтчетов поверх конфигурации УправлениеТорговлей, префикс объектов рсш.",
+"tool": "create_project",
+"params": [
+"projectKind",
+"name"
+],
+"cat": "project"
+},
+{
+"id": "q005",
+"ru": "Нужен проект под внешние обработки, назови его ВнешниеОбработки.",
+"tool": "create_project",
+"params": [
+"projectKind",
+"name"
+],
+"cat": "project"
+},
+{
+"id": "q006",
+"ru": "Убери проект СтарыйПрототип из рабочей области, файлы на диске тоже снеси.",
+"tool": "delete_project",
+"params": [
+"projectName"
+],
+"two_phase": true,
+"cat": "project"
+},
+{
+"id": "q007",
+"ru": "Удали из workspace проект TestSandbox, но исходники на диске оставь как есть.",
+"tool": "delete_project",
+"params": [
+"projectName"
+],
+"two_phase": true,
+"cat": "project"
+},
+{
+"id": "q008",
+"ru": "У меня выгрузка конфигурации в XML лежит в D:\\\\unload. Сделай из неё проект EDT.",
+"tool": "import_configuration_from_xml",
+"params": [
+"importPath",
+"projectName"
+],
+"cat": "project"
+},
+{
+"id": "q009",
+"ru": "Затяни конфигурацию из XML-выгрузки C:\\\\src\\\\cfg в новый проект ERP_Copy.",
+"tool": "import_configuration_from_xml",
+"params": [
+"importPath",
+"projectName"
+],
+"cat": "project"
+},
+{
+"id": "q010",
+"ru": "Выгрузи конфигурацию проекта УправлениеТорговлей в XML в папку D:\\\\export.",
+"tool": "export_configuration_to_xml",
+"params": [
+"projectName",
+"outputPath"
+],
+"cat": "project"
+},
+{
+"id": "q011",
+"ru": "Нужна выгрузка проекта TestConfiguration в формат файлов 1С XML, положи в C:\\\\out.",
+"tool": "export_configuration_to_xml",
+"params": [
+"projectName",
+"outputPath"
+],
+"cat": "project"
+},
+{
+"id": "q012",
+"ru": "Какая версия EDT у меня стоит?",
+"tool": "get_edt_version",
+"params": [],
+"cat": "infra"
+},
+{
+"id": "q013",
+"ru": "Проверь, живой ли вообще MCP-сервер и какие фичи у него включены.",
+"tool": "get_server_status",
+"params": [],
+"cat": "infra"
+},
+{
+"id": "q014",
+"ru": "Какой режим совместимости и версия у конфигурации в проекте TestConfiguration?",
+"tool": "get_configuration_properties",
+"params": [
+"projectName"
+],
+"cat": "project"
+},
+{
+"id": "q015",
+"ru": "Посмотри основной язык и вариант встроенного языка конфигурации проекта УправлениеТорговлей.",
+"tool": "get_configuration_properties",
+"params": [
+"projectName"
+],
+"cat": "project"
+},
+{
+"id": "q016",
+"ru": "Покажи все справочники в проекте TestConfiguration.",
+"tool": "get_metadata_objects",
+"params": [
+"projectName",
+"metadataType"
+],
+"cat": "md-read"
+},
+{
+"id": "q017",
+"ru": "Какие документы есть в конфигурации проекта УправлениеТорговлей? Имена, содержащие Реализация.",
+"tool": "get_metadata_objects",
+"params": [
+"projectName",
+"metadataType",
+"nameFilter"
+],
+"cat": "md-read"
+},
+{
+"id": "q018",
+"ru": "Выведи список регистров сведений проекта TestConfiguration с синонимами на английском.",
+"tool": "get_metadata_objects",
+"params": [
+"projectName",
+"metadataType",
+"language"
+],
+"cat": "md-read"
+},
+{
+"id": "q019",
+"ru": "Дай перечень всех общих модулей в проекте TestConfiguration.",
+"tool": "get_metadata_objects",
+"params": [
+"projectName",
+"metadataType"
+],
+"also": [
+"list_modules"
+],
+"cat": "md-read"
+},
+{
+"id": "q020",
+"ru": "Расскажи подробно про справочник Номенклатура в проекте TestConfiguration: реквизиты, табличные части, формы.",
+"tool": "get_metadata_details",
+"params": [
+"projectName",
+"objectFqns"
+],
+"cat": "md-read"
+},
+{
+"id": "q021",
+"ru": "Какие реквизиты у документа Document.SalesOrder в проекте TestConfiguration?",
+"tool": "get_metadata_details",
+"params": [
+"projectName",
+"objectFqns"
+],
+"cat": "md-read"
+},
+{
+"id": "q022",
+"ru": "Покажи какие права выданы роли Роль.ПолныеПрава в проекте TestConfiguration.",
+"tool": "get_metadata_details",
+"params": [
+"projectName",
+"objectFqns"
+],
+"cat": "md-read"
+},
+{
+"id": "q023",
+"ru": "Сравни свойства сразу трёх объектов: Catalog.Products, Catalog.Partners и Document.SalesOrder в TestConfiguration.",
+"tool": "get_metadata_details",
+"params": [
+"projectName",
+"objectFqns"
+],
+"cat": "md-read"
+},
+{
+"id": "q024",
+"ru": "Покажи дерево подсистем конфигурации TestConfiguration.",
+"tool": "list_subsystems",
+"params": [
+"projectName"
+],
+"cat": "md-read"
+},
+{
+"id": "q025",
+"ru": "Какие подсистемы верхнего уровня есть в проекте УправлениеТорговлей, без вложенных?",
+"tool": "list_subsystems",
+"params": [
+"projectName",
+"recursive"
+],
+"cat": "md-read"
+},
+{
+"id": "q026",
+"ru": "Что входит в подсистему Subsystem.Продажи в проекте TestConfiguration?",
+"tool": "get_subsystem_content",
+"params": [
+"projectName",
+"subsystemFqn"
+],
+"cat": "md-read"
+},
+{
+"id": "q027",
+"ru": "Перечисли объекты подсистемы Подсистема.Закупки вместе с вложенными подсистемами, проект TestConfiguration.",
+"tool": "get_subsystem_content",
+"params": [
+"projectName",
+"subsystemFqn",
+"recursive"
+],
+"cat": "md-read"
+},
+{
+"id": "q028",
+"ru": "Какие общие картинки есть в конфигурации TestConfiguration?",
+"tool": "list_common_pictures",
+"params": [
+"projectName"
+],
+"cat": "md-read"
+},
+{
+"id": "q029",
+"ru": "Инвентаризируй общие картинки проекта УправлениеТорговлей, первые 50.",
+"tool": "list_common_pictures",
+"params": [
+"projectName",
+"limit"
+],
+"cat": "md-read"
+},
+{
+"id": "q030",
+"ru": "Выгрузи картинку CommonPicture.ЛоготипКомпании из проекта TestConfiguration, хочу посмотреть что там за изображение.",
+"tool": "export_common_picture",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-read"
+},
+{
+"id": "q031",
+"ru": "Достань PNG общей картинки ОбщаяКартинка.Печать из TestConfiguration.",
+"tool": "export_common_picture",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-read"
+},
+{
+"id": "q032",
+"ru": "Какие теги я навешивал на объекты в проекте TestConfiguration?",
+"tool": "get_tags",
+"params": [
+"projectName"
+],
+"cat": "md-read"
+},
+{
+"id": "q033",
+"ru": "Найди все объекты, помеченные тегом refactor, в проекте TestConfiguration.",
+"tool": "get_objects_by_tags",
+"params": [
+"projectName",
+"tags"
+],
+"cat": "md-read"
+},
+{
+"id": "q034",
+"ru": "Покажи объекты с тегами legacy и todo в TestConfiguration, не больше 20 штук.",
+"tool": "get_objects_by_tags",
+"params": [
+"projectName",
+"tags",
+"limit"
+],
+"cat": "md-read"
+},
+{
+"id": "q035",
+"ru": "Создай справочник Контрагенты в проекте TestConfiguration с синонимом Контрагенты.",
+"tool": "create_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q036",
+"ru": "Добавь документу Document.SalesOrder реквизит ДатаОтгрузки типа Дата в проекте TestConfiguration.",
+"tool": "create_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q037",
+"ru": "Заведи общий модуль ОбщегоНазначенияСервер в TestConfiguration: серверный, вызов сервера включён, не привилегированный.",
+"tool": "create_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q038",
+"ru": "Создай новое перечисление ВидыОплаты со значениями Наличные и Безналичные в TestConfiguration.",
+"tool": "create_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q039",
+"ru": "Добавь табличную часть Товары к документу Документ.ЗаказКлиента в проекте TestConfiguration.",
+"tool": "create_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q040",
+"ru": "Поменяй синоним справочника Catalog.Products на Товары и услуги в проекте TestConfiguration.",
+"tool": "modify_metadata",
+"params": [
+"projectName",
+"fqn",
+"properties"
+],
+"cat": "md-write"
+},
+{
+"id": "q041",
+"ru": "Выдай роли Role.Менеджер право на чтение и добавление справочника Catalog.Products в TestConfiguration.",
+"tool": "modify_metadata",
+"params": [
+"projectName",
+"fqn",
+"rights"
+],
+"trap": [
+"create_metadata"
+],
+"cat": "md-write"
+},
+{
+"id": "q042",
+"ru": "Замени схему компоновки данных у отчёта Report.ПродажиЗаПериод в проекте TestConfiguration на новую.",
+"tool": "modify_metadata",
+"params": [
+"projectName",
+"fqn",
+"dcs"
+],
+"trap": [
+"create_metadata",
+"write_module_source"
+],
+"cat": "md-write"
+},
+{
+"id": "q043",
+"ru": "Обнови макет Template.ПечатнаяФорма документа Document.SalesOrder в TestConfiguration.",
+"tool": "modify_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q044",
+"ru": "Включи справочник Catalog.Products в состав подсистемы Subsystem.Продажи в проекте TestConfiguration.",
+"tool": "modify_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q045",
+"ru": "Сделай реквизит формы ЦенаСоСкидкой на форме Catalog.Products.Form.ItemForm недоступным для редактирования, проект TestConfiguration.",
+"tool": "modify_metadata",
+"params": [
+"projectName",
+"fqn",
+"properties"
+],
+"cat": "md-write"
+},
+{
+"id": "q046",
+"ru": "Удали справочник Catalog.ВременныйСправочник из проекта TestConfiguration.",
+"tool": "delete_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"two_phase": true,
+"cat": "md-write"
+},
+{
+"id": "q047",
+"ru": "Снеси реквизит Document.SalesOrder.Attribute.Устаревший в TestConfiguration.",
+"tool": "delete_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"two_phase": true,
+"cat": "md-write"
+},
+{
+"id": "q048",
+"ru": "Убери из конфигурации TestConfiguration отчёт Report.НеИспользуемый, он больше не нужен.",
+"tool": "delete_metadata",
+"params": [
+"projectName",
+"fqn"
+],
+"two_phase": true,
+"cat": "md-write"
+},
+{
+"id": "q049",
+"ru": "Переименуй справочник Catalog.Products в Catalog.Nomenclature во всей конфигурации TestConfiguration, чтобы все ссылки поправились.",
+"tool": "rename_metadata_object",
+"params": [
+"projectName",
+"objectFqn",
+"newName"
+],
+"two_phase": true,
+"trap": [
+"modify_metadata"
+],
+"cat": "md-write"
+},
+{
+"id": "q050",
+"ru": "Надо переименовать реквизит Document.SalesOrder.Attribute.Сумма в СуммаДокумента с обновлением всех использований, проект TestConfiguration.",
+"tool": "rename_metadata_object",
+"params": [
+"projectName",
+"objectFqn",
+"newName"
+],
+"two_phase": true,
+"cat": "md-write"
+},
+{
+"id": "q051",
+"ru": "Мне надо доработать справочник Catalog.Products из основной конфигурации в своём расширении. Проект базы TestConfiguration, расширение МоеРасширение.",
+"tool": "adopt_metadata_object",
+"params": [
+"projectName",
+"fqn"
+],
+"trap": [
+"create_metadata"
+],
+"cat": "md-write"
+},
+{
+"id": "q052",
+"ru": "Захвати форму Catalog.Products.Form.ItemForm в расширение, чтобы её перехватить. База TestConfiguration.",
+"tool": "adopt_metadata_object",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write"
+},
+{
+"id": "q053",
+"ru": "Какие модули есть в проекте TestConfiguration?",
+"tool": "list_modules",
+"params": [
+"projectName"
+],
+"cat": "code-read"
+},
+{
+"id": "q054",
+"ru": "Покажи все модули документа ЗаказКлиента в проекте TestConfiguration.",
+"tool": "list_modules",
+"params": [
+"projectName",
+"objectName"
+],
+"cat": "code-read"
+},
+{
+"id": "q055",
+"ru": "Прочитай целиком общий модуль CommonModule.ОбщегоНазначения в проекте TestConfiguration.",
+"tool": "read_module_source",
+"params": [
+"projectName",
+"modulePath"
+],
+"trap": [
+"read_method_source"
+],
+"cat": "code-read"
+},
+{
+"id": "q056",
+"ru": "Покажи строки с 100 по 150 модуля объекта справочника Номенклатура в TestConfiguration.",
+"tool": "read_module_source",
+"params": [
+"projectName",
+"modulePath",
+"startLine",
+"endLine"
+],
+"cat": "code-read"
+},
+{
+"id": "q057",
+"ru": "Дай исходник модуля формы Catalog.Products.Form.ItemForm целиком, проект TestConfiguration.",
+"tool": "read_module_source",
+"params": [
+"projectName",
+"modulePath"
+],
+"cat": "code-read"
+},
+{
+"id": "q058",
+"ru": "Покажи только текст процедуры ПриЗаписи из модуля объекта Document.SalesOrder, проект TestConfiguration.",
+"tool": "read_method_source",
+"params": [
+"projectName",
+"modulePath",
+"methodName"
+],
+"trap": [
+"read_module_source"
+],
+"cat": "code-read"
+},
+{
+"id": "q059",
+"ru": "Хочу увидеть тело функции РассчитатьСкидку в общем модуле CommonModule.Расчеты проекта TestConfiguration.",
+"tool": "read_method_source",
+"params": [
+"projectName",
+"modulePath",
+"methodName"
+],
+"cat": "code-read"
+},
+{
+"id": "q060",
+"ru": "Выведи код одной процедуры ОбработкаПроведения документа Документ.ПриходнаяНакладная в TestConfiguration.",
+"tool": "read_method_source",
+"params": [
+"projectName",
+"modulePath",
+"methodName"
+],
+"cat": "code-read"
+},
+{
+"id": "q061",
+"ru": "Какие процедуры и функции объявлены в модуле CommonModule.ОбщегоНазначения проекта TestConfiguration? Сам код не нужен.",
+"tool": "get_module_structure",
+"params": [
+"projectName",
+"modulePath"
+],
+"trap": [
+"read_module_source"
+],
+"cat": "code-read"
+},
+{
+"id": "q062",
+"ru": "Покажи структуру областей и экспортных методов модуля менеджера справочника Номенклатура, проект TestConfiguration.",
+"tool": "get_module_structure",
+"params": [
+"projectName",
+"modulePath"
+],
+"cat": "code-read"
+},
+{
+"id": "q063",
+"ru": "Какие поля кладут в структуру, которую передают в метод ЗаполнитьДанные модуля CommonModule.Расчеты? Проект TestConfiguration.",
+"tool": "get_outgoing_structures",
+"params": [
+"projectName",
+"modulePath"
+],
+"cat": "code-read"
+},
+{
+"id": "q064",
+"ru": "Разбери какие ключи структуры формируются при вызовах из модуля CommonModule.Обмен в проекте TestConfiguration.",
+"tool": "get_outgoing_structures",
+"params": [
+"projectName",
+"modulePath"
+],
+"cat": "code-read"
+},
+{
+"id": "q065",
+"ru": "Кто вызывает функцию РассчитатьСкидку из CommonModule.Расчеты в проекте TestConfiguration?",
+"tool": "get_method_call_hierarchy",
+"params": [
+"projectName",
+"modulePath",
+"methodName"
+],
+"trap": [
+"find_references",
+"search_in_code"
+],
+"cat": "code-read"
+},
+{
+"id": "q066",
+"ru": "Построй дерево вызовов вниз от процедуры ПровестиДокумент модуля CommonModule.Проведение, проект TestConfiguration.",
+"tool": "get_method_call_hierarchy",
+"params": [
+"projectName",
+"modulePath",
+"methodName",
+"direction"
+],
+"cat": "code-read"
+},
+{
+"id": "q067",
+"ru": "Что за тип у переменной в строке 42 колонке 15 модуля CommonModule.Расчеты проекта TestConfiguration?",
+"tool": "get_symbol_info",
+"params": [
+"projectName",
+"line",
+"column"
+],
+"cat": "code-read"
+},
+{
+"id": "q068",
+"ru": "Наведись на символ в позиции строка 10 колонка 5 файла модуля объекта Catalog.Products в TestConfiguration и покажи его сигнатуру и документацию.",
+"tool": "get_symbol_info",
+"params": [
+"projectName",
+"line",
+"column"
+],
+"cat": "code-read"
+},
+{
+"id": "q069",
+"ru": "Запиши новый текст в модуль общего модуля CommonModule.Расчеты проекта TestConfiguration, полностью заменив его.",
+"tool": "write_module_source",
+"params": [
+"projectName",
+"source"
+],
+"cat": "code-write"
+},
+{
+"id": "q070",
+"ru": "Добавь процедуру ПриЗаписи в модуль объекта справочника Номенклатура проекта TestConfiguration.",
+"tool": "write_module_source",
+"params": [
+"projectName",
+"source"
+],
+"cat": "code-write"
+},
+{
+"id": "q071",
+"ru": "Поправь код обработчика события формы Catalog.Products.Form.ItemForm в TestConfiguration.",
+"tool": "write_module_source",
+"params": [
+"projectName",
+"source"
+],
+"cat": "code-write"
+},
+{
+"id": "q072",
+"ru": "Замени в модуле CommonModule.Обмен старый фрагмент кода на новый, я знаю точный старый текст. Проект TestConfiguration.",
+"tool": "write_module_source",
+"params": [
+"projectName",
+"source"
+],
+"cat": "code-write"
+},
+{
+"id": "q073",
+"ru": "Создай модуль команды ПечатьДокумента у документа Document.SalesOrder и напиши в него код, проект TestConfiguration.",
+"tool": "write_module_source",
+"params": [
+"projectName",
+"source"
+],
+"cat": "code-write"
+},
+{
+"id": "q074",
+"ru": "Найди по всем модулям проекта TestConfiguration строку 'НЕ ИСПОЛЬЗОВАТЬ'.",
+"tool": "search_in_code",
+"params": [
+"projectName",
+"query"
+],
+"cat": "search"
+},
+{
+"id": "q075",
+"ru": "Поищи регуляркой все вызовы Сообщить\\\\( в коде проекта TestConfiguration.",
+"tool": "search_in_code",
+"params": [
+"projectName",
+"query",
+"isRegex"
+],
+"cat": "search"
+},
+{
+"id": "q076",
+"ru": "Найди в исходниках TestConfiguration все места где встречается литерал 'ЗначениеНеЗаполнено' с учётом регистра.",
+"tool": "search_in_code",
+"params": [
+"projectName",
+"query",
+"caseSensitive"
+],
+"cat": "search"
+},
+{
+"id": "q077",
+"ru": "Где вообще используется справочник Catalog.Products в конфигурации TestConfiguration — в коде, формах, ролях?",
+"tool": "find_references",
+"params": [
+"projectName",
+"objectFqn"
+],
+"trap": [
+"search_in_code"
+],
+"cat": "search"
+},
+{
+"id": "q078",
+"ru": "Покажи все использования документа Документ.ПриходнаяНакладная в проекте TestConfiguration.",
+"tool": "find_references",
+"params": [
+"projectName",
+"objectFqn"
+],
+"cat": "search"
+},
+{
+"id": "q079",
+"ru": "Можно ли безопасно удалить регистр сведений РегистрСведений.КурсыВалют в TestConfiguration? Проверь кто на него ссылается.",
+"tool": "find_references",
+"params": [
+"projectName",
+"objectFqn"
+],
+"trap": [
+"delete_metadata"
+],
+"cat": "search"
+},
+{
+"id": "q080",
+"ru": "Где определена функция РассчитатьСкидку? Проект TestConfiguration, модуль CommonModule.Расчеты.",
+"tool": "go_to_definition",
+"params": [
+"projectName",
+"symbol"
+],
+"trap": [
+"find_references",
+"search_in_code"
+],
+"cat": "search"
+},
+{
+"id": "q081",
+"ru": "Открой определение метода ОбщегоНазначения.ЗначениеРеквизита в проекте TestConfiguration.",
+"tool": "go_to_definition",
+"params": [
+"projectName",
+"symbol"
+],
+"cat": "search"
+},
+{
+"id": "q082",
+"ru": "Где объявлен объект Catalog.Products в проекте TestConfiguration?",
+"tool": "go_to_definition",
+"params": [
+"projectName",
+"symbol"
+],
+"cat": "search"
+},
+{
+"id": "q083",
+"ru": "Я поставил точку после переменной СтруктураДанных в строке 30 колонке 20 модуля CommonModule.Расчеты, какие варианты автодополнения тут доступны? Проект TestConfiguration.",
+"tool": "get_content_assist",
+"params": [
+"projectName",
+"line",
+"column"
+],
+"cat": "search"
+},
+{
+"id": "q084",
+"ru": "Покажи все ошибки валидации в проекте TestConfiguration.",
+"tool": "get_project_errors",
+"params": [],
+"cat": "validate"
+},
+{
+"id": "q085",
+"ru": "Выведи только критичные ошибки проекта УправлениеТорговлей, не больше 50.",
+"tool": "get_project_errors",
+"params": [
+"severity"
+],
+"cat": "validate"
+},
+{
+"id": "q086",
+"ru": "Какие замечания EDT висят конкретно на справочнике Catalog.Products в проекте TestConfiguration?",
+"tool": "get_project_errors",
+"params": [
+"projectName"
+],
+"cat": "validate"
+},
+{
+"id": "q087",
+"ru": "Найди все проблемы с кодом проверки md-reference-intergrity в проекте TestConfiguration.",
+"tool": "get_project_errors",
+"params": [
+"checkId"
+],
+"cat": "validate"
+},
+{
+"id": "q088",
+"ru": "Мне нужны только цифры: сколько ошибок и предупреждений по проектам, без списка.",
+"tool": "get_problem_summary",
+"params": [],
+"trap": [
+"get_project_errors"
+],
+"cat": "validate"
+},
+{
+"id": "q089",
+"ru": "Дай сводку по количеству проблем в проекте TestConfiguration с разбивкой по уровням важности.",
+"tool": "get_problem_summary",
+"params": [
+"projectName"
+],
+"trap": [
+"get_project_errors"
+],
+"cat": "validate"
+},
+{
+"id": "q090",
+"ru": "Что означает проверка с кодом mdo-name-invalid и как её исправить?",
+"tool": "get_check_description",
+"params": [
+"checkId"
+],
+"cat": "validate"
+},
+{
+"id": "q091",
+"ru": "Объясни диагностику EDT ql-tempTable-index и что она требует.",
+"tool": "get_check_description",
+"params": [
+"checkId"
+],
+"cat": "validate"
+},
+{
+"id": "q092",
+"ru": "Примени автоисправление EDT к проблеме с кодом проверки bsl-doc-comment в модуле CommonModule.Расчеты строка 12, проект TestConfiguration.",
+"tool": "apply_quick_fix",
+"params": [
+"projectName",
+"checkId"
+],
+"cat": "validate"
+},
+{
+"id": "q093",
+"ru": "Есть быстрое исправление для проверки mdo-name-invalid в проекте TestConfiguration — примени его.",
+"tool": "apply_quick_fix",
+"params": [
+"projectName",
+"checkId"
+],
+"cat": "validate"
+},
+{
+"id": "q094",
+"ru": "Я руками поправил файл Catalog.Products.mdo на диске. Перепроверь только этот объект в проекте TestConfiguration.",
+"tool": "revalidate_objects",
+"params": [
+"projectName",
+"objects"
+],
+"trap": [
+"clean_project"
+],
+"cat": "validate"
+},
+{
+"id": "q095",
+"ru": "Перевалидируй объекты Document.SalesOrder и Catalog.Partners в проекте TestConfiguration.",
+"tool": "revalidate_objects",
+"params": [
+"projectName",
+"objects"
+],
+"cat": "validate"
+},
+{
+"id": "q096",
+"ru": "Скрипт снаружи переписал кучу mdo-файлов проекта TestConfiguration. Полностью пересобери проект из того что лежит на диске и прогони валидацию заново.",
+"tool": "clean_project",
+"params": [
+"projectName"
+],
+"trap": [
+"revalidate_objects",
+"resync_to_disk"
+],
+"cat": "validate"
+},
+{
+"id": "q097",
+"ru": "Сбрось все маркеры валидации проекта TestConfiguration и перечитай конфигурацию с диска целиком.",
+"tool": "clean_project",
+"params": [
+"projectName"
+],
+"cat": "validate"
+},
+{
+"id": "q098",
+"ru": "Обновление базы падает с 'файл объекта не существует'. Проверь какие объекты модели не выгружены в src на диск в проекте TestConfiguration и восстанови их.",
+"tool": "resync_to_disk",
+"params": [
+"projectName"
+],
+"trap": [
+"clean_project",
+"export_configuration_to_xml"
+],
+"cat": "validate"
+},
+{
+"id": "q099",
+"ru": "В Configuration.mdo остались битые ссылки на удалённые объекты, из-за них не идёт выгрузка XML. Разберись с этим в проекте TestConfiguration.",
+"tool": "resync_to_disk",
+"params": [
+"projectName"
+],
+"cat": "validate"
+},
+{
+"id": "q100",
+"ru": "Проверь синтаксис запроса: ВЫБРАТЬ Ссылка ИЗ Справочник.Номенклатура ГДЕ Наименование = &Имя. Проект TestConfiguration.",
+"tool": "validate_query",
+"params": [
+"projectName",
+"queryText"
+],
+"cat": "validate"
+},
+{
+"id": "q101",
+"ru": "Этот запрос для СКД корректен? Проект TestConfiguration, текст запроса приложу.",
+"tool": "validate_query",
+"params": [
+"projectName",
+"queryText",
+"dcsMode"
+],
+"cat": "validate"
+},
+{
+"id": "q102",
+"ru": "Проверь XDTO-пакет XDTOPackage.ОбменДанными в проекте TestConfiguration на ошибки.",
+"tool": "validate_xdto_package",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "validate"
+},
+{
+"id": "q103",
+"ru": "Валиден ли XDTO пакет ExchangeMessage в проекте TestConfiguration?",
+"tool": "validate_xdto_package",
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "validate"
+},
+{
+"id": "q104",
+"ru": "Поставь точку останова на 42 строку модуля CommonModule.Расчеты проекта TestConfiguration.",
+"tool": "set_breakpoint",
+"params": [
+"lineNumber"
+],
+"cat": "debug"
+},
+{
+"id": "q105",
+"ru": "Нужен брейкпоинт в модуле объекта Document.SalesOrder на строке 15, проект TestConfiguration.",
+"tool": "set_breakpoint",
+"params": [
+"lineNumber"
+],
+"cat": "debug"
+},
+{
+"id": "q106",
+"ru": "Убери точку останова со строки 42 модуля CommonModule.Расчеты в проекте TestConfiguration.",
+"tool": "remove_breakpoint",
+"params": [],
+"cat": "debug"
+},
+{
+"id": "q107",
+"ru": "Сними брейкпоинт с идентификатором bp-7.",
+"tool": "remove_breakpoint",
+"params": [
+"breakpointId"
+],
+"cat": "debug"
+},
+{
+"id": "q108",
+"ru": "Какие точки останова сейчас расставлены в проекте TestConfiguration?",
+"tool": "list_breakpoints",
+"params": [
+"projectName"
+],
+"cat": "debug"
+},
+{
+"id": "q109",
+"ru": "Запусти конфигурацию проекта TestConfiguration под отладкой.",
+"tool": "debug_launch",
+"params": [],
+"cat": "debug"
+},
+{
+"id": "q110",
+"ru": "Стартуй тонкий клиент по конфигурации запуска ТолстыйКлиент в отладке, проект TestConfiguration, перед запуском обнови базу.",
+"tool": "debug_launch",
+"params": [
+"launchConfigurationName"
+],
+"cat": "debug"
+},
+{
+"id": "q111",
+"ru": "Есть ли сейчас запущенные сеансы отладки и на чём они стоят?",
+"tool": "debug_status",
+"params": [],
+"cat": "debug"
+},
+{
+"id": "q112",
+"ru": "Проверь, встал ли отладчик на паузу в приложении с идентификатором app-1.",
+"tool": "debug_status",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q113",
+"ru": "Подожди пока отладка не остановится на точке останова, максимум 60 секунд.",
+"tool": "wait_for_break",
+"params": [],
+"cat": "debug"
+},
+{
+"id": "q114",
+"ru": "Жди события приостановки в отладочном сеансе app-1.",
+"tool": "wait_for_break",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q115",
+"ru": "Сделай шаг с заходом внутрь процедуры в потоке thread-1.",
+"tool": "step",
+"params": [
+"threadId",
+"kind"
+],
+"cat": "debug"
+},
+{
+"id": "q116",
+"ru": "Перешагни текущую строку без захода в вызов, поток thread-1.",
+"tool": "step",
+"params": [
+"threadId",
+"kind"
+],
+"cat": "debug"
+},
+{
+"id": "q117",
+"ru": "Продолжи выполнение приостановленного сеанса отладки.",
+"tool": "resume",
+"params": [],
+"cat": "debug"
+},
+{
+"id": "q118",
+"ru": "Отпусти отладку дальше в приложении app-1.",
+"tool": "resume",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q119",
+"ru": "Покажи значения локальных переменных в текущем кадре остановленной отладки.",
+"tool": "get_variables",
+"params": [],
+"cat": "debug"
+},
+{
+"id": "q120",
+"ru": "Разверни структуру ПараметрыЗаписи в переменных кадра frame-2.",
+"tool": "get_variables",
+"params": [
+"frameRef"
+],
+"cat": "debug"
+},
+{
+"id": "q121",
+"ru": "Присвой переменной Счетчик значение 10 в остановленной отладке.",
+"tool": "set_variable",
+"params": [
+"variableName",
+"value"
+],
+"cat": "debug"
+},
+{
+"id": "q122",
+"ru": "Поменяй на лету значение переменной ФлагОбработки на Истина в кадре frame-1.",
+"tool": "set_variable",
+"params": [
+"variableName",
+"value"
+],
+"cat": "debug"
+},
+{
+"id": "q123",
+"ru": "Вычисли выражение Товары.Количество() в кадре отладки frame-1.",
+"tool": "evaluate_expression",
+"params": [
+"frameRef",
+"expression"
+],
+"cat": "debug"
+},
+{
+"id": "q124",
+"ru": "Посчитай в отладке чему равно ЭтотОбъект.Сумма * 2, кадр frame-3.",
+"tool": "evaluate_expression",
+"params": [
+"frameRef",
+"expression"
+],
+"cat": "debug"
+},
+{
+"id": "q125",
+"ru": "Прибей запущенный из EDT сеанс 1С.",
+"tool": "terminate_launch",
+"params": [],
+"two_phase": true,
+"cat": "debug"
+},
+{
+"id": "q126",
+"ru": "Закрой все запущенные из EDT клиенты 1С по проекту TestConfiguration.",
+"tool": "terminate_launch",
+"params": [],
+"two_phase": true,
+"cat": "debug"
+},
+{
+"id": "q127",
+"ru": "Включи замер производительности кода в отладочном приложении app-1.",
+"tool": "start_profiling",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q128",
+"ru": "Начни профилирование BSL в сеансе отладки app-2.",
+"tool": "start_profiling",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q129",
+"ru": "Останови замер производительности в приложении app-1.",
+"tool": "stop_profiling",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q130",
+"ru": "Заверши профилирование сеанса app-2.",
+"tool": "stop_profiling",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q131",
+"ru": "Покажи что тормозит: результаты замера производительности по приложению app-1.",
+"tool": "get_profiling_results",
+"params": [
+"applicationId"
+],
+"cat": "debug"
+},
+{
+"id": "q132",
+"ru": "Дай горячие точки замера только по модулям, содержащим Расчеты.",
+"tool": "get_profiling_results",
+"params": [
+"moduleFilter"
+],
+"cat": "debug"
+},
+{
+"id": "q133",
+"ru": "Создай файловую информационную базу для проекта TestConfiguration в папке D:\\\\bases\\\\test.",
+"tool": "create_infobase",
+"params": [
+"projectName",
+"infobaseFile"
+],
+"cat": "infobase"
+},
+{
+"id": "q134",
+"ru": "Зарегистрируй уже существующую файловую базу D:\\\\bases\\\\prod для проекта УправлениеТорговлей и сделай её основной.",
+"tool": "create_infobase",
+"params": [
+"projectName",
+"infobaseFile"
+],
+"cat": "infobase"
+},
+{
+"id": "q135",
+"ru": "Какие информационные базы подключены к проекту TestConfiguration?",
+"tool": "get_applications",
+"params": [
+"projectName"
+],
+"cat": "infobase"
+},
+{
+"id": "q136",
+"ru": "Покажи список приложений и их идентификаторы для проекта УправлениеТорговлей.",
+"tool": "get_applications",
+"params": [
+"projectName"
+],
+"cat": "infobase"
+},
+{
+"id": "q137",
+"ru": "Обнови конфигурацию базы данных из текущей конфигурации проекта TestConfiguration.",
+"tool": "update_database",
+"params": [],
+"two_phase": true,
+"cat": "infobase"
+},
+{
+"id": "q138",
+"ru": "Накати изменения конфигурации на базу проекта УправлениеТорговлей, если надо — выгони сеансы.",
+"tool": "update_database",
+"params": [],
+"two_phase": true,
+"cat": "infobase"
+},
+{
+"id": "q139",
+"ru": "Отвяжи и удали информационную базу от проекта TestConfiguration вместе с файлами.",
+"tool": "delete_infobase",
+"params": [
+"projectName"
+],
+"two_phase": true,
+"cat": "infobase"
+},
+{
+"id": "q140",
+"ru": "Убери регистрацию базы ТестоваяБаза у проекта TestConfiguration, файлы на диске не трогай.",
+"tool": "delete_infobase",
+"params": [
+"projectName"
+],
+"two_phase": true,
+"cat": "infobase"
+},
+{
+"id": "q141",
+"ru": "У базы стоит пароль. Пропиши логин Администратор и пароль для проекта TestConfiguration, чтобы EDT мог подключаться.",
+"tool": "set_infobase_credentials",
+"params": [],
+"cat": "infobase"
+},
+{
+"id": "q142",
+"ru": "EDT не может обновить базу — просит авторизацию. Сохрани учётные данные пользователя базы для приложения app-1.",
+"tool": "set_infobase_credentials",
+"params": [
+"applicationId"
+],
+"cat": "infobase"
+},
+{
+"id": "q143",
+"ru": "Создай конфигурацию запуска тонкого клиента для проекта TestConfiguration.",
+"tool": "create_launch_config",
+"params": [
+"projectName"
+],
+"cat": "infobase"
+},
+{
+"id": "q144",
+"ru": "Заведи запуск толстого клиента с именем ТолстыйОтладка для проекта УправлениеТорговлей.",
+"tool": "create_launch_config",
+"params": [
+"projectName"
+],
+"cat": "infobase"
+},
+{
+"id": "q145",
+"ru": "Удали ненужную конфигурацию запуска СтарыйЗапуск.",
+"tool": "delete_launch_config",
+"params": [
+"name"
+],
+"two_phase": true,
+"cat": "infobase"
+},
+{
+"id": "q146",
+"ru": "Убери конфигурацию подключения AttachOld, она больше не используется.",
+"tool": "delete_launch_config",
+"params": [
+"name"
+],
+"two_phase": true,
+"cat": "infobase"
+},
+{
+"id": "q147",
+"ru": "Какие конфигурации запуска настроены в EDT для проекта TestConfiguration?",
+"tool": "list_configurations",
+"params": [
+"projectName"
+],
+"cat": "infobase"
+},
+{
+"id": "q148",
+"ru": "Покажи все серверные конфигурации запуска в рабочей области.",
+"tool": "list_configurations",
+"params": [
+"type"
+],
+"cat": "infobase"
+},
+{
+"id": "q149",
+"ru": "Посмотри журнал регистрации базы проекта TestConfiguration за сегодня, только ошибки.",
+"tool": "get_event_log",
+"params": [
+"severity"
+],
+"cat": "infobase"
+},
+{
+"id": "q150",
+"ru": "Что было в журнале регистрации по пользователю Иванов за последнюю неделю? Проект TestConfiguration.",
+"tool": "get_event_log",
+"params": [
+"user"
+],
+"cat": "infobase"
+},
+{
+"id": "q151",
+"ru": "Какие ветки git есть в проекте TestConfiguration и какие базы к ним привязаны?",
+"tool": "list_git_branches",
+"params": [
+"projectName"
+],
+"cat": "git"
+},
+{
+"id": "q152",
+"ru": "Покажи список веток репозитория проекта УправлениеТорговлей.",
+"tool": "list_git_branches",
+"params": [
+"projectName"
+],
+"cat": "git"
+},
+{
+"id": "q153",
+"ru": "Создай ветку feature/новый-отчет в проекте TestConfiguration и переключись на неё.",
+"tool": "create_git_branch",
+"params": [
+"projectName",
+"branch"
+],
+"cat": "git"
+},
+{
+"id": "q154",
+"ru": "Заведи ветку hotfix/1 от ветки master в проекте TestConfiguration.",
+"tool": "create_git_branch",
+"params": [
+"projectName",
+"branch"
+],
+"cat": "git"
+},
+{
+"id": "q155",
+"ru": "Переключи проект TestConfiguration на ветку develop.",
+"tool": "switch_git_branch",
+"params": [
+"projectName",
+"branch"
+],
+"cat": "git"
+},
+{
+"id": "q156",
+"ru": "Мне надо посмотреть версию проекта УправлениеТорговлей из ветки release-2.0, переключись туда.",
+"tool": "switch_git_branch",
+"params": [
+"projectName",
+"branch"
+],
+"cat": "git"
+},
+{
+"id": "q157",
+"ru": "Привяжи существующую базу app-3 к ветке develop проекта TestConfiguration.",
+"tool": "set_branch_infobase",
+"params": [
+"projectName",
+"branch",
+"applicationId"
+],
+"cat": "git"
+},
+{
+"id": "q158",
+"ru": "Сделай так, чтобы при переключении на ветку feature/x проекта TestConfiguration использовалась база app-2, и сделай её основной для ветки.",
+"tool": "set_branch_infobase",
+"params": [
+"projectName",
+"branch",
+"applicationId"
+],
+"cat": "git"
+},
+{
+"id": "q159",
+"ru": "Прогони юнит-тесты YAXUnit по проекту TestConfiguration.",
+"tool": "run_yaxunit_tests",
+"params": [],
+"cat": "tests"
+},
+{
+"id": "q160",
+"ru": "Запусти только тесты из модуля ОМ_ТестыРасчетов, проект TestConfiguration.",
+"tool": "run_yaxunit_tests",
+"params": [
+"modules"
+],
+"cat": "tests"
+},
+{
+"id": "q161",
+"ru": "Прогони YAXUnit тесты с тегом smoke в проекте TestConfiguration.",
+"tool": "run_yaxunit_tests",
+"params": [
+"tags"
+],
+"cat": "tests"
+},
+{
+"id": "q162",
+"ru": "Тест ОМ_ТестыРасчетов.ТестСкидки падает. Запусти его под отладчиком, я поставил точку останова.",
+"tool": "run_yaxunit_tests",
+"params": [],
+"trap": [
+"run_yaxunit_tests"
+],
+"cat": "tests",
+"also": [
+"debug_yaxunit_tests"
+],
+"deprecated_alt": "debug_yaxunit_tests",
+"note": "debug_yaxunit_tests - устаревший алиас run_yaxunit_tests(debug=true); ярлык исправлен после аудита"
+},
+{
+"id": "q163",
+"ru": "Надо пройти отладчиком по тестам YAXUnit модуля ОМ_ТестыОбмена в проекте TestConfiguration.",
+"tool": "run_yaxunit_tests",
+"params": [],
+"cat": "tests",
+"also": [
+"debug_yaxunit_tests"
+],
+"deprecated_alt": "debug_yaxunit_tests",
+"note": "debug_yaxunit_tests - устаревший алиас run_yaxunit_tests(debug=true); ярлык исправлен после аудита"
+},
+{
+"id": "q164",
+"ru": "Запусти тесты YAXUnit из расширения ТестовоеРасширение в режиме отладки, проект TestConfiguration.",
+"tool": "run_yaxunit_tests",
+"params": [],
+"cat": "tests",
+"also": [
+"debug_yaxunit_tests"
+],
+"deprecated_alt": "debug_yaxunit_tests",
+"note": "debug_yaxunit_tests - устаревший алиас run_yaxunit_tests(debug=true); ярлык исправлен после аудита"
+},
+{
+"id": "q165",
+"ru": "Покажи как выглядит форма Catalog.Products.Form.ItemForm — сделай скриншот, проект TestConfiguration.",
+"tool": "get_form_screenshot",
+"params": [
+"formPath"
+],
+"cat": "forms"
+},
+{
+"id": "q166",
+"ru": "Отрендери картинку формы списка документа Document.SalesOrder, проект TestConfiguration, обнови кеш.",
+"tool": "get_form_screenshot",
+"params": [
+"formPath",
+"refresh"
+],
+"cat": "forms"
+},
+{
+"id": "q167",
+"ru": "Дай текстовое дерево расположения элементов формы Catalog.Products.Form.ItemForm с координатами, проект TestConfiguration.",
+"tool": "get_form_layout_snapshot",
+"params": [
+"formPath"
+],
+"trap": [
+"get_form_screenshot"
+],
+"cat": "forms"
+},
+{
+"id": "q168",
+"ru": "Мне нужны рассчитанные размеры и позиции элементов формы Document.SalesOrder.Form.DocumentForm в TestConfiguration, не картинка.",
+"tool": "get_form_layout_snapshot",
+"params": [
+"formPath"
+],
+"trap": [
+"get_form_screenshot"
+],
+"cat": "forms"
+},
+{
+"id": "q169",
+"ru": "Покажи как отрисуется макет печатной формы Document.SalesOrder.Template.ПечатнаяФорма, проект TestConfiguration.",
+"tool": "get_template_screenshot",
+"params": [
+"projectName",
+"templatePath"
+],
+"trap": [
+"get_form_screenshot"
+],
+"cat": "forms"
+},
+{
+"id": "q170",
+"ru": "Отрендери табличный макет CommonTemplate.ОбщийМакет проекта TestConfiguration в картинку.",
+"tool": "get_template_screenshot",
+"params": [
+"projectName",
+"templatePath"
+],
+"cat": "forms"
+},
+{
+"id": "q171",
+"ru": "Собери строки конфигурации TestConfiguration для перевода на английский.",
+"tool": "generate_translation_strings",
+"params": [
+"projectName",
+"targetLanguages"
+],
+"cat": "translation"
+},
+{
+"id": "q172",
+"ru": "Подготовь к переводу только интерфейсные строки проекта УправлениеТорговлей на английский и немецкий.",
+"tool": "generate_translation_strings",
+"params": [
+"projectName",
+"targetLanguages"
+],
+"cat": "translation"
+},
+{
+"id": "q173",
+"ru": "Как настроен перевод в проекте TestConfiguration — какие языки, какой провайдер?",
+"tool": "get_translation_project_info",
+"params": [
+"projectName"
+],
+"cat": "translation"
+},
+{
+"id": "q174",
+"ru": "Переведи конфигурацию проекта TestConfiguration на английский язык.",
+"tool": "translate_configuration",
+"params": [
+"projectName",
+"targetLanguages"
+],
+"trap": [
+"generate_translation_strings"
+],
+"cat": "translation"
+},
+{
+"id": "q175",
+"ru": "Запусти перевод конфигурации УправлениеТорговлей на английский и казахский.",
+"tool": "translate_configuration",
+"params": [
+"projectName",
+"targetLanguages"
+],
+"cat": "translation"
+},
+{
+"id": "q176",
+"ru": "Какая точная сигнатура у метода Найти таблицы значений в 1С?",
+"tool": "get_platform_documentation",
+"params": [
+"typeName"
+],
+"cat": "platform"
+},
+{
+"id": "q177",
+"ru": "Покажи какие методы и свойства есть у типа Соответствие в платформе 1С.",
+"tool": "get_platform_documentation",
+"params": [
+"typeName"
+],
+"cat": "platform"
+},
+{
+"id": "q178",
+"ru": "Какие значения бывают у системного перечисления ЧастиДаты?",
+"tool": "get_platform_documentation",
+"params": [
+"typeName"
+],
+"cat": "platform"
+},
+{
+"id": "q179",
+"ru": "Что за параметры у глобальной функции СтрРазделить?",
+"tool": "get_platform_documentation",
+"params": [
+"typeName"
+],
+"cat": "platform"
+},
+{
+"id": "q180",
+"ru": "Как правильно вызывать инструмент modify_metadata, покажи полную справку по нему.",
+"tool": "get_tool_guide",
+"params": [
+"toolName"
+],
+"cat": "meta"
+},
+{
+"id": "q181",
+"ru": "Какие группы инструментов вообще есть у этого MCP и какие сейчас видны?",
+"tool": "list_toolsets",
+"params": [],
+"cat": "meta"
+},
+{
+"id": "q182",
+"ru": "Покажи какие наборы инструментов доступны для включения.",
+"tool": "list_toolsets",
+"params": [],
+"cat": "meta"
+},
+{
+"id": "q183",
+"ru": "Включи набор инструментов отладки.",
+"tool": "enable_toolset",
+"params": [
+"toolsets"
+],
+"cat": "meta"
+},
+{
+"id": "q184",
+"ru": "Спрячь набор инструментов git, он мне сейчас не нужен.",
+"tool": "enable_toolset",
+"params": [
+"toolsets",
+"disable"
+],
+"cat": "meta"
+},
+{
+"id": "q185",
+"ru": "Покажи последние вызовы MCP-инструментов, какие падали и сколько занимали.",
+"tool": "get_mcp_history",
+"params": [],
+"cat": "meta"
+},
+{
+"id": "q186",
+"ru": "Какие вызовы инструмента create_metadata были за последнее время и с какими ошибками?",
+"tool": "get_mcp_history",
+"params": [
+"tool"
+],
+"cat": "meta"
+},
+{
+"id": "q187",
+"ru": "Найди все TODO в коде проекта TestConfiguration.",
+"tool": "get_markers",
+"params": [],
+"trap": [
+"search_in_code"
+],
+"cat": "meta"
+},
+{
+"id": "q188",
+"ru": "Покажи закладки и задачи, которые я расставил в проекте TestConfiguration.",
+"tool": "get_markers",
+"params": [
+"projectName"
+],
+"cat": "meta"
+},
+{
+"id": "q189",
+"ru": "Собери внешние обработки проекта ВнешниеОбработки в epf-файлы, положи в D:\\\\build.",
+"tool": "build_external_objects",
+"params": [
+"projectName",
+"outputDir"
+],
+"cat": "build"
+},
+{
+"id": "q190",
+"ru": "Скомпилируй внешний отчёт АнализПродаж из проекта ВнешниеОбработки в папку C:\\\\out.",
+"tool": "build_external_objects",
+"params": [
+"projectName",
+"outputDir"
+],
+"cat": "build"
+},
+{
+"id": "q191",
+"ru": "Сделал git pull, подтяни изменения в проект TestConfiguration.",
+"tool": "clean_project",
+"also": [
+"revalidate_objects"
+],
+"params": [
+"projectName"
+],
+"cat": "ambiguous",
+"note": "известная неоднозначность из PR #395"
+},
+{
+"id": "q192",
+"ru": "Хочу увидеть и сам код процедуры ПриЗаписи, и где она вызывается. Проект TestConfiguration, модуль объекта Document.SalesOrder.",
+"tool": "read_method_source",
+"also": [
+"get_method_call_hierarchy"
+],
+"params": [
+"projectName"
+],
+"cat": "ambiguous",
+"note": "два шага, любой первый допустим"
+},
+{
+"id": "q193",
+"ru": "Задеплой конфигурацию TestConfiguration на прод-сервер по SSH и перезапусти службу.",
+"tool": null,
+"cat": "no-tool",
+"note": "деплой на сервер вне поверхности MCP"
+},
+{
+"id": "q194",
+"ru": "Сделай git commit и push изменений проекта TestConfiguration в origin.",
+"tool": null,
+"cat": "no-tool",
+"note": "есть ветки/переключение, но нет commit/push"
+},
+{
+"id": "q195",
+"ru": "Сгенерируй мне PDF-документацию по всей конфигурации TestConfiguration.",
+"tool": null,
+"cat": "no-tool",
+"note": "нет такого инструмента"
+},
+{
+"id": "q196",
+"ru": "Откати последнюю миграцию базы данных проекта TestConfiguration на предыдущую версию конфигурации.",
+"tool": null,
+"cat": "no-tool",
+"note": "нет отката обновления БД"
+},
+{
+"id": "q197",
+"ru": "Настрой CI-пайплайн в GitLab для проекта TestConfiguration.",
+"tool": null,
+"cat": "no-tool",
+"note": "вне поверхности"
+},
+{
+"id": "q198",
+"ru": "Проверь запрос из отчёта Report.ПродажиЗаПериод в проекте TestConfiguration на ошибки — он в схеме компоновки.",
+"tool": "validate_query",
+"also": [
+"get_metadata_details"
+],
+"params": [
+"projectName"
+],
+"cat": "validate"
+},
+{
+"id": "q199",
+"ru": "У документа Document.SalesOrder не проводится движение. Покажи ошибки валидации именно по этому объекту, проект TestConfiguration.",
+"tool": "get_project_errors",
+"params": [
+"projectName"
+],
+"trap": [
+"get_problem_summary"
+],
+"cat": "validate"
+},
+{
+"id": "q200",
+"ru": "Мне надо создать роль ПолныеПраваМенеджера и сразу выдать ей права на все справочники в проекте TestConfiguration.",
+"tool": "create_metadata",
+"also": [
+"modify_metadata"
+],
+"params": [
+"projectName",
+"fqn"
+],
+"cat": "md-write",
+"note": "создание роли, затем права через modify_metadata"
+}
+]

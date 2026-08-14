@@ -1,0 +1,31 @@
+[
+{"id":"q006","calls":[{"tool":"get_tool_guide","args":{"toolName":"delete_project"}},{"tool":"delete_project","args":{"projectName":"СтарыйПрототип","deleteContent":true,"confirm":true}}],"expected_result":"The project СтарыйПрототип is removed from the workspace and its files are deleted from disk (action='deleted').","confidence":5}
+,
+{"id":"q007","calls":[{"tool":"delete_project","args":{"projectName":"TestSandbox","deleteContent":false,"confirm":true}}],"expected_result":"The project TestSandbox is unregistered from the workspace while its on-disk files remain untouched.","confidence":5}
+,
+{"id":"q046","calls":[{"tool":"get_tool_guide","args":{"toolName":"delete_metadata"}},{"tool":"delete_metadata","args":{"fqn":"Catalog.ВременныйСправочник","projectName":"TestConfiguration","confirm":true}}],"expected_result":"The catalog Catalog.ВременныйСправочник is deleted from TestConfiguration with its clean-able references cascaded (action='executed').","confidence":5}
+,
+{"id":"q047","calls":[{"tool":"delete_metadata","args":{"fqn":"Document.SalesOrder.Attribute.Устаревший","projectName":"TestConfiguration","confirm":true}}],"expected_result":"The attribute Document.SalesOrder.Attribute.Устаревший is deleted from TestConfiguration.","confidence":5}
+,
+{"id":"q048","calls":[{"tool":"delete_metadata","args":{"fqn":"Report.НеИспользуемый","projectName":"TestConfiguration","confirm":true}}],"expected_result":"The report Report.НеИспользуемый is deleted from TestConfiguration.","confidence":5}
+,
+{"id":"q049","calls":[{"tool":"get_tool_guide","args":{"toolName":"rename_metadata_object"}},{"tool":"rename_metadata_object","args":{"objectFqn":"Catalog.Products","newName":"Nomenclature","projectName":"TestConfiguration","confirm":true}}],"expected_result":"Catalog.Products is renamed to Catalog.Nomenclature in TestConfiguration and all its references across BSL, forms and metadata are updated.","confidence":5}
+,
+{"id":"q050","calls":[{"tool":"rename_metadata_object","args":{"objectFqn":"Document.SalesOrder.Attribute.Сумма","newName":"СуммаДокумента","projectName":"TestConfiguration","confirm":true}}],"expected_result":"The attribute Сумма on Document.SalesOrder is renamed to СуммаДокумента in TestConfiguration with all its usages updated.","confidence":5}
+,
+{"id":"q125","calls":[{"tool":"get_tool_guide","args":{"toolName":"terminate_launch"}},{"tool":"terminate_launch","args":{"all":true,"confirm":true}}],"expected_result":"The running EDT-launched 1C session(s) are terminated and reported with a terminated/detached result code.","confidence":3}
+,
+{"id":"q126","calls":[{"tool":"terminate_launch","args":{"all":true,"confirm":true,"projectName":"TestConfiguration"}}],"expected_result":"Every EDT-launched 1C client running for project TestConfiguration is terminated or detached.","confidence":5}
+,
+{"id":"q137","calls":[{"tool":"get_tool_guide","args":{"toolName":"update_database"}},{"tool":"update_database","args":{"projectName":"TestConfiguration","confirm":true}}],"expected_result":"The TestConfiguration infobase is updated to match the current project configuration (action='updated', stateAfter='UPDATED').","confidence":5}
+,
+{"id":"q138","calls":[{"tool":"update_database","args":{"projectName":"УправлениеТорговлей","terminateRunningClients":true,"confirm":true}}],"expected_result":"The infobase for project УправлениеТорговлей is updated, terminating any running EDT-launched clients first if needed to free the exclusive lock.","confidence":4}
+,
+{"id":"q139","calls":[{"tool":"get_tool_guide","args":{"toolName":"delete_infobase"}},{"tool":"delete_infobase","args":{"projectName":"TestConfiguration","deleteRegistration":true,"deleteDatabaseFiles":true,"confirm":true}}],"expected_result":"The infobase is dissociated and deregistered from TestConfiguration and its database files are deleted from disk (databaseFilesDeleted=true unless shared/locked).","confidence":4}
+,
+{"id":"q140","calls":[{"tool":"delete_infobase","args":{"projectName":"TestConfiguration","infobaseName":"ТестоваяБаза","deleteRegistration":true,"deleteDatabaseFiles":false,"confirm":true}}],"expected_result":"The infobase ТестоваяБаза's registration is removed from TestConfiguration while its database files on disk are kept.","confidence":5}
+,
+{"id":"q145","calls":[{"tool":"get_tool_guide","args":{"toolName":"delete_launch_config"}},{"tool":"delete_launch_config","args":{"name":"СтарыйЗапуск","confirm":true}}],"expected_result":"The launch configuration СтарыйЗапуск is removed from the workspace (action='deleted').","confidence":5}
+,
+{"id":"q146","calls":[{"tool":"delete_launch_config","args":{"name":"AttachOld","confirm":true}}],"expected_result":"The Attach launch configuration AttachOld is removed from the workspace (action='deleted').","confidence":5}
+]

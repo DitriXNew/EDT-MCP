@@ -1,0 +1,1488 @@
+[
+ {
+  "id": "q001",
+  "expected": "list_projects",
+  "chosen": "list_projects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q002",
+  "expected": "list_projects",
+  "chosen": "list_projects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q003",
+  "expected": "create_project",
+  "chosen": "create_project",
+  "guides": [
+   "create_project"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q004",
+  "expected": "create_project",
+  "chosen": "create_project",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q005",
+  "expected": "create_project",
+  "chosen": "create_project",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q006",
+  "expected": "delete_project",
+  "chosen": "delete_project",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q007",
+  "expected": "delete_project",
+  "chosen": "delete_project",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q008",
+  "expected": "import_configuration_from_xml",
+  "chosen": "import_configuration_from_xml",
+  "guides": [],
+  "tool_ok": true,
+  "missing_required": [
+   "projectName"
+  ],
+  "missing_must": [
+   "projectName"
+  ]
+ },
+ {
+  "id": "q009",
+  "expected": "import_configuration_from_xml",
+  "chosen": "import_configuration_from_xml",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q010",
+  "expected": "export_configuration_to_xml",
+  "chosen": "export_configuration_to_xml",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q011",
+  "expected": "export_configuration_to_xml",
+  "chosen": "export_configuration_to_xml",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q012",
+  "expected": "get_edt_version",
+  "chosen": "get_edt_version",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q013",
+  "expected": "get_server_status",
+  "chosen": "get_server_status",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q014",
+  "expected": "get_configuration_properties",
+  "chosen": "get_configuration_properties",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q015",
+  "expected": "get_configuration_properties",
+  "chosen": "get_configuration_properties",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q016",
+  "expected": "get_metadata_objects",
+  "chosen": "get_metadata_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q017",
+  "expected": "get_metadata_objects",
+  "chosen": "get_metadata_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q018",
+  "expected": "get_metadata_objects",
+  "chosen": "get_metadata_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q019",
+  "expected": "get_metadata_objects",
+  "chosen": "get_metadata_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q020",
+  "expected": "get_metadata_details",
+  "chosen": "get_metadata_details",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q021",
+  "expected": "get_metadata_details",
+  "chosen": "get_metadata_details",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q022",
+  "expected": "get_metadata_details",
+  "chosen": "get_metadata_details",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q023",
+  "expected": "get_metadata_details",
+  "chosen": "get_metadata_details",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q024",
+  "expected": "list_subsystems",
+  "chosen": "list_subsystems",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q025",
+  "expected": "list_subsystems",
+  "chosen": "list_subsystems",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q026",
+  "expected": "get_subsystem_content",
+  "chosen": "get_subsystem_content",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q027",
+  "expected": "get_subsystem_content",
+  "chosen": "get_subsystem_content",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q028",
+  "expected": "list_common_pictures",
+  "chosen": "list_common_pictures",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q029",
+  "expected": "list_common_pictures",
+  "chosen": "list_common_pictures",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q030",
+  "expected": "export_common_picture",
+  "chosen": "export_common_picture",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q031",
+  "expected": "export_common_picture",
+  "chosen": "export_common_picture",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q032",
+  "expected": "get_tags",
+  "chosen": "get_tags",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q033",
+  "expected": "get_objects_by_tags",
+  "chosen": "get_objects_by_tags",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q034",
+  "expected": "get_objects_by_tags",
+  "chosen": "get_objects_by_tags",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q035",
+  "expected": "create_metadata",
+  "chosen": "create_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q036",
+  "expected": "create_metadata",
+  "chosen": "create_metadata",
+  "guides": [
+   "create_metadata",
+   "modify_metadata"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q037",
+  "expected": "create_metadata",
+  "chosen": "create_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q038",
+  "expected": "create_metadata",
+  "chosen": "create_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q039",
+  "expected": "create_metadata",
+  "chosen": "create_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q040",
+  "expected": "modify_metadata",
+  "chosen": "modify_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q041",
+  "expected": "modify_metadata",
+  "chosen": "modify_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q042",
+  "expected": "modify_metadata",
+  "chosen": "modify_metadata",
+  "guides": [],
+  "tool_ok": true,
+  "missing_must": [
+   "dcs"
+  ]
+ },
+ {
+  "id": "q043",
+  "expected": "modify_metadata",
+  "chosen": "modify_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q044",
+  "expected": "modify_metadata",
+  "chosen": "modify_metadata",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q045",
+  "expected": "modify_metadata",
+  "chosen": "get_metadata_details",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q046",
+  "expected": "delete_metadata",
+  "chosen": "delete_metadata",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q047",
+  "expected": "delete_metadata",
+  "chosen": "delete_metadata",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q048",
+  "expected": "delete_metadata",
+  "chosen": "delete_metadata",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q049",
+  "expected": "rename_metadata_object",
+  "chosen": "rename_metadata_object",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q050",
+  "expected": "rename_metadata_object",
+  "chosen": "rename_metadata_object",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "strict"
+ },
+ {
+  "id": "q051",
+  "expected": "adopt_metadata_object",
+  "chosen": "adopt_metadata_object",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q052",
+  "expected": "adopt_metadata_object",
+  "chosen": "adopt_metadata_object",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q053",
+  "expected": "list_modules",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q054",
+  "expected": "list_modules",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q055",
+  "expected": "read_module_source",
+  "chosen": "read_module_source",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q056",
+  "expected": "read_module_source",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q057",
+  "expected": "read_module_source",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q058",
+  "expected": "read_method_source",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q059",
+  "expected": "read_method_source",
+  "chosen": "read_method_source",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q060",
+  "expected": "read_method_source",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q061",
+  "expected": "get_module_structure",
+  "chosen": "get_module_structure",
+  "guides": [
+   "get_module_structure"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q062",
+  "expected": "get_module_structure",
+  "chosen": "get_module_structure",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q063",
+  "expected": "get_outgoing_structures",
+  "chosen": "get_outgoing_structures",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q064",
+  "expected": "get_outgoing_structures",
+  "chosen": "get_outgoing_structures",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q065",
+  "expected": "get_method_call_hierarchy",
+  "chosen": "get_method_call_hierarchy",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q066",
+  "expected": "get_method_call_hierarchy",
+  "chosen": "get_method_call_hierarchy",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q067",
+  "expected": "get_symbol_info",
+  "chosen": "get_symbol_info",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q068",
+  "expected": "get_symbol_info",
+  "chosen": "get_symbol_info",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q069",
+  "expected": "write_module_source",
+  "chosen": "write_module_source",
+  "guides": [
+   "write_module_source"
+  ],
+  "tool_ok": true,
+  "missing_required": [
+   "source"
+  ],
+  "missing_must": [
+   "source"
+  ]
+ },
+ {
+  "id": "q070",
+  "expected": "write_module_source",
+  "chosen": "write_module_source",
+  "guides": [],
+  "tool_ok": true,
+  "missing_required": [
+   "source"
+  ],
+  "missing_must": [
+   "source"
+  ]
+ },
+ {
+  "id": "q071",
+  "expected": "write_module_source",
+  "chosen": "write_module_source",
+  "guides": [],
+  "tool_ok": true,
+  "missing_required": [
+   "source"
+  ],
+  "missing_must": [
+   "source"
+  ]
+ },
+ {
+  "id": "q072",
+  "expected": "write_module_source",
+  "chosen": "write_module_source",
+  "guides": [],
+  "tool_ok": true,
+  "missing_required": [
+   "source"
+  ],
+  "missing_must": [
+   "source"
+  ]
+ },
+ {
+  "id": "q073",
+  "expected": "write_module_source",
+  "chosen": "create_metadata",
+  "guides": [],
+  "tool_ok": true,
+  "missing_required": [
+   "source"
+  ],
+  "missing_must": [
+   "source"
+  ]
+ },
+ {
+  "id": "q074",
+  "expected": "search_in_code",
+  "chosen": "search_in_code",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q075",
+  "expected": "search_in_code",
+  "chosen": "search_in_code",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q076",
+  "expected": "search_in_code",
+  "chosen": "search_in_code",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q077",
+  "expected": "find_references",
+  "chosen": "find_references",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q078",
+  "expected": "find_references",
+  "chosen": "find_references",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q079",
+  "expected": "find_references",
+  "chosen": "find_references",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q080",
+  "expected": "go_to_definition",
+  "chosen": "go_to_definition",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q081",
+  "expected": "go_to_definition",
+  "chosen": "go_to_definition",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q082",
+  "expected": "go_to_definition",
+  "chosen": "go_to_definition",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q083",
+  "expected": "get_content_assist",
+  "chosen": "get_content_assist",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q084",
+  "expected": "get_project_errors",
+  "chosen": "get_project_errors",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q085",
+  "expected": "get_project_errors",
+  "chosen": "get_project_errors",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q086",
+  "expected": "get_project_errors",
+  "chosen": "get_project_errors",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q087",
+  "expected": "get_project_errors",
+  "chosen": "get_project_errors",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q088",
+  "expected": "get_problem_summary",
+  "chosen": "get_problem_summary",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q089",
+  "expected": "get_problem_summary",
+  "chosen": "get_problem_summary",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q090",
+  "expected": "get_check_description",
+  "chosen": "get_check_description",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q091",
+  "expected": "get_check_description",
+  "chosen": "get_check_description",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q092",
+  "expected": "apply_quick_fix",
+  "chosen": "apply_quick_fix",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q093",
+  "expected": "apply_quick_fix",
+  "chosen": "apply_quick_fix",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q094",
+  "expected": "revalidate_objects",
+  "chosen": "revalidate_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q095",
+  "expected": "revalidate_objects",
+  "chosen": "revalidate_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q096",
+  "expected": "clean_project",
+  "chosen": "clean_project",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q097",
+  "expected": "clean_project",
+  "chosen": "clean_project",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q098",
+  "expected": "resync_to_disk",
+  "chosen": "resync_to_disk",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q099",
+  "expected": "resync_to_disk",
+  "chosen": "resync_to_disk",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q100",
+  "expected": "validate_query",
+  "chosen": "validate_query",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q101",
+  "expected": "validate_query",
+  "chosen": "validate_query",
+  "guides": [
+   "validate_query"
+  ],
+  "tool_ok": true,
+  "missing_required": [
+   "queryText"
+  ],
+  "missing_must": [
+   "queryText"
+  ]
+ },
+ {
+  "id": "q102",
+  "expected": "validate_xdto_package",
+  "chosen": "validate_xdto_package",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q103",
+  "expected": "validate_xdto_package",
+  "chosen": "validate_xdto_package",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q104",
+  "expected": "set_breakpoint",
+  "chosen": "set_breakpoint",
+  "guides": [
+   "set_breakpoint"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q105",
+  "expected": "set_breakpoint",
+  "chosen": "set_breakpoint",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q106",
+  "expected": "remove_breakpoint",
+  "chosen": "remove_breakpoint",
+  "guides": [
+   "remove_breakpoint"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q107",
+  "expected": "remove_breakpoint",
+  "chosen": "remove_breakpoint",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q108",
+  "expected": "list_breakpoints",
+  "chosen": "list_breakpoints",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q109",
+  "expected": "debug_launch",
+  "chosen": "debug_launch",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q110",
+  "expected": "debug_launch",
+  "chosen": "debug_launch",
+  "guides": [
+   "debug_launch"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q111",
+  "expected": "debug_status",
+  "chosen": "debug_status",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q112",
+  "expected": "debug_status",
+  "chosen": "debug_status",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q113",
+  "expected": "wait_for_break",
+  "chosen": "wait_for_break",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q114",
+  "expected": "wait_for_break",
+  "chosen": "wait_for_break",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q115",
+  "expected": "step",
+  "chosen": "step",
+  "guides": [
+   "step"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q116",
+  "expected": "step",
+  "chosen": "step",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q117",
+  "expected": "resume",
+  "chosen": "resume",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q118",
+  "expected": "resume",
+  "chosen": "resume",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q119",
+  "expected": "get_variables",
+  "chosen": "get_variables",
+  "guides": [
+   "get_variables"
+  ],
+  "tool_ok": true
+ },
+ {
+  "id": "q120",
+  "expected": "get_variables",
+  "chosen": "get_variables",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q121",
+  "expected": "set_variable",
+  "chosen": "set_variable",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q122",
+  "expected": "set_variable",
+  "chosen": "set_variable",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q123",
+  "expected": "evaluate_expression",
+  "chosen": "evaluate_expression",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q124",
+  "expected": "evaluate_expression",
+  "chosen": "evaluate_expression",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q125",
+  "expected": "terminate_launch",
+  "chosen": "list_configurations",
+  "guides": [
+   "terminate_launch"
+  ],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q126",
+  "expected": "terminate_launch",
+  "chosen": "terminate_launch",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q127",
+  "expected": "start_profiling",
+  "chosen": "start_profiling",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q128",
+  "expected": "start_profiling",
+  "chosen": "start_profiling",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q129",
+  "expected": "stop_profiling",
+  "chosen": "stop_profiling",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q130",
+  "expected": "stop_profiling",
+  "chosen": "stop_profiling",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q131",
+  "expected": "get_profiling_results",
+  "chosen": "get_profiling_results",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q132",
+  "expected": "get_profiling_results",
+  "chosen": "get_profiling_results",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q133",
+  "expected": "create_infobase",
+  "chosen": "create_infobase",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q134",
+  "expected": "create_infobase",
+  "chosen": "create_infobase",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q135",
+  "expected": "get_applications",
+  "chosen": "get_applications",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q136",
+  "expected": "get_applications",
+  "chosen": "get_applications",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q137",
+  "expected": "update_database",
+  "chosen": "update_database",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q138",
+  "expected": "update_database",
+  "chosen": "update_database",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q139",
+  "expected": "delete_infobase",
+  "chosen": "get_applications",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q140",
+  "expected": "delete_infobase",
+  "chosen": "delete_infobase",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q141",
+  "expected": "set_infobase_credentials",
+  "chosen": "set_infobase_credentials",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q142",
+  "expected": "set_infobase_credentials",
+  "chosen": "set_infobase_credentials",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q143",
+  "expected": "create_launch_config",
+  "chosen": "create_launch_config",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q144",
+  "expected": "create_launch_config",
+  "chosen": "create_launch_config",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q145",
+  "expected": "delete_launch_config",
+  "chosen": "delete_launch_config",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q146",
+  "expected": "delete_launch_config",
+  "chosen": "delete_launch_config",
+  "guides": [],
+  "tool_ok": true,
+  "twophase": "confirm"
+ },
+ {
+  "id": "q147",
+  "expected": "list_configurations",
+  "chosen": "list_configurations",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q148",
+  "expected": "list_configurations",
+  "chosen": "list_configurations",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q149",
+  "expected": "get_event_log",
+  "chosen": "get_event_log",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q150",
+  "expected": "get_event_log",
+  "chosen": "get_event_log",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q151",
+  "expected": "list_git_branches",
+  "chosen": "list_git_branches",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q152",
+  "expected": "list_git_branches",
+  "chosen": "list_git_branches",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q153",
+  "expected": "create_git_branch",
+  "chosen": "create_git_branch",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q154",
+  "expected": "create_git_branch",
+  "chosen": "create_git_branch",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q155",
+  "expected": "switch_git_branch",
+  "chosen": "switch_git_branch",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q156",
+  "expected": "switch_git_branch",
+  "chosen": "switch_git_branch",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q157",
+  "expected": "set_branch_infobase",
+  "chosen": "set_branch_infobase",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q158",
+  "expected": "set_branch_infobase",
+  "chosen": "set_branch_infobase",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q159",
+  "expected": "run_yaxunit_tests",
+  "chosen": "run_yaxunit_tests",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q160",
+  "expected": "run_yaxunit_tests",
+  "chosen": "run_yaxunit_tests",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q161",
+  "expected": "run_yaxunit_tests",
+  "chosen": "run_yaxunit_tests",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q162",
+  "expected": "run_yaxunit_tests",
+  "chosen": "run_yaxunit_tests",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q163",
+  "expected": "run_yaxunit_tests",
+  "chosen": "run_yaxunit_tests",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q164",
+  "expected": "run_yaxunit_tests",
+  "chosen": "run_yaxunit_tests",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q165",
+  "expected": "get_form_screenshot",
+  "chosen": "get_form_screenshot",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q166",
+  "expected": "get_form_screenshot",
+  "chosen": "get_form_screenshot",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q167",
+  "expected": "get_form_layout_snapshot",
+  "chosen": "get_form_layout_snapshot",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q168",
+  "expected": "get_form_layout_snapshot",
+  "chosen": "get_form_layout_snapshot",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q169",
+  "expected": "get_template_screenshot",
+  "chosen": "get_template_screenshot",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q170",
+  "expected": "get_template_screenshot",
+  "chosen": "get_template_screenshot",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q171",
+  "expected": "generate_translation_strings",
+  "chosen": "generate_translation_strings",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q172",
+  "expected": "generate_translation_strings",
+  "chosen": "generate_translation_strings",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q173",
+  "expected": "get_translation_project_info",
+  "chosen": "get_translation_project_info",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q174",
+  "expected": "translate_configuration",
+  "chosen": "translate_configuration",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q175",
+  "expected": "translate_configuration",
+  "chosen": "translate_configuration",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q176",
+  "expected": "get_platform_documentation",
+  "chosen": "get_platform_documentation",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q177",
+  "expected": "get_platform_documentation",
+  "chosen": "get_platform_documentation",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q178",
+  "expected": "get_platform_documentation",
+  "chosen": "get_platform_documentation",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q179",
+  "expected": "get_platform_documentation",
+  "chosen": "get_platform_documentation",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q180",
+  "expected": "get_tool_guide",
+  "chosen": "get_tool_guide",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q181",
+  "expected": "list_toolsets",
+  "chosen": "list_toolsets",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q182",
+  "expected": "list_toolsets",
+  "chosen": "list_toolsets",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q183",
+  "expected": "enable_toolset",
+  "chosen": "enable_toolset",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q184",
+  "expected": "enable_toolset",
+  "chosen": "enable_toolset",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q185",
+  "expected": "get_mcp_history",
+  "chosen": "get_mcp_history",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q186",
+  "expected": "get_mcp_history",
+  "chosen": "get_mcp_history",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q187",
+  "expected": "get_markers",
+  "chosen": "get_markers",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q188",
+  "expected": "get_markers",
+  "chosen": "get_markers",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q189",
+  "expected": "build_external_objects",
+  "chosen": "build_external_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q190",
+  "expected": "build_external_objects",
+  "chosen": "build_external_objects",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q191",
+  "expected": "clean_project",
+  "chosen": "clean_project",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q192",
+  "expected": "read_method_source",
+  "chosen": "list_modules",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q193",
+  "expected": null,
+  "chosen": null,
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q194",
+  "expected": null,
+  "chosen": null,
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q195",
+  "expected": null,
+  "chosen": null,
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q196",
+  "expected": null,
+  "chosen": null,
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q197",
+  "expected": null,
+  "chosen": null,
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q198",
+  "expected": "validate_query",
+  "chosen": "get_metadata_details",
+  "guides": [],
+  "tool_ok": true,
+  "missing_required": [
+   "queryText"
+  ]
+ },
+ {
+  "id": "q199",
+  "expected": "get_project_errors",
+  "chosen": "get_project_errors",
+  "guides": [],
+  "tool_ok": true
+ },
+ {
+  "id": "q200",
+  "expected": "create_metadata",
+  "chosen": "create_metadata",
+  "guides": [],
+  "tool_ok": true
+ }
+]
