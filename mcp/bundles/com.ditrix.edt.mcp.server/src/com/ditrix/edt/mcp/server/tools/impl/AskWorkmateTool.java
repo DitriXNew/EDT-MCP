@@ -303,16 +303,6 @@ public class AskWorkmateTool implements IMcpTool
     }
 
     /**
-     * Text prepended to the question so Workmate can reach EDT-MCP's own tools.
-     * <p>
-     * Everything it names is JDK or standard OSGi API and the snippet is complete, which
-     * matters: Workmate's JShell tool forbids improvised Java API, and a caller that has
-     * to prove the bridge in prose on every call would not get an answer at all.
-     *
-     * @param projectName optional project the caller asked about, used in the example
-     * @return the preamble, ending with a blank line before the question
-     */
-    /**
      * Adapts a job's reporter to the gateway's listener, carrying BOTH directions: progress out,
      * and the commit handshake back - which is what keeps a job whose request is already on its
      * way from being published as a retryable failure.
@@ -338,6 +328,16 @@ public class AskWorkmateTool implements IMcpTool
         };
     }
 
+    /**
+     * Text prepended to the question so Workmate can reach EDT-MCP's own tools.
+     * <p>
+     * Everything it names is JDK or standard OSGi API and the snippet is complete, which
+     * matters: Workmate's JShell tool forbids improvised Java API, and a caller that has
+     * to prove the bridge in prose on every call would not get an answer at all.
+     *
+     * @param projectName optional project the caller asked about, used in the example
+     * @return the preamble, ending with a blank line before the question
+     */
     static String mcpBridgePreamble(String projectName)
     {
         // The example has to RUN as written - the whole point of the preamble is that Workmate

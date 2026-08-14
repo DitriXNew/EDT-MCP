@@ -581,20 +581,6 @@ public class WorkmateGateway
     }
 
     /**
-     * Reads Workmate's live Guice injector out of its bundle activator.
-     * <p>
-     * This is the one place that touches a private member. {@code BaseActivator} exposes
-     * {@code injectMembers(Object)} but no injector getter, and using {@code injectMembers} would
-     * require compiling against Workmate's types - which this project deliberately does not do, so
-     * that the Workmate bundles stay out of the target platform and CI never depends on 1C's
-     * server. Keeping the reflection here means a Workmate refactoring breaks exactly one method,
-     * with an INCOMPATIBLE refusal that names the member it could not find.
-     *
-     * @param uiCommonBundle the {@code com.e1c.edt.ai.ui.common} bundle
-     * @return Workmate's live injector, never {@code null}
-     * @throws GatewayException when the activator or the field is missing, or no injector exists yet
-     */
-    /**
      * Makes sure a JShell session is reachable under {@link #CHAT_SESSION_ID}, so
      * Workmate's chat can run code against this plugin's bridge without ever obtaining
      * a session id of its own.
@@ -829,6 +815,20 @@ public class WorkmateGateway
         }
     }
 
+    /**
+     * Reads Workmate's live Guice injector out of its bundle activator.
+     * <p>
+     * This is the one place that touches a private member. {@code BaseActivator} exposes
+     * {@code injectMembers(Object)} but no injector getter, and using {@code injectMembers} would
+     * require compiling against Workmate's types - which this project deliberately does not do, so
+     * that the Workmate bundles stay out of the target platform and CI never depends on 1C's
+     * server. Keeping the reflection here means a Workmate refactoring breaks exactly one method,
+     * with an INCOMPATIBLE refusal that names the member it could not find.
+     *
+     * @param uiCommonBundle the {@code com.e1c.edt.ai.ui.common} bundle
+     * @return Workmate's live injector, never {@code null}
+     * @throws GatewayException when the activator or the field is missing, or no injector exists yet
+     */
     private static Object resolveInjector(Bundle uiCommonBundle) throws GatewayException
     {
         Class<?> baseActivatorClass = requireClass(uiCommonBundle, BASE_ACTIVATOR);

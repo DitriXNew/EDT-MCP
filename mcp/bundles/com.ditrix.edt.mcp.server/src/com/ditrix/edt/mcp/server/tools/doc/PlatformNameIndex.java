@@ -293,18 +293,6 @@ final class PlatformNameIndex
     }
 
     /**
-     * The first {@code limit} names of {@code candidates} that pass {@link #resolvable}. This is the
-     * one place a name becomes something the banner will show, so it is the one place the promise
-     * "every name here answers a lookup" is kept.
-     *
-     * <p>A name carrying a line break is DROPPED rather than flattened, and unlike the echoed query
-     * that is not a matter of taste. The query is echoed to show the caller what was asked, so
-     * flattening it keeps it useful; a listed name is a name the caller is invited to copy and
-     * query, so a flattened one would be a different string that no longer resolves - breaking the
-     * exact promise the list makes. {@link #accept} already refuses such names, so this is the
-     * backstop on the choke point where the promise is actually made, for any future feed.
-     */
-    /**
      * The sample pool reordered so that a bounded number of attempts SPANS it, instead of walking
      * its head.
      *
@@ -347,6 +335,18 @@ final class PlatformNameIndex
         return spread;
     }
 
+    /**
+     * The first {@code limit} names of {@code candidates} that pass {@link #resolvable}. This is the
+     * one place a name becomes something the banner will show, so it is the one place the promise
+     * "every name here answers a lookup" is kept.
+     *
+     * <p>A name carrying a line break is DROPPED rather than flattened, and unlike the echoed query
+     * that is not a matter of taste. The query is echoed to show the caller what was asked, so
+     * flattening it keeps it useful; a listed name is a name the caller is invited to copy and
+     * query, so a flattened one would be a different string that no longer resolves - breaking the
+     * exact promise the list makes. {@link #accept} already refuses such names, so this is the
+     * backstop on the choke point where the promise is actually made, for any future feed.
+     */
     private List<String> verified(List<String> candidates, int limit)
     {
         return verifyPass(candidates, limit, VERIFY_ATTEMPT_LIMIT).names;

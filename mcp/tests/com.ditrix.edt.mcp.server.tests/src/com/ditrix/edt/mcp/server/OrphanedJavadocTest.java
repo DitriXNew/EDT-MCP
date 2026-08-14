@@ -43,9 +43,11 @@ import org.junit.Test;
  * <ul>
  *   <li>one whose next meaningful line is ANOTHER javadoc block — the later block is the
  *       nearer one, so the earlier documents nothing;</li>
- *   <li>one that sits AFTER that first token, i.e. between {@code @Deprecated} and the
- *       member. Here it is the block BEFORE the annotation that survives, which is why
- *       reporting "the first of the pair" would name the wrong one.</li>
+ *   <li>one that sits AFTER an {@code @Deprecated}, between it and the member. Here it is
+ *       the block BEFORE the annotation that survives, which is why reporting "the first
+ *       of the pair" would name the wrong one. Only an annotation carries this rule: a
+ *       modifier or a type name opens a head too, but it also opens a {@code static { }}
+ *       or an {@code int f = expr}, which no javadoc can document.</li>
  * </ul>
  * <p>
  * <b>The fix is to MOVE the block back, not to delete it.</b> Across #341/#345/#353,
@@ -55,10 +57,11 @@ import org.junit.Test;
  * it), and put it there. Delete it only when the declaration it describes is gone, or
  * when a newer block on the same declaration supersedes it — and say so in the PR.
  * <p>
- * {@link #KNOWN_ORPHANS} is a shrinking budget, in the shape
- * {@code BuiltInToolTestCoverageTest} uses: a file may carry the listed number of
- * orphans and no more, and {@link #allowListHasNoStaleEntries} fails once a listed file
- * is cleaner than its budget, so an entry cannot outlive the debt it records.
+ * {@link #KNOWN_ORPHANS} is a shrinking allow-list. Deliberately NOT a per-file count in
+ * the shape {@code BuiltInToolTestCoverageTest} uses — it names each pardoned block by its
+ * own text, so fixing the listed one while introducing another cannot pass on the
+ * arithmetic — and {@link #allowListHasNoStaleEntries} fails once a listed block is gone,
+ * so an entry cannot outlive the debt it records.
  */
 public class OrphanedJavadocTest
 {
@@ -70,8 +73,11 @@ public class OrphanedJavadocTest
      * against identities the new block is unlisted (red) and the pardoned one has vanished
      * (also red, via {@link #allowListHasNoStaleEntries}).
      * <p>
-     * Both entries are the last two sites of issue #353, deferred because the open PR #330
-     * edits exactly these two files; they come out as soon as that PR lands.
+     * The one entry left is the last site of issue #353. It is deferred rather than fixed
+     * because an open PR edits exactly that file, and a one-line javadoc move is not worth a
+     * merge conflict in somebody else's branch; it comes out as soon as that PR lands. Its
+     * sibling entry for {@code ToolSettingsService} is already gone - the block was returned
+     * to its declaration in master, which {@link #allowListHasNoStaleEntries} then reported.
      */
     private static final Map<String, List<String>> KNOWN_ORPHANS = new HashMap<>();
     static
@@ -81,26 +87,24 @@ public class OrphanedJavadocTest
             List.of(
                 "Default: all tools enabled (empty string = no disabled tools)" //$NON-NLS-1$
             ));
-        KNOWN_ORPHANS.put("mcp/bundles/com.ditrix.edt.mcp.server/src" //$NON-NLS-1$
-            + "/com/ditrix/edt/mcp/server/preferences/ToolSettingsService.java", //$NON-NLS-1$
-            List.of(
-                "Applies the tool-enablement preference MIGRATIONS once per store, lazily on the " //$NON-NLS-1$
-                    + "first read. <p> A tool that ships DISABLED by default gets that from {@code " //$NON-NLS-1$
-                    + "DEFAULT_DISABLED_TOOLS} - but only on a store that never persisted its own value. An " //$NON-NLS-1$
-                    + "installation that had already saved the Tools tab (or an \"all tools\" preset) holds " //$NON-NLS-1$
-                    + "an explicit list that predates the new tool, so without this the powerful {@code " //$NON-NLS-1$
-                    + "git} tool would silently arrive ENABLED on upgrade. Version 1 therefore adds it to " //$NON-NLS-1$
-                    + "such a stored list; the user can still enable it deliberately afterwards. @param " //$NON-NLS-1$
-                    + "store the preference store to migrate (never {@code null} here)" //$NON-NLS-1$
-            ));
     }
 
     /** How much of a block's text the REPORT shows; the identity is always the whole of it. */
     private static final int DISPLAY_LENGTH = 60;
 
-    /** The keywords whose declaration opens a TYPE body rather than a block of code. */
+    /**
+     * The RESERVED words whose declaration opens a TYPE body rather than a block of code.
+     * {@code record} is deliberately absent: it is a CONTEXTUAL keyword, so it is also a
+     * legal method, parameter and variable name, and treating it unconditionally as a type
+     * turned the body of every method called {@code record} into a place where this ratchet
+     * accused ordinary comments. {@link #opensRecordDeclaration} decides that one by looking
+     * at what follows.
+     */
     private static final Set<String> TYPE_KEYWORDS =
-        Set.of("class", "interface", "enum", "record"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Set.of("class", "interface", "enum"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    /** The contextual keyword judged by {@link #opensRecordDeclaration} rather than by itself. */
+    private static final String RECORD = "record"; //$NON-NLS-1$
 
     /** The source trees this ratchet covers; the first two must exist. */
     private static final String[] SOURCE_ROOTS = {
@@ -121,16 +125,63 @@ public class OrphanedJavadocTest
      * comment, never in a structural position — checked, not assumed), and the cure is
      * worse than the disease, since translating escapes moves the very line numbers this
      * detector reports by.
+     * <p>
+     * Seven further ways to accuse wrongly were measured on the real detector and CLOSED
+     * rather than listed, because each was reachable in ordinary code: a block in the body of
+     * a method called {@code record} (contextual keyword, see {@link #opensRecordDeclaration});
+     * two consecutive blocks in executable code; a block inside an unclosed {@code (}, e.g. in
+     * a lambda passed as an argument; a block in a parameter list; a block in a field
+     * INITIALIZER, which is an expression and not part of the declaration head; a block before
+     * a head that nothing preceded; and a PAIR of blocks around the {@code static} of an
+     * initializer, which no javadoc can ever attach to. Four rules settle all seven — an
+     * accusation needs a place where a DECLARATION could stand ({@code depth == 0}, inside a
+     * type body or at file level); it must not be past a declaration's {@code =}; the head
+     * accusation needs a pair to choose between; and that pair must be split by an
+     * ANNOTATION, the one head-opening token that cannot also begin a non-declaration.
+     * <p>
+     * Every one was found by REVIEW of this change, not by the corpus: the repository scan
+     * reported the same single site before and after all seven. A shape nobody has written
+     * yet is exactly the shape a ratchet meets on the day somebody writes it — which is why
+     * the list below is the honest deliverable, not the fixes.
+     * <p>
+     * Where the fixing stopped, and why: review kept producing further legal shapes, each
+     * more contrived than the last, and every one of them was UNREACHABLE here (measured, not
+     * assumed — no {@code TYPE_USE} annotation, no {@code @interface}, no block inside a
+     * {@code throws} clause, and the repository scan never moved). Past that point another
+     * mechanism buys nothing and costs a reader: three shapes are therefore LISTED above
+     * rather than closed. Anyone who meets one has the list in the refusal and can say so.
      */
     private static final String KNOWN_LIMITS =
         "If you believe this is a FALSE alarm, these are the detector's known blind spots:\n" //$NON-NLS-1$
             + "  - a structural token spelled as a unicode escape (\\u003b for ';') is not translated,\n" //$NON-NLS-1$
-            + "    so a declaration head can stay open past it. This is the ONLY one that can accuse\n" //$NON-NLS-1$
-            + "    wrongly; if it bit you, say so on the issue rather than working around it.\n" //$NON-NLS-1$
-            + "  - a ',' or a ':' at depth 0 closes the declaration head, so 'throws A, B',\n" //$NON-NLS-1$
-            + "    'implements A, B', '<A, B>', a multi-declarator field and a ternary in an\n" //$NON-NLS-1$
-            + "    initializer give it up early.\n" //$NON-NLS-1$
-            + "Only the first can report wrongly; the rest can only MISS. Details: OrphanedJavadocTest."; //$NON-NLS-1$
+            + "    so a declaration head can stay open past it. This is the only shape KNOWN to be\n" //$NON-NLS-1$
+            + "    able to accuse wrongly; if it bit you, say so on the issue rather than working\n" //$NON-NLS-1$
+            + "    around it - and if something else did, that is a defect worth the same report.\n" //$NON-NLS-1$
+            + "  - two adjacent blocks standing directly in front of a '{ }' initializer are read\n" //$NON-NLS-1$
+            + "    as a pair of declarations.\n" //$NON-NLS-1$
+            + "  - a ',' at depth 0 closes the head, so a TYPE_USE annotation later in the SAME\n" //$NON-NLS-1$
+            + "    declaration ('throws A, /** x */ @TA /** y */ B') reopens it as if it were the\n" //$NON-NLS-1$
+            + "    declaration's first token.\n" //$NON-NLS-1$
+            + "  - 'default' in an annotation element does not begin an initializer the way '=' does,\n" //$NON-NLS-1$
+            + "    so a block in that expression is judged as part of the declaration.\n" //$NON-NLS-1$
+            + "None of those three is reachable in this repository (no TYPE_USE annotation, no\n" //$NON-NLS-1$
+            + "'@interface' declaration, no block inside a 'throws' clause - checked, not assumed).\n" //$NON-NLS-1$
+            + "The rest can only MISS:\n" //$NON-NLS-1$
+            + "  - the head accusation applies only after an ANNOTATION, and only with a block on\n" //$NON-NLS-1$
+            + "    BOTH sides of it. A block after a modifier, a type name or punctuation is a\n" //$NON-NLS-1$
+            + "    deliberate miss: those also begin 'static { }' and 'int f = expr', which have no\n" //$NON-NLS-1$
+            + "    declaration to document.\n" //$NON-NLS-1$
+            + "  - a ',', a ';' or a ':' at depth 0 closes the declaration HEAD, so 'throws A, B'\n" //$NON-NLS-1$
+            + "    and a multi-declarator field give it up early.\n" //$NON-NLS-1$
+            + "  - everything from a declaration's '=' to its ';' is treated as an expression, so a\n" //$NON-NLS-1$
+            + "    later declarator ('int a = 1, /** here */ b = 2;') is not judged.\n" //$NON-NLS-1$
+            + "  - a record whose name is not directly followed by its component list - a generic\n" //$NON-NLS-1$
+            + "    one ('record Pair<A, B>(..)'), or one with a comment after the keyword - is not\n" //$NON-NLS-1$
+            + "    recognised as a type, so its members go unjudged.\n" //$NON-NLS-1$
+            + "  - an anonymous class body counts as code, and nothing inside a '(' is judged at all.\n" //$NON-NLS-1$
+            + "  - a block left after the LAST declaration in a file is never flushed, so an orphan\n" //$NON-NLS-1$
+            + "    at end of file is not reported.\n" //$NON-NLS-1$
+            + "Details: OrphanedJavadocTest."; //$NON-NLS-1$
 
     @Test
     public void noOrphanedJavadocOutsideTheAllowList()
@@ -381,8 +432,9 @@ public class OrphanedJavadocTest
      */
     static String refusalText(List<String> problems)
     {
-        return "Javadoc blocks that document nothing (a member was inserted between the block and " //$NON-NLS-1$
-            + "its declaration). MOVE each block back to the declaration it describes - do NOT just " //$NON-NLS-1$
+        return "Javadoc blocks that document nothing - a member was inserted between the block " //$NON-NLS-1$
+            + "and its declaration, or the declaration itself was removed. MOVE each block back to " //$NON-NLS-1$
+            + "the declaration it describes - do NOT just " //$NON-NLS-1$
             + "delete it, it is usually that declaration's only documentation:\n  " //$NON-NLS-1$
             + String.join("\n  ", problems) //$NON-NLS-1$
             + "\n\n" + KNOWN_LIMITS; //$NON-NLS-1$
@@ -524,10 +576,17 @@ public class OrphanedJavadocTest
     }
 
     /**
-     * Positive control for the OTHER shape of the same accident: a block that sits after
-     * the declaration's first token. Which of the two blocks survives is not a matter of
-     * taste — {@code javadoc} was run on exactly these sources, and the one BEFORE the
-     * annotation is the one it renders — so the block reported here is the discarded one.
+     * Positive control for the OTHER shape of the same accident: a block that sits after an
+     * ANNOTATION. Which of the two blocks survives is not a matter of taste — {@code javadoc}
+     * was run on exactly these sources, and the one BEFORE the annotation is the one it
+     * renders — so the block reported here is the discarded one.
+     * <p>
+     * Only an annotation, deliberately. A head can also be opened by a modifier, a type name
+     * or punctuation, and those forms are documented misses in
+     * {@link #aBlockAfterANonAnnotationFirstTokenIsADocumentedMiss}: an annotation is the one
+     * head-opening token that cannot ALSO begin something undocumentable, such as a
+     * {@code static { }} initializer or an {@code int f = expr}, and those were the source of
+     * every wrong accusation this detector was measured making.
      */
     @Test
     public void detectorFindsABlockInsideADeclarationPrefix()
@@ -556,18 +615,6 @@ public class OrphanedJavadocTest
         assertEquals("a wrapped annotation is still a declaration prefix", //$NON-NLS-1$
             List.of(Integer.valueOf(6)), orphanedJavadocLines(wrapped));
 
-        // A signature split after its modifiers.
-        String split = String.join("\n", //$NON-NLS-1$
-            "class C", //$NON-NLS-1$
-            "{", //$NON-NLS-1$
-            "    /** Attached. */", //$NON-NLS-1$
-            "    public static", //$NON-NLS-1$
-            "    /** Dropped. */", //$NON-NLS-1$
-            "    void m() {}", //$NON-NLS-1$
-            "}"); //$NON-NLS-1$
-        assertEquals("modifiers open the declaration just as an annotation does", //$NON-NLS-1$
-            List.of(Integer.valueOf(5)), orphanedJavadocLines(split));
-
         // The head does not close at the annotation's own braces: they are inside its
         // argument list, not the member's body.
         String braced = String.join("\n", //$NON-NLS-1$
@@ -582,52 +629,6 @@ public class OrphanedJavadocTest
             "}"); //$NON-NLS-1$
         assertEquals("an annotation's own braces must not close the head", //$NON-NLS-1$
             List.of(Integer.valueOf(7)), orphanedJavadocLines(braced));
-
-        // A modifier can be followed by an annotation on the same line.
-        String mixed = String.join("\n", //$NON-NLS-1$
-            "class E", //$NON-NLS-1$
-            "{", //$NON-NLS-1$
-            "    /** Attached. */", //$NON-NLS-1$
-            "    public @Deprecated", //$NON-NLS-1$
-            "    /** Dropped. */", //$NON-NLS-1$
-            "    void m() {}", //$NON-NLS-1$
-            "}"); //$NON-NLS-1$
-        assertEquals("a modifier followed by an annotation is still one open head", //$NON-NLS-1$
-            List.of(Integer.valueOf(5)), orphanedJavadocLines(mixed));
-
-        // A declaration with NO modifier and NO annotation opens its head at its first
-        // token all the same — measured on the real tool for all six package-private
-        // forms (field, method, constructor, generic method, nested class, record): the
-        // block before that token is rendered, the one after it is dropped, every time.
-        String packagePrivate = String.join("\n", //$NON-NLS-1$
-            "class G", //$NON-NLS-1$
-            "{", //$NON-NLS-1$
-            "    /** Attached to the field. */", //$NON-NLS-1$
-            "    String", //$NON-NLS-1$
-            "    /** Dropped. */", //$NON-NLS-1$
-            "    f;", //$NON-NLS-1$
-            "", //$NON-NLS-1$
-            "    /** Attached to the generic method. */", //$NON-NLS-1$
-            "    <T> T", //$NON-NLS-1$
-            "    /** Dropped too. */", //$NON-NLS-1$
-            "    g(T t) { return t; }", //$NON-NLS-1$
-            "}"); //$NON-NLS-1$
-        assertEquals("a package-private declaration opens a head at its first token", //$NON-NLS-1$
-            List.of(Integer.valueOf(5), Integer.valueOf(10)), orphanedJavadocLines(packagePrivate));
-
-        // "whatever it is" includes PUNCTUATION. Contrived, but it is the one shape that
-        // tells "the first token" apart from "the first word", and the real tool agrees:
-        // it renders the block before the '<' and drops the one after it.
-        String angle = String.join("\n", //$NON-NLS-1$
-            "class H", //$NON-NLS-1$
-            "{", //$NON-NLS-1$
-            "    /** Attached. */", //$NON-NLS-1$
-            "    <", //$NON-NLS-1$
-            "    /** Dropped. */", //$NON-NLS-1$
-            "    T> T g(T t) { return t; }", //$NON-NLS-1$
-            "}"); //$NON-NLS-1$
-        assertEquals("a punctuation first token opens the head too", //$NON-NLS-1$
-            List.of(Integer.valueOf(5)), orphanedJavadocLines(angle));
 
         // A block left at the end of a TYPE body after its member was deleted: the '}'
         // cannot be the declaration it was written for, so nobody documents it. This is
@@ -651,6 +652,60 @@ public class OrphanedJavadocTest
             "}"); //$NON-NLS-1$
         assertEquals("a nested type is a type body too", //$NON-NLS-1$
             List.of(Integer.valueOf(7)), orphanedJavadocLines(nested));
+    }
+
+    /**
+     * The forms the head accusation deliberately gives up. All of them were measured on the
+     * real {@code javadoc} tool and it does drop the second block in each - so these ARE
+     * orphans, and they are missed on purpose.
+     * <p>
+     * The reason is the shape of the evidence. In every one of them the head is opened by a
+     * modifier, a type name or punctuation, and each of those ALSO begins something that has
+     * no documentable declaration at all: {@code static { }}, an instance initializer, a
+     * field with an initializer expression. Five review rounds produced six different legal
+     * shapes that were wrongly accused through exactly that door, and none through an
+     * annotation. Set against that, the head accusation had never once caught a real site:
+     * all 20 sites this ratchet has actually found - the 16 cleaned up under #353 and the 4
+     * in this change - were consecutive-block cases, which the other rule reports.
+     * <p>
+     * So the trade is: give up a shape nobody has written for a door nobody can walk through.
+     * If a real one of these ever turns up, this test is where its evidence belongs.
+     */
+    @Test
+    public void aBlockAfterANonAnnotationFirstTokenIsADocumentedMiss()
+    {
+        String[][] shapes = {
+            {"a signature split after its modifiers", "    public static", "    void m() {}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a modifier followed by an annotation", "    public @Deprecated", "    void m() {}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a package-private field", "    String", "    f;"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a package-private generic method", "    <T> T", "    g(T t) { return t; }"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {"a punctuation first token", "    <", "    T> T g(T t) { return t; }"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        };
+        for (String[] shape : shapes)
+        {
+            String source = String.join("\n", //$NON-NLS-1$
+                "class C", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    /** Attached: javadoc renders this one. */", //$NON-NLS-1$
+                shape[1],
+                "    /** Dropped by javadoc, and MISSED by this detector on purpose. */", //$NON-NLS-1$
+                shape[2],
+                "}"); //$NON-NLS-1$
+            assertEquals(shape[0] + " is a documented miss, not a finding", //$NON-NLS-1$
+                List.of(), orphanedJavadocLines(source));
+        }
+
+        // The same source with the first token replaced by an ANNOTATION is still reported,
+        // so this test cannot pass by the detector having stopped working.
+        assertEquals("the annotation form of the very same accident is still caught", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(String.join("\n", //$NON-NLS-1$
+                "class C", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    /** Attached: javadoc renders this one. */", //$NON-NLS-1$
+                "    @Deprecated", //$NON-NLS-1$
+                "    /** Dropped by javadoc, and reported. */", //$NON-NLS-1$
+                "    void m() {}", //$NON-NLS-1$
+                "}"))); //$NON-NLS-1$
     }
 
     /**
@@ -742,7 +797,7 @@ public class OrphanedJavadocTest
             List.of(), orphanedJavadocLines(classLiteral));
 
         // Three blocks, ONE line, two of them dropped: the report counts BLOCKS, so the
-        // budget cannot be gamed by writing them on a single line.
+        // allow-list cannot be satisfied wholesale by writing them on a single line.
         assertEquals("two blocks sharing a line are two findings, not one", //$NON-NLS-1$
             List.of(Integer.valueOf(1), Integer.valueOf(1)),
             orphanedJavadocLines("/** one */ /** two */ /** three */ int f;")); //$NON-NLS-1$
@@ -924,6 +979,444 @@ public class OrphanedJavadocTest
     }
 
     /**
+     * Negative control for the four accusations this detector was measured MAKING on legal
+     * code. Each fixture below reddened the build before the guard "an accusation needs a
+     * place where a declaration could stand" was added, and each of the four shapes occurs
+     * in this repository — they are closed defects, not hypotheticals.
+     * <p>
+     * Written as one test because they are one bug: two of the three accusation paths were
+     * asking "is a block pending?" without asking "could a member be here at all?".
+     */
+    @Test
+    public void detectorNeverAccusesWhereNoDeclarationCouldStand()
+    {
+        // 1. Two ordinary notes in EXECUTABLE code. The "a javadoc block followed by another
+        // one" rule used to fire anywhere, including where there is no declaration to move
+        // either block back to - which is precisely what the refusal tells the reader to do.
+        String[][] bodies = {
+            {"a method body", "    void m()", "    {", "        doIt();", "    }"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            {"a static initializer", "    static", "    {", "        doIt();", "    }"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        };
+        for (String[] body : bodies)
+        {
+            String source = String.join("\n", //$NON-NLS-1$
+                "class A", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                body[1],
+                body[2],
+                "        /** note one */", //$NON-NLS-1$
+                "        /** note two */", //$NON-NLS-1$
+                body[3],
+                body[4],
+                "}"); //$NON-NLS-1$
+            assertEquals("two ordinary notes in " + body[0] + " document nothing by design", //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(), orphanedJavadocLines(source));
+        }
+
+        // ...including through a lambda and an anonymous class, whose bodies are code too.
+        String nestedBodies = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    void m()", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        run(() -> {", //$NON-NLS-1$
+            "            /** note one */", //$NON-NLS-1$
+            "            /** note two */", //$NON-NLS-1$
+            "            doIt();", //$NON-NLS-1$
+            "        });", //$NON-NLS-1$
+            "        run(new Runnable() {", //$NON-NLS-1$
+            "            public void run()", //$NON-NLS-1$
+            "            {", //$NON-NLS-1$
+            "                /** note three */", //$NON-NLS-1$
+            "                /** note four */", //$NON-NLS-1$
+            "                doIt();", //$NON-NLS-1$
+            "            }", //$NON-NLS-1$
+            "        });", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a lambda body and an anonymous class body are code as well", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(nestedBodies));
+
+        // 2. 'record' is a CONTEXTUAL keyword, so it is also a legal method, parameter and
+        // variable name - this repository uses it as all three. Reading it as a type turned
+        // the body of every such method into a place where a member could be declared.
+        String[][] contextualRecord = {
+            {"a method named 'record'", "    void record(String s)", "    {", "        doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"a parameter named 'record'", "    void m(Rec record)", "    {", "        use(record);"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        };
+        for (String[] shape : contextualRecord)
+        {
+            String source = String.join("\n", //$NON-NLS-1$
+                "class A", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                shape[1],
+                shape[2],
+                shape[3],
+                "        /** a trailing note, not documentation */", //$NON-NLS-1$
+                "    }", //$NON-NLS-1$
+                "}"); //$NON-NLS-1$
+            assertEquals(shape[0] + " does not open a type body", //$NON-NLS-1$
+                List.of(), orphanedJavadocLines(source));
+        }
+
+        // 'record instanceof X' is the shape that tells "a NAME follows" apart from "a record
+        // DECLARATION follows", because an identifier follows in both. The '{' is deliberately
+        // the very next token: with a ';' or a ',' in between, the type flag is cleared anyway
+        // and the fixture would survive a detector that had stopped requiring the component
+        // list - proving nothing about the rule it exists for.
+        String instanceOf = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    void m(Object record)", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        if (record instanceof String)", //$NON-NLS-1$
+            "        {", //$NON-NLS-1$
+            "            doIt();", //$NON-NLS-1$
+            "            /** a trailing note, not documentation */", //$NON-NLS-1$
+            "        }", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("'record' followed by an identifier is not a record declaration", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(instanceOf));
+
+        // 3. Inside an unclosed '(' there are expressions, never members. At CLASS level the
+        // enclosing body is a type body, so without this the lambda's contents inherited it.
+        String inParentheses = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    private static final Runnable R = wrap(() -> {", //$NON-NLS-1$
+            "        doIt();", //$NON-NLS-1$
+            "        /** an ordinary note inside a lambda body */", //$NON-NLS-1$
+            "        doIt();", //$NON-NLS-1$
+            "    });", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a class-level lambda in an argument list is still code", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(inParentheses));
+
+        // 4. A parameter list is the same case one level down: legal, if odd, and there is no
+        // declaration below the block to move it to. Two blocks, again, because one is already
+        // covered by the pair rule and would not exercise the parenthesis depth at all.
+        assertEquals("a block inside a parameter list is not a member's javadoc", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(
+                "class A { void m(/** one */ /** two */ int x) {} }")); //$NON-NLS-1$
+
+        // 5. A type keyword read INSIDE an argument list must not survive the ')' that ends
+        // it. Its own '{' is inside those parentheses and is never pushed, so the flag can
+        // only ever leak - here onto the next lambda, whose body would then be judged as a
+        // place where members live. Found by review, not by the corpus: every assertion above
+        // stays green while this one reddens.
+        String leakedTypeKeyword = String.join("\n", //$NON-NLS-1$
+            "class PluginState", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    static final Runnable[] TASKS = {", //$NON-NLS-1$
+            "        keep(() -> {", //$NON-NLS-1$
+            "            class Adapter {}", //$NON-NLS-1$
+            "        }),", //$NON-NLS-1$
+            "        () -> {", //$NON-NLS-1$
+            "            /** milliseconds */", //$NON-NLS-1$
+            "            /** and a second note, so the pair rule is not what saves this */", //$NON-NLS-1$
+            "            doIt();", //$NON-NLS-1$
+            "        }", //$NON-NLS-1$
+            "    };", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a type keyword inside an argument list must not leak past its ')'", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(leakedTypeKeyword));
+
+        // 6. An INITIALIZER is an expression, and the declaration head ended at the name. This
+        // one is older than the rest of this change - the detector accused
+        // 'int f = /** why one */ 1;' from the day it was written - and it cannot be expressed
+        // by closing the head at '=', because the very next identifier reopens it.
+        // Each is written with TWO adjacent blocks on purpose: a single one is already covered
+        // by the pair rule, so it would pass whatever the initializer state did, and the whole
+        // point here is where that state begins and ends.
+        String[][] initializers = {
+            {"a plain field initializer", "    int f = /** one */ /** two */ 1;"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"an expression lambda", //$NON-NLS-1$
+                "    IntUnaryOperator f = x -> /** one */ /** two */ x + 1;"}, //$NON-NLS-1$
+            {"a ternary, before the ':'", //$NON-NLS-1$
+                "    int f = ready ? /** one */ /** two */ 1 : 2;"}, //$NON-NLS-1$
+            // The initializer does not end at the first ';'-like character it happens to
+            // contain. Each of the next four carries a token that was once read as "the
+            // declaration is over" - a brace, a ':', a ',' - after which the REST of the very
+            // same statement was judged as though it were a declaration again.
+            {"a ternary, after the ':'", //$NON-NLS-1$
+                "    int f = ready ? 1 : 2 + /** one */ /** two */ 3;"}, //$NON-NLS-1$
+            {"an array initializer inside the expression", //$NON-NLS-1$
+                "    int f = new int[] { 1 }.length + /** one */ /** two */ 1;"}, //$NON-NLS-1$
+            {"a comma inside the initializer's type arguments", //$NON-NLS-1$
+                "    Object f = new HashMap<String, Integer>() /** one */ /** two */;"}, //$NON-NLS-1$
+            {"a lambda body inside the expression", //$NON-NLS-1$
+                "    int f = call(() -> { doIt(); }) + /** one */ /** two */ 1;"}, //$NON-NLS-1$
+        };
+        for (String[] shape : initializers)
+        {
+            assertEquals("a block in " + shape[0] + " has no declaration to be moved to", //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(), orphanedJavadocLines("class C\n{\n" + shape[1] + "\n}")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // The same rule reaching the OTHER accusation: here a block DOES precede the head, so
+        // the pair rule is satisfied and only the initializer state keeps the stray block in
+        // the expression from being reported.
+        assertEquals("a documented field's initializer is still an expression", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(
+                "class C\n{\n    /** Documents f. */\n    int f = /** stray */ 1;\n}")); //$NON-NLS-1$
+        // ...and the same inside a type whose head carries a comma, which is the combination
+        // that only became reachable once such types started being judged at all.
+        assertEquals("the same, in a type this ratchet had previously switched itself off for", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(
+                "class C<T, U>\n{\n    IntUnaryOperator f = x -> /** note */ x + 1;\n}")); //$NON-NLS-1$
+
+        // Two consecutive blocks in an initializer are the same case reaching the OTHER
+        // accusation, which had no such guard of its own.
+        assertEquals("two blocks in an initializer are two ordinary comments", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines("class C { int f = /** one */ /** two */ 1; }")); //$NON-NLS-1$
+
+        // 7. A head that NOTHING preceded. The head accusation exists to pick the right one of
+        // a pair - the block before the declaration's first token is the one javadoc renders,
+        // the one after it is dropped - so with no first block there is no pair and nothing to
+        // report. Every shape below opens a head with nothing in front of it.
+        String[][] unpairedHeads = {
+            {"a static initializer", "    static", "    /** what this block sets up */", "    {}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"an instance initializer", "    ", "    /** what this block sets up */", "    {}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"an undocumented field", "    int", "    /** a note about the type */", "    f;"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            // The ANNOTATED form of the same thing, which is what tells the pair rule apart
+            // from "the first token was an annotation": here it was, and the block is still
+            // left alone because nothing stood in front of the annotation to be the other
+            // half. An undocumented @Override with a note under it is ordinary code.
+            {"an annotated method nobody documented", "    @Override", //$NON-NLS-1$ //$NON-NLS-2$
+                "    /** a note about the override */", "    public void m() {}"}, //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (String[] shape : unpairedHeads)
+        {
+            for (String head : new String[] {"class C", "class C<T, U>"}) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                String source = String.join("\n", head, "{", shape[1], shape[2], shape[3], "}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                assertEquals("nothing preceded the head of " + shape[0] + " in '" + head //$NON-NLS-1$ //$NON-NLS-2$
+                    + "', so there is no pair to choose between", //$NON-NLS-1$
+                    List.of(), orphanedJavadocLines(source));
+            }
+        }
+
+        // 8. ...and a head that a block DID precede, where the head belongs to a construct
+        // that has no documentable declaration at all. Here the pair rule is satisfied and
+        // only "the first token was not an annotation" keeps this legal source quiet: the
+        // earlier block was written for the field further down, the later one is an ordinary
+        // note on the initializer, and javadoc renders neither.
+        for (String head : new String[] {"class C", "class C<T, U>"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            String pairedAroundAnInitializer = String.join("\n", //$NON-NLS-1$
+                head,
+                "{", //$NON-NLS-1$
+                "    /** Documents f, further down. */", //$NON-NLS-1$
+                "    static", //$NON-NLS-1$
+                "    /** An ordinary note about this initializer. */", //$NON-NLS-1$
+                "    {}", //$NON-NLS-1$
+                "", //$NON-NLS-1$
+                "    int f;", //$NON-NLS-1$
+                "}"); //$NON-NLS-1$
+            assertEquals("a modifier can begin an initializer, so it cannot carry the head " //$NON-NLS-1$
+                + "accusation - in '" + head + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(), orphanedJavadocLines(pairedAroundAnInitializer));
+        }
+
+        // Positive control for this whole test: every assertion above expects an EMPTY list,
+        // which a detector that had stopped working entirely would also satisfy. The same two
+        // notes, moved into a place where a member CAN be declared, must still be reported.
+        String sameNotesInATypeBody = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** note one */", //$NON-NLS-1$
+            "    /** note two */", //$NON-NLS-1$
+            "    int f;", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("the very same two blocks ARE an orphan in a type body", //$NON-NLS-1$
+            List.of(Integer.valueOf(3)), orphanedJavadocLines(sameNotesInATypeBody));
+
+        // ...and so does a block in a declaration PREFIX of an initialized field, which is the
+        // shape closest to the one the initializer rule above must NOT swallow.
+        String prefixOfAnInitializedField = String.join("\n", //$NON-NLS-1$
+            "class C", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    @Deprecated", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    int f = 1;", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("the initializer rule must not reach BACK over the declaration prefix", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(prefixOfAnInitializedField));
+
+        // ...nor FORWARD past the ';' that ends the field. A rule that switches the head off
+        // and never switches it back on would silence the rest of the type, and every
+        // assertion that expects an empty list would go on passing.
+        String memberAfterAnInitializedField = String.join("\n", //$NON-NLS-1$
+            "class C", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    int f = 1;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Attached. */", //$NON-NLS-1$
+            "    @Deprecated", //$NON-NLS-1$
+            "    /** Dropped. */", //$NON-NLS-1$
+            "    void m() {}", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("the initializer ends at its ';' - the next member is judged again", //$NON-NLS-1$
+            List.of(Integer.valueOf(7)), orphanedJavadocLines(memberAfterAnInitializedField));
+    }
+
+    /**
+     * The {@code record} decision reaching all the way through the lexer, on the one shape
+     * found that gets from {@code record instanceof X} to a <code>{</code> at depth 0 without
+     * a {@code ;}, {@code ,}, {@code :} or <code>}</code> clearing the type flag on the way:
+     * a ternary whose branches are lambdas. Trusting the word unconditionally makes that
+     * lambda body a supposed type body, and the ordinary note inside it is then reported when
+     * the body closes.
+     */
+    @Test
+    public void aVariableNamedRecordDoesNotTurnALambdaIntoATypeBody()
+    {
+        String source = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    Object record;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    Runnable r = record instanceof String", //$NON-NLS-1$
+            "        ? () -> {", //$NON-NLS-1$
+            "            /** ordinary note */", //$NON-NLS-1$
+            "        }", //$NON-NLS-1$
+            "        : () -> {};", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a variable called 'record' opens no type body", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(source));
+    }
+
+    /**
+     * The other side of the {@code record} decision: a real record declaration must still be
+     * a TYPE body. Without this, "stop trusting the word {@code record}" could be satisfied
+     * by never trusting it at all, and the test above would pass on a detector that had
+     * quietly stopped judging every record in the repository.
+     */
+    @Test
+    public void detectorStillJudgesARealRecordDeclaration()
+    {
+        String declaration = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    private record Point(int x, int y)", //$NON-NLS-1$
+            "    {", //$NON-NLS-1$
+            "        /** Attached. */", //$NON-NLS-1$
+            "        @Deprecated", //$NON-NLS-1$
+            "        /** Dropped. */", //$NON-NLS-1$
+            "        void m() {}", //$NON-NLS-1$
+            "    }", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a record body is a type body", //$NON-NLS-1$
+            List.of(Integer.valueOf(7)), orphanedJavadocLines(declaration));
+
+        // The compact form this repository actually writes: a body on one line.
+        String compact = String.join("\n", //$NON-NLS-1$
+            "class A", //$NON-NLS-1$
+            "{", //$NON-NLS-1$
+            "    private record Point(int x, int y) {}", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "    /** Orphan. */", //$NON-NLS-1$
+            "    /** Documents f. */", //$NON-NLS-1$
+            "    int f;", //$NON-NLS-1$
+            "}"); //$NON-NLS-1$
+        assertEquals("a record declaration must not disturb the members after it", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(compact));
+    }
+
+    /**
+     * The {@code record} decision, asserted on the FUNCTION as well as through the lexer
+     * ({@link #aVariableNamedRecordDoesNotTurnALambdaIntoATypeBody} does that end to end).
+     * Here, so that each case is named and the two deliberate MISSES are on the record as
+     * decisions rather than surprises.
+     * <p>
+     * Every call goes through real source text with the offset the lexer would really pass —
+     * the index just past the word — because a fixture that starts at 0 with no separator
+     * ({@code "Point(int x)"}) is not a call this lexer can make: without a delimiter,
+     * {@code recordPoint} is one identifier and the helper is never reached.
+     */
+    @Test
+    public void recordIsATypeOnlyWhenAComponentListFollows()
+    {
+        assertTrue("a record declaration: its name and component list follow", //$NON-NLS-1$
+            opensRecordDeclaration(("record Point(int x, int y) {}"))); //$NON-NLS-1$
+        assertTrue("a line break between the keyword and the name is still a declaration", //$NON-NLS-1$
+            opensRecordDeclaration(("record\n    Point(int x)"))); //$NON-NLS-1$
+
+        assertTrue("a METHOD called 'record': an argument list follows, not a name", //$NON-NLS-1$
+            !opensRecordDeclaration(("void record(String s)"))); //$NON-NLS-1$
+        assertTrue("a VARIABLE called 'record', passed as an argument", //$NON-NLS-1$
+            !opensRecordDeclaration(("use(record)"))); //$NON-NLS-1$
+        assertTrue("a VARIABLE called 'record', tested with instanceof - an identifier " //$NON-NLS-1$
+            + "follows it too, which is why the component list is what decides", //$NON-NLS-1$
+            !opensRecordDeclaration(("record instanceof String;"))); //$NON-NLS-1$
+        assertTrue("'record' with nothing but whitespace left must not read past the end", //$NON-NLS-1$
+            !opensRecordDeclaration(("record   \n"))); //$NON-NLS-1$
+
+        // The two documented MISSES: both make the detector judge less, never accuse more.
+        assertTrue("a GENERIC record is not recognised - documented in KNOWN_LIMITS", //$NON-NLS-1$
+            !opensRecordDeclaration(("record Pair<A, B>(A a, B b) {}"))); //$NON-NLS-1$
+        assertTrue("nor one with a comment between the keyword and the name", //$NON-NLS-1$
+            !opensRecordDeclaration(("record /* carrier */ R(int x) {}"))); //$NON-NLS-1$
+    }
+
+    /**
+     * Calls {@link #opensRecordDeclaration} the way the lexer does: on the whole text, at the
+     * offset just past the word {@code record}. Keeping the offset REAL is the point — passing
+     * a pre-trimmed suffix and a zero would leave the argument itself unexercised.
+     *
+     * @param source source text containing the word {@code record}
+     * @return the helper's verdict at the offset just past that word
+     */
+    private static boolean opensRecordDeclaration(String source)
+    {
+        int at = source.indexOf(RECORD);
+        assertTrue("the fixture must actually contain the word", at >= 0); //$NON-NLS-1$
+        return opensRecordDeclaration(source, at + RECORD.length());
+    }
+
+    /**
+     * A {@code ,} inside a TYPE HEAD separates a list, it does not end the head: it is how
+     * {@code implements A, B} and {@code <T, U>} are spelled. Treating it as the end made the
+     * {@code {} that followed open a body of CODE, and with that every declaration of the
+     * type went unjudged — silently, for the whole file. Five files in this repository carry
+     * that shape, so this is the difference between a ratchet and a ratchet that is off.
+     */
+    @Test
+    public void detectorJudgesATypeWhoseHeadContainsAComma()
+    {
+        String[][] heads = {
+            {"implements A, B", "class C implements A, B"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"a generic parameter list", "class C<T, U>"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"an interface extending two", "interface C extends A, B"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"no comma at all (control)", "class C implements A"}, //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (String[] head : heads)
+        {
+            String insideHead = String.join("\n", //$NON-NLS-1$
+                head[1],
+                "{", //$NON-NLS-1$
+                "    /** Attached. */", //$NON-NLS-1$
+                "    @Deprecated", //$NON-NLS-1$
+                "    /** Dropped. */", //$NON-NLS-1$
+                "    void m() {}", //$NON-NLS-1$
+                "}"); //$NON-NLS-1$
+            assertEquals("a block inside a declaration head, in a type declared with " //$NON-NLS-1$
+                + head[0], List.of(Integer.valueOf(5)), orphanedJavadocLines(insideHead));
+
+            String endOfBody = String.join("\n", //$NON-NLS-1$
+                head[1],
+                "{", //$NON-NLS-1$
+                "    int f;", //$NON-NLS-1$
+                "    /** old member left behind */", //$NON-NLS-1$
+                "}"); //$NON-NLS-1$
+            assertEquals("a block left at the end of a type declared with " + head[0], //$NON-NLS-1$
+                List.of(Integer.valueOf(4)), orphanedJavadocLines(endOfBody));
+        }
+    }
+
+    /**
      * Negative control: well-formed documentation, an annotated member, an empty
      * {@code /**}{@code /} comment and a line comment between two blocks must NOT be
      * reported — a detector that flags legal code gets switched off.
@@ -983,11 +1476,22 @@ public class OrphanedJavadocTest
      * <ul>
      *   <li>the next token is another javadoc comment — no code came between, so the
      *       later block is the nearer one and this one is discarded; or</li>
-     *   <li>it appears while a declaration HEAD is open — after the declaration's first
-     *       token (an annotation or a modifier) and before the {@code ;}, <code>{</code>
-     *       or <code>}</code> that closes it. There the block BEFORE the head is the one
-     *       javadoc renders, so the one inside is the discarded one.</li>
+     *   <li>it appears while a declaration HEAD opened by an ANNOTATION is still open —
+     *       before the {@code ;}, {@code ,}, {@code :}, <code>{</code> or <code>}</code> that
+     *       closes it — AND a block stood immediately before that annotation. There the
+     *       earlier block is the one javadoc renders, so this one is the discarded half of a
+     *       pair. Without the pair there is nothing to choose between; and a head opened by a
+     *       modifier or a type name is not judged at all, because those also begin things no
+     *       javadoc can document; or</li>
+     *   <li>it is still pending when a <code>}</code> closes a TYPE body — the member it was
+     *       written for was deleted and left it behind.</li>
      * </ul>
+     * All three are gated on the block standing where a DECLARATION could stand: inside a
+     * type body, outside any unclosed {@code (}, and before a declaration's {@code =} rather
+     * than in the initializer that follows it. Executable code and expressions hold no
+     * members, so a block there is an ordinary comment — and a refusal naming one would ask
+     * the reader to move it back to a declaration that does not exist. Every shape this gate
+     * rules out was a real accusation this detector used to make on legal code.
      * Lexing rather than matching line prefixes is what keeps a text block holding Java
      * source, a {@code "://"} literal or a {@code /**} inside a string from being read as
      * documentation — a ratchet that reddens on legal code is worse than one that misses,
@@ -1012,12 +1516,42 @@ public class OrphanedJavadocTest
         int pending = -1;
         int pendingLine = -1;
         String pendingText = null;
-        // One entry per open brace: true when it opened a TYPE body. A declaration - and
+        // One entry per brace met at parenthesis depth 0: true when it opened a TYPE body.
+        // Braces inside an argument list are not tracked at all - nothing in there is judged.
+        // A declaration - and
         // so a declaration head - can only live in one of those; everything a method body
         // holds is executable code, where a /** */ block is an ordinary comment.
         Deque<Boolean> typeBody = new ArrayDeque<>();
         boolean sawTypeKeyword = false;
         boolean afterDot = false;
+        // Set by an '=' at depth 0: everything from there to the ';' is the INITIALIZER, an
+        // expression. The declaration ITSELF ended at the name, so a block in there documents
+        // nothing and has nothing to be moved back to - 'int f = /** why one */ 1;' was
+        // accused without it.
+        //
+        // It is SAVED AND RESTORED around every brace, not cleared at one, because an
+        // initializer can contain braces of its own: an array initializer, a lambda body, an
+        // anonymous class. Clearing at the brace ended the initializer early and the rest of
+        // the SAME statement was judged as a declaration again -
+        // 'int f = new int[] { 1 }.length + /** note */ 1;'. Only the ';' clears this flag:
+        // a real Java declaration can also end at the ',' before another declarator, but
+        // that ',' is indistinguishable here from one inside the initializer's own type
+        // arguments, so the conservative reading costs a MISS and never an accusation.
+        boolean pastAssignment = false;
+        Deque<Boolean> assignmentOutside = new ArrayDeque<>();
+        // Whether a javadoc block stood immediately BEFORE the token that opened the current
+        // declaration head. The head accusation exists only to pick the right one of a PAIR -
+        // javadoc renders the block before the first token and drops the one after it - so
+        // without a first block there is no pair, nothing to disambiguate, and no accusation
+        // to make. This is what tells 'int f = 1' and 'static { }' (whose heads open with
+        // nothing in front of them) apart from '@Deprecated' standing between two blocks.
+        boolean headHadDoc = false;
+        // Whether the token that opened the current head was an ANNOTATION. An annotation is
+        // the only head-opening token that CANNOT introduce something other than a
+        // declaration: a modifier also begins 'static { }', a type name also begins
+        // 'int f = expr', and punctuation begins anything at all. Every wrong accusation this
+        // detector was measured making came through one of those, never through '@'.
+        boolean headOpenedByAnnotation = false;
         StringBuilder word = new StringBuilder();
         while (i < source.length())
         {
@@ -1032,11 +1566,23 @@ public class OrphanedJavadocTest
             {
                 // A word is a code token, and ANY first token of a declaration opens its
                 // head - the type of a package-private member just as much as 'public'.
+                if (!headOpen)
+                {
+                    headHadDoc = pending >= 0;
+                    headOpenedByAnnotation = false;
+                }
                 pending = -1;
                 pendingLine = -1;
                 headOpen = true;
+                String token = word.toString();
                 // 'Foo.class' is a class LITERAL, not a type declaration - hence afterDot.
-                if (!afterDot && TYPE_KEYWORDS.contains(word.toString()))
+                //
+                // Only at depth 0, because only a '{' at depth 0 is ever pushed: a type
+                // declared inside an argument list (a local class in a lambda) has its brace
+                // in there too, so the flag could never be spent - it would merely SURVIVE
+                // the closing ')' and mark the next unrelated '{' as a type body.
+                if (!afterDot && depth == 0 && (TYPE_KEYWORDS.contains(token)
+                    || (RECORD.equals(token) && opensRecordDeclaration(source, i))))
                 {
                     sawTypeKeyword = true;
                 }
@@ -1083,11 +1629,20 @@ public class OrphanedJavadocTest
                 i = Math.min(i + 2, source.length());
                 if (javadoc)
                 {
-                    if (pending >= 0)
+                    // Both accusations need a place where a DECLARATION could stand: inside a
+                    // type body, not inside an unclosed '(' and not past a declaration's '='.
+                    // An argument list, a condition, an annotation's values and an initializer
+                    // all hold expressions, never members, so a block in one is an ordinary
+                    // comment - and there is no declaration below it to be moved back to,
+                    // which is the only thing this ratchet ever asks anyone to do.
+                    boolean whereADeclarationCouldBe =
+                        depth == 0 && !pastAssignment && inTypeBody(typeBody);
+                    if (pending >= 0 && whereADeclarationCouldBe)
                     {
                         orphans.put(Integer.valueOf(pending), new Orphan(pendingLine, pendingText));
                     }
-                    if (headOpen && inTypeBody(typeBody))
+                    if (headOpen && headOpenedByAnnotation && headHadDoc
+                        && whereADeclarationCouldBe)
                     {
                         orphans.put(Integer.valueOf(startOffset),
                             new Orphan(startLine, identityOf(source, startOffset, i)));
@@ -1121,10 +1676,16 @@ public class OrphanedJavadocTest
             }
             if (c == '@')
             {
+                if (!headOpen)
+                {
+                    headHadDoc = wasPending >= 0;
+                    headOpenedByAnnotation = true;
+                }
                 headOpen = true;
                 i++;
                 continue;
             }
+            boolean wasHeadOpen = headOpen;
             if (c == '(')
             {
                 depth++;
@@ -1133,19 +1694,23 @@ public class OrphanedJavadocTest
             else if (c == '{' && depth == 0)
             {
                 typeBody.push(Boolean.valueOf(sawTypeKeyword));
+                assignmentOutside.push(Boolean.valueOf(pastAssignment));
                 sawTypeKeyword = false;
                 headOpen = false;
+                pastAssignment = false;
             }
             else if (c == '}' && depth == 0)
             {
                 // A block still pending at the end of a TYPE body documents nothing: the
                 // member it was written for was deleted and left it behind. Inside a method
                 // body the same shape is an ordinary trailing comment, so it is left alone.
-                if (wasPending >= 0 && inTypeBody(typeBody))
+                if (wasPending >= 0 && !pastAssignment && inTypeBody(typeBody))
                 {
                     orphans.put(Integer.valueOf(wasPending), new Orphan(wasPendingLine, wasPendingText));
                 }
                 typeBody.poll();
+                Boolean outside = assignmentOutside.poll();
+                pastAssignment = outside != null && outside.booleanValue();
                 sawTypeKeyword = false;
                 headOpen = false;
             }
@@ -1158,12 +1723,37 @@ public class OrphanedJavadocTest
             {
                 // The end of whatever came before. ':' is here for a LABEL - 'default:' and
                 // 'case X:' would otherwise leave the head open over the statements below.
-                sawTypeKeyword = false;
+                //
+                // A ',' does NOT end a type head, it separates a LIST inside one:
+                // 'implements A, B', 'extends A, B', '<T, U>', 'permits A, B'. Clearing the
+                // type flag there made the '{' that follows push a non-type body, and with it
+                // every declaration of that type went unjudged. ';' and ':' cannot appear in a
+                // type head at all, so they still end one.
+                sawTypeKeyword = c == ',' && sawTypeKeyword;
                 headOpen = false;
+                // Only the ';' ends the declaration. A ',' at depth 0 can just as easily be
+                // inside the initializer's own type arguments ('new HashMap<String, Integer>()')
+                // and a ':' inside its ternary, and treating either as the end put the rest of
+                // the expression back under judgement. The cost is a MISS on the second
+                // declarator of 'int a = 1, /** note */ b = 2;', which is the safe direction.
+                pastAssignment = c != ';' && pastAssignment;
+            }
+            else if (c == '=' && depth == 0)
+            {
+                // Past here lies the INITIALIZER, and it is an expression. A word reopens
+                // headOpen on the very next token, so this cannot be expressed by clearing
+                // headOpen once - it has to be remembered until the declaration really ends.
+                pastAssignment = true;
+                headOpen = true;
             }
             else
             {
                 headOpen = true;
+            }
+            if (!wasHeadOpen && headOpen)
+            {
+                headHadDoc = wasPending >= 0;
+                headOpenedByAnnotation = false;
             }
             afterDot = c == '.';
             i++;
@@ -1172,12 +1762,61 @@ public class OrphanedJavadocTest
     }
 
     /**
+     * Whether the {@code record} just read is the keyword of a record DECLARATION rather than
+     * an ordinary identifier. {@code record} is contextual, so it is also a legal method,
+     * parameter and variable name - and this repository uses it as all three.
+     * <p>
+     * A declaration is recognised by what follows: the record's name, then its component
+     * list. Requiring the {@code (} is what separates it from {@code record instanceof
+     * String}, where an identifier follows too. The cost is a MISS on a generic record
+     * ({@code record Pair<A, B>(...)}, whose name is followed by {@code <}) and on one with a
+     * comment wedged in ({@code record /* c *}{@code / R(...)}), which is the safe direction:
+     * a shape this cannot see goes unjudged, it is never accused.
+     *
+     * Package-private, and tested DIRECTLY by
+     * {@link #recordIsATypeOnlyWhenAComponentListFollows}, because the guard is defensive:
+     * once a type keyword is only trusted at depth 0, no legal shape was found that reaches a
+     * depth-0 <code>{</code> from {@code record instanceof X} without passing a {@code ;},
+     * {@code ,}, {@code :} or <code>}</code> that clears the flag anyway. An unreachable
+     * decision left untested is one the next reader deletes as dead weight.
+     *
+     * @param source the whole file
+     * @param at the offset just past the word {@code record}
+     * @return {@code true} when a record declaration starts here
+     */
+    static boolean opensRecordDeclaration(String source, int at)
+    {
+        int i = skipWhitespace(source, at);
+        if (i >= source.length() || !Character.isJavaIdentifierStart(source.charAt(i)))
+        {
+            return false;
+        }
+        while (i < source.length() && Character.isJavaIdentifierPart(source.charAt(i)))
+        {
+            i++;
+        }
+        i = skipWhitespace(source, i);
+        return i < source.length() && source.charAt(i) == '(';
+    }
+
+    /** @return the index of the first non-whitespace character at or after {@code at} */
+    private static int skipWhitespace(String source, int at)
+    {
+        int i = at;
+        while (i < source.length() && Character.isWhitespace(source.charAt(i)))
+        {
+            i++;
+        }
+        return i;
+    }
+
+    /**
      * Whether the innermost open brace is a TYPE body (or we are at file level, where types
      * themselves are declared). Executable code is everything else, and a {@code /** *}{@code /}
      * block there documents nothing by construction - accusing it would redden the build on
      * legal code, which is the one failure this ratchet must never have.
      *
-     * @param typeBody one entry per open brace
+     * @param typeBody one entry per brace met at parenthesis depth 0
      * @return {@code true} when a declaration could appear here
      */
     private static boolean inTypeBody(Deque<Boolean> typeBody)
