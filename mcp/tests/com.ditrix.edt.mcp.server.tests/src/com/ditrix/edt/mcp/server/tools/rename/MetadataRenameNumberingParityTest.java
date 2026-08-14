@@ -24,9 +24,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.ltk.core.refactoring.Change;
 import org.eclipse.ltk.core.refactoring.CompositeChange;
 import org.eclipse.ltk.core.refactoring.NullChange;
+import org.eclipse.ltk.core.refactoring.RefactoringStatus;
 import org.eclipse.text.edits.ReplaceEdit;
 import org.eclipse.text.edits.TextEdit;
 import org.junit.Test;
@@ -283,6 +288,49 @@ public class MetadataRenameNumberingParityTest
     }
 
     @Test
+    public void testOptionalityFlipChangesContentHash()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        String optional = service.changePointContentHash(refactorings(true,
+            stableChange("same", "/Project/target"))); //$NON-NLS-1$ //$NON-NLS-2$
+        String mandatory = service.changePointContentHash(refactorings(false,
+            stableChange("same", "/Project/target"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotEquals("a change point becoming mandatory changes what disableIndices means", //$NON-NLS-1$
+            optional, mandatory);
+    }
+
+    @Test
+    public void testEnabledStateFlipChangesContentHash()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        Change enabledLeaf = stableChange("same", "/Project/target"); //$NON-NLS-1$ //$NON-NLS-2$
+        Change disabledLeaf = stableChange("same", "/Project/target"); //$NON-NLS-1$ //$NON-NLS-2$
+        disabledLeaf.setEnabled(false);
+
+        String enabled = service.changePointContentHash(refactorings(true, enabledLeaf));
+        String disabled = service.changePointContentHash(refactorings(true, disabledLeaf));
+
+        assertNotEquals("a default-enabled state change must invalidate the preview token", //$NON-NLS-1$
+            enabled, disabled);
+    }
+
+    @Test
+    public void testEqualLookingLeavesWithDifferentStableTargetsCannotSwapUndetected()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        String first = service.changePointContentHash(refactorings(true,
+            stableChange("same", "/Project/target-a"), //$NON-NLS-1$ //$NON-NLS-2$
+            stableChange("same", "/Project/target-b"))); //$NON-NLS-1$ //$NON-NLS-2$
+        String swapped = service.changePointContentHash(refactorings(true,
+            stableChange("same", "/Project/target-b"), //$NON-NLS-1$ //$NON-NLS-2$
+            stableChange("same", "/Project/target-a"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotEquals("equal rendered rows still represent different stable edit targets", //$NON-NLS-1$
+            first, swapped);
+    }
+
+    @Test
     public void testPreviewEmitsStableContentHashOverTheFullListRegardlessOfMaxResults()
         throws Exception
     {
@@ -301,6 +349,29 @@ public class MetadataRenameNumberingParityTest
             frontmatterValue(truncated, "contentHash")); //$NON-NLS-1$
         assertEquals("re-rendering the same tree must emit the same token", contentHash, //$NON-NLS-1$
             frontmatterValue(repeated, "contentHash")); //$NON-NLS-1$
+    }
+
+    /**
+     * A change point with no stable identity costs the caller the index LOCK, never the preview.
+     * The preview mutates nothing and is the only way to see what a rename would touch, so refusing
+     * it would withdraw the safe half of the tool because the optional half cannot be guaranteed -
+     * and would leave "run it with confirm=true instead" as the caller's only route.
+     */
+    @Test
+    public void testPreviewStillRendersWithoutATokenWhenALeafHasNoStableIdentity() throws Exception
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        // A bare NullChange exposes neither a modified element nor affected objects.
+        List<IRefactoring> unidentifiable = refactorings(true, new NullChange("opaque")); //$NON-NLS-1$
+
+        String preview = renderPreview(service, unidentifiable, "Old", 0, List.of()); //$NON-NLS-1$
+
+        assertTrue("the preview itself must still be produced", //$NON-NLS-1$
+            preview.contains("# Refactoring Preview")); //$NON-NLS-1$
+        assertFalse("no token may be issued for a list that cannot be verified", //$NON-NLS-1$
+            preview.contains("contentHash:")); //$NON-NLS-1$
+        assertTrue("the preview must say why disableIndices is unavailable here", //$NON-NLS-1$
+            preview.contains("`disableIndices` is unavailable for this rename")); //$NON-NLS-1$
     }
 
     @Test
@@ -398,9 +469,28 @@ public class MetadataRenameNumberingParityTest
         CompositeChange root = new CompositeChange("root"); //$NON-NLS-1$
         for (String name : names)
         {
-            root.add(new NullChange(name));
+            root.add(stableChange(name, "/Project/" + name)); //$NON-NLS-1$
         }
-        INativeChangeRefactoringItem item = nativeItem(root);
+        return refactorings(true, root);
+    }
+
+    /** One native item containing the supplied leaves and exposing the requested skippability. */
+    private static List<IRefactoring> refactorings(boolean optional, Change... changes)
+    {
+        CompositeChange root;
+        if (changes.length == 1 && changes[0] instanceof CompositeChange composite)
+        {
+            root = composite;
+        }
+        else
+        {
+            root = new CompositeChange("root"); //$NON-NLS-1$
+            for (Change change : changes)
+            {
+                root.add(change);
+            }
+        }
+        INativeChangeRefactoringItem item = nativeItem(root, optional);
         IRefactoring refactoring = mock(IRefactoring.class);
         when(refactoring.getTitle()).thenReturn("Rename"); //$NON-NLS-1$
         when(refactoring.getItems()).thenReturn(List.of(item));
@@ -416,10 +506,66 @@ public class MetadataRenameNumberingParityTest
      */
     private static INativeChangeRefactoringItem nativeItem(Change change)
     {
+        return nativeItem(change, true);
+    }
+
+    private static INativeChangeRefactoringItem nativeItem(Change change, boolean optional)
+    {
         INativeChangeRefactoringItem item = mock(INativeChangeRefactoringItem.class);
         when(item.getNativeChange()).thenReturn(change);
-        when(item.isOptional()).thenReturn(true);
+        when(item.isOptional()).thenReturn(optional);
         return item;
+    }
+
+    private static Change stableChange(String name, String targetPath)
+    {
+        return new StableTargetChange(name, Path.fromPortableString(targetPath));
+    }
+
+    /**
+     * Fallback-row leaf whose display fields reveal no target. Its concrete class and IPath returned
+     * by getModifiedElement are stable across fresh tree builds, while object identity is not.
+     */
+    private static final class StableTargetChange extends Change
+    {
+        private final String name;
+        private final IPath targetPath;
+
+        StableTargetChange(String name, IPath targetPath)
+        {
+            this.name = name;
+            this.targetPath = targetPath;
+        }
+
+        @Override
+        public String getName()
+        {
+            return name;
+        }
+
+        @Override
+        public void initializeValidationData(IProgressMonitor pm)
+        {
+            // Nothing to validate in this synthetic leaf.
+        }
+
+        @Override
+        public RefactoringStatus isValid(IProgressMonitor pm)
+        {
+            return new RefactoringStatus();
+        }
+
+        @Override
+        public Change perform(IProgressMonitor pm) throws CoreException
+        {
+            return null;
+        }
+
+        @Override
+        public Object getModifiedElement()
+        {
+            return targetPath;
+        }
     }
 
     // ==================== reflective seams ====================
@@ -490,9 +636,11 @@ public class MetadataRenameNumberingParityTest
     private static Object newChangePoint(int index, String description, Object location)
         throws Exception
     {
+        Object identity = onlyConstructor(nested("ChangePointIdentity")) //$NON-NLS-1$
+            .newInstance("supplemental", "supplemental"); //$NON-NLS-1$ //$NON-NLS-2$
         return onlyConstructor(nested("ChangePoint")) //$NON-NLS-1$
             .newInstance(Integer.valueOf(index), BSL_REF, description, Boolean.TRUE, Boolean.TRUE,
-                location);
+                location, identity);
     }
 
     private static String renderPreview(MetadataRenameService service,

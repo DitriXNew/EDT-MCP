@@ -3484,7 +3484,11 @@
           "type": "boolean"
         },
         "disableIndices": {
-          "description": "Comma-separated preview '#' indices of OPTIONAL change points to skip, e.g. '2,3,5'.",
+          "description": "Comma-separated preview '#' indices of OPTIONAL change points to skip, e.g. '2,3,5'. Entries that cannot be an index at all - not whole numbers, or negative - are refused before anything runs; an index the current preview simply does not have is reported back as unknown instead.",
+          "type": "string"
+        },
+        "expectedHash": {
+          "description": "Optimistic-lock token from the preview's contentHash; required when confirm=true and disableIndices is non-empty.",
           "type": "string"
         },
         "maxResults": {

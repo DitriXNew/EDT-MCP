@@ -21,6 +21,7 @@ import java.util.TreeSet;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
@@ -600,13 +601,28 @@ public class MetadataRenameService
 
         // Phase 2: build markdown with YAML frontmatter
         StringBuilder sb = new StringBuilder();
+        // A leaf without a stable identity costs the caller the INDEX LOCK, not the preview. The
+        // preview changes nothing and is the only way to see what a rename would touch, so refusing
+        // it here would withdraw the safe half of the tool because the optional half cannot be
+        // guaranteed - and the refusal would be steering the caller toward the destructive call
+        // instead. The token is omitted and the reason is printed; confirm still refuses to resolve
+        // an index against a tree it cannot verify.
+        String contentHash;
+        try
+        {
+            contentHash = changePointContentHash(refactorings);
+        }
+        catch (UnverifiableChangePointException e)
+        {
+            contentHash = null;
+        }
         PreviewSummary summary = new PreviewSummary(objectFqn, newName, allChanges.size(), enabledCount,
-            allProblems.size(), exactMatches.size(), shown, changePointContentHash(refactorings));
+            allProblems.size(), exactMatches.size(), shown, contentHash);
         appendFrontmatter(sb, summary);
         appendChangePointsTable(sb, allChanges, shown);
         appendCodeContext(sb, allChanges, shown);
         appendProblemsSection(sb, allProblems);
-        appendFooter(sb);
+        appendFooter(sb, contentHash != null);
 
         return sb.toString();
     }
@@ -649,7 +665,12 @@ public class MetadataRenameService
         return ContentHash.of(changePointSignatureFor(refactorings));
     }
 
-    /** Serializes the seven owner-approved fields with separators that cannot occur in their values. */
+    /**
+     * Serializes every field that can change what an index means, plus the signature-only stable
+     * leaf identity. Optionality controls whether confirm may disable the current leaf, and enabled
+     * is its default apply state, so omitting either would let a materially different tree reuse the
+     * preview token. The identity distinguishes leaves whose rendered fields happen to be equal.
+     */
     private static String changePointSignature(List<ChangePoint> changePoints)
     {
         StringBuilder signature = new StringBuilder();
@@ -660,13 +681,21 @@ public class MetadataRenameService
             {
                 signature.append(HASH_POINT_SEPARATOR);
             }
+            if (changePoint.signatureIdentity == null
+                || changePoint.signatureIdentity.stableValue == null)
+            {
+                throw new UnverifiableChangePointException(changePoint);
+            }
             signature.append(changePoint.index).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.type)).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.description)).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.project)).append(HASH_FIELD_SEPARATOR)
                 .append(hashValue(changePoint.fqn)).append(HASH_FIELD_SEPARATOR)
                 .append(changePoint.lineNumber).append(HASH_FIELD_SEPARATOR)
-                .append(changePoint.columnNumber);
+                .append(changePoint.columnNumber).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.optional).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.enabled).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.signatureIdentity.stableValue);
             first = false;
         }
         return signature.toString();
@@ -718,7 +747,7 @@ public class MetadataRenameService
                 allChanges.add(new ChangePoint(
                     indexCounter[0]++, "rename", //$NON-NLS-1$
                     item.getName(), false, item.isChecked(),
-                    CodeLocation.of(null, null)));
+                    CodeLocation.of(null, null), ChangePointIdentity.forPlainItem(item)));
             }
         }
     }
@@ -813,7 +842,13 @@ public class MetadataRenameService
         sb.append("enabledChanges: ").append(summary.enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("problems: ").append(summary.problemCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("debugExactMatches: ").append(summary.exactMatchCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        sb.append("contentHash: ").append(summary.contentHash).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Absent rather than empty when the tree carries a change point this tool cannot identify:
+        // a key with no value would read as "the lock is available and blank", and a caller copying
+        // it into expectedHash would be refused with the wrong reason.
+        if (summary.contentHash != null)
+        {
+            sb.append("contentHash: ").append(summary.contentHash).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         sb.append("---\n\n"); //$NON-NLS-1$
 
         sb.append("# Refactoring Preview: Rename `").append(summary.objectFqn) //$NON-NLS-1$
@@ -921,12 +956,24 @@ public class MetadataRenameService
     }
 
     /** Appends the trailing usage hint (confirm/disableIndices) shared by every preview. */
-    private void appendFooter(StringBuilder sb)
+    private void appendFooter(StringBuilder sb, boolean indexLockAvailable)
     {
         sb.append("> To execute, call with `confirm=true`.\n"); //$NON-NLS-1$
-        sb.append("> Use `disableIndices='1,2,3'` to skip change points by their `#` index " //$NON-NLS-1$
-            + "and pass this preview's `contentHash` as `expectedHash` " //$NON-NLS-1$
-            + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
+        if (indexLockAvailable)
+        {
+            sb.append("> Use `disableIndices='1,2,3'` to skip change points by their `#` index " //$NON-NLS-1$
+                + "and pass this preview's `contentHash` as `expectedHash` " //$NON-NLS-1$
+                + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
+            return;
+        }
+        // Said here rather than left to the confirm-time refusal: the caller decides what to skip
+        // while reading THIS table, and finding out afterwards costs them a round trip against a
+        // destructive tool.
+        sb.append("> `disableIndices` is unavailable for this rename: one of its change points " //$NON-NLS-1$
+            + "carries no stable identity, so an index taken from this preview could not be " //$NON-NLS-1$
+            + "proven to mean the same change point at `confirm=true`. No `contentHash` is " //$NON-NLS-1$
+            + "issued, and confirm will refuse indices rather than resolve them against an " //$NON-NLS-1$
+            + "unverifiable list. Confirm without `disableIndices` applies the complete rename.\n"); //$NON-NLS-1$
     }
 
     /**
@@ -963,6 +1010,49 @@ public class MetadataRenameService
         }
     }
 
+    /**
+     * Signature-only identity of the operation behind a row. The stable value is deliberately not
+     * rendered: it exists only to stop two equal-looking leaves from exchanging preview indices.
+     */
+    private static final class ChangePointIdentity
+    {
+        final String changeClass;
+        final String stableValue;
+
+        ChangePointIdentity(String changeClass, String stableValue)
+        {
+            this.changeClass = changeClass;
+            this.stableValue = stableValue;
+        }
+
+        static ChangePointIdentity forPlainItem(IRefactoringItem item)
+        {
+            String itemClass = item.getClass().getName();
+            return new ChangePointIdentity(itemClass, identityPart("plainItemClass", itemClass)); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Raised instead of issuing or accepting a token that cannot prove which native leaf an index
+     * addresses. Confirm without disableIndices remains available because no cross-call index is
+     * resolved in that mode.
+     */
+    private static final class UnverifiableChangePointException extends IllegalStateException
+    {
+        private static final long serialVersionUID = 1L;
+
+        UnverifiableChangePointException(ChangePoint changePoint)
+        {
+            super("rename_metadata_object cannot safely create or verify contentHash because change " //$NON-NLS-1$
+                + "point #" + changePoint.index + " ('" + changePoint.description + "') uses " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + changePoint.signatureIdentity.changeClass + " but exposes no stable edit target " //$NON-NLS-1$
+                + "through getModifiedElement() or getAffectedObjects(). Indexed disabling is " //$NON-NLS-1$
+                + "unavailable for this refactoring. Retry with confirm=true and empty " //$NON-NLS-1$
+                + "disableIndices to apply the complete rename, or update EDT/MCP so this change " //$NON-NLS-1$
+                + "type exposes a stable target. Nothing was renamed."); //$NON-NLS-1$
+        }
+    }
+
     /** Simple data holder for a single change point in preview. */
     private static class ChangePoint
     {
@@ -977,9 +1067,10 @@ public class MetadataRenameService
         final int columnNumber;
         final String codeContext;
         final String methodName;
+        final ChangePointIdentity signatureIdentity;
 
         ChangePoint(int index, String type, String description,
-            boolean optional, boolean enabled, CodeLocation location)
+            boolean optional, boolean enabled, CodeLocation location, ChangePointIdentity signatureIdentity)
         {
             this.index = index;
             this.type = type;
@@ -992,6 +1083,7 @@ public class MetadataRenameService
             this.columnNumber = location.columnNumber;
             this.codeContext = location.codeContext;
             this.methodName = location.methodName;
+            this.signatureIdentity = signatureIdentity;
         }
     }
 
@@ -1035,6 +1127,7 @@ public class MetadataRenameService
         String fqn;
         String project;
         boolean addedFallbackChange;
+        ChangePointIdentity signatureIdentity;
 
         LeafScan(String fqn, String project)
         {
@@ -1127,6 +1220,7 @@ public class MetadataRenameService
         boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
         boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
         LeafScan scan = new LeafScan(currentFqn, currentProject);
+        scan.signatureIdentity = changePointIdentity(change);
         List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, ctx.exactMatches);
         logPreviewMapping(change, scan.fqn, scan.project, exactMatchInfos.size());
         if (!exactMatchInfos.isEmpty())
@@ -1160,7 +1254,7 @@ public class MetadataRenameService
         ctx.result.add(new ChangePoint(
             leafIndex, BSL_REF,
             change.getName(), ctx.optional, change.isEnabled(),
-            CodeLocation.of(scan.fqn, scan.project)));
+            CodeLocation.of(scan.fqn, scan.project), scan.signatureIdentity));
     }
 
     /** Emits one change point per resolved exact-match, defaulting fqn/project to the leaf context. */
@@ -1175,7 +1269,7 @@ public class MetadataRenameService
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
                 new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
-                    exactMatch.codeContext, exactMatch.methodName)));
+                    exactMatch.codeContext, exactMatch.methodName), scan.signatureIdentity));
         }
     }
 
@@ -1269,7 +1363,7 @@ public class MetadataRenameService
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
                 new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
-                    matchedCodeContext, matchedMethodName)));
+                    matchedCodeContext, matchedMethodName), scan.signatureIdentity));
         }
     }
 
@@ -1485,7 +1579,8 @@ public class MetadataRenameService
                     edt.lineNumber,
                     edt.columnNumber,
                     edt.codeContext,
-                    edt.methodName)));
+                    edt.methodName),
+                original.signatureIdentity));
         }
     }
 
@@ -1926,6 +2021,157 @@ public class MetadataRenameService
         return array;
     }
 
+    /**
+     * Builds the signature-only identity for one native leaf. The concrete change class says which
+     * operation implementation will run; the stable target says what it will edit. Text-edit shape
+     * and the BM feature refine that target when one object owns several independent edits. No Java
+     * object identity, {@code hashCode()} or arbitrary {@code toString()} value is accepted because a
+     * confirm rebuild allocates a fresh change tree.
+     */
+    private static ChangePointIdentity changePointIdentity(Change change)
+    {
+        String changeClass = change.getClass().getName();
+        String targetIdentity = stableTargetIdentity(invokeNoArg(change, "getModifiedElement")); //$NON-NLS-1$
+        if (targetIdentity == null)
+        {
+            targetIdentity = stableAffectedObjectsIdentity(invokeNoArg(change, "getAffectedObjects")); //$NON-NLS-1$
+        }
+        if (targetIdentity == null)
+        {
+            return new ChangePointIdentity(changeClass, null);
+        }
+
+        StringBuilder stableValue = new StringBuilder();
+        stableValue.append(identityPart("changeClass", changeClass)) //$NON-NLS-1$
+            .append(identityPart("target", targetIdentity)); //$NON-NLS-1$
+        if (change instanceof BmObjectTextContentChange<?> bmChange)
+        {
+            EStructuralFeature feature = getBmChangeFeature(bmChange);
+            if (feature != null)
+            {
+                String featureOwner = feature.getEContainingClass() != null
+                    ? feature.getEContainingClass().getName() : ""; //$NON-NLS-1$
+                stableValue.append(identityPart("feature", featureOwner + "." + feature.getName())); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        TextEdit edit = getChangeEdit(change);
+        if (edit != null)
+        {
+            stableValue.append(identityPart("edit", stableTextEditIdentity(edit))); //$NON-NLS-1$
+        }
+        return new ChangePointIdentity(changeClass, stableValue.toString());
+    }
+
+    /** Stable descriptions for the edit-target shapes EDT and Eclipse expose to LTK changes. */
+    private static String stableTargetIdentity(Object target)
+    {
+        if (target == null)
+        {
+            return null;
+        }
+        if (target instanceof IResource resource)
+        {
+            return identityPart("resource", resource.getFullPath().toPortableString()); //$NON-NLS-1$
+        }
+        if (target instanceof IPath path)
+        {
+            return identityPart("path", path.toPortableString()); //$NON-NLS-1$
+        }
+        if (target instanceof IBmObject bmObject)
+        {
+            String fqn = bmObject.bmGetFqn();
+            if (fqn != null && !fqn.isBlank())
+            {
+                String engine = bmObject.bmGetEngine() != null ? bmObject.bmGetEngine().getId() : ""; //$NON-NLS-1$
+                return identityPart("bmEngine", engine) + identityPart("bmFqn", fqn); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (target instanceof EObject eObject)
+        {
+            org.eclipse.emf.common.util.URI uri = EcoreUtil.getURI(eObject);
+            if (uri != null && !uri.toString().isBlank())
+            {
+                return identityPart("eObjectUri", uri.toString()); //$NON-NLS-1$
+            }
+        }
+        if (target instanceof org.eclipse.emf.common.util.URI uri)
+        {
+            return identityPart("emfUri", uri.toString()); //$NON-NLS-1$
+        }
+        if (target instanceof java.net.URI uri)
+        {
+            return identityPart("uri", uri.toASCIIString()); //$NON-NLS-1$
+        }
+        if (target instanceof CharSequence || target instanceof Number || target instanceof Boolean
+            || target instanceof Character || target instanceof Enum<?>)
+        {
+            return identityPart(target.getClass().getName(), String.valueOf(target));
+        }
+
+        // Several EDT wrappers expose the actual workspace file rather than implementing IResource.
+        Object fileObject = invokeNoArg(target, GET_FILE);
+        if (fileObject != target && fileObject instanceof IFile file)
+        {
+            return identityPart("file", file.getFullPath().toPortableString()); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Uses affected objects only when every entry has a stable representation. */
+    private static String stableAffectedObjectsIdentity(Object affected)
+    {
+        if (!(affected instanceof Object[] affectedObjects) || affectedObjects.length == 0)
+        {
+            return null;
+        }
+        StringBuilder identity = new StringBuilder();
+        for (Object affectedObject : affectedObjects)
+        {
+            String part = stableTargetIdentity(affectedObject);
+            if (part == null)
+            {
+                return null;
+            }
+            identity.append(identityPart("affected", part)); //$NON-NLS-1$
+        }
+        return identity.toString();
+    }
+
+    /** Stable structural form of an LTK text edit, including replacement text when exposed. */
+    private static String stableTextEditIdentity(TextEdit edit)
+    {
+        StringBuilder identity = new StringBuilder();
+        appendStableTextEditIdentity(edit, identity);
+        return identity.toString();
+    }
+
+    private static void appendStableTextEditIdentity(TextEdit edit, StringBuilder identity)
+    {
+        identity.append(identityPart("editClass", edit.getClass().getName())) //$NON-NLS-1$
+            .append(identityPart("offset", String.valueOf(edit.getOffset()))) //$NON-NLS-1$
+            .append(identityPart("length", String.valueOf(edit.getLength()))); //$NON-NLS-1$
+        Object text = invokeNoArg(edit, "getText"); //$NON-NLS-1$
+        if (text instanceof String replacement)
+        {
+            identity.append(identityPart("text", replacement)); //$NON-NLS-1$
+        }
+        TextEdit[] children = edit.getChildren();
+        if (children != null)
+        {
+            for (TextEdit child : children)
+            {
+                identity.append(identityPart("child", stableTextEditIdentity(child))); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /** Length-prefixing keeps identity components unambiguous without trusting their character set. */
+    private static String identityPart(String kind, String value)
+    {
+        String nonNullValue = value != null ? value : ""; //$NON-NLS-1$
+        return kind.length() + ":" + kind + nonNullValue.length() + ":" + nonNullValue; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private static boolean isInstanceOf(Object value, String className)
     {
         try
@@ -2289,7 +2535,15 @@ public class MetadataRenameService
         {
             return missingExpectedHashError();
         }
-        String currentSignature = changePointSignatureFor(refactorings);
+        String currentSignature;
+        try
+        {
+            currentSignature = changePointSignatureFor(refactorings);
+        }
+        catch (UnverifiableChangePointException e)
+        {
+            return e.getMessage();
+        }
         if (!ContentHash.matches(currentSignature, expectedHash))
         {
             return "expectedHash does not match the current ordered change-point list, so the " //$NON-NLS-1$
