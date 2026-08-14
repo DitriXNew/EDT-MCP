@@ -198,19 +198,20 @@ Control which MCP tools are exposed to AI assistants. This lets you reduce conte
 
 ### Tool Groups
 
-All 67 tools are organized into 9 semantic groups:
+All tools are organized into 10 semantic groups:
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| **Core / Project** | EDT version, server self-diagnosis, on-demand tool guides, project listing, configuration, validation, XML export/import, project removal, project creation (configuration / extension / externalObjects) | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `delete_project`, `create_project` |
-| **Errors & Problems** | Error reporting and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers` |
-| **Code Intelligence** | Content assist, documentation, metadata browsing | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references` |
-| **Tags** | Tag management | `get_tags`, `get_objects_by_tags` |
-| **Applications & Testing** | App management, infobase create/delete, database updates, launch, termination, testing | `get_applications`, `create_infobase`, `delete_infobase`, `list_configurations`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests` |
-| **Debugging** | Breakpoints, stepping, variable inspection and modification | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `set_variable`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
-| **BSL Code** | Module browsing, code reading/writing, search, form layout inspection | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query` |
-| **Refactoring** | Metadata create (objects, members and form members), rename, delete, set properties, adopt into an extension | `create_metadata`, `rename_metadata_object`, `delete_metadata`, `modify_metadata`, `adopt_metadata_object` |
+| **Core / Project** | Essential server, project, configuration, history, and XML export/import tools | `get_edt_version`, `get_server_status`, `get_tool_guide`, `list_toolsets`, `enable_toolset`, `list_projects`, `get_configuration_properties`, `clean_project`, `revalidate_objects`, `resync_to_disk`, `get_check_description`, `export_configuration_to_xml`, `import_configuration_from_xml`, `delete_project`, `create_project`, `get_event_log`, `get_mcp_history` |
+| **Errors & Problems** | Error reporting, validation, and workspace markers (bookmarks, tasks) | `get_problem_summary`, `get_project_errors`, `get_markers`, `apply_quick_fix`, `validate_xdto_package` |
+| **Code Intelligence** | Content assist, documentation, metadata and common-picture browsing, and references | `get_content_assist`, `get_platform_documentation`, `get_metadata_objects`, `get_metadata_details`, `list_subsystems`, `get_subsystem_content`, `find_references`, `list_common_pictures`, `export_common_picture` |
+| **Tags** | Metadata tag management | `get_tags`, `get_objects_by_tags` |
+| **Applications & Testing** | Application and infobase management, external-object builds, launch, testing, and Workmate | `get_applications`, `list_configurations`, `create_launch_config`, `delete_launch_config`, `create_infobase`, `delete_infobase`, `update_database`, `debug_launch`, `terminate_launch`, `run_yaxunit_tests`, `ask_workmate`, `build_external_objects`, `set_infobase_credentials` |
+| **Debugging** | Breakpoints, stepping, variables, expression evaluation, and profiling | `set_breakpoint`, `remove_breakpoint`, `list_breakpoints`, `wait_for_break`, `get_variables`, `set_variable`, `step`, `resume`, `evaluate_expression`, `debug_yaxunit_tests`, `debug_status`, `start_profiling`, `stop_profiling`, `get_profiling_results` |
+| **BSL Code** | Module source reading/writing, structure, search, call hierarchy, navigation, and forms | `read_module_source`, `write_module_source`, `get_module_structure`, `list_modules`, `search_in_code`, `read_method_source`, `get_method_call_hierarchy`, `get_outgoing_structures`, `go_to_definition`, `get_symbol_info`, `get_form_layout_snapshot`, `get_form_screenshot`, `get_template_screenshot`, `validate_query` |
+| **Refactoring** | Metadata create, rename, adopt, delete, and property management | `rename_metadata_object`, `delete_metadata`, `create_metadata`, `modify_metadata`, `adopt_metadata_object` |
 | **Translation (LanguageTool)** | Translation strings generation, configuration synchronization, project info | `generate_translation_strings`, `translate_configuration`, `get_translation_project_info` |
+| **Git** | Git operations: the `git` command tool (disabled by default), branch listing/switching, and the branch-to-infobase binding | `git`, `list_git_branches`, `switch_git_branch`, `create_git_branch`, `set_branch_infobase` |
 
 Enable or disable entire groups or individual tools from the **Tools** tab in **Window → Preferences → MCP Server**. Disabled tools are filtered out of `tools/list` responses. If a client calls a disabled tool directly through `tools/call`, the server returns a message explaining that the tool is disabled.
 
@@ -220,7 +221,7 @@ Quickly switch between common tool configurations using presets:
 
 | Preset | Description |
 |--------|-------------|
-| **All Tools** | All 67 tools enabled (default) |
+| **All Tools** | All tools enabled (default) |
 | **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
@@ -256,7 +257,7 @@ When on, only the `core` toolset (navigation, source read, metadata discovery, a
 two management tools) appears in `tools/list`. To use more tools:
 
 1. Call **`list_toolsets`** to see the groups (`core`, `metadata`, `code`, `debug`,
-   `testing`, `profiling`, `forms`, `tags`, `translation`, `project`) and their tools.
+   `testing`, `profiling`, `forms`, `tags`, `translation`, `project`, `git`) and their tools.
 2. Call **`enable_toolset`** with `toolsets=[ids]` (e.g. `["code","debug"]`).
 3. **Re-request `tools/list`** — the revealed tools now appear.
 
