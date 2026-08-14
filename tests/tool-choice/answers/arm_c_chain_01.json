@@ -1,0 +1,276 @@
+[
+ {
+  "id": "c001",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_project_errors"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.РеализацияТоваров"]}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/РеализацияТоваров/ObjectModule.bsl"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "set_breakpoint"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/РеализацияТоваров/ObjectModule.bsl", "lineNumber": 120}}
+  ],
+  "expected_result": "Сначала проверяются замечания валидации по документу, затем читается код обработки проведения и на подозрительной строке ставится точка останова для дальнейшей отладки.",
+  "confidence": 4
+ },
+ {
+  "id": "c002",
+  "calls": [
+   {"tool": "get_variables", "args": {"frameRef": 1}},
+   {"tool": "evaluate_expression", "args": {"frameRef": 1, "expression": "Товары.Количество()"}},
+   {"tool": "step", "args": {"threadId": 1, "kind": "over"}},
+   {"tool": "get_variables", "args": {"frameRef": 2}}
+  ],
+  "expected_result": "Показываются переменные текущего кадра, вычисляется выражение Товары.Количество(), и если оно равно нулю — выполняется шаг на следующую строку с повторным показом переменных.",
+  "confidence": 4
+ },
+ {
+  "id": "c003",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "debug_launch"}},
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration", "applicationId": "<id из get_applications>"}},
+   {"tool": "start_profiling", "args": {"applicationId": "<id из get_applications>"}},
+   {"tool": "stop_profiling", "args": {"applicationId": "<id из get_applications>"}},
+   {"tool": "get_profiling_results", "args": {"moduleFilter": "Проведение"}}
+  ],
+  "expected_result": "Конфигурация запускается под отладкой, включается замер производительности, после ручного проведения документа замер останавливается и показываются модули с 'Проведение' в имени, где тратится время.",
+  "confidence": 4
+ },
+ {
+  "id": "c004",
+  "calls": [
+   {"tool": "get_module_structure", "args": {"projectName": "УправлениеТорговлей", "modulePath": "CommonModules/Расчеты/Module.bsl"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "УправлениеТорговлей", "modulePath": "CommonModules/Расчеты/Module.bsl", "lineNumber": 5}},
+   {"tool": "debug_launch", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "wait_for_break", "args": {}},
+   {"tool": "get_variables", "args": {"frameRef": 1}}
+  ],
+  "expected_result": "Точка останова ставится на первую строку функции РассчитатьСкидку в CommonModule.Расчеты, запускается отладка, ожидается остановка и показываются переменные текущего кадра.",
+  "confidence": 4
+ },
+ {
+  "id": "c005",
+  "calls": [
+   {"tool": "debug_status", "args": {}},
+   {"tool": "resume", "args": {}},
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "terminate_launch", "args": {"projectName": "<project из debug_status>", "applicationId": "<applicationId из debug_status>", "force": true}}
+  ],
+  "expected_result": "Состояние сеансов отладки проверяется, приостановленный сеанс отпускается через resume, а полностью зависший — принудительно завершается через terminate_launch.",
+  "confidence": 3
+ },
+ {
+  "id": "c006",
+  "calls": [
+   {"tool": "list_breakpoints", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "remove_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl", "breakpointId": "<id из list_breakpoints>"}}
+  ],
+  "expected_result": "Список текущих точек останова в проекте TestConfiguration проверяется, и точки в модуле CommonModule.Проведение удаляются.",
+  "confidence": 4
+ },
+ {
+  "id": "c007",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_event_log"}},
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "severity": ["Error"], "from": "2026-08-14T00:00:00"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/<Модуль>/Module.bsl", "methodName": "<Метод>"}}
+  ],
+  "expected_result": "Из журнала регистрации базы TestConfiguration извлекаются сегодняшние ошибки, и если они указывают на конкретный общий модуль, показывается код бросающего ошибку метода.",
+  "confidence": 4
+ },
+ {
+  "id": "c008",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Номенклатура", "limit": 500}},
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Номенклатура", "newName": "Товары"}}
+  ],
+  "expected_result": "Показываются все места использования справочника Номенклатура (код, формы, роли, подсистемы) и предпросмотр переименования; при более чем сотне использований выполнение остаётся на паузе до подтверждения.",
+  "confidence": 4
+ },
+ {
+  "id": "c009",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.СтарыйОбмен"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.СтарыйОбмен", "confirm": true}}
+  ],
+  "expected_result": "Проверяются ссылки на общий модуль СтарыйОбмен, и если их нет — модуль удаляется; при найденных использованиях он не трогается и просто выводится их список.",
+  "confidence": 4
+ },
+ {
+  "id": "c010",
+  "calls": [
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/SalesOrder/ObjectModule.bsl", "methodName": "РассчитатьСкидку"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/SalesOrder/ObjectModule.bsl", "methodName": "РассчитатьСкидку", "direction": "callers"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ОбщегоНазначенияРасчеты"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.ОбщегоНазначенияРасчеты", "moduleType": "Module", "mode": "replace", "source": "<текст функции РассчитатьСкидку>", "overwrite": true}}
+  ],
+  "expected_result": "Показывается текущий код функции РассчитатьСкидку и её вызывающие, затем создаётся общий модуль ОбщегоНазначенияРасчеты и функция переносится в него.",
+  "confidence": 4
+ },
+ {
+  "id": "c011",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Сообщить(", "outputMode": "files"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "<модуль с наибольшим числом совпадений>"}}
+  ],
+  "expected_result": "Ищутся все места прямого вызова Сообщить() в TestConfiguration, показывается структура модуля с наибольшим числом таких вызовов, а замену кода предлагается сделать только после подтверждения.",
+  "confidence": 4
+ },
+ {
+  "id": "c012",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.SalesOrder.Attribute.Сумма"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.SalesOrder.Attribute.Сумма", "newName": "СуммаДокумента", "confirm": true}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Показываются места использования реквизита Сумма, затем он переименовывается в СуммаДокумента с обновлением ссылок и документ перевалидируется.",
+  "confidence": 4
+ },
+ {
+  "id": "c013",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "commonModules"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "<каждый общий модуль>", "responseFormat": "detailed"}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.<Имя>"}}
+  ],
+  "expected_result": "Перечисляются все общие модули проекта, для каждого проверяется число экспортируемых методов и наличие ссылок на него, чтобы найти модули с более чем десятью экспортами и неиспользуемые модули.",
+  "confidence": 3
+ },
+ {
+  "id": "c014",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_project_errors", "args": {"projectName": "УправлениеТорговлей", "severity": "ERRORS", "responseFormat": "detailed"}},
+   {"tool": "get_applications", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "applicationId": "<id из get_applications>", "confirm": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "run_yaxunit_tests"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "УправлениеТорговлей", "applicationId": "<id из get_applications>"}}
+  ],
+  "expected_result": "Сначала проверяется сводка проблем; при отсутствии ошибок уровня ERROR база обновляется и прогоняются тесты YAXUnit, а при их наличии обновление базы не выполняется и ошибки показываются детально.",
+  "confidence": 3
+ },
+ {
+  "id": "c015",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "resync_to_disk"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration", "cleanDanglingReferences": true}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "D:\\release"}}
+  ],
+  "expected_result": "Сначала выявляются и устраняются битые/висячие ссылки расхождения модели и диска, а затем конфигурация выгружается в XML в D:\\release.",
+  "confidence": 4
+ },
+ {
+  "id": "c016",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "release/2026.2", "checkout": true, "applicationId": "<id базы app-2>"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "<id базы app-2>", "confirm": true}}
+  ],
+  "expected_result": "Создаётся и сразу становится текущей ветка release/2026.2, к ней привязывается база app-2, после чего эта база обновляется текущей конфигурацией.",
+  "confidence": 4
+ },
+ {
+  "id": "c017",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "ВнешниеОбработки"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "build_external_objects"}},
+   {"tool": "build_external_objects", "args": {"projectName": "ВнешниеОбработки", "outputDir": "D:\\dist", "recordBuildTime": true}}
+  ],
+  "expected_result": "Сначала перечисляются внешние объекты проекта ВнешниеОбработки, затем все они собираются в epf/erf в папку D:\\dist с отметкой времени сборки.",
+  "confidence": 4
+ },
+ {
+  "id": "c018",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "develop"}},
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "<id из get_applications>", "confirm": true}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "applicationId": "<id из get_applications>", "tags": ["regression"]}}
+  ],
+  "expected_result": "Проект переключается на ветку develop, база обновляется текущей конфигурацией, и запускаются тесты YAXUnit с тегом regression.",
+  "confidence": 4
+ },
+ {
+  "id": "c019",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_project_errors", "args": {"projectName": "УправлениеТорговлей", "responseFormat": "detailed", "limit": 1000}},
+   {"tool": "get_check_description", "args": {"checkId": "<самый частый check>", "projectName": "УправлениеТорговлей"}},
+   {"tool": "get_project_errors", "args": {"projectName": "УправлениеТорговлей", "checkId": "<самый частый check>"}}
+  ],
+  "expected_result": "Показывается сводка замечаний по уровням, затем для самого частого кода проверки даётся объяснение и детальный список именно по нему.",
+  "confidence": 4
+ },
+ {
+  "id": "c020",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "responseFormat": "detailed"}},
+   {"tool": "get_check_description", "args": {"checkId": "<check с Fix registered=yes>", "projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "apply_quick_fix"}},
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "<check с Fix registered=yes>", "modulePath": "<модуль первой ошибки>", "line": 1}}
+  ],
+  "expected_result": "Находятся ошибки с зарегистрированным автоисправлением, объясняется суть первой такой проверки, и на неё применяется быстрый фикс.",
+  "confidence": 4
+ },
+ {
+  "id": "c021",
+  "calls": [
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Catalog.Номенклатура", "Document.РеализацияТоваров"]}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Номенклатура", "Document.РеализацияТоваров"]}}
+  ],
+  "expected_result": "Модель точечно перевалидируется по справочнику Номенклатура и документу РеализацияТоваров, после чего показываются новые замечания по этим двум объектам.",
+  "confidence": 4
+ },
+ {
+  "id": "c022",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "resync_to_disk"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration", "cleanDanglingReferences": true}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "<id из get_applications>", "confirm": true}}
+  ],
+  "expected_result": "Устраняется рассинхрон модели и диска, проект перевалидируется, и обновление базы данных запускается заново.",
+  "confidence": 4
+ },
+ {
+  "id": "c023",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Report.ПродажиЗаПериод"]}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Report.ПродажиЗаПериод.Template.ОсновнаяСхемаКомпоновкиДанных"]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "validate_query"}},
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "<запрос из схемы компоновки>", "dcsMode": true}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Report.ПродажиЗаПериод"]}}
+  ],
+  "expected_result": "Показываются свойства и схема компоновки отчёта ПродажиЗаПериод, запрос из схемы проверяется на ошибки, и выводятся результаты валидации по этому объекту.",
+  "confidence": 4
+ },
+ {
+  "id": "c024",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "validate_xdto_package"}},
+   {"tool": "validate_xdto_package", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_check_description", "args": {"checkId": "<первая проверка из списка>", "projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Проверяется XDTO-пакет ОбменСБанком, показывается общая картина валидации по проекту, и объясняется первая проверка из списка.",
+  "confidence": 4
+ },
+ {
+  "id": "c025",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "adopt_metadata_object"}},
+   {"tool": "adopt_metadata_object", "args": {"projectName": "УправлениеТорговлей", "fqn": "Document.РеализацияТоваров", "extensionProjectName": "ДоработкиУТ"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "ДоработкиУТ", "objectName": "Document.РеализацияТоваров", "moduleType": "ObjectModule", "mode": "append", "source": "<процедура-перехватчик с аннотацией &After(\"ОбработкаПроведения\")>"}}
+  ],
+  "expected_result": "Документ РеализацияТоваров захватывается из базовой конфигурации УправлениеТорговлей в расширение ДоработкиУТ, и в его модуле объекта заводится процедура-перехватчик проведения.",
+  "confidence": 4
+ }
+]

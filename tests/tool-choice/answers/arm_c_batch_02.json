@@ -1,22 +1,425 @@
 [
- {"id":"q021","calls":[{"tool":"get_tool_guide","args":{"toolName":"get_metadata_details"}},{"tool":"get_metadata_details","args":{"projectName":"TestConfiguration","objectFqns":["Document.SalesOrder"],"full":true}}],"expected_result":"A markdown listing of Document.SalesOrder's attributes (and other reflected sections) in TestConfiguration.","confidence":4},
- {"id":"q022","calls":[{"tool":"get_tool_guide","args":{"toolName":"get_metadata_details"}},{"tool":"get_metadata_details","args":{"projectName":"TestConfiguration","objectFqns":["Role.ПолныеПрава"],"full":true}}],"expected_result":"The rights matrix (granted/denied permissions per object) for Role.ПолныеПрава in TestConfiguration.","confidence":4},
- {"id":"q023","calls":[{"tool":"get_tool_guide","args":{"toolName":"get_metadata_details"}},{"tool":"get_metadata_details","args":{"projectName":"TestConfiguration","objectFqns":["Catalog.Products","Catalog.Partners","Document.SalesOrder"]}}],"expected_result":"A markdown response with one section per object (Catalog.Products, Catalog.Partners, Document.SalesOrder) so their properties can be compared.","confidence":4},
- {"id":"q024","calls":[{"tool":"list_subsystems","args":{"projectName":"TestConfiguration","recursive":true}}],"expected_result":"A hierarchical tree of all subsystems (including nested ones) in TestConfiguration.","confidence":4},
- {"id":"q025","calls":[{"tool":"list_subsystems","args":{"projectName":"УправлениеТорговлей","recursive":false}}],"expected_result":"A flat list of only top-level subsystems in the УправлениеТорговлей project, without nested subsystems.","confidence":4},
- {"id":"q026","calls":[{"tool":"get_subsystem_content","args":{"projectName":"TestConfiguration","subsystemFqn":"Subsystem.Продажи"}}],"expected_result":"The list of metadata objects and child subsystems belonging to Subsystem.Продажи in TestConfiguration.","confidence":4},
- {"id":"q027","calls":[{"tool":"get_subsystem_content","args":{"projectName":"TestConfiguration","subsystemFqn":"Подсистема.Закупки","recursive":true}}],"expected_result":"The full list of objects in Подсистема.Закупки including objects from its nested subsystems, in TestConfiguration.","confidence":4},
- {"id":"q028","calls":[{"tool":"list_common_pictures","args":{"projectName":"TestConfiguration"}}],"expected_result":"An inventory of all CommonPicture objects defined in the TestConfiguration configuration.","confidence":5},
- {"id":"q029","calls":[{"tool":"list_common_pictures","args":{"projectName":"УправлениеТорговлей","limit":50}}],"expected_result":"An inventory of up to 50 common pictures in the УправлениеТорговлей project.","confidence":5},
- {"id":"q030","calls":[{"tool":"get_tool_guide","args":{"toolName":"export_common_picture"}},{"tool":"export_common_picture","args":{"projectName":"TestConfiguration","fqn":"CommonPicture.ЛоготипКомпании","variant":"best"}}],"expected_result":"The variant inventory of CommonPicture.ЛоготипКомпании plus its best raster variant decoded and returned as a viewable base64 PNG.","confidence":4},
- {"id":"q031","calls":[{"tool":"get_tool_guide","args":{"toolName":"export_common_picture"}},{"tool":"export_common_picture","args":{"projectName":"TestConfiguration","fqn":"ОбщаяКартинка.Печать","variant":"best"}}],"expected_result":"The common picture ОбщаяКартинка.Печать decoded and returned as a base64 PNG.","confidence":4},
- {"id":"q032","calls":[{"tool":"get_tags","args":{"projectName":"TestConfiguration"}}],"expected_result":"The list of user-defined tags used to organize metadata objects in TestConfiguration.","confidence":5},
- {"id":"q033","calls":[{"tool":"get_objects_by_tags","args":{"projectName":"TestConfiguration","tags":["refactor"]}}],"expected_result":"All metadata objects in TestConfiguration tagged with 'refactor'.","confidence":5},
- {"id":"q034","calls":[{"tool":"get_objects_by_tags","args":{"projectName":"TestConfiguration","tags":["legacy","todo"],"limit":20}}],"expected_result":"Up to 20 metadata objects in TestConfiguration tagged with 'legacy' or 'todo'.","confidence":5},
- {"id":"q035","calls":[{"tool":"get_tool_guide","args":{"toolName":"create_metadata"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"Catalog.Контрагенты","properties":[{"name":"synonym","value":"Контрагенты"}]}}],"expected_result":"A new Catalog.Контрагенты object is created in TestConfiguration with the synonym 'Контрагенты', confirmed by the tool's created/persisted result.","confidence":4},
- {"id":"q036","calls":[{"tool":"get_tool_guide","args":{"toolName":"create_metadata"}},{"tool":"get_tool_guide","args":{"toolName":"modify_metadata"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"Document.SalesOrder.Attribute.ДатаОтгрузки"}},{"tool":"modify_metadata","args":{"projectName":"TestConfiguration","fqn":"Document.SalesOrder.Attribute.ДатаОтгрузки","properties":[{"name":"type","value":{"types":[{"kind":"Date"}]}}]}}],"expected_result":"Document.SalesOrder gets a new attribute ДатаОтгрузки of type Date in TestConfiguration.","confidence":3},
- {"id":"q037","calls":[{"tool":"get_tool_guide","args":{"toolName":"create_metadata"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"CommonModule.ОбщегоНазначенияСервер","commonModuleKind":"Server","serverCall":true,"privileged":false}}],"expected_result":"A new server CommonModule ОбщегоНазначенияСервер is created in TestConfiguration with server-call enabled and privileged off.","confidence":4},
- {"id":"q038","calls":[{"tool":"get_tool_guide","args":{"toolName":"create_metadata"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"Enum.ВидыОплаты"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"Enum.ВидыОплаты.EnumValue.Наличные"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"Enum.ВидыОплаты.EnumValue.Безналичные"}}],"expected_result":"A new Enum.ВидыОплаты is created in TestConfiguration with two enum values, Наличные and Безналичные.","confidence":4},
- {"id":"q039","calls":[{"tool":"get_tool_guide","args":{"toolName":"create_metadata"}},{"tool":"create_metadata","args":{"projectName":"TestConfiguration","fqn":"Документ.ЗаказКлиента.TabularSection.Товары"}}],"expected_result":"A new tabular section Товары is added to Документ.ЗаказКлиента in TestConfiguration.","confidence":3},
- {"id":"q040","calls":[{"tool":"get_tool_guide","args":{"toolName":"modify_metadata"}},{"tool":"modify_metadata","args":{"projectName":"TestConfiguration","fqn":"Catalog.Products","properties":[{"name":"synonym","value":"Товары и услуги"}]}}],"expected_result":"Catalog.Products' synonym is changed to 'Товары и услуги' in TestConfiguration.","confidence":4}
+ {
+  "id": "q051",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "adopt_metadata_object"}},
+   {"tool": "adopt_metadata_object", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products", "extensionProjectName": "МоеРасширение"}}
+  ],
+  "expected_result": "Справочник Catalog.Products из базовой конфигурации адаптируется в расширение МоеРасширение проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q052",
+  "calls": [
+   {"tool": "adopt_metadata_object", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ItemForm"}}
+  ],
+  "expected_result": "Форма Catalog.Products.Form.ItemForm захватывается (adopt) в расширение, чтобы её можно было перехватить.",
+  "confidence": 4
+ },
+ {
+  "id": "q053",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_modules"}},
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Возвращается таблица всех BSL-модулей проекта TestConfiguration с их путями и типами.",
+  "confidence": 5
+ },
+ {
+  "id": "q054",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "objectName": "ЗаказКлиента", "metadataType": "documents"}}
+  ],
+  "expected_result": "Возвращается список модулей документа ЗаказКлиента (объектный, менеджера, форм и т.д.) в проекте TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q055",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "read_module_source"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ОбщегоНазначения/Module.bsl"}}
+  ],
+  "expected_result": "Возвращается полный исходный текст общего модуля CommonModule.ОбщегоНазначения проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q056",
+  "calls": [
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/ObjectModule.bsl", "startLine": 100, "endLine": 150}}
+  ],
+  "expected_result": "Возвращаются строки 100-150 модуля объекта справочника Номенклатура проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q057",
+  "calls": [
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Products/Forms/ItemForm/Module.bsl"}}
+  ],
+  "expected_result": "Возвращается полный исходный текст модуля формы Catalog.Products.Form.ItemForm проекта TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q058",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "read_method_source"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/SalesOrder/ObjectModule.bsl", "methodName": "ПриЗаписи"}}
+  ],
+  "expected_result": "Возвращается только текст процедуры ПриЗаписи из модуля объекта Document.SalesOrder проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q059",
+  "calls": [
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl", "methodName": "РассчитатьСкидку"}}
+  ],
+  "expected_result": "Возвращается тело функции РассчитатьСкидку из общего модуля CommonModule.Расчеты проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q060",
+  "calls": [
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ПриходнаяНакладная/ObjectModule.bsl", "methodName": "ОбработкаПроведения"}}
+  ],
+  "expected_result": "Возвращается код процедуры ОбработкаПроведения документа Документ.ПриходнаяНакладная проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q061",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_module_structure"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ОбщегоНазначения/Module.bsl"}}
+  ],
+  "expected_result": "Возвращается таблица процедур и функций модуля CommonModule.ОбщегоНазначения без исходного кода.",
+  "confidence": 5
+ },
+ {
+  "id": "q062",
+  "calls": [
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Номенклатура/ManagerModule.bsl"}}
+  ],
+  "expected_result": "Возвращается структура областей и экспортных методов модуля менеджера справочника Номенклатура проекта TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q063",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_outgoing_structures"}},
+   {"tool": "get_outgoing_structures", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl", "method": "ЗаполнитьДанные"}}
+  ],
+  "expected_result": "Возвращаются литеральные ключи структуры, которую метод ЗаполнитьДанные модуля CommonModule.Расчеты передаёт в вызываемые методы.",
+  "confidence": 4
+ },
+ {
+  "id": "q064",
+  "calls": [
+   {"tool": "get_outgoing_structures", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Обмен/Module.bsl"}}
+  ],
+  "expected_result": "Возвращаются ключи структур, формируемых при исходящих вызовах из модуля CommonModule.Обмен целиком.",
+  "confidence": 4
+ },
+ {
+  "id": "q065",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_method_call_hierarchy"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl", "methodName": "РассчитатьСкидку", "direction": "callers"}}
+  ],
+  "expected_result": "Возвращается список мест, которые вызывают функцию РассчитатьСкидку из CommonModule.Расчеты.",
+  "confidence": 5
+ },
+ {
+  "id": "q066",
+  "calls": [
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl", "methodName": "ПровестиДокумент", "direction": "callees"}}
+  ],
+  "expected_result": "Возвращается дерево методов, которые вызывает процедура ПровестиДокумент модуля CommonModule.Проведение.",
+  "confidence": 4
+ },
+ {
+  "id": "q067",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_symbol_info"}},
+   {"tool": "get_symbol_info", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl", "line": 42, "column": 15}}
+  ],
+  "expected_result": "Возвращается выведенный тип переменной в строке 42 колонке 15 модуля CommonModule.Расчеты.",
+  "confidence": 5
+ },
+ {
+  "id": "q068",
+  "calls": [
+   {"tool": "get_symbol_info", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Products/ObjectModule.bsl", "line": 10, "column": 5}}
+  ],
+  "expected_result": "Возвращаются сигнатура и документация символа в строке 10 колонке 5 модуля объекта Catalog.Products.",
+  "confidence": 4
+ },
+ {
+  "id": "q069",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.Расчеты", "moduleType": "Module", "mode": "replace"}}
+  ],
+  "expected_result": "Модуль общего модуля CommonModule.Расчеты полностью перезаписывается новым текстом (mode=replace).",
+  "confidence": 3
+ },
+ {
+  "id": "q070",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Catalog.Номенклатура", "mode": "append"}}
+  ],
+  "expected_result": "Процедура ПриЗаписи добавляется в конец модуля объекта справочника Номенклатура проекта TestConfiguration.",
+  "confidence": 3
+ },
+ {
+  "id": "q071",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Catalog.Products", "moduleType": "FormModule", "formName": "ItemForm", "mode": "searchReplace"}}
+  ],
+  "expected_result": "Код обработчика события формы Catalog.Products.Form.ItemForm правится точечной заменой фрагмента (searchReplace).",
+  "confidence": 3
+ },
+ {
+  "id": "q072",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.Обмен", "moduleType": "Module", "mode": "searchReplace"}}
+  ],
+  "expected_result": "Старый фрагмент кода в модуле CommonModule.Обмен заменяется на новый указанным точным старым текстом (searchReplace).",
+  "confidence": 4
+ },
+ {
+  "id": "q073",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Command.ПечатьДокумента"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Document.SalesOrder", "moduleType": "CommandModule", "commandName": "ПечатьДокумента", "mode": "replace"}}
+  ],
+  "expected_result": "Создаётся команда ПечатьДокумента у документа Document.SalesOrder и в её новый командный модуль записывается код.",
+  "confidence": 3
+ },
+ {
+  "id": "q074",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "search_in_code"}},
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "НЕ ИСПОЛЬЗОВАТЬ"}}
+  ],
+  "expected_result": "Возвращаются все места в BSL-коде проекта TestConfiguration, содержащие строку 'НЕ ИСПОЛЬЗОВАТЬ'.",
+  "confidence": 5
+ },
+ {
+  "id": "q075",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Сообщить\\(", "isRegex": true}}
+  ],
+  "expected_result": "Возвращаются все вызовы Сообщить( в коде проекта TestConfiguration, найденные по регулярному выражению.",
+  "confidence": 5
+ },
+ {
+  "id": "q076",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "ЗначениеНеЗаполнено", "caseSensitive": true}}
+  ],
+  "expected_result": "Возвращаются все места с литералом 'ЗначениеНеЗаполнено' в исходниках TestConfiguration с учётом регистра.",
+  "confidence": 5
+ },
+ {
+  "id": "q077",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "find_references"}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Products"}}
+  ],
+  "expected_result": "Возвращаются все использования справочника Catalog.Products в коде, формах и других объектах конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q078",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Документ.ПриходнаяНакладная"}}
+  ],
+  "expected_result": "Возвращаются все использования документа Документ.ПриходнаяНакладная в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q079",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "РегистрСведений.КурсыВалют"}}
+  ],
+  "expected_result": "Возвращается список ссылающихся мест на регистр сведений КурсыВалют, чтобы оценить безопасность его удаления.",
+  "confidence": 5
+ },
+ {
+  "id": "q080",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "go_to_definition"}},
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "Расчеты.РассчитатьСкидку"}}
+  ],
+  "expected_result": "Возвращается место определения функции РассчитатьСкидку в общем модуле CommonModule.Расчеты.",
+  "confidence": 4
+ },
+ {
+  "id": "q081",
+  "calls": [
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "ОбщегоНазначения.ЗначениеРеквизита"}}
+  ],
+  "expected_result": "Возвращается определение метода ОбщегоНазначения.ЗначениеРеквизита проекта TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q082",
+  "calls": [
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "Catalog.Products"}}
+  ],
+  "expected_result": "Возвращаются тип и список модулей объекта Catalog.Products проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q083",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_content_assist"}},
+   {"tool": "get_content_assist", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl", "line": 30, "column": 20}}
+  ],
+  "expected_result": "Возвращается список вариантов автодополнения в позиции строка 30 колонка 20 модуля CommonModule.Расчеты.",
+  "confidence": 4
+ },
+ {
+  "id": "q084",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_project_errors"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Возвращаются все ошибки и предупреждения валидации проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q085",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "УправлениеТорговлей", "severity": "CRITICAL", "limit": 50}}
+  ],
+  "expected_result": "Возвращаются не более 50 критичных проблем проекта УправлениеТорговлей.",
+  "confidence": 5
+ },
+ {
+  "id": "q086",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Products"]}}
+  ],
+  "expected_result": "Возвращаются замечания EDT, относящиеся именно к справочнику Catalog.Products проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q087",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "checkId": "md-reference-intergrity"}}
+  ],
+  "expected_result": "Возвращаются все проблемы с кодом проверки md-reference-intergrity в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q088",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_problem_summary"}},
+   {"tool": "get_problem_summary", "args": {}}
+  ],
+  "expected_result": "Возвращаются только суммарные счётчики ошибок и предупреждений по всем проектам, без списка проблем.",
+  "confidence": 5
+ },
+ {
+  "id": "q089",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Возвращается сводка количества проблем проекта TestConfiguration с разбивкой по уровням важности.",
+  "confidence": 5
+ },
+ {
+  "id": "q090",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_check_description"}},
+   {"tool": "get_check_description", "args": {"checkId": "mdo-name-invalid"}}
+  ],
+  "expected_result": "Возвращается подробное описание проверки mdo-name-invalid и способ её исправления.",
+  "confidence": 5
+ },
+ {
+  "id": "q091",
+  "calls": [
+   {"tool": "get_check_description", "args": {"checkId": "ql-tempTable-index"}}
+  ],
+  "expected_result": "Возвращается подробное описание диагностики ql-tempTable-index и её требований.",
+  "confidence": 4
+ },
+ {
+  "id": "q092",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "apply_quick_fix"}},
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "bsl-doc-comment", "modulePath": "CommonModules/Расчеты/Module.bsl", "line": 12}}
+  ],
+  "expected_result": "К проблеме проверки bsl-doc-comment в модуле CommonModule.Расчеты на строке 12 применяется официальное автоисправление EDT.",
+  "confidence": 5
+ },
+ {
+  "id": "q093",
+  "calls": [
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "mdo-name-invalid"}}
+  ],
+  "expected_result": "К проблеме проверки mdo-name-invalid в проекте TestConfiguration применяется доступное быстрое исправление.",
+  "confidence": 4
+ },
+ {
+  "id": "q094",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "revalidate_objects"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Catalog.Products"]}}
+  ],
+  "expected_result": "Проводится точечная перевалидация объекта Catalog.Products после его ручного изменения на диске.",
+  "confidence": 5
+ },
+ {
+  "id": "q095",
+  "calls": [
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.SalesOrder", "Catalog.Partners"]}}
+  ],
+  "expected_result": "Проводится перевалидация объектов Document.SalesOrder и Catalog.Partners в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q096",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "clean_project"}},
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Проект TestConfiguration полностью пересобирается из файлов на диске и заново проходит валидацию.",
+  "confidence": 5
+ },
+ {
+  "id": "q097",
+  "calls": [
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Все маркеры валидации проекта TestConfiguration сбрасываются, а модель полностью перечитывается с диска.",
+  "confidence": 5
+ },
+ {
+  "id": "q098",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "resync_to_disk"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Проверяются и восстанавливаются на диске .mdo-файлы объектов модели, отсутствующих в src проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q099",
+  "calls": [
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration", "cleanDanglingReferences": true}}
+  ],
+  "expected_result": "Битые ссылки на удалённые объекты в Configuration.mdo проекта TestConfiguration удаляются, что разблокирует выгрузку XML.",
+  "confidence": 5
+ },
+ {
+  "id": "q100",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "validate_query"}},
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "ВЫБРАТЬ Ссылка ИЗ Справочник.Номенклатура ГДЕ Наименование = &Имя"}}
+  ],
+  "expected_result": "Запрос проверяется на синтаксические ошибки и корректность ссылок на метаданные в проекте TestConfiguration.",
+  "confidence": 5
+ }
 ]

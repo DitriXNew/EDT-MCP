@@ -1,0 +1,283 @@
+[
+ {
+  "id": "c076",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа.EnumValue.Новый"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа.EnumValue.ВРаботе"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа.EnumValue.Закрыт"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Статус"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Статус", "properties": [{"name": "type", "value": {"types": [{"kind": "Ref", "ref": "Enum.СтатусыЗаказа"}]}}]}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Будет создано перечисление с тремя значениями, документу добавлен реквизит этого типа, и документ перевалидирован.",
+  "confidence": 4
+ },
+ {
+  "id": "c077",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Template.ПечатнаяФорма"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Template.ПечатнаяФорма", "template": {"cells": [{"row": 0, "col": 0, "text": "Печатная форма", "bold": true}]}}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_template_screenshot"}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.ПечатнаяФорма"}}
+  ],
+  "expected_result": "Будет создан макет печатной формы документа, заполнено его содержимое и получен скриншот отрисовки.",
+  "confidence": 3
+ },
+ {
+  "id": "c078",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров.Dimension.Номенклатура"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров.Dimension.Склад"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров.Resource.Количество"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Subsystem.Учёт", "content": [{"metadata": "AccumulationRegister.ОстаткиТоваров"}]}},
+   {"tool": "get_subsystem_content", "args": {"projectName": "TestConfiguration", "subsystemFqn": "Subsystem.Учёт"}}
+  ],
+  "expected_result": "Будет создан регистр накопления с двумя измерениями и ресурсом, включён в подсистему, и показано её содержимое.",
+  "confidence": 4
+ },
+ {
+  "id": "c079",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Справочник.Номенклатура.Command.ПечатьЭтикетки"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Справочник.Номенклатура", "moduleType": "CommandModule", "commandName": "ПечатьЭтикетки", "mode": "replace", "source": "Процедура ОбработкаКоманды(ПараметрКоманды, ПараметрВыполненияКоманды) Экспорт\n\t// печать этикетки\nКонецПроцедуры"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Справочник.Номенклатура.Command.ПечатьЭтикетки"]}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objects": ["Справочник.Номенклатура.Command.ПечатьЭтикетки"]}}
+  ],
+  "expected_result": "Будет создана команда у справочника, в её модуль записан код, и показаны результаты валидации.",
+  "confidence": 4
+ },
+ {
+  "id": "c080",
+  "calls": [
+   {"tool": "list_common_pictures", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonPicture.ИконкаЭтикетка"}},
+   {"tool": "list_common_pictures", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Будет показан текущий список общих картинок, создана новая, и список показан ещё раз с добавленной картинкой.",
+  "confidence": 4
+ },
+ {
+  "id": "c081",
+  "calls": [
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "dev/ivanov", "startPoint": "master"}},
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "dev/ivanov"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_infobase"}},
+   {"tool": "create_infobase", "args": {"projectName": "TestConfiguration", "infobaseFile": "D:\\bases\\ivanov", "mode": "create"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "set_branch_infobase"}},
+   {"tool": "set_branch_infobase", "args": {"projectName": "TestConfiguration", "applicationId": "<id from create_infobase>", "branch": "dev/ivanov", "action": "attach"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Будет создана и выбрана новая ветка, развёрнута и привязана к ней отдельная база, и в неё накачена конфигурация.",
+  "confidence": 3
+ },
+ {
+  "id": "c082",
+  "calls": [
+   {"tool": "get_edt_version", "args": {}},
+   {"tool": "get_server_status", "args": {}},
+   {"tool": "list_projects", "args": {"format": "md"}},
+   {"tool": "get_applications", "args": {}}
+  ],
+  "expected_result": "Будут показаны версия EDT, статус MCP-сервера, список открытых проектов и привязанные к ним базы.",
+  "confidence": 3
+ },
+ {
+  "id": "c083",
+  "calls": [
+   {"tool": "list_toolsets", "args": {}},
+   {"tool": "enable_toolset", "args": {"toolsets": ["translation", "debug"], "disable": true}},
+   {"tool": "list_toolsets", "args": {}}
+  ],
+  "expected_result": "Будет показан список групп инструментов, отключены группы перевода и отладки, и показано, что осталось видимым.",
+  "confidence": 4
+ },
+ {
+  "id": "c084",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_mcp_history"}},
+   {"tool": "get_mcp_history", "args": {"includeStats": true, "limit": 100}},
+   {"tool": "get_mcp_history", "args": {"minDurationMs": 1000, "includeStats": true}}
+  ],
+  "expected_result": "Будет показана история недавних MCP-вызовов со временем выполнения, и выделены самые долгие вызовы и виновный инструмент.",
+  "confidence": 4
+ },
+ {
+  "id": "c085",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйТолстый", "confirm": true}},
+   {"tool": "create_launch_config", "args": {"projectName": "УправлениеТорговлей", "clientType": "thin"}},
+   {"tool": "debug_launch", "args": {"projectName": "УправлениеТорговлей", "launchConfigurationName": "<new config from create_launch_config>"}}
+  ],
+  "expected_result": "Будет удалена старая конфигурация запуска, создана новая для тонкого клиента, и запущена отладка по ней.",
+  "confidence": 4
+ },
+ {
+  "id": "c086",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_objects"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "catalogs"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "documents"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "accumulationRegisters"}},
+   {"tool": "list_subsystems", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_configuration_properties", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Будут показаны количества справочников, документов и регистров, список подсистем и версия платформы конфигурации.",
+  "confidence": 4
+ },
+ {
+  "id": "c087",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "печать"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"], "full": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_template_screenshot"}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "<template found via get_metadata_details>"}}
+  ],
+  "expected_result": "Будут найдены упоминания печати в коде, показаны макеты документа, и один из макетов отрисован.",
+  "confidence": 3
+ },
+ {
+  "id": "c088",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Роль.Менеджер"], "full": true}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Роль.Менеджер"}}
+  ],
+  "expected_result": "Будут показаны права роли по объектам, и найдены упоминания роли в коде и метаданных.",
+  "confidence": 4
+ },
+ {
+  "id": "c089",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"projectName": "TestConfiguration", "typeName": "ТаблицаЗначений"}},
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "ТаблицаЗначений"}}
+  ],
+  "expected_result": "Будет показана документация платформы по типу ТаблицаЗначений, и найдены места его использования в проекте.",
+  "confidence": 5
+ },
+ {
+  "id": "c090",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_modules"}},
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "documents", "objectName": "РеализацияТоваров"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/РеализацияТоваров/ObjectModule.bsl"}}
+  ],
+  "expected_result": "Будут показаны все модули документа, открыт модуль объекта, и показана его структура процедур и функций.",
+  "confidence": 4
+ },
+ {
+  "id": "c091",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Склад"}},
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "<method found via search_in_code>"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "<module found via go_to_definition>", "methodName": "<method found>", "direction": "callers"}}
+  ],
+  "expected_result": "Будут найдены упоминания строки Склад в коде, показано определение найденного метода, и его вызывающие.",
+  "confidence": 3
+ },
+ {
+  "id": "c092",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Справочник.ВременныйСправочник"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Справочник.ВременныйСправочник", "confirm": true}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Обработка.СтарыйЗагрузчик"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Обработка.СтарыйЗагрузчик", "confirm": true}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Отчёт.НеИспользуемый"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Отчёт.НеИспользуемый", "confirm": true}}
+  ],
+  "expected_result": "Для каждого из трёх объектов будут проверены ссылки на него, и затем объект удалён.",
+  "confidence": 4
+ },
+ {
+  "id": "c093",
+  "calls": [
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "confirm": true, "deleteDatabaseFiles": true}},
+   {"tool": "delete_project", "args": {"projectName": "TestConfiguration", "confirm": true, "deleteContent": true}}
+  ],
+  "expected_result": "Будет удалена база проекта вместе с файлами, а затем удалён и сам проект вместе с исходниками.",
+  "confidence": 3
+ },
+ {
+  "id": "c094",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "confirm": true, "fullUpdate": true, "terminateRunningClients": true}}
+  ],
+  "expected_result": "Конфигурация будет накачена на базу с полной реструктуризацией и принудительным завершением сеансов пользователей.",
+  "confidence": 3
+ },
+ {
+  "id": "c095",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Документ.РеализацияТоваров"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Документ.РеализацияТоваров", "newName": "РеализацияТоваровУслуг"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Документ.РеализацияТоваров", "newName": "РеализацияТоваровУслуг", "confirm": true}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Будут проверены ссылки на документ, показан предпросмотр каскада переименования, выполнено переименование, и проверены ошибки после него.",
+  "confidence": 4
+ },
+ {
+  "id": "c096",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "resync_to_disk"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "clean_project"}},
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Текущая модель будет сначала выгружена на диск, чтобы не потерять несохранённые правки, а затем проект перечитан с диска вместе с чужими изменениями.",
+  "confidence": 2
+ },
+ {
+  "id": "c097",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "terminate_launch", "args": {"all": true, "confirm": true}}
+  ],
+  "expected_result": "Будут принудительно завершены все сеансы 1С, запущенные из EDT, по всем проектам.",
+  "confidence": 4
+ },
+ {
+  "id": "c098",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Скидка", "confirm": true, "force": true}}
+  ],
+  "expected_result": "Реквизит будет удалён принудительно, несмотря на блокирующие ссылки в коде, которые останутся висячими.",
+  "confidence": 4
+ },
+ {
+  "id": "c099",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "<самый проблемный модуль из get_project_errors>"}},
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "run_yaxunit_tests"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "applicationId": "<id from get_applications>", "tags": ["smoke"]}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "D:\\daily"}}
+  ],
+  "expected_result": "Будет показана сводка ошибок и структура самого проблемного модуля, прогнаны smoke-тесты, и при их успехе конфигурация выгружена в XML.",
+  "confidence": 3
+ },
+ {
+  "id": "c100",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_event_log"}},
+   {"tool": "get_event_log", "args": {"projectName": "УправлениеТорговлей", "severity": ["Error"]}},
+   {"tool": "search_in_code", "args": {"projectName": "УправлениеТорговлей", "query": "<метод из текста ошибки журнала>"}},
+   {"tool": "read_method_source", "args": {"projectName": "УправлениеТорговлей", "modulePath": "<модуль, найденный в коде>", "methodName": "<метод из текста ошибки>"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "УправлениеТорговлей", "modulePath": "<тот же модуль>", "lineNumber": "<строка метода>"}}
+  ],
+  "expected_result": "Будут найдены записи журнала об ошибке проведения, найден и открыт исходник упомянутого метода, и в нём поставлен брейкпоинт.",
+  "confidence": 3
+ }
+]

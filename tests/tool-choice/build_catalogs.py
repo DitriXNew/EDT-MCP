@@ -145,14 +145,27 @@ for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c")):
 json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3"},
           open(os.path.join(HERE, "arms", "MAPPING.json"), "w", encoding="utf-8"), indent=1)
 
+# Batches: the one-step requests go 30 to an agent, the long multi-step scenarios 15,
+# because each of those answers carries a whole plan rather than a single call.
 os.makedirs(os.path.join(HERE, "batches"), exist_ok=True)
-for i in range(0, len(questions), 20):
-    batch = [{"id": q["id"], "request": q["ru"]} for q in questions[i:i + 20]]
-    json.dump(batch, open(os.path.join(HERE, "batches", "batch_%02d.json" % (i // 20 + 1)),
-                          "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-json.dump([{"id": q["id"], "request": q["ru"]} for q in questions if q.get("two_phase")],
+singles = [q for q in questions if q.get("kind", "single") == "single"]
+chains = [q for q in questions if q.get("kind") == "chain"]
+strip = lambda qs: [{"id": q["id"], "request": q["ru"]} for q in qs]
+n_single = n_chain = 0
+for i in range(0, len(singles), 50):
+    n_single += 1
+    json.dump(strip(singles[i:i + 50]),
+              open(os.path.join(HERE, "batches", "batch_%02d.json" % n_single), "w",
+                   encoding="utf-8"), ensure_ascii=False, indent=1)
+for i in range(0, len(chains), 25):
+    n_chain += 1
+    json.dump(strip(chains[i:i + 25]),
+              open(os.path.join(HERE, "batches", "chain_%02d.json" % n_chain), "w",
+                   encoding="utf-8"), ensure_ascii=False, indent=1)
+json.dump(strip([q for q in questions if q.get("two_phase") or q.get("two_phase_tool")]),
           open(os.path.join(HERE, "batches", "destructive.json"), "w", encoding="utf-8"),
           ensure_ascii=False, indent=1)
+print("батчей: %d одношаговых по 50, %d цепочек по 25" % (n_single, n_chain))
 
 wire = len(json.dumps(tools, ensure_ascii=False))
 print("tools: %d" % len(tools))

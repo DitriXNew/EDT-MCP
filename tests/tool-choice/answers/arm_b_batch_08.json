@@ -1,22 +1,32 @@
 [
- {"id":"q141","calls":[{"tool":"set_infobase_credentials","args":{"projectName":"TestConfiguration","user":"Администратор"}}],"expected_result":"Credentials (username Администратор) are stored for the TestConfiguration project's infobase so EDT can authenticate on connect.","confidence":3},
- {"id":"q142","calls":[{"tool":"set_infobase_credentials","args":{"applicationId":"app-1"}}],"expected_result":"Infobase credentials configuration is attempted for application app-1, but no username/password was given in the request so nothing meaningful is stored.","confidence":2},
- {"id":"q143","calls":[{"tool":"create_launch_config","args":{"projectName":"TestConfiguration","clientType":"thin"}}],"expected_result":"A new thin-client runtime launch configuration is created for the TestConfiguration project.","confidence":5},
- {"id":"q144","calls":[{"tool":"create_launch_config","args":{"projectName":"УправлениеТорговлей","clientType":"thick","name":"ТолстыйОтладка"}}],"expected_result":"A thick-client launch configuration named ТолстыйОтладка is created for the УправлениеТорговлей project.","confidence":5},
- {"id":"q145","calls":[{"tool":"delete_launch_config","args":{"name":"СтарыйЗапуск","confirm":true}}],"expected_result":"The launch configuration СтарыйЗапуск is deleted.","confidence":4},
- {"id":"q146","calls":[{"tool":"delete_launch_config","args":{"name":"AttachOld","confirm":true}}],"expected_result":"The attach launch configuration AttachOld is deleted.","confidence":4},
- {"id":"q147","calls":[{"tool":"list_configurations","args":{"projectName":"TestConfiguration"}}],"expected_result":"A list of the runtime and attach launch configurations set up for the TestConfiguration project is returned.","confidence":5},
- {"id":"q148","calls":[{"tool":"list_configurations","args":{"type":"attach"}}],"expected_result":"A list of all server-side (attach) launch configurations across the workspace is returned.","confidence":4},
- {"id":"q149","calls":[{"tool":"get_event_log","args":{"projectName":"TestConfiguration","severity":["Error"],"from":"2026-08-14"}}],"expected_result":"Only error-severity event log entries for TestConfiguration's infobase from today are returned.","confidence":4},
- {"id":"q150","calls":[{"tool":"get_event_log","args":{"projectName":"TestConfiguration","user":["Иванов"],"from":"2026-08-07"}}],"expected_result":"Event log entries for user Иванов over the last week in the TestConfiguration project's infobase are returned.","confidence":3},
- {"id":"q151","calls":[{"tool":"list_git_branches","args":{"projectName":"TestConfiguration"}}],"expected_result":"A list of git branches for TestConfiguration along with their bound infobases is returned.","confidence":5},
- {"id":"q152","calls":[{"tool":"list_git_branches","args":{"projectName":"УправлениеТорговлей"}}],"expected_result":"A list of git branches for the УправлениеТорговлей project's repository is returned.","confidence":5},
- {"id":"q153","calls":[{"tool":"create_git_branch","args":{"projectName":"TestConfiguration","branch":"feature/новый-отчет","checkout":true}}],"expected_result":"A new branch feature/новый-отчет is created in TestConfiguration and checked out immediately.","confidence":5},
- {"id":"q154","calls":[{"tool":"create_git_branch","args":{"projectName":"TestConfiguration","branch":"hotfix/1","startPoint":"master"}}],"expected_result":"A new branch hotfix/1 is created in TestConfiguration starting from master.","confidence":5},
- {"id":"q155","calls":[{"tool":"switch_git_branch","args":{"projectName":"TestConfiguration","branch":"develop"}}],"expected_result":"The TestConfiguration project's active branch is switched to develop.","confidence":5},
- {"id":"q156","calls":[{"tool":"switch_git_branch","args":{"projectName":"УправлениеТорговлей","branch":"release-2.0"}},{"tool":"get_configuration_properties","args":{"projectName":"УправлениеТорговлей"}}],"expected_result":"The project is switched to branch release-2.0 and its configuration properties (including version) are then reported.","confidence":3},
- {"id":"q157","calls":[{"tool":"set_branch_infobase","args":{"projectName":"TestConfiguration","applicationId":"app-3","branch":"develop"}}],"expected_result":"Existing infobase app-3 is attached to the develop branch context of TestConfiguration.","confidence":4},
- {"id":"q158","calls":[{"tool":"set_branch_infobase","args":{"projectName":"TestConfiguration","applicationId":"app-2","branch":"feature/x","setDefault":true}}],"expected_result":"Infobase app-2 is attached to the feature/x branch of TestConfiguration and set as its default infobase.","confidence":4},
- {"id":"q159","calls":[{"tool":"run_yaxunit_tests","args":{"projectName":"TestConfiguration"}}],"expected_result":"YAXUnit unit tests for the TestConfiguration project are run and a test report is returned.","confidence":5},
- {"id":"q160","calls":[{"tool":"run_yaxunit_tests","args":{"projectName":"TestConfiguration","modules":["ОМ_ТестыРасчетов"]}}],"expected_result":"Only the YAXUnit tests belonging to module ОМ_ТестыРасчетов are run for TestConfiguration.","confidence":5}
+ {
+  "id": "q351",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: каталог не содержит средства для показа git diff между ветками — есть только list_git_branches/create_git_branch/switch_git_branch/set_branch_infobase, но не сравнение содержимого веток.",
+  "confidence": 4
+ },
+ {
+  "id": "q352",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: профилирование (start_profiling/get_profiling_results) измеряет время выполнения и покрытие BSL-кода в отладочной сессии, а не потребление памяти сервером 1С под нагрузкой.",
+  "confidence": 4
+ },
+ {
+  "id": "q353",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: в каталоге есть создание/регистрация и удаление инфобазы, но нет восстановления базы из бэкапа.",
+  "confidence": 4
+ },
+ {
+  "id": "q354",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: run_yaxunit_tests/debug_yaxunit_tests только запускают уже существующие тесты, а инструмента автогенерации тестов YAXUnit по коду модуля в каталоге нет.",
+  "confidence": 4
+ },
+ {
+  "id": "q355",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: настройка прав пользователя в самой инфобазе через конфигуратор — это администрирование запущенной базы, а не редактирование метаданных роли (modify_metadata) в проекте EDT, и такого инструмента в каталоге нет.",
+  "confidence": 4
+ }
 ]

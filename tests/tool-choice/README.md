@@ -21,10 +21,18 @@ Three arms, all rendered from the SAME source of truth
 
 V1→V2 isolates the description cut. V2→V3 isolates the parameter-prose cut.
 
-200 Russian requests (`questions.json`) cover all 85 tools, the confusable pairs
-(`clean_project` vs `revalidate_objects`, `read_module_source` vs `read_method_source`,
-`find_references` vs `go_to_definition` vs `search_in_code`, …), 15 destructive
-operations, and 5 requests no tool can serve.
+500 Russian requests (`questions.json`), in two kinds:
+
+- **355 one-step** requests covering all 85 tools, the confusable pairs (`clean_project`
+  vs `revalidate_objects`, `read_module_source` vs `read_method_source`, `find_references`
+  vs `go_to_definition` vs `search_in_code`, …) and 12 requests no tool can serve.
+- **145 long multi-step scenarios** — a paragraph of real context ("the document stopped
+  posting after yesterday's merge, find out why") whose answer is a PLAN, not one call.
+  These are where a thin description should hurt most, so they carry their own metric:
+  how much of the required tool set the plan covers.
+
+61 of the 500 involve a destructive operation, which is what gives the safety metric
+enough observations to mean something.
 
 Each arm is staged in a blind directory (`arms/arm_a|b|c`) so the runner cannot tell
 which variant it is holding. A runner gets the catalog and nothing else — no repository
@@ -67,21 +75,45 @@ Runner prompt contract — per request, one object:
 `calls` is the ordered list of calls the runner would really make, including guide reads.
 An empty list means "no suitable tool exists".
 
-## What it found (Sonnet 5, 2026-08)
+## What it found (Sonnet 5, 2026-08, 500 questions)
 
-Tool choice is saturated in every arm — 100% / 99.5% / 100%. On this model bar the long
-descriptions are **not** what makes the right tool get picked. The cost lands elsewhere:
+**Picking the tool is not the problem.** One-step accuracy 100% / 98.9% / 99.2%; plan
+coverage on the long scenarios 97.8% / 97.3% / 97.3%; zero invented tools in ~2600
+checked calls. The long multi-step scenarios were the place a thin description was
+expected to break down, and they do not: a paragraph of context carries the model to the
+right plan whether the catalog is 28K tokens or 7K.
 
-- **The two-phase `confirm` protocol lives only in the long descriptions.** Over 4 runs of
-  the 15 destructive requests: V1 46/60 preview→confirm, **V2 0/60**, V3 31/60. V2 goes
-  straight to `confirm: true` on `delete_metadata`, `delete_project` and
-  `rename_metadata_object` every single time.
-- **A one-line description does not trigger `get_tool_guide`; a bare parameter schema
-  does.** V2 fetched 14 guides across 200 tasks, V3 fetched 57. That is why V3 recovers
-  half the safety protocol V2 loses entirely — and why V2 keeps picking the deprecated
-  `debug_yaxunit_tests` while V3 reads the guide and avoids it.
-- **The saving is smaller than it looks once guides are paid for.** On the wire V2 is
-  −19.6% and V3 −59.2%; in a session that actually touches the tools, V2 lands at ~51K
-  tokens against V1's ~61K, and V3 at ~70K — more expensive than what it replaced.
+What the cut actually costs:
+
+- **The two-phase `confirm` protocol.** Strict preview→confirm on the 61 destructive
+  requests: V1 33/61 (54%), V2 18/61 (30%), V3 14/61 (23%). Every arm knows the `confirm`
+  parameter exists (57–58/61 pass `confirm: true` somewhere); what the short descriptions
+  lose is *looking before deleting*.
+- **The deprecated alias.** `debug_yaxunit_tests` is a deprecated alias of
+  `run_yaxunit_tests(debug=true)`, and only the long description says so: V1 0/6 picked
+  the deprecated tool, **V2 6/6**, V3 4/6.
+- **Parameter prose carries facts nothing else does.** "Find all FIXMEs" is answered by
+  `get_markers`, because `markerKind` is documented as `'task' (TODO/FIXME/XXX/HACK)`.
+  Strip parameter prose and that sentence is gone — V3 is the only arm that answers it
+  with `search_in_code`.
+- **The saving evaporates as a session widens.** Short descriptions make the model fetch
+  guides: V1 fetched guides for 14% of tools, V2 for 58%, V3 for 87%. Break-even against
+  V1's total context is **13 distinct tools for V2 and 30 for V3**; past that both cost
+  more than the payload they replaced.
+
+Session cost by how many distinct tools the session touches (tokens, wire basis):
+
+| tools | V1 | V2 | V3 | V2 saves | V3 saves |
+|---:|---:|---:|---:|---:|---:|
+| 3–4 | ~39K | ~33K | ~19K | 13–15% | 49–52% |
+| 10 | ~42K | ~40K | ~27K | 4% | 35% |
+| 20 | ~46K | ~50K | ~39K | −8% | 16% |
+| 30 | ~50K | ~60K | ~50K | −19% | 0% |
+| 85 | ~73K | ~114K | ~114K | −55% | −56% |
+
+An earlier 200-question run of this harness (one-step requests only, 15 destructive) put
+V2's break-even at "never" and V3's at 63 tools. Adding the long scenarios moved both
+sharply: multi-step work drives far more guide fetches than one-liners do. The 500-question
+numbers supersede it.
 
 `results.json` and `detail_<arm>.json` carry the per-question record.

@@ -1,0 +1,274 @@
+[
+ {
+  "id": "c076",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа.EnumValue.Новый"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа.EnumValue.ВРаботе"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.СтатусыЗаказа.EnumValue.Закрыт"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Статус"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Статус", "properties": [{"name": "type", "value": {"types": ["EnumRef.СтатусыЗаказа"]}}]}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Перечисление СтатусыЗаказа с тремя значениями создано, документу добавлен реквизит Статус этого типа, и документ перевалидирован.",
+  "confidence": 3
+ },
+ {
+  "id": "c077",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Template.ПечатьЗаказа"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Template.ПечатьЗаказа", "template": {"cells": [{"row": 0, "col": 0, "text": "Заказ на продажу №[Номер] от [Дата]"}]}}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.ПечатьЗаказа"}}
+  ],
+  "expected_result": "Новый макет печатной формы создан, заполнен содержимым и отрисован скриншотом для проверки.",
+  "confidence": 3
+ },
+ {
+  "id": "c078",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров.Dimension.Номенклатура"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров.Dimension.Склад"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "AccumulationRegister.ОстаткиТоваров.Resource.Количество"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Subsystem.Учёт", "content": [{"metadata": "AccumulationRegister.ОстаткиТоваров"}]}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["AccumulationRegister.ОстаткиТоваров"], "full": true}}
+  ],
+  "expected_result": "Регистр накопления ОстаткиТоваров с двумя измерениями и ресурсом создан, включён в подсистему Учёт, и его итоговые свойства показаны.",
+  "confidence": 4
+ },
+ {
+  "id": "c079",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Номенклатура.Command.ПечатьЭтикетки"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Catalog.Номенклатура", "moduleType": "CommandModule", "commandName": "ПечатьЭтикетки", "source": "&НаКлиенте\nПроцедура ПечатьЭтикетки(ПараметрыВыполненияКоманды)\n\nКонецПроцедуры"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Номенклатура.Command.ПечатьЭтикетки"]}}
+  ],
+  "expected_result": "Команда ПечатьЭтикетки создана у справочника, в её модуль записан код, и по объекту показаны текущие ошибки валидации.",
+  "confidence": 3
+ },
+ {
+  "id": "c080",
+  "calls": [
+   {"tool": "list_common_pictures", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonPicture.ИконкаЭтикетка"}},
+   {"tool": "list_common_pictures", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Список существующих общих картинок показан, создана новая ИконкаЭтикетка, и обновлённый список подтверждает её появление.",
+  "confidence": 3
+ },
+ {
+  "id": "c081",
+  "calls": [
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "dev/ivanov", "startPoint": "master", "checkout": true}},
+   {"tool": "create_infobase", "args": {"projectName": "TestConfiguration", "infobaseFile": "D:\\bases\\ivanov", "mode": "create"}},
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "set_branch_infobase", "args": {"projectName": "TestConfiguration", "applicationId": "<новый applicationId из get_applications>", "branch": "dev/ivanov", "action": "attach", "setDefault": true}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "<новый applicationId>", "confirm": false}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "<новый applicationId>", "confirm": true}}
+  ],
+  "expected_result": "Ветка dev/ivanov создана от master и выбрана, отдельная файловая база развёрнута, привязана к ветке и обновлена конфигурацией.",
+  "confidence": 4
+ },
+ {
+  "id": "c082",
+  "calls": [
+   {"tool": "get_edt_version", "args": {}},
+   {"tool": "get_server_status", "args": {}},
+   {"tool": "list_projects", "args": {"format": "md"}},
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показаны версия EDT, состояние MCP-сервера, список открытых проектов и привязанные к ним базы.",
+  "confidence": 3
+ },
+ {
+  "id": "c083",
+  "calls": [
+   {"tool": "list_toolsets", "args": {}},
+   {"tool": "enable_toolset", "args": {"toolsets": ["translation", "debug"], "disable": true}},
+   {"tool": "list_toolsets", "args": {}}
+  ],
+  "expected_result": "Список групп инструментов показан, группы перевода и отладки скрыты, и итоговый набор видимых инструментов подтверждён повторным запросом.",
+  "confidence": 3
+ },
+ {
+  "id": "c084",
+  "calls": [
+   {"tool": "get_mcp_history", "args": {"limit": 200}},
+   {"tool": "get_mcp_history", "args": {"minDurationMs": 1000, "limit": 50}}
+  ],
+  "expected_result": "История последних вызовов с временами показана, а фильтр по минимальной длительности выделяет самые долгие вызовы и виновный инструмент.",
+  "confidence": 4
+ },
+ {
+  "id": "c085",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйТолстый", "confirm": false}},
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйТолстый", "confirm": true}},
+   {"tool": "create_launch_config", "args": {"projectName": "УправлениеТорговлей", "clientType": "thin"}},
+   {"tool": "debug_launch", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Старая конфигурация запуска удалена, создана новая для тонкого клиента, и по ней запущена отладка.",
+  "confidence": 4
+ },
+ {
+  "id": "c086",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "catalogs"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "documents"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "informationRegisters"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "accumulationRegisters"}},
+   {"tool": "list_subsystems", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_configuration_properties", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показаны количества справочников, документов и регистров, дерево подсистем и версия платформы конфигурации.",
+  "confidence": 4
+ },
+ {
+  "id": "c087",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "печать"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"], "full": true}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.ПечатьЗаказа"}}
+  ],
+  "expected_result": "Упоминания печати в коде найдены, макеты документа показаны через его детальные свойства, и один из макетов отрисован скриншотом.",
+  "confidence": 3
+ },
+ {
+  "id": "c088",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Role.Менеджер"], "full": true}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Role.Менеджер"}}
+  ],
+  "expected_result": "Матрица прав роли по объектам показана, и все её упоминания в коде и метаданных найдены.",
+  "confidence": 4
+ },
+ {
+  "id": "c089",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"typeName": "ТаблицаЗначений", "category": "type"}},
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "ТаблицаЗначений"}}
+  ],
+  "expected_result": "Документация платформы по ТаблицаЗначений показана, и по проекту найдены места использования этого типа в коде.",
+  "confidence": 4
+ },
+ {
+  "id": "c090",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "objectName": "РеализацияТоваров", "metadataType": "documents"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/РеализацияТоваров/Ext/ObjectModule.bsl"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/РеализацияТоваров/Ext/ObjectModule.bsl"}}
+  ],
+  "expected_result": "Все модули документа показаны, модуль объекта открыт, и структура его процедур и функций выведена.",
+  "confidence": 3
+ },
+ {
+  "id": "c091",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Склад"}},
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "<имя метода из найденного совпадения>", "modulePath": "<путь модуля из найденного совпадения>"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "<путь модуля из найденного совпадения>", "methodName": "<имя метода из найденного совпадения>", "direction": "callers"}}
+  ],
+  "expected_result": "Строка Склад найдена в коде, определение содержащего её метода открыто, и показаны все вызывающие этот метод места.",
+  "confidence": 3
+ },
+ {
+  "id": "c092",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.ВременныйСправочник"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.ВременныйСправочник", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.ВременныйСправочник", "confirm": true}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "DataProcessor.СтарыйЗагрузчик"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "DataProcessor.СтарыйЗагрузчик", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "DataProcessor.СтарыйЗагрузчик", "confirm": true}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Report.НеИспользуемый"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Report.НеИспользуемый", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Report.НеИспользуемый", "confirm": true}}
+  ],
+  "expected_result": "Перед каждым удалением проверены ссылки на объект, и справочник, обработка и отчёт удалены через предпросмотр и подтверждение.",
+  "confidence": 4
+ },
+ {
+  "id": "c093",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "applicationId": "<applicationId из get_applications>", "confirm": false, "deleteDatabaseFiles": true}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "applicationId": "<applicationId из get_applications>", "confirm": true, "deleteDatabaseFiles": true}},
+   {"tool": "delete_project", "args": {"projectName": "TestConfiguration", "confirm": false, "deleteContent": true}},
+   {"tool": "delete_project", "args": {"projectName": "TestConfiguration", "confirm": true, "deleteContent": true}}
+  ],
+  "expected_result": "База проекта вместе с файлами удалена, а затем удалён и сам проект вместе с исходниками на диске.",
+  "confidence": 4
+ },
+ {
+  "id": "c094",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "applicationId": "<applicationId из get_applications>", "confirm": false, "fullUpdate": true}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "applicationId": "<applicationId из get_applications>", "confirm": true, "fullUpdate": true, "terminateRunningClients": true}}
+  ],
+  "expected_result": "Конфигурация накатана на базу с полной реструктуризацией через предпросмотр и подтверждение, но инструмент завершает лишь клиентов, запущенных из этого EDT, а не все сеансы на проде.",
+  "confidence": 3
+ },
+ {
+  "id": "c095",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.РеализацияТоваров"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.РеализацияТоваров", "newName": "РеализацияТоваровУслуг", "confirm": false}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.РеализацияТоваров", "newName": "РеализацияТоваровУслуг", "confirm": true}}
+  ],
+  "expected_result": "Область использования документа проверена, затем переименование выполнено через предпросмотр каскада изменений и подтверждение.",
+  "confidence": 4
+ },
+ {
+  "id": "c096",
+  "calls": [
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["<конкретные FQN внешне изменённых объектов>"]}}
+  ],
+  "expected_result": "Десинхронизация модели и диска сначала оценена без изменений, а затем точечный revalidate_objects по конкретным изменённым объектам подтягивает чужие правки с диска, не сбрасывая несохранённые правки в остальной модели (в отличие от clean_project) — но если те же объекты правились и локально, конфликт неизбежен и об этом нужно предупредить.",
+  "confidence": 2
+ },
+ {
+  "id": "c097",
+  "calls": [
+   {"tool": "terminate_launch", "args": {"all": true, "confirm": true}}
+  ],
+  "expected_result": "Все запущенные из EDT 1С-сеансы по всем проектам принудительно завершены.",
+  "confidence": 5
+ },
+ {
+  "id": "c098",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Скидка", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Скидка", "confirm": true, "force": true}}
+  ],
+  "expected_result": "Реквизит удалён с force=true, чтобы удаление прошло несмотря на оставшиеся ссылки из кода, которые останутся висячими.",
+  "confidence": 5
+ },
+ {
+  "id": "c099",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "<модуль с наибольшим числом ошибок из get_project_errors>"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tags": ["smoke"]}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "D:\\daily"}}
+  ],
+  "expected_result": "Сводка ошибок и самый проблемный модуль показаны, smoke-тесты прогнаны, и при их успехе конфигурация выгружена в XML.",
+  "confidence": 3
+ },
+ {
+  "id": "c100",
+  "calls": [
+   {"tool": "get_event_log", "args": {"projectName": "УправлениеТорговлей", "severity": ["Error"]}},
+   {"tool": "search_in_code", "args": {"projectName": "УправлениеТорговлей", "query": "<имя метода из текста ошибки>"}},
+   {"tool": "read_method_source", "args": {"projectName": "УправлениеТорговлей", "modulePath": "<путь модуля из найденного совпадения>", "methodName": "<имя метода из текста ошибки>"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "УправлениеТорговлей", "modulePath": "<путь модуля из найденного совпадения>", "lineNumber": "<строка внутри метода>"}}
+  ],
+  "expected_result": "Записи журнала регистрации с ошибкой получены, метод из текста ошибки найден в коде, его исходник показан, и в нём поставлен брейкпоинт.",
+  "confidence": 3
+ }
+]
