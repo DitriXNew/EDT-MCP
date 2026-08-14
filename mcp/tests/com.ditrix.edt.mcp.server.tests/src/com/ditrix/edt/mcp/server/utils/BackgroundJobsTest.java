@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobWork;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
 
 /** Focused lifecycle and capacity tests for {@link BackgroundJobs}. */
@@ -186,16 +187,8 @@ public class BackgroundJobsTest
                 jobs.start(60_000L, 1, "start", progress -> "second")); //$NON-NLS-1$ //$NON-NLS-2$
 
             release.countDown();
-            JobSnapshot admitted = null;
-            long until = System.currentTimeMillis() + 5_000L;
-            while (admitted == null && System.currentTimeMillis() < until)
-            {
-                admitted = jobs.start(60_000L, 1, "start", progress -> "third"); //$NON-NLS-1$ //$NON-NLS-2$
-                if (admitted == null)
-                {
-                    Thread.sleep(20L);
-                }
-            }
+            JobSnapshot admitted = startWhenAdmitted(jobs, 60_000L, 1, "start", //$NON-NLS-1$
+                progress -> "third"); //$NON-NLS-1$
             assertNotNull("the slot never came back after the work unwound", admitted); //$NON-NLS-1$
         }
     }
@@ -231,7 +224,7 @@ public class BackgroundJobsTest
                 // Two jobs were admitted and one of them is provably over, so a limit of two
                 // must still have room. Without the slot coming back this returns null.
                 assertNotNull("the cancelled job kept its admission slot", //$NON-NLS-1$
-                    jobs.start(60_000L, 2, "start", progress -> "third")); //$NON-NLS-1$ //$NON-NLS-2$
+                    startWhenAdmitted(jobs, 60_000L, 2, "start", progress -> "third")); //$NON-NLS-1$ //$NON-NLS-2$
             }
             finally
             {
@@ -256,7 +249,7 @@ public class BackgroundJobsTest
 
             CountDownLatch release = new CountDownLatch(1);
             CountDownLatch busy = new CountDownLatch(1);
-            JobSnapshot running = jobs.start(60_000L, 1, "start", progress -> { //$NON-NLS-1$
+            JobSnapshot running = startWhenAdmitted(jobs, 60_000L, 1, "start", progress -> { //$NON-NLS-1$
                 busy.countDown();
                 release.await();
                 return "busy"; //$NON-NLS-1$
@@ -343,6 +336,26 @@ public class BackgroundJobsTest
                 release.countDown();
             }
         }
+    }
+
+    /**
+     * A terminal status is published before its admission slot is released, so a finished job
+     * does not imply that its slot is back; tests must wait for the deliberate release ordering.
+     */
+    private static JobSnapshot startWhenAdmitted(BackgroundJobs jobs, long timeoutMs, int maxRunning,
+        String initialProgress, JobWork work) throws InterruptedException
+    {
+        JobSnapshot admitted = null;
+        long until = System.currentTimeMillis() + 5_000L;
+        while (admitted == null && System.currentTimeMillis() < until)
+        {
+            admitted = jobs.start(timeoutMs, maxRunning, initialProgress, work);
+            if (admitted == null)
+            {
+                Thread.sleep(20L);
+            }
+        }
+        return admitted;
     }
 
     private static JobSnapshot completed(BackgroundJobs jobs, String value)
