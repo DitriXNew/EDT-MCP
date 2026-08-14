@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.rename;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -239,6 +240,8 @@ public class MetadataRenameNumberingParityTest
         assertEquals(List.of("p1#0", "a#1", "b#2", "p2#3", "c#4"), describe(rows)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         assertEquals(RENAME, field(rows.get(0), "type")); //$NON-NLS-1$
         assertEquals(BSL_REF, field(rows.get(1), "type")); //$NON-NLS-1$
+        assertEquals("a regular item is never skippable through disableIndices, even when EDT " //$NON-NLS-1$
+            + "calls it optional", Boolean.FALSE, field(rows.get(0), "optional")); //$NON-NLS-1$ //$NON-NLS-2$
 
         int previewedIndexOfC = indexOfRow(rows, "c"); //$NON-NLS-1$
         int[] executeCounter = {0};
@@ -264,6 +267,108 @@ public class MetadataRenameNumberingParityTest
             previewCounter[0], executeCounter[0]);
     }
 
+    // ==================== #392: optimistic lock for the cross-call index handle ====================
+
+    @Test
+    public void testSameOrderedTreeHashesTheSameAndChangedOrderHashesDifferently()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        String first = service.changePointContentHash(refactorings("a", "b")); //$NON-NLS-1$ //$NON-NLS-2$
+        String same = service.changePointContentHash(refactorings("a", "b")); //$NON-NLS-1$ //$NON-NLS-2$
+        String reordered = service.changePointContentHash(refactorings("b", "a")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the same ordered change-point list must be stable", first, same); //$NON-NLS-1$
+        assertNotEquals("reordering the tree changes what an index means and must change the token", //$NON-NLS-1$
+            first, reordered);
+    }
+
+    @Test
+    public void testPreviewEmitsStableContentHashOverTheFullListRegardlessOfMaxResults()
+        throws Exception
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        List<IRefactoring> refactorings = refactorings("a", "b", "c"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String full = renderPreview(service, refactorings, "Old", 0, List.of()); //$NON-NLS-1$
+        String truncated = renderPreview(service, refactorings, "Old", 1, List.of()); //$NON-NLS-1$
+        String repeated = renderPreview(service, refactorings, "Old", 0, List.of()); //$NON-NLS-1$
+        String contentHash = frontmatterValue(full, "contentHash"); //$NON-NLS-1$
+
+        assertTrue("the preview must emit ContentHash's 64-bit lowercase token", //$NON-NLS-1$
+            contentHash.matches("[0-9a-f]{16}")); //$NON-NLS-1$
+        assertEquals(service.changePointContentHash(refactorings), contentHash);
+        assertEquals("display truncation must not change the full-list token", contentHash, //$NON-NLS-1$
+            frontmatterValue(truncated, "contentHash")); //$NON-NLS-1$
+        assertEquals("re-rendering the same tree must emit the same token", contentHash, //$NON-NLS-1$
+            frontmatterValue(repeated, "contentHash")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testPreviewOnlyOldNameAndLocationEnrichmentDoNotChangeContentHash()
+        throws Exception
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        List<IRefactoring> refactorings = refactorings("leaf"); //$NON-NLS-1$
+        Object enriched = newChangePoint(0, "leaf", //$NON-NLS-1$
+            newCodeLocation("CommonModule.Other", "OtherProject", 37, 12)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String metadataLike = renderPreview(service, refactorings, "OldMetadataName", 0, //$NON-NLS-1$
+            List.of(enriched));
+        String formLike = renderPreview(service, refactorings, "OldFormName", 0, List.of()); //$NON-NLS-1$
+
+        assertEquals("preview-only oldName/location enrichment is not reproducible on confirm and " //$NON-NLS-1$
+            + "must not leak into the lock token", frontmatterValue(formLike, "contentHash"), //$NON-NLS-1$ //$NON-NLS-2$
+            frontmatterValue(metadataLike, "contentHash")); //$NON-NLS-1$
+        assertTrue("the positive control: supplemental EDT data really changed a hashed display field", //$NON-NLS-1$
+            metadataLike.contains("| 37 | 12 |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmRefusesMissingExpectedHashWhenIndicesArePresent()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        String error = service.expectedHashError(refactorings("leaf"), //$NON-NLS-1$
+            DisableRequest.parse("0"), null); //$NON-NLS-1$
+
+        assertTrue(error.contains("expectedHash is required")); //$NON-NLS-1$
+        assertTrue(error.contains("contentHash")); //$NON-NLS-1$
+        assertTrue(error.contains("Nothing was renamed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmRefusesStaleExpectedHashBeforeApplyingIndices()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        List<IRefactoring> refactorings = refactorings("leaf"); //$NON-NLS-1$
+        String current = service.changePointContentHash(refactorings);
+        String stale = (current.charAt(0) == '0' ? "1" : "0") + current.substring(1); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String error = service.expectedHashError(refactorings, DisableRequest.parse("0"), stale); //$NON-NLS-1$
+
+        assertTrue(error.contains("preview is stale")); //$NON-NLS-1$
+        assertTrue(error.contains("Nothing was renamed")); //$NON-NLS-1$
+        assertTrue(error.contains("indices may now mean different change points")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmProceedsPastHashGuardWhenExpectedHashMatches()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        List<IRefactoring> refactorings = refactorings("leaf"); //$NON-NLS-1$
+        String contentHash = service.changePointContentHash(refactorings);
+
+        assertNull(service.expectedHashError(refactorings, DisableRequest.parse("0"), //$NON-NLS-1$
+            "  \"" + contentHash.toUpperCase(java.util.Locale.ROOT) + "\"  ")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testConfirmDoesNotRequireExpectedHashWithoutDisableIndices()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+
+        assertNull(service.expectedHashError(refactorings("leaf"), DisableRequest.parse(null), null)); //$NON-NLS-1$
+    }
+
     // ==================== fixtures ====================
 
     /** {@code root[ a, mid[ b, c ], d ]} - nested composites so recursion order is observable. */
@@ -283,7 +388,23 @@ public class MetadataRenameNumberingParityTest
     {
         IRefactoringItem item = mock(IRefactoringItem.class);
         when(item.getName()).thenReturn(name);
+        when(item.isOptional()).thenReturn(true);
         return item;
+    }
+
+    /** One optional native item whose composite children have the given ordered names. */
+    private static List<IRefactoring> refactorings(String... names)
+    {
+        CompositeChange root = new CompositeChange("root"); //$NON-NLS-1$
+        for (String name : names)
+        {
+            root.add(new NullChange(name));
+        }
+        INativeChangeRefactoringItem item = nativeItem(root);
+        IRefactoring refactoring = mock(IRefactoring.class);
+        when(refactoring.getTitle()).thenReturn("Rename"); //$NON-NLS-1$
+        when(refactoring.getItems()).thenReturn(List.of(item));
+        return List.of(refactoring);
     }
 
     /**
@@ -356,6 +477,45 @@ public class MetadataRenameNumberingParityTest
                 "context", "Method"); //$NON-NLS-1$ //$NON-NLS-2$
         return onlyConstructor(nested("ExactMatchInfo")) //$NON-NLS-1$
             .newInstance(filePath, Integer.valueOf(offset), location);
+    }
+
+    private static Object newCodeLocation(String fqn, String project, int line, int column)
+        throws Exception
+    {
+        return onlyConstructor(nested("CodeLocation")) //$NON-NLS-1$
+            .newInstance(fqn, project, Integer.valueOf(line), Integer.valueOf(column),
+                "context", "Method"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static Object newChangePoint(int index, String description, Object location)
+        throws Exception
+    {
+        return onlyConstructor(nested("ChangePoint")) //$NON-NLS-1$
+            .newInstance(Integer.valueOf(index), BSL_REF, description, Boolean.TRUE, Boolean.TRUE,
+                location);
+    }
+
+    private static String renderPreview(MetadataRenameService service,
+        List<IRefactoring> refactorings, String oldName, int maxResults,
+        List<?> edtBslPreviewChanges) throws Exception
+    {
+        return (String)method("renderPreview").invoke(service, //$NON-NLS-1$
+            "CommonModule.Old", "New", oldName, refactorings, Integer.valueOf(maxResults), //$NON-NLS-1$ //$NON-NLS-2$
+            Map.of(), edtBslPreviewChanges);
+    }
+
+    private static String frontmatterValue(String markdown, String key)
+    {
+        String prefix = key + ": "; //$NON-NLS-1$
+        for (String line : markdown.split("\\R")) //$NON-NLS-1$
+        {
+            if (line.startsWith(prefix))
+            {
+                return line.substring(prefix.length());
+            }
+        }
+        fail("frontmatter has no " + key + ":\n" + markdown); //$NON-NLS-1$ //$NON-NLS-2$
+        return null;
     }
 
     /** The single declared method of that name (fails loudly if it stops being unambiguous). */

@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.rename;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -33,8 +34,8 @@ import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
  * Tests the {@code disableIndices} half of the {@code rename_metadata_object} contract: WHICH change
  * points a requested index may switch off (#393), WHAT the executed report then claims about it (#394 -
  * the change points the request really left switched off, not the size of the request), and how the
- * entries that produced no skip at all are accounted for: an index that matched nothing, an index
- * naming a required point, or a token that never parsed as a number (#401).
+ * entries that produced no skip at all are accounted for: an index that matched nothing or names a
+ * required point (#394), while a token that can never be an index is refused before execution (#401).
  * <p>
  * Everything here is driven through {@code applyDisableIndices} - the method {@code performRename}
  * actually calls - rather than through the leaf walker underneath it. That is deliberate: the decision
@@ -175,7 +176,10 @@ public class MetadataRenameDisableIndicesTest
     public void testUnknownIndexIsNotCountedAsASkip() throws Exception
     {
         Change leaf = new NullChange("edit"); //$NON-NLS-1$
-        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, true)), request("99"));
+        DisableRequest tooLarge = request("99"); //$NON-NLS-1$
+        assertNull("a merely too-large index is a stale reference, not malformed", //$NON-NLS-1$
+            tooLarge.validationError());
+        Object outcome = applyDisableIndices(refactoring(nativeItem(leaf, true)), tooLarge);
 
         String report = renderExecutedReport(outcome, List.of("TestConfiguration"), List.of()); //$NON-NLS-1$
 
@@ -276,7 +280,7 @@ public class MetadataRenameDisableIndicesTest
         assertTrue(report.contains("unknownIndices: [7, 42, 99]")); //$NON-NLS-1$
     }
 
-    // ============ #401: a token that never became an index is still accounted for ============
+    // ============ #401: a token that can never be an index is refused ============
 
 
     /** Separator noise is punctuation, not an entry the caller meant - it must not inflate the count. */
@@ -308,11 +312,10 @@ public class MetadataRenameDisableIndicesTest
     // ======== A change point THIS TOOL cannot skip is not the same as a mandatory one ========
 
     /**
-     * The preview prints a plain item's own {@code isOptional()}, so such a row can read
-     * {@code Skippable: yes} - and this branch still cannot switch it off, because a plain item owns no
-     * leaf {@code Change}. Reporting that as "the refactoring deems it mandatory" is the report
-     * asserting something untrue ABOUT THE REFACTORING, which is the rule #394 exists for: say what
-     * actually happened, not the nearest convenient thing.
+     * Since #400 the preview prints {@code Skippable: no} for a plain item even when its platform
+     * optional flag is true. A caller can still guess its index, and this branch still cannot switch
+     * it off because a plain item owns no leaf {@code Change}; the report must describe that as
+     * unsupported rather than falsely claiming the refactoring called it mandatory.
      */
     @Test
     public void testAnOptionalPlainItemIsReportedAsUnsupportedNotMandatory() throws Exception
@@ -341,24 +344,18 @@ public class MetadataRenameDisableIndicesTest
     }
 
     /**
-     * The all-unparsable request, end to end and headless: nothing to walk, and the report must still
-     * say so. This is the shape the old code answered exactly as if nothing had been asked, and the
-     * one the outcome-before-the-guard construction exists for - so it is asserted here as well as
-     * over the wire, because a headless test keeps working when the stand is unavailable.
+     * An all-unparsable request is refused before execution, so the executed report and its old
+     * unparsedCount branch are unreachable.
      */
     @Test
-    public void testARequestOfOnlyUnparsableEntriesIsStillReported() throws Exception
+    public void testARequestOfOnlyUnparsableEntriesIsRefused()
     {
-        String askedForNothing = renderExecutedReport(newOutcome(request(null)), List.of(), List.of());
-        String askedWithGarbage =
-            renderExecutedReport(newOutcome(request("abc,1.5")), List.of(), List.of()); //$NON-NLS-1$
+        String refusal = request("abc,1.5").validationError(); //$NON-NLS-1$
 
-        assertTrue(askedWithGarbage.contains("unparsedCount: 2")); //$NON-NLS-1$
-        assertTrue(askedWithGarbage.contains(
-            "2 entr(ies) in disableIndices could not be read as change-point indices")); //$NON-NLS-1$
-        assertFalse("a request that asked for something must not answer like one that asked nothing", //$NON-NLS-1$
-            askedForNothing.equals(askedWithGarbage));
-        assertFalse("the caller's own text must never come back", askedWithGarbage.contains("abc")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(refusal.contains("2 entries could not be read as a change-point index")); //$NON-NLS-1$
+        assertTrue(refusal.contains("Nothing was renamed")); //$NON-NLS-1$
+        assertTrue(refusal.contains("current indices")); //$NON-NLS-1$
+        assertFalse("the caller's own text must never come back", refusal.contains("abc")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== helpers ====================

@@ -80,7 +80,7 @@ public class MetadataRenameServiceTest
             BmModelResolver.resolve(dependentProject, modelManager);
 
         String json = new MetadataRenameService().prepareMdClassRename(project,
-            "CommonModule.Calc", "Calculator", object, false, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
+            "CommonModule.Calc", "Calculator", object, false, null, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
             refactoringService, resolution);
 
         JsonObject result = JsonParser.parseString(json).getAsJsonObject();
@@ -110,7 +110,7 @@ public class MetadataRenameServiceTest
                 "Cannot invoke \"IBmModel.getId()\" because \"model\" is null")); //$NON-NLS-1$
 
         String json = new MetadataRenameService().prepareMdClassRename(project,
-            "CommonModule.Calc", "Calculator", object, false, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
+            "CommonModule.Calc", "Calculator", object, false, null, null, 0, null, //$NON-NLS-1$ //$NON-NLS-2$
             refactoringService, resolution);
 
         JsonObject result = JsonParser.parseString(json).getAsJsonObject();
