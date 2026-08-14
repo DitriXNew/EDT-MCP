@@ -352,6 +352,23 @@ public class AskWorkmateToolTest
             "network status"); //$NON-NLS-1$
     }
 
+    /**
+     * A timeout AFTER the request was sent must not carry the "retry with a bigger budget"
+     * advice: Workmate may still be running it, and its tools change this configuration, so a
+     * blind retry runs the same edits twice. The message has to say check first, then start.
+     */
+    @Test
+    public void testTimeoutAfterDispatchWarnsInsteadOfInvitingAPlainRetry()
+    {
+        AskWorkmateTool tool = tool(stubThrowing(GatewayException.timedOutAfterDispatch()));
+        Map<String, String> params = params("question", "q"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("timeoutSeconds", "7"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = tool.execute(params);
+        assertJobFailedContains(result, "within 7 seconds", "already been sent", //$NON-NLS-1$ //$NON-NLS-2$
+            "may still be working on it", "Do NOT", "get_project_errors"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     @Test
     public void testWorkmateReturnedFailureIsActionable()
     {

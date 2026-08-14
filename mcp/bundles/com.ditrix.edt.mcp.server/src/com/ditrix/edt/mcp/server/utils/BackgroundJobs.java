@@ -438,7 +438,13 @@ public final class BackgroundJobs implements AutoCloseable
         }
 
         deadlines.shutdownNow();
-        workers.shutdownNow();
+        // shutdown(), not shutdownNow(): a committed job was deliberately NOT cancelled above,
+        // and interrupting its worker here would undo that - the gateway turns the interrupt
+        // into a failure and the caller is told to retry work that is already under way. Every
+        // job that COULD be abandoned has had its task cancelled, so nothing queued will run,
+        // and awaitTermination still escalates to shutdownNow when the grace period is up: a
+        // request that outlives the bundle cannot be saved, only reported honestly.
+        workers.shutdown();
         awaitTermination(deadlines);
         awaitTermination(workers);
 

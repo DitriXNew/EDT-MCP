@@ -725,6 +725,16 @@ public class AskWorkmateTool implements IMcpTool
                 return "1C:Workmate did not answer within " + timeoutSeconds //$NON-NLS-1$
                     + " seconds. Retry with a larger timeoutSeconds value or check Workmate " //$NON-NLS-1$
                     + "and network status in EDT."; //$NON-NLS-1$
+            case TIMED_OUT_AFTER_DISPATCH:
+                // Deliberately NOT the "just retry with a bigger budget" advice: the request
+                // reached Workmate, whose tools change this configuration, and cancelling the
+                // wait does not undo that. A blind retry would run the same work twice.
+                return "1C:Workmate did not answer within " + timeoutSeconds //$NON-NLS-1$
+                    + " seconds, and the request had already been sent - Workmate may still be " //$NON-NLS-1$
+                    + "working on it, and its tools can change this configuration. Do NOT " //$NON-NLS-1$
+                    + "simply retry: check the Workmate chat panel and the project (" //$NON-NLS-1$
+                    + "get_project_errors, git status) for what it already did, and only then " //$NON-NLS-1$
+                    + "start a new ask_workmate job, with a larger timeoutSeconds."; //$NON-NLS-1$
             case CALL_FAILED:
             default:
                 return "1C:Workmate failed to answer: " + error.getDetail() //$NON-NLS-1$

@@ -139,6 +139,13 @@ public class WorkmateGateway
         INCOMPATIBLE,
         NOT_READY,
         TIMED_OUT,
+        /**
+         * The wait ran out AFTER the request had already reached Workmate. Separate from
+         * {@link #TIMED_OUT} because the advice differs in the way that matters: Workmate may
+         * still be running the request, and its tools change this configuration, so "retry with
+         * a larger budget" would run that work a second time.
+         */
+        TIMED_OUT_AFTER_DISPATCH,
         CALL_FAILED
     }
 
@@ -195,6 +202,13 @@ public class WorkmateGateway
         public static GatewayException timedOut()
         {
             return new GatewayException(FailureKind.TIMED_OUT, "conversation future timed out"); //$NON-NLS-1$
+        }
+
+        /** @return timeout of a wait whose request was already sent and cannot be recalled */
+        public static GatewayException timedOutAfterDispatch()
+        {
+            return new GatewayException(FailureKind.TIMED_OUT_AFTER_DISPATCH,
+                "the request was sent and the wait for its result timed out"); //$NON-NLS-1$
         }
 
         public static GatewayException callFailed(String detail)
@@ -367,9 +381,12 @@ public class WorkmateGateway
             }
             catch (TimeoutException e)
             {
+                // The token ASKS Workmate to stop; it does not undo what its tools have
+                // already done. So this is a dispatched timeout, not a plain retryable one -
+                // the difference is whether the caller may safely run the same request again.
                 cancelled.set(true);
                 future.cancel(true);
-                throw GatewayException.timedOut();
+                throw GatewayException.timedOutAfterDispatch();
             }
             catch (InterruptedException e)
             {
@@ -504,9 +521,12 @@ public class WorkmateGateway
             }
             catch (TimeoutException e)
             {
+                // The token ASKS Workmate to stop; it does not undo what its tools have
+                // already done. So this is a dispatched timeout, not a plain retryable one -
+                // the difference is whether the caller may safely run the same request again.
                 cancelled.set(true);
                 future.cancel(true);
-                throw GatewayException.timedOut();
+                throw GatewayException.timedOutAfterDispatch();
             }
             catch (InterruptedException e)
             {
