@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
-# Guard Maven builds against transient edt.1c.ru p2 outages without ever masking
-# real compilation or test failures: those failures must not become green on retry.
+# Retry Maven builds only when every [ERROR] line is a recognised transient p2
+# repository/network diagnostic. Enumerating every possible real build failure
+# cannot be completed, so an unknown error must fail rather than risk being masked
+# by a retry that turns a red build green.
 
 set -euo pipefail
 
 log="${RUNNER_TEMP:-/tmp}/mvn.log"
 sleep_seconds="${MVN_RETRY_SLEEP_SECONDS:-30}"
 
+# Transient p2/network diagnostics and Maven trailer noise allowed on [ERROR] lines.
+# Extend this allowlist when another unambiguously retryable diagnostic is identified.
+transient_error_allowlist='Could not mirror artifact|Unable to read repository|Connection reset|HTTP code: 50[0-9]|Return code is: 50[0-9]|Could not resolve target platform specification|Failed to resolve target definition|Cannot resolve target definition|No repository found at|Failed to load p2 repository|Read timed out|Connection timed out|UnknownHostException|-> \[Help [0-9]+\]|re-run Maven|For more information about the errors|After correcting the problems|To see the full stack trace|Re-run Maven using|^[[:space:]]*\[ERROR\][[:space:]]*$'
+
 for attempt in 1 2 3; do
   if mvn "$@" 2>&1 | tee "$log"; then
     exit 0
   fi
 
-  if grep -qiE "COMPILATION ERROR|Compilation failure" "$log"; then
-    echo "::error::Maven build failed: compilation failure"
-    exit 1
-  fi
-  if grep -qi "There are test failures" "$log"; then
-    echo "::error::Maven build failed: test failures"
-    exit 1
-  fi
-  if grep -qi "There are test errors" "$log"; then
-    echo "::error::Maven build failed: test errors"
+  error_lines="$(grep -E '^[[:space:]]*\[ERROR\]' "$log" || true)"
+  if [[ -z "$error_lines" ]]; then
+    echo "::error::Maven build failed; not retrying (no [ERROR] lines found in attempt log)"
     exit 1
   fi
 
-  if ! grep -qiE "Could not mirror artifact|Unable to read repository|edt\.1c\.ru.*(Connection reset|HTTP code: 50[0-9]|Return code is: 50[0-9])|(Connection reset|HTTP code: 50[0-9]|Return code is: 50[0-9]).*edt\.1c\.ru" "$log"; then
-    echo "::error::Maven build failed (not a transient edt.1c.ru error)"
-    exit 1
-  fi
+  while IFS= read -r error_line; do
+    if ! [[ "$error_line" =~ $transient_error_allowlist ]]; then
+      echo "::error::Maven build failed; not retrying (unrecognised error: $error_line)"
+      exit 1
+    fi
+  done <<< "$error_lines"
 
-  echo "::warning::transient edt.1c.ru failure (attempt $attempt/3); cooling ${sleep_seconds}s"
+  echo "::warning::transient p2 repository failure (attempt $attempt/3); cooling ${sleep_seconds}s"
   sleep "$sleep_seconds"
 done
 
