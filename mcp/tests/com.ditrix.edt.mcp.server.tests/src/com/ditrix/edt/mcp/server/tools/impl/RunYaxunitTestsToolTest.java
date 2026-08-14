@@ -220,8 +220,10 @@ public class RunYaxunitTestsToolTest
             guide.contains("before the auto-chain is handed to an Eclipse background job")); //$NON-NLS-1$
         assertTrue("the no-update path commits immediately before the actual launch",
             guide.contains("immediately before `workingCopy.launch()`")); //$NON-NLS-1$
-        assertTrue("cancel_job must report the post-handoff outcome honestly",
-            guide.contains("alreadyCommitted") && guide.contains("was **not** cancelled")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must explain destructive committed-run termination",
+            guide.contains("reports `terminated`") && guide.contains("NOT** rolled back")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must retain alreadyCommitted when no live launch can be stopped",
+            guide.contains("still reports `alreadyCommitted`")); //$NON-NLS-1$
     }
 
     @Test
@@ -706,7 +708,7 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
-    public void testCommittedYaxunitJobReportsNotCancelled() throws Exception
+    public void testCommittedJobWithoutCancellationCapabilityReportsNotCancelled() throws Exception
     {
         CountDownLatch committed = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -726,7 +728,7 @@ public class RunYaxunitTestsToolTest
 
             String outcome = new CancelJobTool(jobs).execute(Map.of(
                 "jobId", jobId, "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            assertTrue("cancel_job must not claim a handed-off launch was stopped",
+            assertTrue("cancel_job must not invent a committed cancellation capability",
                 outcome.contains("# Background job cancellation: alreadyCommitted")); //$NON-NLS-1$
             assertTrue(outcome.contains("The job was NOT cancelled")); //$NON-NLS-1$
             assertEquals(BackgroundJobs.Status.RUNNING, jobs.get(jobId).getStatus());

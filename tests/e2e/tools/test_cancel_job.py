@@ -1,4 +1,9 @@
-"""Black-box contract tests for confirm-preview background-job cancellation."""
+"""Black-box contract tests for capability-aware confirm-preview job cancellation.
+
+Committed jobs remain alreadyCommitted unless their owner declared a destructive
+cancellation handler at start. In particular, ask_workmate must never inherit the
+YAXUnit client-termination capability.
+"""
 
 import os
 import re
@@ -76,6 +81,10 @@ def test_cancel_job_previews_then_reports_the_honest_commit_outcome_when_enabled
     ):
         if expected not in preview.text:
             raise AssertionError("incomplete cancellation preview: " + preview.text)
+    if "client process" in preview.text or "infobase" in preview.text:
+        raise AssertionError(
+            "ask_workmate preview inherited another owner's capability: " + preview.text
+        )
 
     confirmed = call("cancel_job", {"jobId": job_id, "confirm": True})
     assert_ok(confirmed, "confirm background-job cancellation")
@@ -87,6 +96,10 @@ def test_cancel_job_previews_then_reports_the_honest_commit_outcome_when_enabled
         for expected in ("NOT cancelled", "cannot be recalled", "do not start a duplicate"):
             if expected not in confirmed.text:
                 raise AssertionError("dishonest committed outcome: " + confirmed.text)
+    elif "cancellation: terminated" in confirmed.text:
+        raise AssertionError(
+            "ask_workmate cannot recall a dispatched cloud request: " + confirmed.text
+        )
     elif "cancellation: alreadyTerminal" not in confirmed.text:
         raise AssertionError("unexpected cancellation outcome: " + confirmed.text)
     assert_no_diff()

@@ -93,9 +93,13 @@ Completed reports stay fetchable with `get_job_status(jobId=...)` until the boun
 
 ### Cancellation boundary
 
-This step does not terminate a running YAXUnit launch. `cancel_job` can cancel only before the job crosses its commit handshake. With `updateBeforeLaunch=true`, commit happens before the auto-chain is handed to an Eclipse background job, because that chain may terminate a client and update the infobase and cannot be recalled by interrupting the registry worker. With `updateBeforeLaunch=false`, commit happens immediately before `workingCopy.launch()`.
+Call `cancel_job` without `confirm` first. The preview changes nothing and names the owning tool, state, progress, and the destructive effect of stopping a YAXUnit run: the client process is killed, the infobase keeps whatever the tests already did, no rollback is performed, and the JUnit report may be partial or absent.
 
-After commit, `cancel_job(confirm=true)` honestly reports `alreadyCommitted`: the launch or preparation was **not** cancelled. Keep polling the same `jobId`; do not start a duplicate. Designing explicit consent and recovery for terminating a running test launch is separate work.
+Before the commit handshake, `confirm=true` cancels the job normally. With `updateBeforeLaunch=true`, commit happens immediately before the auto-chain is handed to an Eclipse background job, because that chain may terminate a client and update the infobase independently. With it disabled, commit happens immediately before `workingCopy.launch()`.
+
+After the client launch exists, this owning tool's declared cancellation capability can terminate it even though the job is committed. A confirmed stop reports `terminated`, never a clean pass/fail outcome. It says explicitly that the infobase was **NOT** rolled back and includes a rendered partial JUnit report only when the XML is usable; otherwise it says the report is absent or incomplete.
+
+A committed job with no live YAXUnit client yet cannot undo already-dispatched preparation and still reports `alreadyCommitted`. Jobs owned by tools without this explicit capability also keep `alreadyCommitted`; `cancel_job` does not infer cancellability from a tool name.
 
 ## Auto-chain (updateBeforeLaunch)
 

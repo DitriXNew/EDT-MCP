@@ -35,5 +35,6 @@ arguments.
 ## Cancellation
 
 Polling never changes a job. To stop work, call `cancel_job` first without
-`confirm` to preview the owner, state, and progress, then repeat with
-`confirm=true` only if cancellation is still intended.
+`confirm` to preview the owner, state, progress, and any owner-declared destructive
+cancellation warning, then repeat with `confirm=true` only if cancellation is
+still intended.

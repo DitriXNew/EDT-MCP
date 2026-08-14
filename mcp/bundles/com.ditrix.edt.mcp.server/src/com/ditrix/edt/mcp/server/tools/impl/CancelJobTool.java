@@ -49,8 +49,10 @@ public class CancelJobTool implements IMcpTool
     {
         return "Preview or cancel a background job by jobId. Destructive: omitting confirm or " //$NON-NLS-1$
             + "passing confirm=false only describes the owning tool, state, and progress; " //$NON-NLS-1$
-            + "confirm=true acts only while the work can still be recalled. Full parameters " //$NON-NLS-1$
-            + "and examples: call get_tool_guide('cancel_job')."; //$NON-NLS-1$
+            + "confirm=true cancels uncommitted work, or invokes an owning tool's declared " //$NON-NLS-1$
+            + "destructive cancellation capability. Committed jobs without that capability " //$NON-NLS-1$
+            + "remain in flight. Full parameters and examples: call " //$NON-NLS-1$
+            + "get_tool_guide('cancel_job')."; //$NON-NLS-1$
     }
 
     @Override
@@ -60,7 +62,8 @@ public class CancelJobTool implements IMcpTool
             .stringProperty(KEY_JOB_ID,
                 "Background job id returned by the tool that started the job.", true) //$NON-NLS-1$
             .booleanProperty(KEY_CONFIRM,
-                "true = request cancellation; false or omitted = preview only, with no change.") //$NON-NLS-1$
+                "true = request cancellation, including an owner-declared destructive stop when " //$NON-NLS-1$
+                    + "available; false or omitted = preview only, with no change.") //$NON-NLS-1$
             .build();
     }
 
@@ -95,10 +98,15 @@ public class CancelJobTool implements IMcpTool
             {
                 return unknownJobError(jobId);
             }
+            String capabilityWarning = snapshot.getCancellationPreview();
+            String destructivePreview = capabilityWarning == null ? "" //$NON-NLS-1$
+                : "\n\n**Destructive committed-run cancellation:** " //$NON-NLS-1$
+                    + capabilityWarning;
             return "# Background job cancellation: preview\n\n" //$NON-NLS-1$
                 + "No change was made. This would request cancellation of job `" + jobId //$NON-NLS-1$
                 + "`, owned by `" + snapshot.getOwningTool() + "`, while its current state is `" //$NON-NLS-1$ //$NON-NLS-2$
-                + snapshot.getStatus().value() + "`. Re-call cancel_job with the same jobId and " //$NON-NLS-1$
+                + snapshot.getStatus().value() + "`." + destructivePreview //$NON-NLS-1$
+                + "\n\nRe-call cancel_job with the same jobId and " //$NON-NLS-1$
                 + "confirm=true to act.\n\n" //$NON-NLS-1$
                 + BackgroundJobRenderer.render(snapshot);
         }
@@ -122,12 +130,22 @@ public class CancelJobTool implements IMcpTool
                 + "` handed its work over. No external request from this job remains to be " //$NON-NLS-1$
                 + "recalled."; //$NON-NLS-1$
         }
+        else if (outcome == CancellationOutcome.TERMINATED)
+        {
+            message = "The committed job was stopped through the destructive cancellation " //$NON-NLS-1$
+                + "capability declared by `" + snapshot.getOwningTool() //$NON-NLS-1$
+                + "`. Read the cancellation section below for the effects and any partial " //$NON-NLS-1$
+                + "result. Never treat a terminated run as a clean outcome."; //$NON-NLS-1$
+        }
         else if (outcome == CancellationOutcome.ALREADY_COMMITTED)
         {
-            message = "The job was NOT cancelled: `" + snapshot.getOwningTool() //$NON-NLS-1$
-                + "` had already handed the work over, so the underlying request cannot be " //$NON-NLS-1$
-                + "recalled. Continue polling this job with get_job_status and do not start a " //$NON-NLS-1$
-                + "duplicate job."; //$NON-NLS-1$
+            message = cancellation.getDetail() != null
+                ? cancellation.getDetail() + " Continue polling this job with get_job_status " //$NON-NLS-1$
+                    + "and do not start a duplicate job." //$NON-NLS-1$
+                : "The job was NOT cancelled: `" + snapshot.getOwningTool() //$NON-NLS-1$
+                    + "` had already handed the work over, so the underlying request cannot be " //$NON-NLS-1$
+                    + "recalled. Continue polling this job with get_job_status and do not start a " //$NON-NLS-1$
+                    + "duplicate job."; //$NON-NLS-1$
         }
         else
         {

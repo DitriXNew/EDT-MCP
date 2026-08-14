@@ -83,6 +83,8 @@ public class DebugYaxunitTestsToolTest
         // than as an error — the one failure mode that looks like success.
         assertTrue("schema must include tags (parity with run_yaxunit_tests)",
             schema.contains("\"tags\""));
+        assertTrue("schema must expose the named-job start wait",
+            schema.contains("\"timeout\""));
         assertTrue("schema must include updateBeforeLaunch (auto-chain switch)",
             schema.contains("\"updateBeforeLaunch\""));
         // Parity with run_yaxunit_tests: the deprecated alias declares (and forwards)
@@ -102,6 +104,8 @@ public class DebugYaxunitTestsToolTest
         // Detail moved out of description/schema must live in the guide.
         assertTrue("guide must explain the wait_for_break next step",
             guide.contains("wait_for_break"));
+        assertTrue("guide must explain Pending jobId polling",
+            guide.contains("jobId") && guide.contains("get_job_status"));
         assertTrue("guide must document the updateBeforeLaunch auto-chain",
             guide.contains("updateBeforeLaunch"));
     }
@@ -150,5 +154,34 @@ public class DebugYaxunitTestsToolTest
             tool.getDescription().contains("run_yaxunit_tests"));
         assertTrue("guide must document the run_yaxunit_tests(debug=true) replacement",
             tool.getGuide().contains("debug=true"));
+    }
+
+    @Test
+    public void testAliasForwardsTimeoutAndPreservesItsOwningToolIdentity()
+    {
+        CapturingRunTool delegate = new CapturingRunTool();
+        DebugYaxunitTestsTool tool = new DebugYaxunitTestsTool(delegate);
+        Map<String, String> params = new HashMap<>();
+        params.put("launchConfigurationName", "Debug config"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("timeout", "7"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("captured", tool.execute(params)); //$NON-NLS-1$
+        assertEquals(DebugYaxunitTestsTool.NAME, delegate.owningTool);
+        assertEquals("true", delegate.params.get("debug")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("7", delegate.params.get("timeout")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static final class CapturingRunTool extends RunYaxunitTestsTool
+    {
+        Map<String, String> params;
+        String owningTool;
+
+        @Override
+        String executeAs(Map<String, String> forwarded, String owner)
+        {
+            params = forwarded;
+            owningTool = owner;
+            return "captured"; //$NON-NLS-1$
+        }
     }
 }

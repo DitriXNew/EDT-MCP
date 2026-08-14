@@ -4,10 +4,11 @@ e2e tests for debug_yaxunit_tests (kind: read).
 What the tool does
 ------------------
 debug_yaxunit_tests is now a DEPRECATED thin ALIAS for run_yaxunit_tests with
-debug=true (the two near-twin tools were merged behind a `debug` flag). It forwards
-its arguments to run_yaxunit_tests(debug=true), which launches YAXUnit tests in
-DEBUG mode (so set_breakpoint breakpoints trip) and returns IMMEDIATELY with a
-Markdown launch handle; the caller then calls wait_for_break. It is a RUNTIME/DEBUG
+debug=true. It forwards into the SAME named-background-job implementation while
+preserving debug_yaxunit_tests as the owning tool. A short resolve/prep/spawn returns
+the Markdown launch handle synchronously; otherwise Pending carries a jobId for
+get_job_status, whose terminal result is that same handle. The caller then calls
+wait_for_break. It is a RUNTIME/DEBUG
 tool driving a 1C runtime-client launch against a running infobase. It is NOT a
 project-source mutator — its only on-disk writes are a private xUnitParams.json +
 junit.xml under java.io.tmpdir/edt-mcp-yaxunit-debug, never in the git-tracked
@@ -15,8 +16,8 @@ TestConfiguration/ tree. So EVERY test ends with assert_no_diff().
 
 Response shape (IMPORTANT)
 --------------------------
-Because the alias delegates to run_yaxunit_tests, its getResponseType() is now
-MARKDOWN (it was JSON before the merge): a launch handle lands in r.text. On error
+Because the alias delegates to run_yaxunit_tests, its getResponseType() is
+MARKDOWN: a Pending snapshot or launch handle lands in r.text. On error
 the envelope is still the structured {"success": false, "error": "<message>"} that
 the protocol layer marks isError; assert_error()/error_text() surfaces it.
 
@@ -46,8 +47,10 @@ so none of them touch a running infobase — they are deterministic in this env.
 
 Parameter shape (from getInputSchema / execute)
 ------------------------------------------------
-All parameters are schema-OPTIONAL strings (+ one boolean updateBeforeLaunch),
-but execute() enforces a CONDITIONAL contract: launchConfigurationName XOR
+All parameters are schema-optional; the filter families are arrays that also accept
+comma-separated strings, timeout is an integer start-call wait, and
+updateBeforeLaunch is boolean. execute() enforces a CONDITIONAL contract:
+launchConfigurationName XOR
 (projectName AND applicationId). The reachable negatives below exercise each
 branch of that conditional plus the not-found paths. There is no closed string
 enum to violate.
@@ -224,3 +227,25 @@ def test_empty_launch_config_name_falls_back_to_projectname_guard():
             "empty launchConfigurationName must fall through to the projectName guard, "
             "not the by-name not-found branch, got: %r" % err)
     assert_no_diff("a rejected call must not touch the project source on disk")
+
+
+@e2e_test(tool="debug_yaxunit_tests", kind="read")
+def test_timeout_is_accepted_by_the_named_job_alias():
+    """The alias exposes the same bounded start-call wait as run_yaxunit_tests.
+
+    A missing launch config fails during resolution before the wait matters, which is
+    useful here: timeout must be accepted and forwarded, while the response still
+    names the real missing precondition rather than rejecting the new parameter.
+    """
+    bad = "NoSuchDebugConfig_Timeout_e2e"
+    r = call("debug_yaxunit_tests", {
+        "launchConfigurationName": bad,
+        "timeout": 1,
+    })
+    err = assert_error(r, "debug alias timeout reaches normal resolution")
+    assert_error_quality(
+        err,
+        names=[bad],
+        suggests=["list_configurations"],
+        ctx="debug named-job timeout is accepted and forwarded")
+    assert_no_diff("a rejected debug launch must not touch project source")

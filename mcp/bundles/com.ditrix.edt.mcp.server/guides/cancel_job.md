@@ -20,16 +20,28 @@ After reviewing the owning tool, current state, and progress, confirm:
 
 ## Commit handshake and honest outcomes
 
-A job is cancellable only before its owning tool crosses the `BackgroundJobs`
-commit handshake. Once work has been handed to an external service or another
-thread, it cannot be recalled. In that case `cancel_job` reports that the job was
-**not** cancelled, leaves it running, and tells you to continue polling it with
-`get_job_status`. Do not start a duplicate job: the original work is already in
-flight.
+If cancellation wins before the owning tool crosses the `BackgroundJobs` commit
+handshake, the job moves to `cancelled` and its worker is interrupted.
 
-If cancellation wins before commit, the job moves to `cancelled` and its worker
-is interrupted. A job that was already done, failed, or cancelled is left
-unchanged and reported as already terminal.
+Most work cannot be recalled after commit. A cloud request already dispatched by
+`ask_workmate`, for example, keeps running: `cancel_job` reports
+`alreadyCommitted`, makes no false cancellation claim, and tells you to keep
+polling the same `jobId` without starting a duplicate.
+
+An owning tool may explicitly declare a destructive cancellation capability when
+it starts a job. This is capability data and a handler supplied to the registry;
+`cancel_job` never special-cases a tool name. The preview prints the handler's
+warning, and `confirm=true` invokes it only for that job.
+
+For a live YAXUnit run, the preview states that termination kills the client
+process, does not roll back the infobase, and may leave a partial or absent JUnit
+report. A successful confirmed stop reports `terminated`, states that the
+infobase was **NOT** rolled back, and renders usable partial JUnit XML. It never
+claims a clean test outcome. If no live launch can be stopped, the committed job
+keeps the honest `alreadyCommitted` outcome.
+
+A job that was already done, failed, or cancelled is left unchanged and reported
+as already terminal.
 
 ## Unknown and expired jobs
 

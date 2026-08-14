@@ -57,9 +57,6 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
-import com.ditrix.edt.mcp.server.utils.JUnitMarkdownFormatter;
-import com.ditrix.edt.mcp.server.utils.JUnitTestResults;
-import com.ditrix.edt.mcp.server.utils.JUnitXmlParser;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
@@ -67,6 +64,8 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.YaxunitJobCancellation;
+import com.ditrix.edt.mcp.server.utils.YaxunitReportUtils;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -213,8 +212,9 @@ public class RunYaxunitTestsTool implements IMcpTool
                + "A phase that stops changing is the server's only signal — it means either a " //$NON-NLS-1$
                + "legitimately long stage or one blocked on a modal dialog in EDT, and the tool " //$NON-NLS-1$
                + "cannot tell them apart: look at EDT before waiting indefinitely. " //$NON-NLS-1$
-               + "Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once " //$NON-NLS-1$
-               + "so you can call wait_for_break. " //$NON-NLS-1$
+               + "Pass `debug=true` to use the same named-job path for a DEBUG launch: a short " //$NON-NLS-1$
+               + "start returns the launch handle, while Pending returns jobId for " //$NON-NLS-1$
+               + "get_job_status; call wait_for_break after the handle arrives. " //$NON-NLS-1$
                + "The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects " //$NON-NLS-1$
                + "whose sources changed since their last prepared run; that mark survives an EDT " //$NON-NLS-1$
                + "restart, so an unchanged project is not recomputed at all. " //$NON-NLS-1$
@@ -257,10 +257,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
                 EXTERNAL_INFOBASE_CHANGES_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("debug", //$NON-NLS-1$
-                "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints " //$NON-NLS-1$
-                    + "fire, return a launch handle as soon as it is spawned and call wait_for_break " //$NON-NLS-1$
-                    + "next. The named job still owns pre-launch preparation: if that work outlives " //$NON-NLS-1$
-                    + "the start call's `timeout`, Pending returns its jobId for get_job_status.") //$NON-NLS-1$
+                "Default false: poll and return the report. true: use the same named-job path to " //$NON-NLS-1$
+                    + "launch in DEBUG mode so breakpoints fire. A short start returns the launch " //$NON-NLS-1$
+                    + "handle and you call wait_for_break next; if resolution or preparation " //$NON-NLS-1$
+                    + "outlives timeout, Pending returns jobId for get_job_status.") //$NON-NLS-1$
             .build();
     }
 
@@ -452,6 +452,12 @@ public class RunYaxunitTestsTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
+        return executeAs(params, NAME);
+    }
+
+    /** Shared implementation that preserves the actual surface which created the named job. */
+    String executeAs(Map<String, String> params, String owningTool)
+    {
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String applicationId = JsonUtils.extractStringArgument(params, "applicationId"); //$NON-NLS-1$
@@ -495,7 +501,7 @@ public class RunYaxunitTestsTool implements IMcpTool
 
         RunRequest request = new RunRequest(configName, projectName, applicationId, extensions,
             modules, tests, tags, timeout, updateBeforeLaunch, updateScope, externalChanges, debug);
-        return startOrAttach(request);
+        return startOrAttach(request, owningTool);
     }
 
     /**
@@ -503,14 +509,23 @@ public class RunYaxunitTestsTool implements IMcpTool
      * submission. The caller waits only for its clamped transport-safe window; the job continues
      * until it has collected the launch result.
      */
-    private String startOrAttach(RunRequest request)
+    private String startOrAttach(RunRequest request, String owningTool)
     {
-        return startOrAttachJob(buildSubmissionKey(request), request.timeout,
-            (jobId, progress) -> runJobToCompletion(request, jobId, progress));
+        YaxunitJobCancellation cancellation =
+            new YaxunitJobCancellation(RunYaxunitTestsTool::evict);
+        return startOrAttachJob(owningTool, buildSubmissionKey(request), request.timeout,
+            cancellation, (jobId, progress) ->
+                runJobToCompletion(request, jobId, progress, cancellation));
     }
 
     /** Package-private seam over the production admission + synchronous-wait path. */
     String startOrAttachJob(String submissionKey, int waitSeconds, NamedJobWork work)
+    {
+        return startOrAttachJob(NAME, submissionKey, waitSeconds, null, work);
+    }
+
+    private String startOrAttachJob(String owningTool, String submissionKey, int waitSeconds,
+        YaxunitJobCancellation cancellation, NamedJobWork work)
     {
         JobSnapshot started;
         try
@@ -523,8 +538,10 @@ public class RunYaxunitTestsTool implements IMcpTool
                 {
                     AtomicReference<String> jobId = new AtomicReference<>();
                     CountDownLatch jobIdReady = new CountDownLatch(1);
-                    started = jobs.start(NAME, BACKGROUND_JOB_TIMEOUT_MS,
-                        "Accepted the YAXUnit request.", progress -> { //$NON-NLS-1$
+                    BackgroundJobs.CancellationCapability capability = cancellation != null
+                        ? cancellation.capability() : null;
+                    started = jobs.start(owningTool, BACKGROUND_JOB_TIMEOUT_MS,
+                        "Accepted the YAXUnit request.", capability, progress -> { //$NON-NLS-1$
                             jobIdReady.await();
                             return work.run(jobId.get(), progress);
                         });
@@ -536,7 +553,8 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
         catch (RejectedExecutionException e)
         {
-            return ToolResult.error("Could not start run_yaxunit_tests because the background-job " //$NON-NLS-1$
+            return ToolResult.error("Could not start " + owningTool //$NON-NLS-1$
+                + " because the background-job " //$NON-NLS-1$
                 + "registry is full or stopping: " + e.getMessage() + ". Poll existing jobs with " //$NON-NLS-1$ //$NON-NLS-2$
                 + "get_job_status and retry, or restart EDT if the bundle is stopping.").toJson(); //$NON-NLS-1$
         }
@@ -545,7 +563,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         if (latest == null)
         {
             return ToolResult.error("The YAXUnit background job '" + started.getId() //$NON-NLS-1$
-                + "' expired before this call could poll it. Start run_yaxunit_tests again to " //$NON-NLS-1$
+                + "' expired before this call could poll it. Start " + owningTool + " again to " //$NON-NLS-1$ //$NON-NLS-2$
                 + "create a new job.").toJson(); //$NON-NLS-1$
         }
         return renderStartResult(latest);
@@ -559,10 +577,10 @@ public class RunYaxunitTestsTool implements IMcpTool
 
     /** Runs the whole resolve -> prepare -> launch -> report pipeline inside one registry job. */
     private String runJobToCompletion(RunRequest request, String jobId,
-        ProgressReporter progress)
+        ProgressReporter progress, YaxunitJobCancellation cancellation)
     {
         CallState state = new CallState(progress);
-        JobExecution execution = new JobExecution(jobId, progress);
+        JobExecution execution = new JobExecution(jobId, progress, cancellation);
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -593,7 +611,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         {
             return ToolResult.error("YAXUnit background job '" + job.getId() + "' failed: " //$NON-NLS-1$ //$NON-NLS-2$
                 + job.getErrorMessage() + ". Inspect its progress with get_job_status, fix the " //$NON-NLS-1$
-                + "reported cause, and start run_yaxunit_tests again.").toJson(); //$NON-NLS-1$
+                + "reported cause, and start " + job.getOwningTool() + " again.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         if (job.getStatus() == BackgroundJobs.Status.CANCELLED)
         {
@@ -685,11 +703,14 @@ public class RunYaxunitTestsTool implements IMcpTool
     {
         final String jobId;
         final ProgressReporter progress;
+        final YaxunitJobCancellation cancellation;
 
-        JobExecution(String jobId, ProgressReporter progress)
+        JobExecution(String jobId, ProgressReporter progress,
+            YaxunitJobCancellation cancellation)
         {
             this.jobId = jobId;
             this.progress = progress;
+            this.cancellation = cancellation;
         }
 
         String claimOrExisting(String runKey)
@@ -700,6 +721,14 @@ public class RunYaxunitTestsTool implements IMcpTool
         boolean tryCommit()
         {
             return progress.tryCommit();
+        }
+
+        void trackLaunch(ILaunch launch, Path reportDir)
+        {
+            if (cancellation != null)
+            {
+                cancellation.track(launch, reportDir);
+            }
         }
     }
 
@@ -876,6 +905,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             ILaunch existing = ACTIVE_LAUNCHES.get(runKey);
             if (existing != null)
             {
+                execution.trackLaunch(existing, reportDir);
                 state.set(PHASE_RUN);
                 return handleExistingLaunch(existing, reportDir, deadlineMs, runKey,
                         projectName, applicationId);
@@ -946,6 +976,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 }
             }
 
+            execution.trackLaunch(launch, reportDir);
             state.set(PHASE_RUN);
             String pollResult = pollLaunch(launch, reportDir, deadlineMs, runKey,
                     projectName, applicationId);
@@ -1350,10 +1381,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
             {
                 ACTIVE_LAUNCHES.remove(runKey, existing);
-                File junitXml = findJunitXml(reportDir);
+                File junitXml = YaxunitReportUtils.findJunitXml(reportDir);
                 if (junitXml != null)
                 {
-                    return readResults(junitXml);
+                    return YaxunitReportUtils.renderAndSave(junitXml);
                 }
                 return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
                         + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
@@ -1520,6 +1551,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             ILaunch[] spawned = new ILaunch[1];
             try
             {
+                // DEBUG launch attaches the debugger and starts code in the client. Interrupting
+                // the registry worker cannot recall that hand-off, so commit immediately before
+                // launch(). The owner-declared consent capability may later terminate the client,
+                // but it cannot roll back infobase changes already made by the tests.
                 if (!execution.tryCommit())
                 {
                     return ToolResult.error("The YAXUnit debug job was cancelled before the " //$NON-NLS-1$
@@ -1553,6 +1588,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return ToolResult.error(declined).toJson();
             }
             LaunchLifecycleUtils.registerOwnedLaunch(spawned[0]);
+            execution.trackLaunch(spawned[0], reportDir);
         }
         return buildDebugLaunchMarkdown(matchingConfig.getName(), projectName, applicationId,
             reportDir, junitFile, preLaunch);
@@ -1960,8 +1996,9 @@ public class RunYaxunitTestsTool implements IMcpTool
      * Polls a launch until the absolute {@code deadline}. Returns the parsed Markdown report
      * if the launch finished, or {@code null} if still running (caller should return a Pending message).
      * <p>
-     * The post-completion read ({@code ACTIVE_LAUNCHES.remove} + {@link #findJunitXml} +
-     * {@link #readResults}) runs under the per-IB lock, for the SAME reason the existing-terminated
+     * The post-completion read ({@code ACTIVE_LAUNCHES.remove} +
+     * {@link YaxunitReportUtils#findJunitXml(Path)} + report rendering) runs under the per-IB
+     * lock, for the SAME reason the existing-terminated
      * and pending-fetch read paths do: a concurrent identical call that falls through to a fresh
      * launch holds the SAME lock for {@link #cleanupTempDir}(reportDir) + spawn, so it cannot wipe
      * {@code reportDir} mid-read. The {@code remove} is INSIDE the lock together with the read so
@@ -2001,7 +2038,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             ACTIVE_LAUNCHES.remove(runKey, launch);
             Activator.logInfo("YAXUnit tests completed for " + runKey); //$NON-NLS-1$
 
-            File junitXml = findJunitXml(reportDir);
+            File junitXml = YaxunitReportUtils.findJunitXml(reportDir);
             if (junitXml == null)
             {
                 return ToolResult.error("No JUnit XML report found in " + reportDir //$NON-NLS-1$
@@ -2009,7 +2046,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                         + "and test configuration is correct.").toJson(); //$NON-NLS-1$
             }
 
-            return readResults(junitXml);
+            return YaxunitReportUtils.renderAndSave(junitXml);
         }
     }
 
@@ -2036,53 +2073,6 @@ public class RunYaxunitTestsTool implements IMcpTool
             Activator.logError("Error checking application", e); //$NON-NLS-1$
             return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
                     + " (" + e.getMessage() + ")").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-    }
-
-    /**
-     * Parses the JUnit XML, formats it as Markdown and writes report.md next to junit.xml so
-     * that the user can open the report manually from disk. Returns the Markdown content for
-     * the MCP response, with an extra footer pointing at the on-disk file.
-     */
-    private String readResults(File junitXml)
-    {
-        try
-        {
-            JUnitTestResults results = JUnitXmlParser.parse(junitXml);
-            String markdown = JUnitMarkdownFormatter.format(results);
-
-            Path reportFile = junitXml.toPath().resolveSibling("report.md"); //$NON-NLS-1$
-            boolean reportWritten = writeReportFile(reportFile, markdown);
-
-            if (reportWritten)
-            {
-                return markdown + "\n---\n*Full report saved to:* `" + reportFile + "`\n"; //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            return markdown;
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Error parsing JUnit XML: " + junitXml, e); //$NON-NLS-1$
-            return ToolResult.error("Failed to parse test results: " + e.getMessage()).toJson(); //$NON-NLS-1$
-        }
-    }
-
-    /**
-     * Writes the Markdown report to {@code reportFile}. Returns {@code true} if the file
-     * was written and exists afterwards; a failed write is logged and returns {@code false}
-     * (the report content is still returned to the caller without the on-disk footer).
-     */
-    private boolean writeReportFile(Path reportFile, String markdown)
-    {
-        try
-        {
-            Files.write(reportFile, markdown.getBytes(StandardCharsets.UTF_8));
-            return Files.exists(reportFile);
-        }
-        catch (IOException io)
-        {
-            Activator.logError("Failed to write Markdown report to " + reportFile, io); //$NON-NLS-1$
-            return false;
         }
     }
 
@@ -2557,35 +2547,6 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
 
         return ToolResult.error(sb.toString()).toJson();
-    }
-
-    /**
-     * Finds the JUnit XML report file in the temp directory.
-     */
-    private File findJunitXml(Path tempDir)
-    {
-        if (tempDir == null || !Files.exists(tempDir))
-        {
-            return null;
-        }
-
-        String[] candidates = {VAL_JUNIT_XML, "report.xml", "test-report.xml"}; //$NON-NLS-1$ //$NON-NLS-2$
-        for (String name : candidates)
-        {
-            File f = tempDir.resolve(name).toFile();
-            if (f.exists() && f.length() > 0)
-            {
-                return f;
-            }
-        }
-
-        File[] xmlFiles = tempDir.toFile().listFiles((dir, name) -> name.endsWith(".xml")); //$NON-NLS-1$
-        if (xmlFiles != null && xmlFiles.length > 0)
-        {
-            return xmlFiles[0];
-        }
-
-        return null;
     }
 
     /**

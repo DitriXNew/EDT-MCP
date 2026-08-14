@@ -86,6 +86,12 @@ Whenever the call has not finished the work it returns **Pending** with a `jobId
 `prep:terminate` / `prep:recompute` / `prep:db-update` / `spawn` / `run`). The job
 continues independently of this window and is polled by id, never by rebuilt arguments.
 
+The named job declares a YAXUnit-specific destructive cancellation capability. A
+cancel_job preview does nothing and warns that a confirmed live-run stop kills the
+client, does not roll back the infobase, and can leave a partial/absent report. This
+headless fixture cannot launch a client, so the actual termination path is proved by
+the Java unit tests with a committed job and launch double rather than faked here.
+
 Fixture inventory used (TestConfiguration, English Names): the project itself
 (projectName "TestConfiguration"); CommonModule.Calc exists but is irrelevant here
 (YAXUnit needs an infobase, not a module). No launch configuration registered.

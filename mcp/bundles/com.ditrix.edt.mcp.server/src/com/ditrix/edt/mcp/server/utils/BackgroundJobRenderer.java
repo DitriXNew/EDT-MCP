@@ -76,7 +76,9 @@ public final class BackgroundJobRenderer
         else if (job.getStatus() == BackgroundJobs.Status.CANCELLED)
         {
             result.append("\n## Cancellation\n\n") //$NON-NLS-1$
-                .append("The job was cancelled before its owning tool handed the work over."); //$NON-NLS-1$
+                .append(job.getResult() == null
+                    ? "The job was cancelled before its owning tool handed the work over." //$NON-NLS-1$
+                    : job.getResult());
         }
         return result.toString();
     }
