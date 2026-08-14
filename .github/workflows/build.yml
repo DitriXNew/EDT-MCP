@@ -51,22 +51,7 @@ jobs:
         working-directory: mcp
         env:
           MAVEN_OPTS: -Xmx2g -XX:+UseParallelGC
-        run: |
-          # pipefail: without it the `if` below reads tee's status, not Maven's, so a
-          # real compile/test failure would exit 0 and the job would go green on a red build.
-          set -o pipefail
-          # edt.1c.ru intermittently 502s / resets while Tycho mirrors the EDT p2 platform
-          # (most often on a cold cache). Retry, but ONLY on those transient network errors —
-          # fail fast on a real compile/test failure.
-          for attempt in 1 2 3; do
-            if mvn clean verify --batch-mode --no-transfer-progress -T 1C 2>&1 | tee "$RUNNER_TEMP/mvn.log"; then
-              exit 0
-            fi
-            grep -qiE "Could not mirror artifact|Connection reset|HTTP code: 50[0-9]|Unable to read repository|Return code is: 50[0-9]" "$RUNNER_TEMP/mvn.log" \
-              || { echo "::error::Maven build failed (not a transient edt.1c.ru error)"; exit 1; }
-            echo "::warning::transient edt.1c.ru failure (attempt $attempt/3); cooling 30s"; sleep 30
-          done
-          exit 1
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/mvn-retry.sh" clean verify --batch-mode --no-transfer-progress -T 1C
 
       - name: JaCoCo coverage report
         working-directory: mcp
