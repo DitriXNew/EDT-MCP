@@ -73,21 +73,16 @@ public class OrphanedJavadocTest
      * against identities the new block is unlisted (red) and the pardoned one has vanished
      * (also red, via {@link #allowListHasNoStaleEntries}).
      * <p>
-     * The one entry left is the last site of issue #353. It is deferred rather than fixed
-     * because an open PR edits exactly that file, and a one-line javadoc move is not worth a
-     * merge conflict in somebody else's branch; it comes out as soon as that PR lands. Its
-     * sibling entry for {@code ToolSettingsService} is already gone - the block was returned
-     * to its declaration in master, which {@link #allowListHasNoStaleEntries} then reported.
+     * It is EMPTY, and that is the point: the ratchet starts with no debt, so the first entry
+     * anyone adds is a deliberate act with a reason attached rather than one more line on a
+     * list nobody reads. Both entries it used to carry are gone — {@code ToolSettingsService}
+     * because master returned the block to its declaration, and {@code PreferenceConstants}
+     * because the PR that was editing that file landed and the block could finally be dealt
+     * with. The mechanism is still exercised on synthetic input by
+     * {@link #aPardonDoesNotTransferToADifferentBlock} and its neighbours, so an empty map
+     * here does not leave it untested.
      */
     private static final Map<String, List<String>> KNOWN_ORPHANS = new HashMap<>();
-    static
-    {
-        KNOWN_ORPHANS.put("mcp/bundles/com.ditrix.edt.mcp.server/src" //$NON-NLS-1$
-            + "/com/ditrix/edt/mcp/server/preferences/PreferenceConstants.java", //$NON-NLS-1$
-            List.of(
-                "Default: all tools enabled (empty string = no disabled tools)" //$NON-NLS-1$
-            ));
-    }
 
     /** How much of a block's text the REPORT shows; the identity is always the whole of it. */
     private static final int DISPLAY_LENGTH = 60;
@@ -400,6 +395,20 @@ public class OrphanedJavadocTest
         List<String> stale = stalePardonsAcross(scanned, orphanedPardon);
         assertEquals("a pardon whose file was not scanned is stale", 1, stale.size()); //$NON-NLS-1$
         assertTrue("and it says so", stale.get(0).contains("no such source file was scanned")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The other branch of the same reduction: the file IS scanned, and the pardon names a
+        // block that is no longer orphaned there. Asserted on synthetic input because
+        // KNOWN_ORPHANS is empty - the repository cannot exercise this path at all, and a
+        // reduction with one branch covered and one not is how a stale entry survives.
+        Map<String, List<String>> fixedButStillListed = new LinkedHashMap<>();
+        fixedButStillListed.put("a/A.java", List.of("A block somebody has since fixed.")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> outlived = stalePardonsAcross(scanned, fixedButStillListed);
+        assertEquals("a pardon for a scanned file whose block is gone is stale too", //$NON-NLS-1$
+            1, outlived.size());
+        assertTrue("and it names the block, not just the file", //$NON-NLS-1$
+            outlived.get(0).contains("no longer orphaned")); //$NON-NLS-1$
+        assertTrue("while a pardon whose block is still there is not stale", //$NON-NLS-1$
+            stalePardonsAcross(scanned, Map.of("a/A.java", List.of("Pardoned in A."))).isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

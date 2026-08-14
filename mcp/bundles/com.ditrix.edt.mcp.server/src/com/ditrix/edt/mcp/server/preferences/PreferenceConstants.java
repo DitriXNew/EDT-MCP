@@ -92,7 +92,6 @@ public final class PreferenceConstants
      */
     public static final int TOOL_PREFS_MIGRATION_VERSION = 4;
 
-    /** Default: all tools enabled (empty string = no disabled tools) */
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
 
