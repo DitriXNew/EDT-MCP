@@ -10,7 +10,6 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import static org.mockito.Mockito.mock;
@@ -23,6 +22,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.resources.IProject;
@@ -31,6 +32,7 @@ import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -198,20 +200,28 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
-    public void testGuideDocumentsOnceOnlyPendingDelivery()
+    public void testGuideDocumentsNamedPendingDelivery()
     {
-        // #136/#137: there is NO time-based result cache — a completed result is
-        // delivered to the matching identical call exactly once (the Pending
-        // re-call contract); every later identical call re-runs the tests. The
-        // guide pins the once-only delivery and the abandoned-Pending caveat so
-        // the contract can't silently drift back to a stale read cache.
         String guide = new RunYaxunitTestsTool().getGuide();
-        assertTrue("guide must state there is no time-based result cache",
-            guide.contains("NO time-based result cache"));
-        assertTrue("guide must document the once-only delivery of a Pending result",
-            guide.contains("exactly once"));
-        assertTrue("guide must document the abandoned-Pending caveat",
-            guide.contains("abandoned Pending"));
+        assertTrue("guide must direct a known run to get_job_status",
+            guide.contains("get_job_status")); //$NON-NLS-1$
+        assertTrue("guide must say Pending carries jobId", guide.contains("jobId")); //$NON-NLS-1$
+        assertTrue("guide must preserve fresh reruns after terminal completion",
+            guide.contains("fresh run")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsHonestCancellationBoundary()
+    {
+        String guide = new RunYaxunitTestsTool().getGuide();
+        assertTrue("guide must name the BackgroundJobs commit handshake",
+            guide.contains("commit handshake")); //$NON-NLS-1$
+        assertTrue("auto-chain work commits before its independent Eclipse job hand-off",
+            guide.contains("before the auto-chain is handed to an Eclipse background job")); //$NON-NLS-1$
+        assertTrue("the no-update path commits immediately before the actual launch",
+            guide.contains("immediately before `workingCopy.launch()`")); //$NON-NLS-1$
+        assertTrue("cancel_job must report the post-handoff outcome honestly",
+            guide.contains("alreadyCommitted") && guide.contains("was **not** cancelled")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -403,14 +413,14 @@ public class RunYaxunitTestsToolTest
     public void testGuideDocuments25sBudgetAndBackgroundPrep()
     {
         // Ratchet: the guide must explain the 25-second budget, the background
-        // prep job, and the pending-retry contract when the budget is exceeded.
+        // prep job, and the named polling contract when the budget is exceeded.
         String guide = new RunYaxunitTestsTool().getGuide();
         assertTrue("guide must mention the 25-second budget",
             guide.contains("25s") || guide.contains("25-second")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("guide must say preparation runs in a background job",
             guide.contains("background")); //$NON-NLS-1$
-        assertTrue("guide must document the pending-retry contract for prep",
-            guide.contains("same arguments")); //$NON-NLS-1$
+        assertTrue("guide must document named polling after prep outlives the call",
+            guide.contains("get_job_status")); //$NON-NLS-1$
     }
 
     // ============ #357 — the call never outlives the MCP transport ============
@@ -432,32 +442,6 @@ public class RunYaxunitTestsToolTest
             RunYaxunitTestsTool.clampTimeout(0));
         assertTrue("the ceiling must sit BELOW the ~60s transport limit it exists to respect",
             RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS < 60);
-    }
-
-    @Test
-    public void testTheCallNeverOutlivesTheRequestedWindow()
-    {
-        // #357 follow-up: the backstop used to be given `timeout + 5s`, so the public parameter
-        // stopped bounding the call — `timeout: 1` held the request for about six seconds, and a
-        // client with a shorter transport than ours still got the bare transport error this whole
-        // change exists to remove. Checked across EVERY accepted window, not just the default.
-        for (int timeout = 1; timeout <= RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS; timeout++)
-        {
-            long requestedMs = timeout * 1000L;
-            long backstopMs = RunYaxunitTestsTool.backstopBudgetMs(timeout);
-            long innerMs = RunYaxunitTestsTool.innerWindowMs(timeout);
-
-            assertEquals("the backstop must not outlive the requested window (timeout=" + timeout
-                + ")", requestedMs, backstopMs);
-            assertTrue("the inner deadline must fire BEFORE the backstop, or the backstop steals "
-                + "the answer and replaces a real phase with a generic timeout (timeout=" + timeout
-                + "): inner=" + innerMs + " backstop=" + backstopMs, innerMs < backstopMs);
-            assertTrue("the inner window must stay positive, or a healthy short run answers "
-                + "'did not finish' the moment it starts (timeout=" + timeout + "): inner="
-                + innerMs, innerMs > 0);
-            assertTrue("the work must keep at least 80% of the window it was given (timeout="
-                + timeout + "): inner=" + innerMs, innerMs * 5 >= requestedMs * 4);
-        }
     }
 
     @Test
@@ -569,184 +553,282 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
-    public void testWorkThatNeverStartedIsReportedAsAnErrorNotAsPending()
+    public void testPendingCarriesJobIdAndIdenticalSubmissionAttaches() throws Exception
     {
-        // BoundedJob distinguishes "still running" from "never left the scheduler". Reporting the
-        // second as Pending would be a lie in the one sentence the caller uses to decide whether
-        // to wait: nothing was launched, so there is nothing to wait for.
-        String message = RunYaxunitTestsTool.buildStalledPendingMessage("spawn", 12);
-        assertTrue("the still-running case stays a Pending", message.contains("**Pending:**")); //$NON-NLS-1$
-        assertTrue("and says the work was not cancelled",
-            message.contains("nothing was cancelled")); //$NON-NLS-1$
-        // The never-ran case is a separate branch in runBounded; its wording is pinned by the
-        // e2e/description contract, and the distinction itself is what this asserts.
-        assertFalse("the still-running message must not claim the work never started",
-            message.contains("did not start")); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testAResultFinishedAfterThePendingStaysFetchable()
-    {
-        // The backstop stops WAITING for the worker, it does not stop the worker. A worker that
-        // finishes afterwards runs the normal success path, which consumes the pending-fetch
-        // marker and hands the report to a holder nobody reads. Without the re-arm the finished
-        // report is unreachable: the next identical call sees no active launch and no pending
-        // fetch, starts a fresh run, and wipes the report directory on the way — the opposite of
-        // "call again to pick up where you left off".
-        String runKey = "ratchet-357-late-" + System.nanoTime(); //$NON-NLS-1$
-        try
+        String submissionKey = "ratchet-job-attach-" + System.nanoTime(); //$NON-NLS-1$
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger starts = new AtomicInteger();
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
         {
-            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
-            // The run armed its marker before polling, then the success path consumed it.
-            RunYaxunitTestsTool.armUndeliveredResult(runKey);
-            state.consumeResultFor(runKey);
-            assertFalse("the success path consumes the marker",
-                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String first = tool.startOrAttachJob(submissionKey, 0, (jobId, progress) -> {
+                starts.incrementAndGet();
+                entered.countDown();
+                release.await();
+                return "# Finished report"; //$NON-NLS-1$
+            });
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            String second = tool.startOrAttachJob(submissionKey, 0, (jobId, progress) -> {
+                starts.incrementAndGet();
+                return "duplicate"; //$NON-NLS-1$
+            });
 
-            // The backstop answered first: the caller already holds a Pending.
-            assertTrue("the backstop must win the answer when the worker has not published yet",
-                state.claimAnswer());
+            String jobId = extractJobId(first);
+            assertEquals("an identical in-flight submission must return the same named identity",
+                jobId, extractJobId(second));
+            assertTrue(first.contains("**Pending:**")); //$NON-NLS-1$
+            assertTrue(first.contains("get_job_status")); //$NON-NLS-1$
+            assertTrue(first.contains("| owningTool | run_yaxunit_tests |")); //$NON-NLS-1$
+            assertEquals("the duplicate guard must start one body only", 1, starts.get());
 
-            // ...and only now does the worker come back with a real report.
-            assertFalse("a worker that lost the race must not claim the answer",
-                state.publishResult());
-            assertTrue("a result finished after the Pending must stay fetchable by the next call",
-                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            release.countDown();
+            jobs.await(jobId, 2_000L);
+            String fetched = new GetJobStatusTool(jobs).execute(
+                Map.of("jobId", jobId, "waitSeconds", "0")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            assertTrue("the completed result remains fetchable by id", //$NON-NLS-1$
+                fetched.contains("# Finished report")); //$NON-NLS-1$
         }
         finally
         {
-            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+            release.countDown();
         }
     }
 
     @Test
-    public void testADeliveredResultDoesNotLeaveAMarkerBehind()
+    public void testShortRunReturnsOriginalReportWithoutJobWrapper() throws Exception
     {
-        // The ordinary case must be untouched: when the caller IS listening, the worker owns the
-        // answer and the consumed marker stays consumed. Re-arming here would make the next
-        // identical call serve the same report again instead of re-running the tests.
-        String runKey = "ratchet-357-ontime-" + System.nanoTime(); //$NON-NLS-1$
-        try
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
         {
-            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
-            RunYaxunitTestsTool.armUndeliveredResult(runKey);
-            state.consumeResultFor(runKey);
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String report = "# YAXUnit Test Results\n\nshort run"; //$NON-NLS-1$
+            String result = tool.startOrAttachJob(
+                "ratchet-short-" + System.nanoTime(), 2, (jobId, progress) -> report); //$NON-NLS-1$
+            assertEquals("the synchronous success shape must stay byte-for-byte the report",
+                report, result);
+        }
+    }
 
-            assertTrue("the worker must own the answer when it finishes in time",
-                state.publishResult());
-            assertFalse("a delivered result must not be left marked as undelivered",
-                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
-            assertFalse("the backstop must not answer after the worker already did",
-                state.claimAnswer());
+    @Test
+    public void testTerminalJobIsNotReusedButOldResultRemainsFetchable() throws Exception
+    {
+        String submissionKey = "ratchet-fresh-rerun-" + System.nanoTime(); //$NON-NLS-1$
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch finishFirst = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String pending = tool.startOrAttachJob(submissionKey, 0, (jobId, progress) -> {
+                firstStarted.countDown();
+                finishFirst.await();
+                return "first report"; //$NON-NLS-1$
+            });
+            String oldJobId = extractJobId(pending);
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            finishFirst.countDown();
+            jobs.await(oldJobId, 2_000L);
+
+            String rerun = tool.startOrAttachJob(submissionKey, 2,
+                (jobId, progress) -> "second report"); //$NON-NLS-1$
+            assertEquals("a new call after terminal completion must execute afresh",
+                "second report", rerun); //$NON-NLS-1$
+
+            String old = new GetJobStatusTool(jobs).execute(
+                Map.of("jobId", oldJobId, "waitSeconds", "0")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            assertTrue("the prior result must remain fetchable until registry eviction",
+                old.contains("first report")); //$NON-NLS-1$
         }
         finally
         {
-            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+            finishFirst.countDown();
         }
     }
 
     @Test
-    public void testNoMarkerIsInventedForACallThatNeverReachedARun()
+    public void testCompletedReportCanBeFetchedMoreThanOnce() throws Exception
     {
-        // A backstop that fires during resolve or preparation consumed no marker, because there
-        // was no run behind the key yet. Re-arming there would let the next call serve a report
-        // left over from an EARLIER run as if it were this one's — a false success, worse than
-        // the lost report the re-arm exists to prevent.
-        String runKey = "ratchet-357-norun-" + System.nanoTime(); //$NON-NLS-1$
-        try
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
         {
-            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
-            assertTrue(state.claimAnswer());
-            assertFalse(state.publishResult());
-            assertFalse("a call that never consumed a marker must not arm one",
-                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String pending = tool.startOrAttachJob(
+                "ratchet-repeat-fetch-" + System.nanoTime(), 0, //$NON-NLS-1$
+                (jobId, progress) -> {
+                    entered.countDown();
+                    release.await();
+                    return "durable report"; //$NON-NLS-1$
+                });
+            String jobId = extractJobId(pending);
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            release.countDown();
+            jobs.await(jobId, 2_000L);
+
+            GetJobStatusTool statusTool = new GetJobStatusTool(jobs);
+            Map<String, String> poll = Map.of("jobId", jobId, "waitSeconds", "0"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            String first = statusTool.execute(poll);
+            String second = statusTool.execute(poll);
+            assertTrue(first.contains("durable report")); //$NON-NLS-1$
+            assertEquals("a named job replaces the old once-only pending delivery", first, second);
         }
         finally
         {
-            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+            release.countDown();
         }
     }
 
     @Test
-    public void testAPendingFetchThatFoundNoReportReleasesOwnership() throws Exception
+    public void testCancellationBeforeCommitStopsYaxunitJob() throws Exception
     {
-        // Drives the REAL fall-through in tryDeliverPendingResult (empty report directory, so
-        // findJunitXml returns nothing) rather than the helper it calls — a test that only
-        // exercised releaseConsumed() directly would still pass if the call site were deleted.
-        //
-        // The marker this call consumed referred to no report. If ownership survived that, the
-        // call would go on to start a FRESH run and could later re-arm the key on the strength of
-        // a report that never existed — by which time the key belongs to that fresh run, whose
-        // result another caller may already have delivered.
-        String runKey = "ratchet-357-noreport-" + System.nanoTime(); //$NON-NLS-1$
-        java.nio.file.Path emptyDir = java.nio.file.Files.createTempDirectory("yaxunit-ratchet"); //$NON-NLS-1$
-        try
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch wait = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
         {
-            RunYaxunitTestsTool.armUndeliveredResult(runKey);
-            RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String pending = tool.startOrAttachJob(
+                "ratchet-cancel-before-commit-" + System.nanoTime(), 0, //$NON-NLS-1$
+                (jobId, progress) -> {
+                    entered.countDown();
+                    wait.await();
+                    return "must not be delivered"; //$NON-NLS-1$
+                });
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
 
-            String delivered = new RunYaxunitTestsTool().tryDeliverPendingResult(runKey, emptyDir,
-                "TestConfiguration", "TestConfiguration.SomeApp", state); //$NON-NLS-1$ //$NON-NLS-2$
-
-            assertNull("an empty report directory must fall through to a fresh run", delivered);
-            assertFalse("the consumed marker referred to nothing, so ownership must be released",
-                state.consumed(runKey));
-
-            // ...and the proof that it matters: a later loss must NOT resurrect the key.
-            assertTrue(state.claimAnswer());
-            assertFalse(state.publishResult());
-            assertFalse("a call holding no result must not re-arm the key",
-                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            String outcome = new CancelJobTool(jobs).execute(Map.of(
+                "jobId", extractJobId(pending), "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            assertTrue(outcome.contains("# Background job cancellation: cancelled")); //$NON-NLS-1$
+            assertTrue(outcome.contains("| owningTool | run_yaxunit_tests |")); //$NON-NLS-1$
         }
         finally
         {
-            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
-            java.nio.file.Files.deleteIfExists(emptyDir);
+            wait.countDown();
         }
     }
 
     @Test
-    public void testACallThatLostTheRaceForTheMarkerDoesNotResurrectIt()
+    public void testCommittedYaxunitJobReportsNotCancelled() throws Exception
     {
-        // Two calls poll the SAME launch: A timed out and is still inside its read, B is
-        // listening and delivers the report, consuming the shared marker. When A finally
-        // finishes it must NOT put the marker back — its remove was a no-op, the result was
-        // already handed over, and resurrecting it would serve the same report twice and
-        // suppress a genuine re-run.
-        String runKey = "ratchet-357-loser-" + System.nanoTime(); //$NON-NLS-1$
-        try
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
         {
-            RunYaxunitTestsTool.armUndeliveredResult(runKey);
-            RunYaxunitTestsTool.CallState a = new RunYaxunitTestsTool.CallState();
-            RunYaxunitTestsTool.CallState b = new RunYaxunitTestsTool.CallState();
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String pending = tool.startOrAttachJob(
+                "ratchet-cancel-after-commit-" + System.nanoTime(), 0, //$NON-NLS-1$
+                (jobId, progress) -> {
+                    assertTrue(progress.tryCommit());
+                    committed.countDown();
+                    release.await();
+                    return "finished after cancellation request"; //$NON-NLS-1$
+                });
+            assertTrue(committed.await(1, TimeUnit.SECONDS));
+            String jobId = extractJobId(pending);
 
-            b.consumeResultFor(runKey);                 // B took it and delivered
-            assertTrue("B owns the consumed result", b.consumed(runKey));
-            assertTrue(b.publishResult());
+            String outcome = new CancelJobTool(jobs).execute(Map.of(
+                "jobId", jobId, "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            assertTrue("cancel_job must not claim a handed-off launch was stopped",
+                outcome.contains("# Background job cancellation: alreadyCommitted")); //$NON-NLS-1$
+            assertTrue(outcome.contains("The job was NOT cancelled")); //$NON-NLS-1$
+            assertEquals(BackgroundJobs.Status.RUNNING, jobs.get(jobId).getStatus());
 
-            a.consumeResultFor(runKey);                 // A's remove finds nothing left
-            assertFalse("A must not claim a result it never took", a.consumed(runKey));
-            assertTrue("A's caller gave up", a.claimAnswer());
-            assertFalse(a.publishResult());
-
-            assertFalse("a delivered result must not be resurrected by the loser",
-                RunYaxunitTestsTool.hasUndeliveredResult(runKey));
+            release.countDown();
+            assertEquals(BackgroundJobs.Status.DONE, jobs.await(jobId, 2_000L).getStatus());
         }
         finally
         {
-            RunYaxunitTestsTool.forgetUndeliveredResult(runKey);
+            release.countDown();
         }
     }
 
     @Test
-    public void testTheAnswerIsOwnedByExactlyOneSide()
+    public void testPendingRendersCurrentJobProgress() throws Exception
     {
-        // Both sides settle through the same compare-and-set, so the result can never be both
-        // returned and reported as still pending.
-        RunYaxunitTestsTool.CallState state = new RunYaxunitTestsTool.CallState();
-        assertTrue("first claim wins", state.publishResult());
-        assertFalse("second claim loses", state.claimAnswer());
-        assertFalse("and stays lost", state.publishResult());
+        CountDownLatch phasePublished = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String key = "ratchet-progress-" + System.nanoTime(); //$NON-NLS-1$
+            String first = tool.startOrAttachJob(key, 0, (jobId, progress) -> {
+                progress.add("Phase: prep:db-update"); //$NON-NLS-1$
+                phasePublished.countDown();
+                release.await();
+                return "report"; //$NON-NLS-1$
+            });
+            assertNotNull(extractJobId(first));
+            assertTrue(phasePublished.await(1, TimeUnit.SECONDS));
+
+            String pending = tool.startOrAttachJob(key, 0,
+                (jobId, progress) -> "duplicate"); //$NON-NLS-1$
+            assertTrue("Pending must expose the registry progress journal",
+                pending.contains("Phase: prep:db-update")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
+    public void testCancellationPreviewNamesOwningTool() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String pending = tool.startOrAttachJob(
+                "ratchet-cancel-preview-" + System.nanoTime(), 0, //$NON-NLS-1$
+                (jobId, progress) -> {
+                    entered.countDown();
+                    release.await();
+                    return "report"; //$NON-NLS-1$
+                });
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+
+            String preview = new CancelJobTool(jobs).execute(Map.of(
+                "jobId", extractJobId(pending))); //$NON-NLS-1$
+            assertTrue(preview.contains("# Background job cancellation: preview")); //$NON-NLS-1$
+            assertTrue(preview.contains("owned by `run_yaxunit_tests`")); //$NON-NLS-1$
+            assertEquals(BackgroundJobs.Status.RUNNING,
+                jobs.get(extractJobId(pending)).getStatus());
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
+    public void testDifferentStartWaitWindowsStillAttachByNamedSubmission() throws Exception
+    {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger starts = new AtomicInteger();
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            String key = "ratchet-wait-window-" + System.nanoTime(); //$NON-NLS-1$
+            String first = tool.startOrAttachJob(key, 0, (jobId, progress) -> {
+                starts.incrementAndGet();
+                entered.countDown();
+                release.await();
+                return "report"; //$NON-NLS-1$
+            });
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            String second = tool.startOrAttachJob(key, 1,
+                (jobId, progress) -> {
+                    starts.incrementAndGet();
+                    return "duplicate"; //$NON-NLS-1$
+                });
+
+            assertEquals(extractJobId(first), extractJobId(second));
+            assertEquals("the wait window is not execution identity", 1, starts.get());
+        }
+        finally
+        {
+            release.countDown();
+        }
     }
 
     @Test
@@ -791,23 +873,6 @@ public class RunYaxunitTestsToolTest
         assertEquals("a missing entry must still name a phase, never null",
             "prep:" + LaunchLifecycleUtils.PHASE_RECOMPUTE,
             RunYaxunitTestsTool.prepPhaseLabel(null));
-    }
-
-    @Test
-    public void testStalledPendingNamesThePhaseAndSaysTheWorkIsStillRunning()
-    {
-        String message = RunYaxunitTestsTool.buildStalledPendingMessage("prep:recompute", 47);
-        assertTrue("the message replacing the transport error must be a Pending",
-            message.contains("**Pending:**")); //$NON-NLS-1$
-        assertTrue("it must name the phase — that is the whole information the bare timeout lacked",
-            message.contains("prep:recompute")); //$NON-NLS-1$
-        assertTrue("it must report how long the call waited", message.contains("47s")); //$NON-NLS-1$
-        assertTrue("it must say the work was NOT cancelled",
-            message.contains("nothing was cancelled")); //$NON-NLS-1$
-        assertTrue("it must tell the caller how to keep waiting",
-            message.contains("same arguments")); //$NON-NLS-1$
-        assertTrue("it must name the one case where retrying is pointless",
-            message.contains("modal dialog")); //$NON-NLS-1$
     }
 
     @Test
@@ -1018,9 +1083,8 @@ public class RunYaxunitTestsToolTest
     /**
      * Different tag selections must be different runs.
      *
-     * <p>The run key governs active-launch reuse, once-only pending delivery and the report
-     * directory. If tags were not folded into it, a run started for one tag could be polled by —
-     * and have its report handed to — a call that asked for a different one.
+     * <p>The run key governs live-job/launch reuse and the report directory. If tags were not
+     * folded into it, a run started for one tag could be joined by a call that asked for another.
      */
     @Test
     public void testRunKeyDistinguishesTagSelections()
@@ -1047,8 +1111,8 @@ public class RunYaxunitTestsToolTest
     // Reuse keys (#411)
     //
     // Two keys decide whether one call is served by another call's work: the RUN key
-    // (ACTIVE_LAUNCHES, once-only PENDING_FETCH delivery and the report directory — all three
-    // consulted BEFORE preparation) and the PREPARATION key (the single in-flight
+    // (RUN_JOBS, ACTIVE_LAUNCHES and the report directory, consulted before preparation) and
+    // the PREPARATION key (the single in-flight
     // recompute+update job). A term missing from either is not a slow path: it is a wrong answer
     // that looks exactly like a right one.
     //
@@ -1349,6 +1413,34 @@ public class RunYaxunitTestsToolTest
             variants.keySet().containsAll(excluded.keySet()));
     }
 
+    @Test
+    public void testSubmissionIdentityIncludesEveryExecutionFieldExceptTimeout()
+    {
+        RunYaxunitTestsTool.RunRequest baseRequest = baseline();
+        String base = RunYaxunitTestsTool.buildSubmissionKey(baseRequest);
+        int classified = 0;
+        for (Map.Entry<String, RunYaxunitTestsTool.RunRequest> variant
+            : runRequestVariants().entrySet())
+        {
+            String field = variant.getKey();
+            assertEquals("each variant must still differ in exactly its named field", field,
+                theOnlyChangedField(baseRequest, variant.getValue()));
+            String varied = RunYaxunitTestsTool.buildSubmissionKey(variant.getValue());
+            if ("timeout".equals(field)) //$NON-NLS-1$
+            {
+                assertEquals("timeout controls only this call's wait and must attach to the same job",
+                    base, varied);
+            }
+            else
+            {
+                assertFalse("RunRequest." + field + " changes the unresolved submission and must "
+                    + "not start beside a different request", base.equals(varied));
+            }
+            classified++;
+        }
+        assertEquals(runRequestVariants().size(), classified);
+    }
+
     /**
      * Two concurrent calls asking to rebuild different things must not share one preparation.
      */
@@ -1492,6 +1584,17 @@ public class RunYaxunitTestsToolTest
             classified, variants.size());
         assertTrue("prepKeyExclusions() names a field PrepRequest does not declare",
             variants.keySet().containsAll(excluded.keySet()));
+    }
+
+    private static String extractJobId(String markdown)
+    {
+        String marker = "| jobId | "; //$NON-NLS-1$
+        int start = markdown.indexOf(marker);
+        assertTrue("Expected jobId row in: " + markdown, start >= 0); //$NON-NLS-1$
+        int valueStart = start + marker.length();
+        int end = markdown.indexOf(" |", valueStart); //$NON-NLS-1$
+        assertTrue("Expected complete jobId row in: " + markdown, end > valueStart); //$NON-NLS-1$
+        return markdown.substring(valueStart, end).trim();
     }
 
     /**

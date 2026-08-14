@@ -4,10 +4,11 @@ the git-tracked project tree).
 
 What the tool does
 ------------------
-RunYaxunitTestsTool launches a 1C runtime-client with the RunUnitTests startup
-parameter, polls until the launch terminates (or `timeout` seconds elapse), parses
-the JUnit XML the YAXUnit run drops on disk, and returns a Markdown report
-(getResponseType() == MARKDOWN, so the payload is in r.text, NOT r.structured).
+RunYaxunitTestsTool starts a named BackgroundJobs job that launches a 1C runtime-client
+with the RunUnitTests startup parameter and collects its JUnit XML. The start call waits
+up to `timeout`: a short run returns the original Markdown report in r.text; otherwise
+**Pending** carries a jobId that is polled with get_job_status. Repeating reconstructed
+arguments is only a live duplicate guard and is not how a known run is addressed.
 The report.md / junit.xml / xUnitParams.json files all live under the SYSTEM TEMP
 dir (java.io.tmpdir/edt-mcp-yaxunit/...), NEVER inside the TestConfiguration/ git
 tree — so a correct run leaves the fixture clean. Every test here ends with
@@ -69,10 +70,10 @@ the required-ness is conditional and enforced in code:
 There is NO closed enum and NO declared XOR pair; the real conditional-required
 branches (projectName/applicationId vs launchConfigurationName) ARE exercised below.
 
-TIMEOUT IS A WHOLE-CALL BOUND, AND IT IS CLAMPED (#357)
--------------------------------------------------------
-`timeout` bounds the WHOLE call (resolve + pre-launch preparation + spawn + poll),
-not just the polling step, and RunYaxunitTestsTool.clampTimeout() caps it at
+TIMEOUT BOUNDS THE START CALL, AND IT IS CLAMPED (#357)
+------------------------------------------------------
+`timeout` bounds how long the start call waits for the job (whose work covers resolve +
+pre-launch preparation + spawn + poll), and RunYaxunitTestsTool.clampTimeout() caps it at
 MAX_TIMEOUT_SECONDS = 45. An MCP transport cuts a call at roughly 60s, so a larger
 window could only turn the tool's answer into a bare transport error — which is
 exactly what #357 reported. The clamp is SILENT: a large value is accepted and
@@ -80,9 +81,10 @@ quietly reduced, never rejected, so an existing caller passing `timeout: 240` ke
 working. That silence is asserted below, because "reject anything above 45" would be
 a plausible-looking implementation that breaks every such caller.
 
-Whenever the call has not finished the work it returns **Pending** naming the phase
-(`resolve` / `prep:terminate` / `prep:recompute` / `prep:db-update` / `spawn` / `run`),
-never a transport error.
+Whenever the call has not finished the work it returns **Pending** with a `jobId`, the
+`run_yaxunit_tests` owning-tool name, and progress naming the phase (`resolve` /
+`prep:terminate` / `prep:recompute` / `prep:db-update` / `spawn` / `run`). The job
+continues independently of this window and is polled by id, never by rebuilt arguments.
 
 Fixture inventory used (TestConfiguration, English Names): the project itself
 (projectName "TestConfiguration"); CommonModule.Calc exists but is irrelevant here

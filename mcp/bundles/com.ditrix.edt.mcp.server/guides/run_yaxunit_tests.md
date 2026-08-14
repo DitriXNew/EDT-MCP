@@ -1,4 +1,4 @@
-Launches the 1C:Enterprise application with the `RunUnitTests` startup parameter, polls until the launch terminates or the polling window expires, then parses the JUnit XML report and returns a Markdown summary. The full Markdown report is also written to `report.md` next to `junit.xml` so you can read it directly from disk.
+Starts a named background job that launches the 1C:Enterprise application with the `RunUnitTests` startup parameter, waits for the launch to terminate, parses the JUnit XML report, and retains that report by `jobId`. A short run still returns its Markdown report directly from the start call. The full report is also written to `report.md` next to `junit.xml`.
 
 ## When to use
 
@@ -43,7 +43,7 @@ in practice (verified against YAXUnit v25.12):
 
 Control:
 
-- `timeout` — wall-clock window in seconds for the WHOLE call (default and maximum 45; a larger value is clamped). See ## Polling and Pending.
+- `timeout` — how many seconds the start call waits for the background job (default and maximum 45; a larger value is clamped). It does not limit the job's server-side lifetime. See ## Polling and Pending.
 - `updateBeforeLaunch` — auto-chain, default `true`. See ## Auto-chain.
 - `updateScope` — which projects to force-recompute + update before the run when `updateBeforeLaunch=true`: `all` (configuration + dependent extensions, default), `configuration`, or `extension:<ProjectName>` (comma-separate several). See ## Auto-chain.
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
@@ -64,9 +64,17 @@ Note `update_database` identifies the application by `projectName` + `applicatio
 
 ## Polling and Pending
 
-**Every call is bounded.** `timeout` is the window for the WHOLE call — resolution, pre-launch preparation, spawn and polling together, not the polling step alone — and it is clamped to **45 seconds**. That ceiling is deliberate: an MCP client cuts a call at roughly 60 seconds, so a longer window does not buy a longer wait, it replaces the tool's answer with a bare transport error carrying no phase and no reason. Ask for less if you want a quick probe; asking for more is silently clamped.
+**The start call is bounded.** `timeout` is how long `run_yaxunit_tests` waits for its named job, and it is clamped to **45 seconds**. That ceiling is deliberate: an MCP client cuts a call at roughly 60 seconds. The job itself continues server-side through resolution, pre-launch preparation, spawn, test execution, and report collection.
 
-**A call that has not finished the work returns `Pending` naming the phase**, never a transport error (the one exception is work that never started at all — that returns an explicit error, see below):
+If the job finishes in this window, the tool returns the parsed JUnit report in the same shape as before. If it does not, the reply is **Pending**, carries a `jobId`, and includes the job's progress journal. Poll that identity with:
+
+```json
+{ "jobId": "<id-from-run_yaxunit_tests>", "waitSeconds": 45 }
+```
+
+using `get_job_status`. Do not repeat the original arguments to address a run you already know: changing one argument would describe another request, while the `jobId` is the run's actual identity.
+
+The progress journal names these phases:
 
 | phase | what the server is doing |
 |---|---|
@@ -77,25 +85,27 @@ Note `update_database` identifies the application by `projectName` + `applicatio
 | `spawn` | starting the 1C client |
 | `run` | the client is running the tests |
 
-Call again with the SAME arguments to keep waiting; nothing is cancelled and the work continues server-side.
+**What the phase can and cannot tell you.** A phase that ADVANCES between polls proves the server is making progress — keep waiting. A phase that stops changing is ambiguous, and honestly so: a `prep:recompute` that sits still for forty minutes is normal on a large configuration, and one blocked on a modal dialog looks exactly the same from here. There is no signal that separates them, so **when a phase stops advancing, look at EDT** for a dialog waiting for a click instead of waiting indefinitely. Running the pre-flight above is what keeps that case rare.
 
-**What the phase can and cannot tell you.** A phase that ADVANCES between calls proves the server is making progress — keep waiting. A phase that stops changing is ambiguous, and honestly so: a `prep:recompute` that sits still for forty minutes is normal on a large configuration, and one blocked on a modal dialog looks exactly the same from here (the elapsed counter grows either way — it is wall-clock, not a heartbeat). There is no signal that separates them, so **when a phase stops advancing, look at EDT** for a dialog waiting for a click instead of waiting indefinitely. Running the pre-flight above is what keeps that case rare.
+The run key still matters, but only as an in-flight duplicate guard. It includes the resolved target, every filter family (including `tags`), the update flag/scope, and the external-change policy. A new call describing the same execution while its job is live attaches to that job instead of launching a second 7-minute run. It is not how a caller addresses a known run; use `jobId` for that.
 
-The window is a ceiling, not an aim: the call returns **within** `timeout`. At least 80% of it is available to the work; the remainder is held back so the answer can be assembled instead of being cut off mid-way. Both clocks start when the call does, so a slow start inside EDT's job scheduler cannot eat the reserve.
+Completed reports stay fetchable with `get_job_status(jobId=...)` until the bounded registry evicts them. At the same time, a new `run_yaxunit_tests` call after terminal completion starts a **fresh run**; completed jobs are never selected by argument identity. This preserves real reruns without sacrificing a report when an agent loses its earlier context.
 
-Two honest edges. A step that blocks inside the platform without ever checking a deadline — acquiring the per-infobase lock, the launch itself, parsing the report — is stopped by the outer bound rather than by its own, so you get the phase it was in rather than a step-specific message; the call still returns on time. And if the job carrying the call never leaves the scheduler at all, establishing that fact costs up to half a second more, and that path returns an explicit "did not start" error rather than a **Pending**.
+### Cancellation boundary
 
-The tool polls for up to the remaining window. If the launch finishes in that window it returns the parsed JUnit report. If the window expires while the launch is still running it returns **Pending** and does NOT terminate the launch. Call the tool again with the SAME arguments to keep waiting and fetch the result once the launch completes. A run key is derived from the config name plus the filter, so identical arguments reattach to the in-flight launch instead of starting a new one. There is NO time-based result cache. A completed result is delivered to the matching identical call exactly once (to satisfy a re-call fetching a previously reported **Pending** run); every later identical call re-runs the tests. Caveat: if you were told **Pending** and never fetched the result, the next identical call returns that old report once (not a fresh run) before subsequent calls re-execute. To force a fresh run after an abandoned Pending, either change the filter (a new run-key carries no pending result) or make one identical call to drain that result, then call again to re-execute. (`terminate_launch` does NOT help here — it stops the Eclipse launch but leaves the once-only pending result to be served by the next identical call.)
+This step does not terminate a running YAXUnit launch. `cancel_job` can cancel only before the job crosses its commit handshake. With `updateBeforeLaunch=true`, commit happens before the auto-chain is handed to an Eclipse background job, because that chain may terminate a client and update the infobase and cannot be recalled by interrupting the registry worker. With `updateBeforeLaunch=false`, commit happens immediately before `workingCopy.launch()`.
+
+After commit, `cancel_job(confirm=true)` honestly reports `alreadyCommitted`: the launch or preparation was **not** cancelled. Keep polling the same `jobId`; do not start a duplicate. Designing explicit consent and recovery for terminating a running test launch is separate work.
 
 ## Auto-chain (updateBeforeLaunch)
 
-Default `true`: before spawning a new test launch, the tool runs the **pre-launch preparation chain** (selectively force-recompute changed projects, wait for the workspace build to settle, politely terminate any live 1C client running this configuration, then run a silent database update) in a background job with a **25-second budget**:
+Default `true`: before spawning a new test launch, the tool runs the **pre-launch preparation chain** (selectively force-recompute changed projects, wait for the workspace build to settle, politely terminate any live 1C client running this configuration, then run a silent database update) in an Eclipse background job. The owning registry job observes it in **25-second wait slices**:
 
 - **If the chain completes within 25s** the tool proceeds to spawn and poll the test launch as normal.
-- **If the chain is still running after 25s** the tool returns **Pending** with the chain's live phase (`prep:terminate` / `prep:recompute` / `prep:db-update`) — call again with the same arguments; the background preparation continues and the follow-up call waits again (or proceeds to launch if it finds the prep done). This prevents MCP client timeouts on large configurations where a recompute can take 2–8 minutes.
-- The 25s budget is a maximum, not an allowance: the wait takes whatever is smaller, the budget or what is left of the call's own window. Waiting a full 25s *after* spending time resolving would push the call past the transport limit, which is how a call that respected every individual limit still died on the wire.
+- **If the chain is still running after 25s** the owning registry job keeps waiting; when the start call's `timeout` expires it returns **Pending** with the same job's `jobId`. `get_job_status` shows the live phase (`prep:terminate` / `prep:recompute` / `prep:db-update`). This prevents MCP client timeouts on large configurations where a recompute can take 2–8 minutes.
+- The 25s slice is internal, not a caller-visible lifetime or a reason to start again. The named job owns every slice through the eventual launch and report.
 
-**Dialogs are not impossible with `updateBeforeLaunch=true`.** The auto-chain answers the platform's update dialogs automatically (`Application update`, `Restructure data`, `Infobase configuration changes`), including any that are already on screen when it starts, so the common cases do not block. What it cannot promise is that EDT never raises a dialog outside those windows. If one does appear, the run stops making progress and shows up as a **Pending whose phase stops changing** — check EDT for a dialog waiting for a click, answer it, and the next call continues. Running the pre-flight in ## Required order before the first run is what keeps the infobase update out of the launch and makes this case rare.
+**Dialogs are not impossible with `updateBeforeLaunch=true`.** The auto-chain answers the platform's update dialogs automatically (`Application update`, `Restructure data`, `Infobase configuration changes`), including any that are already on screen when it starts, so the common cases do not block. What it cannot promise is that EDT never raises a dialog outside those windows. If one does appear, the run stops making progress and shows up as a **Pending whose phase stops changing** — check EDT for a dialog waiting for a click, answer it, and the next `get_job_status` poll continues to observe the same job. Running the pre-flight in ## Required order before the first run is what keeps the infobase update out of the launch and makes this case rare.
 
 The recompute step is **selective**: a project is force-recomputed (`recomputeAll`) only when its sources differ from the content state of its last successful preparation, or when a non-derived file change was observed since then; projects with no change get only a cheap derived-data drain that returns immediately when nothing is pending. The "prepared at" mark is a fingerprint of the project content (paths plus workspace modification stamps of all non-derived files) recorded on the project itself, so it **survives an EDT restart** — restarting EDT no longer forces a full recompute by itself, only a real source change does. A project with no recorded mark yet (a fresh workspace, or a preparation that did not complete) still recomputes fully. That fingerprint is read from the workspace's own resource tree, so the first preparation of a project in each EDT session refreshes the project from disk first (bounded — a refresh that cannot finish in time makes the project count as changed): the operating system reports no events for changes made while EDT was **not running**, so without that refresh a `git checkout` performed on a closed workspace would still look unchanged. Whether the infobase itself is then updated stays EDT's own decision: the application update state (`UPDATED` — the value `get_applications` reports) means nothing to update. This eliminates the per-call 2–8 minute delay on large configurations while keeping the stale-`.cfe` safety guarantee: a test extension edited just before the run is still force-rebuilt and its regenerated `.cfe` is loaded into the infobase before the run, and a change that lands *during* the recompute keeps the project dirty for the next run instead of being recorded as prepared.
 
@@ -107,7 +117,7 @@ On a **standalone-server** application (`applicationId` starting with `ServerApp
 
 ## Debug mode (debug=true)
 
-Pass `debug=true` to launch in DEBUG mode so breakpoints set with `set_breakpoint` trip. Then the tool does NOT poll: it returns a Markdown launch handle as soon as the launch is spawned and you call `wait_for_break` next. `timeout` is therefore not a waiting window here — but the call is still bounded by it, exactly like the polling path: a pre-launch preparation that outlasts the window returns **Pending** with its phase instead of the handle, and the next identical call carries on from there. The full cycle:
+Pass `debug=true` to launch in DEBUG mode so breakpoints set with `set_breakpoint` trip. The background job returns a Markdown launch handle as soon as the launch is spawned, and the start call returns it directly when that happens within `timeout`; then call `wait_for_break`. If pre-launch preparation outlasts the window, **Pending** carries the jobId and `get_job_status` eventually returns the launch handle. The full cycle:
 
 ```
 set_breakpoint -> run_yaxunit_tests(debug=true) -> wait_for_break
@@ -137,19 +147,19 @@ Run a single test method, waiting the full window:
 { "launchConfigurationName": "TestClient", "tests": "Tests_Catalog.CreateAndPost", "timeout": 45 }
 ```
 
-A longer run is waited for by CALLING AGAIN, not by asking for a longer window — `"timeout": 180` is clamped to 45 and behaves exactly like the call above.
+A longer run is followed by polling the returned `jobId` with `get_job_status`; `"timeout": 180` is clamped to 45 and never extends the start call.
 
 ## Notes
 
 - Response type is Markdown; the report is also saved to `report.md` next to `junit.xml`.
-- The temp/report directory is not deleted on completion so a later call can re-fetch it.
+- The temp/report directory is not deleted on completion, and the registry retains the parsed result by `jobId` until eviction.
 - Module and test names are 1C identifiers (programmatic `Name`), not synonyms.
 
 ## Gotchas
 
-- A timeout returns **Pending**, not a failure — do not retry with different arguments; reuse the same ones so the run key matches. The single exception is work that never left EDT's scheduler: that returns an explicit "did not start" error, because there is nothing pending to wait for.
+- A start-call timeout returns **Pending**, not a failure. Keep its `jobId` and poll `get_job_status`; do not reconstruct the original arguments to address the run.
 - `timeout` above 45 is clamped, silently and on purpose. If a call ever comes back as a bare transport error rather than **Pending**, that is a bug worth reporting: the whole point of the ceiling is that it cannot happen.
-- A **Pending whose phase never changes** means waiting will not help — look for a modal dialog in EDT. A phase that advances, or an elapsed counter that grows, means the server is working; keep calling.
+- A **Pending whose phase never changes** means waiting alone may not help — look for a modal dialog in EDT. A phase that advances means the server is working; keep polling the same jobId.
 - If no JUnit XML appears after the launch finishes, the YAXUnit extension is likely not installed in the infobase, or the filter matched no tests.
 - The config must be a runtime-client launch configuration; other types are rejected.
 

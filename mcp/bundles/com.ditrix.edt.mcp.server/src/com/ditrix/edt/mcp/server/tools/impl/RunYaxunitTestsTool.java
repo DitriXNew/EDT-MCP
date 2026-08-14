@@ -19,8 +19,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -48,7 +49,11 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.ditrix.edt.mcp.server.utils.BoundedJob;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
@@ -69,11 +74,12 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 /**
  * Tool to run YAXUnit tests for a 1C:Enterprise project.
  *
- * Launches the application with the {@code RunUnitTests} startup parameter,
- * polls until the launch terminates or the polling window expires, then parses
- * the JUnit XML report and returns a Markdown summary. The full Markdown report
- * is also written to {@code report.md} next to {@code junit.xml} so the user
- * can read it directly from disk.
+ * Starts a named background job that launches the application with the
+ * {@code RunUnitTests} startup parameter, waits for the launch to terminate, then parses the
+ * JUnit XML report and retains its Markdown summary. The start call waits only for its clamped
+ * transport-safe window; if the job is still running, it returns the job id for
+ * {@code get_job_status}. The full Markdown report is also written to {@code report.md} next to
+ * {@code junit.xml} so the user can read it directly from disk.
  */
 public class RunYaxunitTestsTool implements IMcpTool
 {
@@ -111,17 +117,18 @@ public class RunYaxunitTestsTool implements IMcpTool
     private static final String VAL_JUNIT_XML = "junit.xml"; //$NON-NLS-1$
 
     /**
-     * Hard ceiling (seconds) on how long ONE call may hold the MCP transport open, and the
-     * default polling window.
+     * Hard ceiling (seconds) on how long ONE start call may hold the MCP transport open, and the
+     * default start-call wait window.
      *
      * <p>An MCP client cuts a call at its own transport timeout — around 60 seconds for the
      * clients this tool is driven by — while the pre-launch preparation of a real
      * configuration runs for minutes. A polling window above that ceiling is therefore not a
      * longer wait, it is a wait the caller never sees the end of: the call dies on the wire
      * with a bare "operation timed out", carrying neither the phase nor the reason (#357).
-     * Every wait in this tool is bounded by this ceiling so the answer always arrives while
-     * someone is still listening — {@code Pending} with the phase when the work is not done,
-     * which is strictly more information than a transport error.
+     * The start call is bounded by this ceiling so the answer always arrives while someone is
+     * still listening — {@code Pending} with the job id and phase when the work is not done,
+     * which is strictly more information than a transport error. The named job is not bounded by
+     * this value and continues collecting the report.
      *
      * <p>A caller may ask for LESS (a short probe), never for more: a larger {@code timeout}
      * is clamped, and the schema says so rather than advertising a window the transport
@@ -131,34 +138,6 @@ public class RunYaxunitTestsTool implements IMcpTool
 
     private static final int DEFAULT_TIMEOUT = MAX_TIMEOUT_SECONDS;
     private static final int POLL_INTERVAL_MS = 1000;
-
-    /**
-     * Time (ms) held back from the INNER deadline so the backstop cannot steal the answer.
-     *
-     * <p>The deadline threaded through the call is what normally answers — it returns a
-     * {@code Pending} naming the phase. The backstop exists for the case that cannot: a
-     * platform call that blocks on the tool thread and never returns to look at any deadline
-     * (the pre-launch reads and the spawn both reach EDT services that a running recompute or
-     * an unanswered modal can hold for minutes). The two must not race, or a merely-slow run
-     * would get the generic "did not answer" message instead of its real phase.
-     *
-     * <p>The reserve therefore sits INSIDE the caller's window, not on top of it. Adding it to
-     * the backstop instead made the public parameter stop bounding the call: {@code timeout: 1}
-     * held the request for about six seconds, and a client whose transport is shorter than ours
-     * still saw the bare transport error this whole change exists to remove. A parameter named
-     * as the bound of the call has to be the bound of the call.
-     */
-    private static final long CALL_BACKSTOP_RESERVE_MS = 5_000L;
-
-    /**
-     * The smallest fraction of the caller's window that is left to the work itself, as a
-     * divisor: the reserve never takes more than {@code 1/RESERVE_MAX_SHARE} of it.
-     *
-     * <p>Without this a short window would go negative ({@code timeout: 1} minus five seconds),
-     * and a healthy quick run would answer "did not finish" the moment it started — a false
-     * "still working" on a call that was doing fine, which is worse than waiting a second longer.
-     */
-    private static final long RESERVE_MAX_SHARE = 5L;
 
     /** Phase label while the launch configuration and its application are being resolved. */
     private static final String PHASE_RESOLVE = "resolve"; //$NON-NLS-1$
@@ -173,22 +152,45 @@ public class RunYaxunitTestsTool implements IMcpTool
     private static final Map<String, ILaunch> ACTIVE_LAUNCHES = new ConcurrentHashMap<>();
 
     /**
-     * Run keys for which a {@code Pending} was reported but whose result has NOT yet been delivered.
-     * A re-call consumes the entry EXACTLY ONCE to fetch the completed report; any later call with
-     * the same key then starts a fresh run. This is what lets a genuine re-run (e.g. after fixing the
-     * code under test) always re-execute instead of returning a stale, time-cached report.
-     *
-     * <p>Identical arguments are inherently ambiguous (fetch-my-{@code Pending} vs. start-fresh): if a
-     * caller receives {@code Pending} and never fetches, a later genuine re-run consumes the lingering
-     * entry and delivers the prior report ONCE before the following call re-executes.
+     * Submission identities map to running registry jobs. This closes the short window before the
+     * launch context has been resolved and the final {@link #buildRunKey} is available: an immediate
+     * repeat with the same request attaches to the first job instead of starting another resolver.
      */
-    private static final Set<String> PENDING_FETCH = ConcurrentHashMap.newKeySet();
+    private static final Map<String, String> SUBMISSION_JOBS = new ConcurrentHashMap<>();
+
+    /**
+     * Final run keys map to running registry jobs. Completed entries are never reused: their result
+     * remains fetchable by job id in {@link BackgroundJobs}, while a new argument-based call starts a
+     * fresh run. This keeps the run key in its real role as an in-flight duplicate guard.
+     */
+    private static final Map<String, String> RUN_JOBS = new ConcurrentHashMap<>();
+
+    /** Serialises lookup + admission in both job indexes. */
+    private static final Object RUN_JOBS_LOCK = new Object();
+
+    /**
+     * The public timeout is a per-call wait, not the lifetime of the YAXUnit run. Once EDT has
+     * accepted preparation or launch, only that work can say when it is finished.
+     */
+    private static final long BACKGROUND_JOB_TIMEOUT_MS = Long.MAX_VALUE;
 
     /** Lazily registered listener that evicts terminated launches from {@link #ACTIVE_LAUNCHES}. */
     private static final AtomicBoolean LISTENER_REGISTERED = new AtomicBoolean(false);
 
     /** Per-launch counter for the unique debug-mode report directory name. */
     private static final AtomicLong DEBUG_LAUNCH_COUNTER = new AtomicLong(0);
+
+    private final BackgroundJobs jobs;
+
+    public RunYaxunitTestsTool()
+    {
+        this(BackgroundJobs.shared());
+    }
+
+    RunYaxunitTestsTool(BackgroundJobs jobs)
+    {
+        this.jobs = jobs;
+    }
 
     @Override
     public String getName()
@@ -199,12 +201,15 @@ public class RunYaxunitTestsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. " //$NON-NLS-1$
-               + "The whole call is bounded by `timeout` (default and maximum " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
-               + "s, larger values are clamped) so it always answers before an MCP transport " //$NON-NLS-1$
-               + "cuts it: it returns the report, an error, or **Pending** naming the current " //$NON-NLS-1$
-               + "phase (resolve / prep:terminate / prep:recompute / prep:db-update / spawn / run) — " //$NON-NLS-1$
-               + "call again with identical arguments to keep waiting; nothing is terminated. " //$NON-NLS-1$
+        return "Run YAXUnit tests as a named background job and return a JUnit Markdown report. " //$NON-NLS-1$
+               + "The start call waits up to `timeout` (default and maximum " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
+               + "s, larger values are clamped): a short run returns the report unchanged in " //$NON-NLS-1$
+               + "that call; otherwise **Pending** returns the jobId to poll with get_job_status. " //$NON-NLS-1$
+               + "The job owns resolution, preparation, launch and report collection, and its " //$NON-NLS-1$
+               + "progress names the current phase (resolve / prep:terminate / prep:recompute / " //$NON-NLS-1$
+               + "prep:db-update / spawn / run). A repeated start with the same execution " //$NON-NLS-1$
+               + "parameters attaches only while that job is running, preventing a duplicate " //$NON-NLS-1$
+               + "launch; use jobId, not repeated arguments, to address a known run. " //$NON-NLS-1$
                + "A phase that stops changing is the server's only signal — it means either a " //$NON-NLS-1$
                + "legitimately long stage or one blocked on a modal dialog in EDT, and the tool " //$NON-NLS-1$
                + "cannot tell them apart: look at EDT before waiting indefinitely. " //$NON-NLS-1$
@@ -246,18 +251,16 @@ public class RunYaxunitTestsTool implements IMcpTool
                     + "own windows still waits for a human, and the tool reports it as a Pending whose " //$NON-NLS-1$
                     + "phase stops changing. false: legacy delegate behaviour — no client sweep, no " //$NON-NLS-1$
                     + "auto-confirmed update dialog; platform dialogs may appear and block. Results are " //$NON-NLS-1$
-                    + "never served from a cache — a completed run is re-executed on the next identical " //$NON-NLS-1$
-                    + "call regardless of this flag.") //$NON-NLS-1$
+                    + "retained by jobId until registry eviction, while a new start after completion " //$NON-NLS-1$
+                    + "always executes a fresh run regardless of this flag.") //$NON-NLS-1$
             .stringProperty("updateScope", UPDATE_SCOPE_DESCRIPTION) //$NON-NLS-1$
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
                 EXTERNAL_INFOBASE_CHANGES_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("debug", //$NON-NLS-1$
                 "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints " //$NON-NLS-1$
                     + "fire, return a launch handle as soon as it is spawned and call wait_for_break " //$NON-NLS-1$
-                    + "next. It does not POLL, so `timeout` is not a waiting window here — but the " //$NON-NLS-1$
-                    + "call is still bounded by it: a pre-launch preparation longer than the window " //$NON-NLS-1$
-                    + "returns Pending instead of the handle, and the next identical call picks up " //$NON-NLS-1$
-                    + "where it left off.") //$NON-NLS-1$
+                    + "next. The named job still owns pre-launch preparation: if that work outlives " //$NON-NLS-1$
+                    + "the start call's `timeout`, Pending returns its jobId for get_job_status.") //$NON-NLS-1$
             .build();
     }
 
@@ -271,16 +274,13 @@ public class RunYaxunitTestsTool implements IMcpTool
      * got LESS information, not more (#357).
      */
     static final String TIMEOUT_DESCRIPTION =
-        "Wall-clock window in seconds for the WHOLE call, not just the polling step " //$NON-NLS-1$
+        "Maximum seconds the start call waits for its background job " //$NON-NLS-1$
             + "(default and maximum " + MAX_TIMEOUT_SECONDS + "; a larger value is clamped to it, " //$NON-NLS-1$ //$NON-NLS-2$
             + "because an MCP transport cuts the call at around 60s and a longer window would " //$NON-NLS-1$
-            + "return a bare transport error instead of an answer). The call returns WITHIN this " //$NON-NLS-1$
-            + "window: at least 80% of it is available to the work, the remainder is reserved so " //$NON-NLS-1$
-            + "the answer can be assembled rather than cut off. On expiry the tool returns " //$NON-NLS-1$
-            + "Pending with the current phase — or, if the work never started at all, an explicit " //$NON-NLS-1$
-            + "error saying so (that one case can take up to half a second longer, while the " //$NON-NLS-1$
-            + "server establishes the work never began); call again with the same arguments to " //$NON-NLS-1$
-            + "keep waiting."; //$NON-NLS-1$
+            + "return a bare transport error instead of an answer). A job that finishes in this " //$NON-NLS-1$
+            + "window returns the same report in this call. Otherwise the call returns Pending " //$NON-NLS-1$
+            + "with jobId; poll get_job_status with that id. This value never limits the job's " //$NON-NLS-1$
+            + "server-side lifetime."; //$NON-NLS-1$
 
     /**
      * Shared schema doc for the {@code externalInfobaseChanges} parameter (also forwarded by
@@ -495,7 +495,212 @@ public class RunYaxunitTestsTool implements IMcpTool
 
         RunRequest request = new RunRequest(configName, projectName, applicationId, extensions,
             modules, tests, tags, timeout, updateBeforeLaunch, updateScope, externalChanges, debug);
-        return runBounded(request);
+        return startOrAttach(request);
+    }
+
+    /**
+     * Starts one registry-owned run, or attaches this call to the job already executing the same
+     * submission. The caller waits only for its clamped transport-safe window; the job continues
+     * until it has collected the launch result.
+     */
+    private String startOrAttach(RunRequest request)
+    {
+        return startOrAttachJob(buildSubmissionKey(request), request.timeout,
+            (jobId, progress) -> runJobToCompletion(request, jobId, progress));
+    }
+
+    /** Package-private seam over the production admission + synchronous-wait path. */
+    String startOrAttachJob(String submissionKey, int waitSeconds, NamedJobWork work)
+    {
+        JobSnapshot started;
+        try
+        {
+            synchronized (RUN_JOBS_LOCK)
+            {
+                purgeTerminalJobMappings();
+                started = findRunningJob(SUBMISSION_JOBS.get(submissionKey));
+                if (started == null)
+                {
+                    AtomicReference<String> jobId = new AtomicReference<>();
+                    CountDownLatch jobIdReady = new CountDownLatch(1);
+                    started = jobs.start(NAME, BACKGROUND_JOB_TIMEOUT_MS,
+                        "Accepted the YAXUnit request.", progress -> { //$NON-NLS-1$
+                            jobIdReady.await();
+                            return work.run(jobId.get(), progress);
+                        });
+                    SUBMISSION_JOBS.put(submissionKey, started.getId());
+                    jobId.set(started.getId());
+                    jobIdReady.countDown();
+                }
+            }
+        }
+        catch (RejectedExecutionException e)
+        {
+            return ToolResult.error("Could not start run_yaxunit_tests because the background-job " //$NON-NLS-1$
+                + "registry is full or stopping: " + e.getMessage() + ". Poll existing jobs with " //$NON-NLS-1$ //$NON-NLS-2$
+                + "get_job_status and retry, or restart EDT if the bundle is stopping.").toJson(); //$NON-NLS-1$
+        }
+
+        JobSnapshot latest = BackgroundJobPolling.await(jobs, started.getId(), waitSeconds);
+        if (latest == null)
+        {
+            return ToolResult.error("The YAXUnit background job '" + started.getId() //$NON-NLS-1$
+                + "' expired before this call could poll it. Start run_yaxunit_tests again to " //$NON-NLS-1$
+                + "create a new job.").toJson(); //$NON-NLS-1$
+        }
+        return renderStartResult(latest);
+    }
+
+    @FunctionalInterface
+    interface NamedJobWork
+    {
+        Object run(String jobId, ProgressReporter progress) throws Exception;
+    }
+
+    /** Runs the whole resolve -> prepare -> launch -> report pipeline inside one registry job. */
+    private String runJobToCompletion(RunRequest request, String jobId,
+        ProgressReporter progress)
+    {
+        CallState state = new CallState(progress);
+        JobExecution execution = new JobExecution(jobId, progress);
+        InfobaseAuthDialogSuppressor.markActivityStart();
+        try
+        {
+            while (true) // NOSONAR prep returns a bounded internal wait; the owning job keeps waiting
+            {
+                String result = runTests(request, state, Long.MAX_VALUE, execution);
+                if (!isPendingResult(result))
+                {
+                    return result;
+                }
+                progress.add("Still working (phase: " + state.label() + ")."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        finally
+        {
+            InfobaseAuthDialogSuppressor.markActivityEnd();
+        }
+    }
+
+    private String renderStartResult(JobSnapshot job)
+    {
+        if (job.getStatus() == BackgroundJobs.Status.DONE)
+        {
+            Object result = job.getResult();
+            return result instanceof String ? (String)result : GsonProvider.toJson(result);
+        }
+        if (job.getStatus() == BackgroundJobs.Status.FAILED)
+        {
+            return ToolResult.error("YAXUnit background job '" + job.getId() + "' failed: " //$NON-NLS-1$ //$NON-NLS-2$
+                + job.getErrorMessage() + ". Inspect its progress with get_job_status, fix the " //$NON-NLS-1$
+                + "reported cause, and start run_yaxunit_tests again.").toJson(); //$NON-NLS-1$
+        }
+        if (job.getStatus() == BackgroundJobs.Status.CANCELLED)
+        {
+            return BackgroundJobRenderer.render(job);
+        }
+        return "**Pending:** YAXUnit work continues in background job `" + job.getId() //$NON-NLS-1$
+            + "`. Nothing was cancelled.\n\nPoll it with `get_job_status` using " //$NON-NLS-1$
+            + "`jobId=\"" + job.getId() + "\"`; do not repeat the original arguments to " //$NON-NLS-1$ //$NON-NLS-2$
+            + "address this run.\n\n" + BackgroundJobRenderer.render(job); //$NON-NLS-1$
+    }
+
+    /** Drops only terminal/evicted mappings; terminal results themselves stay in the registry. */
+    private void purgeTerminalJobMappings()
+    {
+        SUBMISSION_JOBS.entrySet().removeIf(entry -> findRunningJob(entry.getValue()) == null);
+        RUN_JOBS.entrySet().removeIf(entry -> findRunningJob(entry.getValue()) == null);
+    }
+
+    private JobSnapshot findRunningJob(String jobId)
+    {
+        if (jobId == null)
+        {
+            return null;
+        }
+        JobSnapshot snapshot = jobs.get(jobId);
+        return snapshot != null && snapshot.getStatus() == BackgroundJobs.Status.RUNNING
+            ? snapshot : null;
+    }
+
+    /**
+     * Claims the final run key for this job, or returns the running job that claimed it first.
+     */
+    private String claimRunKey(String runKey, String jobId)
+    {
+        synchronized (RUN_JOBS_LOCK)
+        {
+            purgeTerminalJobMappings();
+            JobSnapshot existing = findRunningJob(RUN_JOBS.get(runKey));
+            if (existing != null && !existing.getId().equals(jobId))
+            {
+                return existing.getId();
+            }
+            RUN_JOBS.put(runKey, jobId);
+            return null;
+        }
+    }
+
+    /** Mirrors an equivalent live job instead of launching the same run a second time. */
+    private String awaitExistingRun(String existingJobId, ProgressReporter progress)
+    {
+        progress.add("Attached to existing YAXUnit job " + existingJobId + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        while (true) // NOSONAR the referenced registry job supplies the terminal condition
+        {
+            JobSnapshot existing = jobs.await(existingJobId, 1_000L);
+            if (existing == null)
+            {
+                return ToolResult.error("The equivalent YAXUnit job '" + existingJobId //$NON-NLS-1$
+                    + "' expired while this job was attached. Start run_yaxunit_tests again.") //$NON-NLS-1$
+                    .toJson();
+            }
+            if (existing.getStatus() == BackgroundJobs.Status.DONE)
+            {
+                Object result = existing.getResult();
+                return result instanceof String ? (String)result : GsonProvider.toJson(result);
+            }
+            if (existing.getStatus() == BackgroundJobs.Status.FAILED)
+            {
+                return ToolResult.error("Equivalent YAXUnit job '" + existingJobId //$NON-NLS-1$
+                    + "' failed: " + existing.getErrorMessage() //$NON-NLS-1$
+                    + ". Inspect it with get_job_status and fix the reported cause before retrying.") //$NON-NLS-1$
+                    .toJson();
+            }
+            if (existing.getStatus() == BackgroundJobs.Status.CANCELLED)
+            {
+                return ToolResult.error("Equivalent YAXUnit job '" + existingJobId //$NON-NLS-1$
+                    + "' was cancelled before launch. Start run_yaxunit_tests again if the tests " //$NON-NLS-1$
+                    + "still need to run.").toJson(); //$NON-NLS-1$
+            }
+        }
+    }
+
+    private static boolean isPendingResult(String result)
+    {
+        return result != null && result.startsWith("**Pending:**"); //$NON-NLS-1$
+    }
+
+    /** Job-local access to the registry identity and commit handshake. */
+    private final class JobExecution
+    {
+        final String jobId;
+        final ProgressReporter progress;
+
+        JobExecution(String jobId, ProgressReporter progress)
+        {
+            this.jobId = jobId;
+            this.progress = progress;
+        }
+
+        String claimOrExisting(String runKey)
+        {
+            return claimRunKey(runKey, jobId);
+        }
+
+        boolean tryCommit()
+        {
+            return progress.tryCommit();
+        }
     }
 
     /**
@@ -516,168 +721,30 @@ public class RunYaxunitTestsTool implements IMcpTool
         return Math.min(requested, MAX_TIMEOUT_SECONDS);
     }
 
-    /**
-     * The wall clock the backstop is given — EXACTLY the caller's (clamped) window.
-     *
-     * <p>Pure (test seam). This is the number that makes {@code timeout} mean what its name
-     * says, so it is asserted directly rather than inferred from a live run.
-     *
-     * <p>One documented exception, from {@link BoundedJob}: a job the deadline catches while it
-     * is still QUEUED costs up to a further half second while the scheduler establishes that it
-     * never started. That path returns the "did not start" error, not a {@code Pending}.
-     *
-     * @param timeoutSeconds the clamped window
-     * @return the backstop's budget in milliseconds
-     */
-    static long backstopBudgetMs(int timeoutSeconds)
-    {
-        return timeoutSeconds * 1000L;
-    }
-
-    /**
-     * The window the call's own deadline races against: the caller's window minus the reserve.
-     *
-     * <p>Pure (test seam). Strictly smaller than {@link #backstopBudgetMs(int)} for every
-     * accepted {@code timeout}, so the inner flow always gets to answer first with its real
-     * phase, and always positive, so a short window still buys real working time.
-     *
-     * @param timeoutSeconds the clamped window
-     * @return the inner deadline's budget in milliseconds
-     */
-    static long innerWindowMs(int timeoutSeconds)
-    {
-        long requestedMs = backstopBudgetMs(timeoutSeconds);
-        // Proportional on short windows: a flat five seconds would swallow them whole.
-        long reserveMs = Math.min(CALL_BACKSTOP_RESERVE_MS, requestedMs / RESERVE_MAX_SHARE);
-        return requestedMs - reserveMs;
-    }
-
-    /**
-     * Runs {@link #runTests} under a hard wall-clock bound, so the call answers while the MCP
-     * transport is still listening no matter what the platform does.
-     *
-     * <p>{@link #runTests} already carries the caller's deadline and returns a {@code Pending}
-     * of its own accord; this is the layer beneath that, for the failure mode a deadline cannot
-     * cover — work that blocks on the tool thread and never reaches the next deadline check.
-     * That is not hypothetical here: the pre-launch resolution and the spawn both call into EDT
-     * services (the application manager, the per-infobase launch monitor) that a running
-     * recompute or an unanswered modal holds for minutes, which is exactly how identical repeat
-     * calls came back as a bare transport timeout with no phase and no reason (#357).
-     *
-     * <p>A timed-out job keeps running — nothing here cancels the preparation or the launch, and
-     * the returned {@code Pending} says so. The next identical call re-attaches to the same
-     * in-flight work.
-     *
-     * @param request the parsed call arguments
-     * @return the report, a structured error, or a {@code Pending} naming the phase
-     */
-    private String runBounded(RunRequest request)
-    {
-        CallState state = new CallState();
-        String[] resultHolder = new String[1];
-        // Anchored to the CALL, not to the job body: the job can sit in EDT's scheduler for a
-        // while before it runs, and a deadline started at that point would land AFTER the
-        // backstop's — handing the backstop a race it is supposed to lose.
-        long innerDeadlineMs = System.currentTimeMillis() + innerWindowMs(request.timeout);
-        BoundedJob.Result bounded = BoundedJob.run("run_yaxunit_tests: " //$NON-NLS-1$
-            + (request.configName != null ? request.configName : String.valueOf(request.projectName)),
-            backstopBudgetMs(request.timeout), monitor -> {
-                // The suppressor's in-flight window is scoped to execute(); this job can outlive
-                // it, and it reaches the same infobase-connecting calls, so it marks its own.
-                InfobaseAuthDialogSuppressor.markActivityStart();
-                try
-                {
-                    // Write the result BEFORE claiming it: the claim's compare-and-set is the
-                    // happens-before edge that publishes this write to whoever reads the holder.
-                    resultHolder[0] = runTests(request, state, innerDeadlineMs);
-                    state.publishResult();
-                }
-                finally
-                {
-                    InfobaseAuthDialogSuppressor.markActivityEnd();
-                }
-            });
-        if (bounded.getOutcome() == BoundedJob.Outcome.COMPLETED && bounded.getFailure() == null)
-        {
-            return resultHolder[0];
-        }
-        // EVERY remaining outcome means this thread, not the worker, is about to answer — so the
-        // claim is settled ONCE, here, before any of them. Claiming inside the individual
-        // branches let the timed-out/interrupted paths return while the worker still believed
-        // someone was listening, and a worker that believes that keeps the result it consumed.
-        if (!state.claimAnswer())
-        {
-            // The work finished in the race window between the deadline elapsing and this line.
-            // The real answer exists and was published to the holder — returning a Pending (or an
-            // error) here would throw away a completed report and send the caller round again.
-            return resultHolder[0];
-        }
-        if (bounded.getFailure() != null)
-        {
-            Activator.logError("Unexpected error running YAXUnit tests", bounded.getFailure()); //$NON-NLS-1$
-            return ToolResult.error(bounded.getFailure().getMessage() != null
-                ? bounded.getFailure().getMessage()
-                : bounded.getFailure().getClass().getSimpleName()).toJson();
-        }
-        if (bounded.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START
-            || bounded.getOutcome() == BoundedJob.Outcome.NOT_RUN)
-        {
-            // The body NEVER ran: no preparation was started, no launch was spawned, nothing is
-            // pending. Calling that a Pending would be a lie in the one sentence the caller uses
-            // to decide whether to wait — there is nothing to wait FOR.
-            return ToolResult.error("run_yaxunit_tests did not start: the job carrying it never " //$NON-NLS-1$
-                + "left the scheduler (outcome " + bounded.getOutcome() + " after " //$NON-NLS-1$ //$NON-NLS-2$
-                + bounded.getElapsedMs() + "ms). Nothing was launched and nothing is running. " //$NON-NLS-1$
-                + "Retry; if it repeats, EDT's job scheduler is blocked or suspended — check the " //$NON-NLS-1$
-                + "EDT progress view.").toJson(); //$NON-NLS-1$
-        }
-        return buildStalledPendingMessage(state.label(), bounded.getElapsedMs() / 1000L);
-    }
-
-    /**
-     * State shared between the call's worker and the backstop that may end the call before the
-     * worker does: the stage the call is in, and which of the two owns the answer.
-     *
-     * <p>A {@code Pending} whose phase is guessed is worse than none: the caller uses it to
-     * decide whether waiting is even the right thing to do, so every label here is written on
-     * ENTRY to the stage it names and the pre-launch label is read LIVE from the background
-     * preparation rather than remembered from when the wait began.
-     *
-     * <p>The ownership half exists because the backstop does not stop the worker — it stops
-     * WAITING for it. A worker that finishes afterwards would otherwise complete the normal
-     * success path, consume the pending-fetch marker, and hand its report to a holder nobody
-     * reads: the finished report becomes unreachable and the next identical call re-runs the
-     * tests from scratch, which is the opposite of the "call again to pick up where you left
-     * off" this tool promises.
-     */
+    /** Tracks the phase exposed through the owning background job's progress journal. */
     static final class CallState
     {
         private final AtomicReference<String> current = new AtomicReference<>(PHASE_RESOLVE);
+        private final ProgressReporter progress;
 
-        /**
-         * The run key whose undelivered-result marker THIS call actually took off the board, or
-         * {@code null} when it took none.
-         *
-         * <p>Set only where a {@code PENDING_FETCH.remove} genuinely removed something. Two
-         * distinctions ride on that:
-         * <ul>
-         *   <li>a call that never reached a run must not re-arm a key, or the next call would
-         *       serve a report left over from an EARLIER run as if it were this one's — a false
-         *       success, worse than the lost report this mechanism exists to prevent;</li>
-         *   <li>a call whose remove was a no-op because ANOTHER caller had already taken and
-         *       delivered that result must not put the marker back either, or the report would
-         *       be delivered twice and a genuine re-run suppressed.</li>
-         * </ul>
-         */
-        private volatile String consumedKey;
+        CallState()
+        {
+            this(null);
+        }
 
-        /** Whoever wins this owns the answer: the worker (it returns it) or the backstop. */
-        private final AtomicBoolean answered = new AtomicBoolean(false);
+        CallState(ProgressReporter progress)
+        {
+            this.progress = progress;
+        }
 
         /** The stage the call has entered and not yet left. */
         void set(String phase)
         {
-            current.set(phase);
+            String previous = current.getAndSet(phase);
+            if (progress != null && phase != null && !phase.equals(previous))
+            {
+                progress.add("Phase: " + phase + "."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
         }
 
         /** @return the current stage label, never {@code null} */
@@ -686,114 +753,6 @@ public class RunYaxunitTestsTool implements IMcpTool
             String value = current.get();
             return value != null ? value : PHASE_RESOLVE;
         }
-
-        /**
-         * Takes the undelivered-result marker for {@code runKey} off the board on this call's
-         * behalf, recording it so the marker can be restored if this call turns out to have no
-         * one listening.
-         *
-         * <p>Deliberately a single place: consuming the marker and being able to give it back are
-         * the same decision, and splitting them is how the first version of this lost results.
-         *
-         * @param runKey the run key whose result this call is about to deliver
-         */
-        void consumeResultFor(String runKey)
-        {
-            if (PENDING_FETCH.remove(runKey))
-            {
-                consumedKey = runKey;
-            }
-        }
-
-        /**
-         * Whether THIS call is the one that took {@code runKey}'s marker off the board.
-         *
-         * @param runKey the run key to test
-         * @return {@code true} when this call owns that undelivered result
-         */
-        boolean consumed(String runKey)
-        {
-            return runKey != null && runKey.equals(consumedKey);
-        }
-
-        /**
-         * Gives up ownership of a consumed marker, for the case where it turned out to refer to
-         * no result at all.
-         *
-         * <p>Ownership is what licenses {@link #publishResult()} to put the marker back, so it
-         * must not outlive the result it stands for: a call that consumed a marker, found no
-         * report and went on to start a FRESH run would otherwise still be entitled to re-arm the
-         * key later — by which time the key can belong to that fresh run and its result may
-         * already have been delivered by somebody else.
-         */
-        void releaseConsumed()
-        {
-            consumedKey = null;
-        }
-
-        /**
-         * The worker announcing it has a result.
-         *
-         * <p>When the caller already gave up, a marker THIS call consumed is put BACK, because
-         * the report on disk is now the only copy of a run that really finished. A spurious
-         * marker is cheap and self-clearing — the next call consumes it, finds no report and
-         * falls through to a fresh run — whereas a missing one silently discards completed work.
-         *
-         * @return {@code true} when the caller is still listening and will read the result
-         */
-        boolean publishResult()
-        {
-            if (answered.compareAndSet(false, true))
-            {
-                return true;
-            }
-            String key = consumedKey;
-            if (key != null)
-            {
-                PENDING_FETCH.add(key);
-                Activator.logInfo("YAXUnit run finished after its call had already returned " //$NON-NLS-1$
-                    + "Pending; keeping the result fetchable for runKey=" + key); //$NON-NLS-1$
-            }
-            return false;
-        }
-
-        /**
-         * The backstop announcing it is about to answer for the call.
-         *
-         * @return {@code true} when it owns the answer; {@code false} when the worker beat it to
-         *         it, in which case the worker's result is published and must be returned instead
-         */
-        boolean claimAnswer()
-        {
-            return answered.compareAndSet(false, true);
-        }
-    }
-
-    /**
-     * Whether {@code runKey} currently has an undelivered result waiting to be fetched.
-     *
-     * <p>Package-private read-only probe over {@link #PENDING_FETCH}, which is otherwise private
-     * process-wide state: the guarantee that a late worker keeps its result reachable is only
-     * observable through this set.
-     *
-     * @param runKey the run key to test
-     * @return {@code true} when the next identical call would fetch a result for it
-     */
-    static boolean hasUndeliveredResult(String runKey)
-    {
-        return PENDING_FETCH.contains(runKey);
-    }
-
-    /** Drops a pending-fetch marker; for tests that must not leak process-wide state. */
-    static void forgetUndeliveredResult(String runKey)
-    {
-        PENDING_FETCH.remove(runKey);
-    }
-
-    /** Arms a pending-fetch marker, as the polling paths do before they start waiting. */
-    static void armUndeliveredResult(String runKey)
-    {
-        PENDING_FETCH.add(runKey);
     }
 
     /**
@@ -840,37 +799,32 @@ public class RunYaxunitTestsTool implements IMcpTool
     /**
      * Main test execution flow.
      *
-     * Non-blocking with state tracking. Behaviour:
+     * Registry-job execution with state tracking. Behaviour:
      * <ol>
-     *   <li>Compute the stable runKey (see {@link #buildRunKey}) — the launch config name plus
-     *       everything that decides what the run executes.</li>
-     *   <li>If a launch is already running for this key — poll up to {@code timeout}s, return result or "Pending".</li>
-     *   <li>If no active launch but this key has an UNDELIVERED Pending result — deliver it ONCE, then
-     *       forget the key so the next call re-runs.</li>
-     *   <li>Otherwise — start a new launch, poll, return result or "Pending".</li>
+     *   <li>Compute the stable runKey (see {@link #buildRunKey}) from everything that decides
+     *       what the run executes.</li>
+     *   <li>Claim that key for the owning background job, or mirror the live job that already
+     *       claimed it.</li>
+     *   <li>Reuse a tracked launch when present; otherwise prepare and start a new one.</li>
+     *   <li>Poll until the launch terminates, parse the report, and retain it in the registry.</li>
      * </ol>
      *
-     * There is deliberately NO time-based result cache: a re-run with identical arguments after a
-     * completed run always re-executes the tests. A completed report is reused only to
-     * satisfy a re-call fetching a previously reported {@code Pending} run, and only once.
+     * A completed job is never selected by its run key: a new start after completion re-executes
+     * the tests, while get_job_status can still fetch the completed result by job id.
      *
      * {@code debug=true} skips this polling lifecycle entirely and returns a launch handle at
      * once (see {@link #launchDebugMode}); {@code updateScope} narrows the pre-launch
      * auto-chain recompute+update (see {@link #UPDATE_SCOPE_DESCRIPTION}).
      *
-     * The temp directory is NEVER deleted in finally — a Pending re-call can fetch the result. Old
-     * runs are cleaned up automatically before starting a new launch.
+     * The temp directory is never deleted in finally; the registry retains the parsed result and
+     * a later fresh run cleans the stable directory before launching.
      */
-    private String runTests(RunRequest req, CallState state, long deadlineMs) // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+    private String runTests(RunRequest req, CallState state, long deadlineMs, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+        JobExecution execution)
     {
-        // ONE deadline for the whole call, not one per step: the steps run in sequence, so a
-        // per-step budget adds up (resolve + 25s preparation + spawn + the polling window) to
-        // far more than the transport allows, which is how a call that honoured every
-        // individual limit still died on the wire (#357).
-        //
-        // The deadline is the caller's window MINUS the backstop reserve, measured from when the
-        // CALL began (see runBounded), so this flow reaches its own deadline first and answers
-        // with the real phase. The reserve comes out of the window, never on top of it.
+        // The owning registry job passes an effectively unbounded deadline and outlives the MCP
+        // call. The parameter remains for the bounded preparation seam and defensive poll path;
+        // only startOrAttach limits how long the transport waits.
         try
         {
             ILaunchManager launchManager = DebugPlugin.getDefault().getLaunchManager();
@@ -899,16 +853,23 @@ public class RunYaxunitTestsTool implements IMcpTool
             IProject project = context.project;
             IApplicationManager appManager = context.appManager;
 
+            String runKey = buildRunKey(matchingConfig.getName(), projectName, applicationId, req);
+            String jobRunKey = req.debug ? "debug:" + runKey : runKey; //$NON-NLS-1$
+            String existingJobId = execution.claimOrExisting(jobRunKey);
+            if (existingJobId != null)
+            {
+                return awaitExistingRun(existingJobId, execution.progress);
+            }
+
             // DEBUG mode shares the whole setup above (resolve/validate/effective
-            // project+app), then spawns a DEBUG launch and returns at once for
-            // wait_for_break — no polling, no run-key reuse cache.
+            // project+app), including the live-job run-key guard, then spawns a DEBUG launch
+            // and returns at once for wait_for_break — it does not poll for a test report.
             if (req.debug)
             {
                 return launchDebugMode(matchingConfig, project, projectName, applicationId,
-                    appManager, launchManager, req, deadlineMs, state);
+                    appManager, launchManager, req, deadlineMs, state, execution);
             }
 
-            String runKey = buildRunKey(matchingConfig.getName(), projectName, applicationId, req);
             Path reportDir = stableReportDir(runKey);
 
             // If a launch is already running for this key, just poll it.
@@ -917,29 +878,16 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 state.set(PHASE_RUN);
                 return handleExistingLaunch(existing, reportDir, deadlineMs, runKey,
-                        projectName, applicationId, state);
-            }
-
-            // No active launch. Deliver a previously reported Pending result EXACTLY ONCE: a re-call
-            // fetching the result of a run that finished after a Pending response gets the report; // NOSONAR explanatory comment, not commented-out code
-            // any later call with the same key falls through to a fresh run. There is NO time-based
-            // cache, so a genuine re-run always re-executes the tests.
-            String pendingResult = tryDeliverPendingResult(runKey, reportDir, projectName,
-                applicationId, state);
-            if (pendingResult != null)
-            {
-                return pendingResult;
+                        projectName, applicationId);
             }
 
             // Phase 1 (quick, JVM-wide): try to reuse an active launch for this runKey.
             ILaunch launch = reuseActiveLaunch(runKey);
 
             // Phase 2: pre-launch preparation (terminate stale launch + recompute
-            // + DB update) runs in a background Job under a 25-second budget.
-            // The tool thread waits on the job's latch; if the prep is not done
-            // within the budget it returns a "Pending (preparation)" response and
-            // the caller retries with the same arguments. The launch (Phase 3) is
-            // NEVER run in the background — only the prep. One in-flight entry
+            // + DB update) runs in an Eclipse background Job under a 25-second wait slice.
+            // The owning registry job waits on the latch repeatedly until preparation finishes;
+            // only the original MCP call returns at its own timeout. One in-flight entry
             // per PREPARATION (see PrepRequest.prepKey: the project and the
             // application, plus the conflict policy and the rebuild scope)
             // prevents a second job for the same one from starting while it
@@ -956,6 +904,15 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 if (req.updateBeforeLaunch)
                 {
+                    // Preparation can terminate a client and update the infobase on a separate
+                    // Eclipse Job. Once scheduled it cannot be recalled by interrupting this
+                    // registry worker, so commit BEFORE that hand-off, not only before launch().
+                    if (!execution.tryCommit())
+                    {
+                        return ToolResult.error("The YAXUnit job was cancelled before pre-launch " //$NON-NLS-1$
+                            + "preparation started. Start run_yaxunit_tests again if the tests " //$NON-NLS-1$
+                            + "still need to run.").toJson(); //$NON-NLS-1$
+                    }
                     // What identifies this preparation is derived from the request that drives it
                     // (see PrepRequest.prepKey): a piggybacking call must never inherit a DIFFERENT
                     // caller's answer to the external-changes modal (one of the answers rewrites
@@ -984,30 +941,21 @@ public class RunYaxunitTestsTool implements IMcpTool
                     synchronized (ACTIVE_LAUNCHES)
                     {
                         launch = spawnOrReuseLaunch(req, matchingConfig, applicationId,
-                            runKey, reportDir);
+                            runKey, reportDir, execution);
                     }
                 }
             }
 
             state.set(PHASE_RUN);
-            // Marked BEFORE the poll, not only when the window expires: this call can also end
-            // WITHOUT reaching either branch — the backstop can answer while the poll is inside
-            // the platform — and a Pending that left no marker sends the retry into a fresh run
-            // that wipes the very report the abandoned poll was about to read. Cleared again the
-            // moment a result is actually delivered — and put back by publishResult when that
-            // delivery turns out to have no one listening.
-            PENDING_FETCH.add(runKey);
             String pollResult = pollLaunch(launch, reportDir, deadlineMs, runKey,
                     projectName, applicationId);
             if (pollResult != null)
             {
-                // Result delivered — forget any Pending bookkeeping so the next call re-runs.
-                state.consumeResultFor(runKey);
                 return prependPreLaunchInfo(preLaunch, pollResult);
             }
 
-            // Polling window expired — return Pending without terminating the launch; the marker
-            // set above lets a re-call fetch the result once it completes.
+            // The registry job normally polls without a deadline. This remains a defensive
+            // response for package-level seams and for a future bounded internal caller.
             return prependPreLaunchInfo(preLaunch, buildPendingMessage(reportDir));
         }
         catch (CoreException e)
@@ -1053,7 +1001,8 @@ public class RunYaxunitTestsTool implements IMcpTool
      * @return the reused or freshly spawned launch (never {@code null})
      */
     private ILaunch spawnOrReuseLaunch(RunRequest req, ILaunchConfiguration matchingConfig,
-            String applicationId, String runKey, Path reportDir) throws CoreException, IOException
+            String applicationId, String runKey, Path reportDir, JobExecution execution)
+        throws CoreException, IOException
     {
         ILaunch racer = ACTIVE_LAUNCHES.get(runKey);
         if (racer != null && !racer.isTerminated())
@@ -1123,6 +1072,13 @@ public class RunYaxunitTestsTool implements IMcpTool
         ILaunch launch;
         try
         {
+            // With no auto-chain this is the first irreversible hand-off. With the auto-chain
+            // the job is already committed, and this idempotent check closes the launch race.
+            if (!execution.tryCommit())
+            {
+                throw new CoreException(new Status(IStatus.CANCEL, Activator.PLUGIN_ID,
+                    "The YAXUnit job was cancelled before the launch was handed to EDT.")); //$NON-NLS-1$
+            }
             launch = workingCopy.launch(ILaunchManager.RUN_MODE,
                 new NullProgressMonitor());
         }
@@ -1370,8 +1326,7 @@ public class RunYaxunitTestsTool implements IMcpTool
      * if it terminated, evicts it and reads the report (or reports a missing one);
      * otherwise polls until {@code deadlineMs} and returns the parsed report or a
      * Pending message. Does NOT spawn a launch — it only reads results and updates
-     * the {@link #ACTIVE_LAUNCHES}/{@link #PENDING_FETCH} tracking maps, exactly as
-     * the inline branch did.
+     * the {@link #ACTIVE_LAUNCHES} tracking map, exactly as the inline branch did.
      * <p>
      * The terminated remove + read runs under the per-IB lock so remove-then-read is
      * ATOMIC against a concurrent identical call that falls through to a fresh launch:
@@ -1388,14 +1343,13 @@ public class RunYaxunitTestsTool implements IMcpTool
      * @return the Markdown report, a structured error, or a Pending message — always non-{@code null}
      */
     private String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-            String projectName, String applicationId, CallState state) throws InterruptedException
+            String projectName, String applicationId) throws InterruptedException
     {
         if (existing.isTerminated())
         {
             synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
             {
                 ACTIVE_LAUNCHES.remove(runKey, existing);
-                state.consumeResultFor(runKey);
                 File junitXml = findJunitXml(reportDir);
                 if (junitXml != null)
                 {
@@ -1405,66 +1359,9 @@ public class RunYaxunitTestsTool implements IMcpTool
                         + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
             }
         }
-        // Marked BEFORE the poll for the same reason as the fresh-run path: this call can end
-        // without reaching either branch (the backstop answering while the poll is inside the
-        // platform), and an unmarked Pending sends the retry into a fresh run that wipes the
-        // report.
-        PENDING_FETCH.add(runKey);
         String pollResult = pollLaunch(existing, reportDir, deadlineMs, runKey,
                 projectName, applicationId);
-        if (pollResult != null)
-        {
-            // Result delivered — forget any Pending bookkeeping so the next call re-runs.
-            state.consumeResultFor(runKey);
-            return pollResult;
-        }
-        // Still running past the window — the marker set above lets a re-call fetch the result.
-        return buildPendingMessage(reportDir);
-    }
-
-    /**
-     * Delivers a previously reported Pending result EXACTLY ONCE: a re-call fetching
-     * the result of a run that finished after a Pending response gets the report;
-     * any later call with the same key falls through to a fresh run. Reads the report
-     * only (no launch is spawned) and consumes the {@link #PENDING_FETCH} entry.
-     * <p>
-     * Consume + read run under the per-IB lock so a concurrent identical call that falls
-     * through to a fresh launch cannot cleanupTempDir(reportDir) mid-read — the fresh-run
-     * path holds the SAME lock for cleanup+spawn. A racer blocked here finds PENDING_FETCH
-     * already drained and proceeds to a fresh run; worst case degrades from a torn parse to
-     * a clean null.
-     *
-     * @return the parsed report when a pending result was delivered, or {@code null}
-     *         when the caller should fall through and start a fresh run (no pending
-     *         entry, or the launch died without writing junit.xml)
-     */
-    String tryDeliverPendingResult(String runKey, Path reportDir, String projectName, // NOSONAR package-private so the released-ownership ratchet can drive the fall-through headlessly
-            String applicationId, CallState state)
-    {
-        synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
-        {
-            state.consumeResultFor(runKey);
-            if (state.consumed(runKey))
-            {
-                File pending = findJunitXml(reportDir);
-                if (pending != null)
-                {
-                    Activator.logInfo("Delivering completed YAXUnit result for pending runKey=" + runKey); //$NON-NLS-1$
-                    return readResults(pending);
-                }
-                // Pending was reported but no report materialised (the launch died without writing
-                // junit.xml) — fall through and start a fresh run.
-                //
-                // Ownership is RELEASED here: the marker this call took off the board referred to
-                // nothing, so the call is not holding an undelivered result any more. Keeping it
-                // would make a later publishResult re-arm the key on the strength of a report that
-                // never existed — and by then the key can belong to a different run whose result
-                // somebody else has already delivered, which would serve it twice and suppress a
-                // genuine re-run.
-                state.releaseConsumed();
-            }
-        }
-        return null;
+        return pollResult != null ? pollResult : buildPendingMessage(reportDir);
     }
 
     /**
@@ -1508,7 +1405,8 @@ public class RunYaxunitTestsTool implements IMcpTool
      */
     private String launchDebugMode(ILaunchConfiguration matchingConfig, IProject project, // NOSONAR the request IS the parameter object; the rest are the RESOLVED context, which the request deliberately does not carry
             String projectName, String applicationId, IApplicationManager appManager,
-            ILaunchManager launchManager, RunRequest req, long deadlineMs, CallState state)
+            ILaunchManager launchManager, RunRequest req, long deadlineMs, CallState state,
+            JobExecution execution)
         throws IOException, CoreException
     {
         // Native path separators: YAXUnit builds file:// URIs and breaks on forward slashes on Windows.
@@ -1530,6 +1428,14 @@ public class RunYaxunitTestsTool implements IMcpTool
         PreLaunchResult preLaunch = null;
         if (req.updateBeforeLaunch)
         {
+            // The shared preparation job can terminate a client and update the infobase after
+            // this worker stops waiting, so cancellation must lose before it is scheduled.
+            if (!execution.tryCommit())
+            {
+                return ToolResult.error("The YAXUnit debug job was cancelled before pre-launch " //$NON-NLS-1$
+                    + "preparation started. Start it again if the debug launch is still needed.") //$NON-NLS-1$
+                    .toJson();
+            }
             final PreLaunchResult[] resultHolder = new PreLaunchResult[1];
             PrepRequest prepReq = new PrepRequest(projectName, launchManager, project,
                 applicationId, appManager, req.updateScope, req.externalChanges,
@@ -1614,6 +1520,12 @@ public class RunYaxunitTestsTool implements IMcpTool
             ILaunch[] spawned = new ILaunch[1];
             try
             {
+                if (!execution.tryCommit())
+                {
+                    return ToolResult.error("The YAXUnit debug job was cancelled before the " //$NON-NLS-1$
+                        + "launch was handed to EDT. Start it again if it is still needed.") //$NON-NLS-1$
+                        .toJson();
+                }
                 spawned[0] = workingCopy.launch(ILaunchManager.DEBUG_MODE, new NullProgressMonitor());
             }
             catch (CoreException ex)
@@ -2231,10 +2143,6 @@ public class RunYaxunitTestsTool implements IMcpTool
             return;
         }
         ACTIVE_LAUNCHES.entrySet().removeIf(e -> e.getValue() == launch);
-        // PENDING_FETCH is intentionally NOT cleared here: it is keyed by runKey (String) and there is
-        // no reverse map from this ILaunch back to its key. A key left behind after an abandoned Pending
-        // is bounded by the number of distinct (config, filter) combinations, and is consumed at most
-        // once on the next identical call (the documented "ambiguous identical args" tradeoff of #136).
         LaunchLifecycleUtils.unregisterOwnedLaunch(launch);
     }
 
@@ -2247,52 +2155,17 @@ public class RunYaxunitTestsTool implements IMcpTool
         });
     }
 
-    /**
-     * Builds a Pending message that instructs the caller to invoke the tool again with
-     * identical arguments to fetch the result.
-     */
+    /** Defensive internal marker; the owning registry job normally polls to completion. */
     private String buildPendingMessage(Path reportDir)
     {
         return "**Pending:** YAXUnit tests are still running (phase: `" + PHASE_RUN + "`).\n\n" //$NON-NLS-1$ //$NON-NLS-2$
                 + "Report directory: `" + reportDir + "`\n\n" //$NON-NLS-1$ //$NON-NLS-2$
-                + "Call `run_yaxunit_tests` again with the same arguments to wait further " //$NON-NLS-1$
-                + "and fetch the JUnit XML once the launch completes.\n"; //$NON-NLS-1$
+                + "The owning background job continues waiting for the report.\n"; //$NON-NLS-1$
     }
 
     /**
-     * The {@code Pending} returned when the call hit its wall-clock bound while a step was
-     * still inside the platform — the case the per-step deadlines cannot answer because the
-     * step never came back to look at one.
-     *
-     * <p>This is the message that replaces the bare transport timeout of #357, so it must
-     * carry the two things that error carried neither of: WHICH stage the call was in, and
-     * whether waiting is the right response. Both are stated plainly, and the work is
-     * explicitly described as still running — nothing here cancels it.
-     *
-     * @param phase the stage the call was in when the bound elapsed
-     * @param elapsedSeconds how long the call waited
-     * @return a Markdown pending response
-     */
-    static String buildStalledPendingMessage(String phase, long elapsedSeconds)
-    {
-        return "**Pending:** the launch pipeline did not answer within this call's window " //$NON-NLS-1$
-            + "(phase: `" + phase + "`, waited: " + elapsedSeconds + "s).\n\n" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + "The work is still running on the server — nothing was cancelled. This call " //$NON-NLS-1$
-            + "returns early ON PURPOSE: an MCP transport cuts a call at around 60 seconds, " //$NON-NLS-1$
-            + "so waiting longer would replace this message with a bare transport error.\n\n" //$NON-NLS-1$
-            + "Call `run_yaxunit_tests` again with the **same arguments** to keep waiting. If the " //$NON-NLS-1$
-            + "phase stops changing across several calls, this tool cannot tell a legitimately " //$NON-NLS-1$
-            + "long stage from one blocked on a modal dialog — check EDT for a dialog waiting " //$NON-NLS-1$
-            + "for a click, and see get_tool_guide('run_yaxunit_tests') for the pre-flight order " //$NON-NLS-1$
-            + "that keeps the infobase update out of the launch.\n"; //$NON-NLS-1$
-    }
-
-    /**
-     * Builds a Pending response for the pre-launch preparation phase (background
-     * recompute / DB update). The caller is instructed to retry with the SAME
-     * arguments — the in-flight job continues server-side and a follow-up call
-     * will either find the prep completed (and proceed to launch) or return
-     * another pending response until the budget is met.
+     * Builds the bounded internal wait marker for pre-launch preparation. The registry job
+     * consumes this marker and keeps waiting; it is not the public addressing contract.
      *
      * @param elapsedSeconds elapsed time since the background job started
      * @param phase the current preparation phase label (e.g. {@code "recompute"} /
@@ -2302,14 +2175,11 @@ public class RunYaxunitTestsTool implements IMcpTool
      */
     static String buildPrepPendingMessage(long elapsedSeconds, String phase)
     {
-        int retryAfter = 5;
         return "**Pending:** Pre-launch preparation is still running " //$NON-NLS-1$
             + "(phase: `" + (phase != null ? phase : prepPhaseLabel(null)) + "`" //$NON-NLS-1$ //$NON-NLS-2$
             + ", elapsed: " + elapsedSeconds + "s).\n\n" //$NON-NLS-1$ //$NON-NLS-2$
             + "The server is rebuilding changed projects and updating the infobase in the " //$NON-NLS-1$
-            + "background so the run starts against a fresh, up-to-date infobase. " //$NON-NLS-1$
-            + "Call `run_yaxunit_tests` again with the **same arguments** in ~" //$NON-NLS-1$
-            + retryAfter + "s to check for completion.\n"; //$NON-NLS-1$
+            + "background so the run starts against a fresh, up-to-date infobase.\n"; //$NON-NLS-1$
     }
 
     /**
@@ -2372,9 +2242,9 @@ public class RunYaxunitTestsTool implements IMcpTool
      * <p>The launch config name is the key root — stable across the
      * {@code (project, applicationId)} and {@code launchConfigurationName} call styles. Everything
      * that changes WHICH tests run, WHERE they run, or WHAT code they run against is folded into
-     * the hash, because the key governs active-launch reuse ({@link #ACTIVE_LAUNCHES}), once-only
-     * pending delivery ({@link #PENDING_FETCH}) and the report directory
-     * ({@link #stableReportDir}), and all three reuse checks happen BEFORE preparation. A term
+     * the hash, because the key governs live-job reuse ({@link #RUN_JOBS}), active-launch reuse
+     * ({@link #ACTIVE_LAUNCHES}) and the report directory ({@link #stableReportDir}), and those
+     * reuse checks happen BEFORE preparation. A term
      * that is NOT in the key lets a run started under one request be polled by — and have its
      * report delivered to — a call that asked for a different one, and the answer is
      * indistinguishable from an honest fresh run.
@@ -2442,6 +2312,20 @@ public class RunYaxunitTestsTool implements IMcpTool
         return configName + ":" //$NON-NLS-1$
             + sha1(framed(projectName, applicationId, filterKeyPart(req.extensions),
                 filterKeyPart(req.modules), filterKeyPart(req.tests), filterKeyPart(req.tags),
+                req.externalChanges.wireValue(), preLaunchKeyPart(req)));
+    }
+
+    /**
+     * Pre-resolution identity used only to close the admission window before a final run key can
+     * be derived. It is never exposed to callers and never addresses a completed run. Timeout is
+     * deliberately excluded because it controls only how long this call waits for the same job.
+     */
+    static String buildSubmissionKey(RunRequest req)
+    {
+        return (req.debug ? "debug:" : "run:") //$NON-NLS-1$ //$NON-NLS-2$
+            + sha1(framed(req.configName, req.projectName, req.applicationId,
+                filterKeyPart(req.extensions), filterKeyPart(req.modules),
+                filterKeyPart(req.tests), filterKeyPart(req.tags),
                 req.externalChanges.wireValue(), preLaunchKeyPart(req)));
     }
 

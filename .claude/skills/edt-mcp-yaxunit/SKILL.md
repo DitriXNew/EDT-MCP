@@ -92,7 +92,7 @@ Unconditional: `ЮТест.Упал("why")`, `ЮТест.Пропустить("r
 - **The extension must be deployed into the infobase** (`update_database`) before a run; after changing a test module on disk → `clean_project(projectName="TestConfiguration.tests")` (refresh from disk) → `update_database` (deploy) → `run_yaxunit_tests`.
 - **The EDT extension project is named `<base>.<extName>`** (e.g. `TestConfiguration.tests`) — use this name in `clean_project`/`get_project_errors`/`get_module_structure`. But `filter.extensions` takes the *extension configuration* name (`tests`).
 - **Expected EDT warnings** (NOT errors, the run is unaffected): `Variable 'ЮТест'/'ЮТТесты' is not defined` — the engine isn't in the EDT workspace, it resolves at runtime from the loaded `.cfe`; `common-module-type` — a BSP-style opinion about a server module's context flags, inapplicable to test modules.
-- The MCP client call timeout may be shorter than the server-side polling — set a small `timeout` (≈30) and on `Pending` re-call with the same arguments (the tool re-attaches by run-key, doesn't spawn a second run).
+- The MCP client call timeout may be shorter than the run — set a small `timeout` (≈30). On `Pending`, keep the returned `jobId` and poll `get_job_status`; do not reconstruct the start arguments to address a known run. A repeated start is only a live duplicate guard, not the polling interface.
 
 ## Example in the repo
 
