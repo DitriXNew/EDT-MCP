@@ -21,7 +21,9 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 C = json.load(open(os.path.join(HERE, "contract.json"), encoding="utf-8"))
 Q = {q["id"]: q for q in json.load(open(os.path.join(HERE, "questions.json"), encoding="utf-8"))}
 ARMS = {"arm_a": "V1 (текущая)", "arm_b": "V2 (короткие описания)",
-        "arm_c": "V3 (короткие + голая схема)"}
+        "arm_c": "V3 (короткие + голая схема)",
+        "arm_d": "V4 (V3 + несущие клаузы в описании)"}
+ORDER = ["arm_a", "arm_b", "arm_c", "arm_d"]
 GUIDE_DIR = os.path.join(ROOT, "mcp/bundles/com.ditrix.edt.mcp.server/guides")
 GUIDE_CHARS = {f[:-3]: os.path.getsize(os.path.join(GUIDE_DIR, f))
                for f in os.listdir(GUIDE_DIR) if f.endswith(".md")}
@@ -175,14 +177,15 @@ for arm in ARMS:
     json.dump(details[arm], open(os.path.join(HERE, "detail_%s.json" % arm), "w",
                                  encoding="utf-8"), ensure_ascii=False, indent=1)
 
-W = 102
+W = 108
+HDR = "%-46s" + " %14s" * len(ORDER)
 print("=" * W)
-print("%-48s %12s %12s %12s" % ("метрика", "V1", "V2", "V3"))
+print(HDR % ("метрика", "V1", "V2", "V3", "V4"))
 print("=" * W)
 
 
 def row(label, fn):
-    print("%-48s %12s %12s %12s" % (label, *[fn(results[a]) for a in ("arm_a", "arm_b", "arm_c")]))
+    print(HDR % (label, *[fn(results[a]) for a in ORDER]))
 
 
 row("отвечено вопросов", lambda m: "%d/%d" % (m["n"], len(Q)))
@@ -219,7 +222,7 @@ row("вызовов get_tool_guide", lambda m: str(m["guide_calls"]))
 row("уникальных гайдов запрошено", lambda m: str(m["guide_uniq"]))
 print("-" * W)
 print("СТОИМОСТЬ КОНТЕКСТА (каталог один раз + каждый нужный гайд один раз)")
-for arm in ("arm_a", "arm_b", "arm_c"):
+for arm in ORDER:
     m, cat = results[arm], CATALOG_CHARS[arm]
     print("  %-28s каталог ~%2dK ток + гайды ~%2dK = ~%2dK ток"
           % (ARMS[arm], cat // 4000, m["guide_uniq_chars"] // 4000,
@@ -240,27 +243,27 @@ CRIT = [
 ]
 print()
 print("=" * W)
-print("%-42s %6s %10s %10s %10s" % ("критерий (0..10)", "вес", "V1", "V2", "V3"))
+CH = "%-40s %5s" + " %11s" * len(ORDER)
+print(CH % ("критерий (0..10)", "вес", "V1", "V2", "V3", "V4"))
 print("=" * W)
 tot = {a: 0.0 for a in ARMS}
 for label, w, fn in CRIT:
     vals = {a: max(0.0, min(10.0, fn(results[a]))) for a in ARMS}
     for a in ARMS:
         tot[a] += vals[a] * w
-    print("%-42s %6.1f %10.1f %10.1f %10.1f"
-          % (label, w, vals["arm_a"], vals["arm_b"], vals["arm_c"]))
+    print(("%-40s %5.1f" + " %11.1f" * len(ORDER))
+          % (label, w, *[vals[a] for a in ORDER]))
 eff = {a: CATALOG_CHARS[a] + results[a]["guide_uniq_chars"] for a in ARMS}
 best, wc = min(eff.values()), 1.0
 cost = {a: 10.0 * best / eff[a] for a in ARMS}
 for a in ARMS:
     tot[a] += cost[a] * wc
-print("%-42s %6.1f %10.1f %10.1f %10.1f"
-      % ("Экономия контекста (все 85 тулов)", wc, cost["arm_a"], cost["arm_b"], cost["arm_c"]))
+print(("%-40s %5.1f" + " %11.1f" * len(ORDER))
+      % ("Экономия контекста (все 85 тулов)", wc, *[cost[a] for a in ORDER]))
 print("-" * W)
 wsum = sum(x[1] for x in CRIT) + wc
-print("%-42s %6.1f %10.2f %10.2f %10.2f"
-      % ("ИТОГО (взвешенное среднее)", wsum, tot["arm_a"] / wsum, tot["arm_b"] / wsum,
-         tot["arm_c"] / wsum))
+print(("%-40s %5.1f" + " %11.2f" * len(ORDER))
+      % ("ИТОГО (взвешенное среднее)", wsum, *[tot[a] / wsum for a in ORDER]))
 json.dump({a: dict(results[a]) for a in ARMS},
           open(os.path.join(HERE, "results.json"), "w", encoding="utf-8"),
           ensure_ascii=False, indent=1)

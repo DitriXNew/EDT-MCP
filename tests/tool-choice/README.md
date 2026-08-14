@@ -18,8 +18,11 @@ Three arms, all rendered from the SAME source of truth
 | **V1** | as shipped today (post-#395) | full |
 | **V2** | one line + `get_tool_guide` pointer (the issue's proposal, wording from the comment table) | full |
 | **V3** | one line + `get_tool_guide` pointer | stripped to name / type / required / enum / default |
+| **V4** | V3, plus one clause kept in the description for the ~12 tools where the text is load-bearing (two-phase protocol, cascade, deprecation) | V3, plus ~10 short phrases restored where the prose carries a fact nothing else does |
 
-V1→V2 isolates the description cut. V2→V3 isolates the parameter-prose cut.
+V1→V2 isolates the description cut. V2→V3 isolates the parameter-prose cut. V4 is the
+proposal that came out of the first three: cut everything V3 cuts, then put back only
+what was measured to be load-bearing.
 
 500 Russian requests (`questions.json`), in two kinds:
 
@@ -75,6 +78,27 @@ Runner prompt contract — per request, one object:
 `calls` is the ordered list of calls the runner would really make, including guide reads.
 An empty list means "no suitable tool exists".
 
+## The result: V4
+
+| | V1 | V2 | V3 | **V4** |
+|---|---:|---:|---:|---:|
+| Верный тул (одношаговые) | 100% | 98.9% | 99.2% | **100%** |
+| Покрытие плана (сценарии) | 97.8% | 97.3% | 97.3% | 97.3% |
+| Вызовов без обязательного параметра | 22/882 | 16/853 | 30/845 | **7/905** |
+| Устаревший алиас выбран | 0/6 | 6/6 | 4/6 | **0/6** |
+| **preview→confirm (61 разрушающий)** | 54% | 30% | 23% | **98%** |
+| `tools/list` на старте | 37.6K | 30.3K | 15.4K | **15.9K** |
+| Взвешенный балл | 9.06 | 8.22 | 8.07 | **9.50** |
+
+V4 beats the payload we ship today on every axis except wide-session cost, and beats it
+by a lot on the one that matters most: the two-phase protocol goes from 54% to 98%. The
+whole gain comes from one imperative sentence per destructive tool - *"call once WITHOUT
+confirm to preview, then again with confirm=true to apply"* - instead of the paragraph of
+prose that carries the same rule today. `tools/list` still drops 58%.
+
+Break-even against V1's total context is 28 distinct tools per session; at 3-4 tools
+(the common profile) V4 costs half of V1.
+
 ## What it found (Sonnet 5, 2026-08, 500 questions)
 
 **Picking the tool is not the problem.** One-step accuracy 100% / 98.9% / 99.2%; plan
@@ -96,6 +120,12 @@ What the cut actually costs:
   `get_markers`, because `markerKind` is documented as `'task' (TODO/FIXME/XXX/HACK)`.
   Strip parameter prose and that sentence is gone — V3 is the only arm that answers it
   with `search_in_code`.
+- **Fetching the guide does not fix any of this.** Cross-tabulated over the 61 destructive
+  requests: V3 fetched the guide for the destructive tool in 46 of 61 cases and still
+  previewed only 22% of the time, against 27% when it had *not* fetched it. The guide
+  already documents the protocol in full - it is read and ignored. Text that is always in
+  context changes behaviour; text the model went and fetched does not. That is why V4 puts
+  the clause back in the description rather than "moving it to the guide".
 - **The saving evaporates as a session widens.** Short descriptions make the model fetch
   guides: V1 fetched guides for 14% of tools, V2 for 58%, V3 for 87%. Break-even against
   V1's total context is **13 distinct tools for V2 and 30 for V3**; past that both cost

@@ -43,12 +43,13 @@ def type_of(spec):
     return "object"
 
 
-def render_params(tool, keep_prose):
+def render_params(tool, keep_prose, facts=None):
     schema = tool["inputSchema"]
     props = schema.get("properties", {})
     req = set(schema.get("required", []))
     if not props:
         return ["  (no parameters)"]
+    facts = (facts or {}).get(tool["name"], {})
     out = []
     for pname in sorted(props):
         spec = props[pname]
@@ -61,6 +62,8 @@ def render_params(tool, keep_prose):
         line = "  - `%s` (%s)" % (pname, ", ".join(bits))
         if keep_prose and spec.get("description"):
             line += " - " + spec["description"].replace("\n", " ")
+        elif pname in facts:
+            line += " - " + facts[pname]
         out.append(line)
     return out
 
@@ -91,16 +94,23 @@ GUIDE_NOTE = (
 )
 
 
-def build(arm, use_short, keep_prose, pointer):
+V4 = json.load(open(os.path.join(HERE, "v4_overrides.json"), encoding="utf-8"))
+
+
+def build(arm, use_short, keep_prose, pointer, v4=False):
     parts = [HEADER % (arm, GUIDE_NOTE)]
+    facts = V4["params"] if v4 else None
     for t in tools:
         name = t["name"]
-        desc = short[name] if use_short else t["description"]
+        if v4 and name in V4["descriptions"]:
+            desc = V4["descriptions"][name]
+        else:
+            desc = short[name] if use_short else t["description"]
         if pointer and use_short:
             desc = desc.rstrip() + " Parameters and examples: get_tool_guide('%s')." % name
         ann = annotations(t)
         parts.append("## %s %s\n%s\n\nParameters:\n%s\n" % (
-            name, ann, desc.strip(), "\n".join(render_params(t, keep_prose))))
+            name, ann, desc.strip(), "\n".join(render_params(t, keep_prose, facts))))
     return "\n".join(parts)
 
 
@@ -109,6 +119,8 @@ arms = {
     "V2": build("V2 (short descriptions)", use_short=True, keep_prose=True, pointer=True),
     "V3": build("V3 (short descriptions + bare parameter schema)", use_short=True,
                 keep_prose=False, pointer=True),
+    "V4": build("V4 (V3 + load-bearing clauses kept in the description)", use_short=True,
+                keep_prose=False, pointer=True, v4=True),
 }
 
 for arm, text in arms.items():
@@ -136,13 +148,13 @@ json.dump(contract, open(os.path.join(HERE, "contract.json"), "w", encoding="utf
 import shutil
 questions = json.load(open(os.path.join(HERE, "questions.json"), encoding="utf-8"))
 plugin_guides = os.path.join(ROOT, "mcp/bundles/com.ditrix.edt.mcp.server/guides")
-for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c")):
+for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c"), ("V4", "arm_d")):
     d = os.path.join(HERE, "arms", blind)
     os.makedirs(d, exist_ok=True)
     open(os.path.join(d, "catalog.md"), "w", encoding="utf-8").write(arms[arm])
     if os.path.isdir(plugin_guides) and not os.path.isdir(os.path.join(d, "guides")):
         shutil.copytree(plugin_guides, os.path.join(d, "guides"))
-json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3"},
+json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"},
           open(os.path.join(HERE, "arms", "MAPPING.json"), "w", encoding="utf-8"), indent=1)
 
 # Batches: the one-step requests go 30 to an agent, the long multi-step scenarios 15,
@@ -172,7 +184,7 @@ print("tools: %d" % len(tools))
 print("%-4s %9s %9s  %s" % ("arm", "chars", "~tokens", "vs V1"))
 print("%-4s %9d %9d  %s" % ("wire", wire, wire // 4, "(real tools/list JSON today)"))
 base = None
-for arm in ("V1", "V2", "V3"):
+for arm in ("V1", "V2", "V3", "V4"):
     n = len(arms[arm])
     if base is None:
         base = n
