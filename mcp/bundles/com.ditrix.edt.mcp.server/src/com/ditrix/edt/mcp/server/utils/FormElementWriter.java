@@ -5220,6 +5220,54 @@ public final class FormElementWriter
     }
 
     // ---- the form-wide id allocation ------------------------------------------------------------
+    //
+    // Two questions live here, and they have DIFFERENT answers. Conflating them is the mistake this
+    // block exists to prevent, so both answers are written down.
+    //
+    // 1. "Which ids are TAKEN?" -> the WHOLE LIVE FORM MODEL, computed branches included.
+    //    The platform's own allocator, FormIdentifierService.getMaxId (bundle
+    //    com._1c.g5.v8.dt.form), scans EcoreUtil.getAllContents(form, true) - the same unconditional
+    //    walk as eAllContents(), which descends into transient containments - and filters with
+    //    exactly FormItem / AbstractFormAttribute / FormCommand, reading exactly getId(). So the
+    //    max* scans below stay WIDE on purpose. This is not indifference to the computed branches:
+    //    AutoCommandBar, SelectedItemsActionsPanel and RowActionsPanel are FormItem subtypes, so the
+    //    objects behind the layouter-only containments carry real ids. Those containments are
+    //    CommandBarHolder.topCommandBar / bottomCommandBar / fABCommandBar,
+    //    SelectedItemsActionsPanelHolder.selectedItemsActionsPanel and
+    //    RowActionsPanelHolder.rowActionsPanel - all five declared "contains transient" (the last
+    //    two are additionally commented "// layouter only"; being transient is the part that matters
+    //    here). (CommandBarHolder.autoCommandBar, by contrast, is PERSISTED and reached by both
+    //    passes. Every command-bar holder declares one - a Table's is numbered like any other item;
+    //    only the instance owned by the form ROOT carries the -1 sentinel.) Narrowing the ITEM
+    //    ceiling would hand out an id the platform considers reserved.
+    //    For attributes and commands the ceiling is wide for PARITY, not for a measurable effect:
+    //    nothing transient reaches an AbstractFormAttribute or a FormCommand in the shipped
+    //    metamodel, so narrowing those two would be observationally identical today. They stay wide
+    //    so all three id spaces answer "which ids are taken" the same way the platform does.
+    //
+    // 2. "Which objects may be RENUMBERED?" -> the PERSISTED AUTHORED GRAPH ONLY.
+    //    The platform draws this line in a different place, and does so consistently. Its
+    //    form-invalid-item-id diagnostic (InvalidItemIdCheck, bundle com.e1c.dt.check.form) and its
+    //    merge-time repair (FormComparisonParticipant.checkUniqueItemIds) both collect their targets
+    //    with FormItemIterator, which follows autoCommandBar, contextMenu, extendedTooltip, items,
+    //    autoTable and the Additions - every one of them persisted - and never the transient bars or
+    //    panels. Its command and attribute repairs are narrower still, addressing
+    //    FormPackage.Literals.FORM__FORM_COMMANDS and FORM__ATTRIBUTES outright. Only then does it
+    //    allocate a replacement through the WIDE getNext*Id. Wide read, narrow write.
+    //
+    // Hence the shape below: the max* scans use eAllContents(), the three normalizeForm*Ids collect
+    // their targets through PersistedContents.descendants. Writing into a computed branch would be
+    // wrong twice over - it mutates an object that is never serialized, and, when a layouter item
+    // and an authored item collide on an id, it lets visit order decide which of the two is
+    // renumbered, so an ephemeral object can durably renumber authored content in Form.form.
+    //
+    // Only the FormItem pair makes this observable: no transient containment reaches an
+    // AbstractFormAttribute or a FormCommand (FormStandardCommand, the inferred one, extends Command
+    // and NOT FormCommand, and declares no id at all), so for those two the narrow collection is
+    // parity with the platform rather than a change in numbering.
+    //
+    // Verified against the shipped model/Form.xcore of EDT 2026.1.2+2 and 2026.2.0+289, which are
+    // identical on every declaration named above.
 
     /**
      * The next free form-attribute id = max existing {@code AbstractFormAttribute} id across the whole
@@ -5282,6 +5330,17 @@ public final class FormElementWriter
         return max;
     }
 
+    /**
+     * WIDE on purpose - question 1 of the block comment above: {@code eAllContents()} mirrors the
+     * platform's own {@code FormIdentifierService.getMaxId}, which scans
+     * {@code EcoreUtil.getAllContents(form, true)}.
+     *
+     * <p>For the command space this is PARITY rather than a measurable difference: the inferred
+     * {@code FormStandardCommand} is not a {@code FormCommand} and carries no {@code id}, and no
+     * other transient containment reaches one, so a narrowed scan would return the same number on
+     * any form the shipped metamodel can produce. It stays wide so that all three id spaces answer
+     * "which ids are taken" exactly as the platform does.</p>
+     */
     private static int maxCommandId(EObject formModel, EClass commandClass)
     {
         int max = 0;
@@ -5296,6 +5355,7 @@ public final class FormElementWriter
         return max;
     }
 
+    /** WIDE on purpose - see {@link #maxCommandId} and the block comment above. */
     private static int maxAttributeId(EObject formModel, EClass attributeClass)
     {
         int max = 0;
@@ -5322,7 +5382,13 @@ public final class FormElementWriter
         return reference != null && !reference.eIsProxy() ? reference : null;
     }
 
-    /** The next free form-item id = max existing {@code FormItem} id across the whole form + 1. */
+    /**
+     * The next free form-item id = max existing {@code FormItem} id across the whole form + 1.
+     * WIDE on purpose - see {@link #maxCommandId} and the block comment above. This is the one id
+     * space where the computed branches actually carry ids: the layouter's {@code AutoCommandBar},
+     * {@code SelectedItemsActionsPanel} and {@code RowActionsPanel} are {@code FormItem}s reachable
+     * only through transient containments, and the platform counts them as taken.
+     */
     private static int nextItemId(EObject formModel)
     {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
@@ -5349,6 +5415,13 @@ public final class FormElementWriter
      * the model. The designer allocates these ids through {@code getNextAttributeId}; attributes and
      * attribute columns share this attribute id space, but it is intentionally independent from
      * {@code FormItem.id}.
+     *
+     * <p>The ceiling is read WIDE and the repair targets are collected NARROW - see the block
+     * comment above. The platform repairs attribute ids by addressing
+     * {@code FormPackage.Literals.FORM__ATTRIBUTES} and the explicit column features outright, so
+     * only persisted attributes are eligible to be renumbered. No transient containment reaches an
+     * {@code AbstractFormAttribute} in the shipped metamodel, so this is parity with the platform
+     * rather than a change in the numbers produced.</p>
      * Package-visible for the headless unit test.
      */
     static void normalizeFormAttributeIds(EObject formModel)
@@ -5366,9 +5439,8 @@ public final class FormElementWriter
         {
             max = Math.max(max, maxAttributeIdForAllocation(extensionForm, attributeClass));
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        for (EObject obj : PersistedContents.descendants(formModel))
         {
-            EObject obj = it.next();
             if (!attributeClass.isInstance(obj))
             {
                 continue;
@@ -5398,6 +5470,14 @@ public final class FormElementWriter
      * Repairs the form-wide {@code FormCommand.id} invariant before validation/export sees the model.
      * The designer allocates these ids through {@code getNextCommandId}; commands have their own id
      * space, independent from form items and form attributes.
+     *
+     * <p>The ceiling is read WIDE and the repair targets are collected NARROW - see the block
+     * comment above. The platform repairs command ids by addressing
+     * {@code FormPackage.Literals.FORM__FORM_COMMANDS} outright. The inferred
+     * {@code FormStandardCommand} behind the transient {@code FormStandardCommandSource.commands}
+     * is NOT a {@code FormCommand} - it extends {@code Command} directly and declares no {@code id}
+     * - so it never entered this loop even before the narrowing; this is parity with the platform
+     * rather than a change in the numbers produced.</p>
      * Package-visible for the headless unit test.
      */
     static void normalizeFormCommandIds(EObject formModel)
@@ -5415,9 +5495,8 @@ public final class FormElementWriter
         {
             max = Math.max(max, maxCommandIdForAllocation(extensionForm, commandClass));
         }
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        for (EObject obj : PersistedContents.descendants(formModel))
         {
-            EObject obj = it.next();
             if (!commandClass.isInstance(obj))
             {
                 continue;
@@ -5446,8 +5525,24 @@ public final class FormElementWriter
     /**
      * Repairs the form-wide {@code FormItem.id} invariant before validation/export sees the model.
      * The form root's predefined {@code autoCommandBar} has the platform sentinel {@code -1}; every
-     * other form item, including designer auto-children such as {@code contextMenu} and
-     * {@code extendedTooltip}, gets a positive id unique in the same form-wide space.
+     * other PERSISTED form item, including designer auto-children such as {@code contextMenu} and
+     * {@code extendedTooltip}, gets a positive id unique in the same form-wide space. Items that
+     * exist only behind a computed containment are left exactly as the layouter made them - they are
+     * counted when the ceiling is computed, but never rewritten.
+     *
+     * <p>This is the pair where the wide/narrow split is observable, so the two jobs run as two
+     * separate passes - see the block comment above. The ceiling comes from a WIDE pass, because the
+     * layouter's {@code AutoCommandBar}, {@code SelectedItemsActionsPanel} and
+     * {@code RowActionsPanel} are {@code FormItem}s that hold real ids behind transient
+     * containments and the platform counts them as taken. The repair targets come from a NARROW
+     * pass, because the platform's own validation and repair paths (its {@code form-invalid-item-id}
+     * diagnostic and its merge-time {@code checkUniqueItemIds}) judge and rewrite only what
+     * {@code FormItemIterator} yields, and that follows persisted children only. Renumbering a computed item would write into an object that
+     * is never serialized, and - worse - on an id collision between a layouter item and an authored
+     * one it would let visit order decide which of the two keeps its id.
+     *
+     * <p>The form root's own {@code autoCommandBar} is a PERSISTED containment, so it stays visible
+     * to the narrow pass and keeps its {@code -1} sentinel.</p>
      * Package-visible for the headless unit test.
      */
     static void normalizeFormItemIds(EObject formModel)
@@ -5461,19 +5556,13 @@ public final class FormElementWriter
 
         EClass formItemClass = (EClass)formItem;
         EObject rootAutoCommandBar = singleReference(formModel, FEATURE_AUTO_COMMAND_BAR);
+        int max = maxItemId(formModel, formItemClass, rootAutoCommandBar);
         List<EObject> items = new ArrayList<>();
-        int max = 0;
-        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        for (EObject obj : PersistedContents.descendants(formModel))
         {
-            EObject obj = it.next();
-            if (!formItemClass.isInstance(obj))
+            if (formItemClass.isInstance(obj))
             {
-                continue;
-            }
-            items.add(obj);
-            if (obj != rootAutoCommandBar)
-            {
-                max = Math.max(max, intFeature(obj, FEATURE_ID));
+                items.add(obj);
             }
         }
 
@@ -5488,6 +5577,36 @@ public final class FormElementWriter
         {
             max = assignItemId(item, rootAutoCommandBar, seen, max);
         }
+    }
+
+    /**
+     * The highest {@code FormItem.id} anywhere in the LIVE form - the ceiling
+     * {@link #normalizeFormItemIds} numbers up from. WIDE on purpose: this answers "which ids are
+     * taken", which the platform decides over the whole live model
+     * ({@code FormIdentifierService.getMaxId} scans {@code EcoreUtil.getAllContents(form, true)}),
+     * so the layouter items behind transient containments must be counted here even though they are
+     * never eligible for renumbering.
+     *
+     * <p>{@code rootAutoCommandBar} is excluded because it carries the platform sentinel
+     * {@code -1} rather than an allocated id.</p>
+     *
+     * @param formModel the form root to scan
+     * @param formItemClass the resolved {@code FormItem} EClass
+     * @param rootAutoCommandBar the form root's own command bar, or {@code null}
+     * @return the highest id found, or {@code 0} when the form holds no numbered item
+     */
+    private static int maxItemId(EObject formModel, EClass formItemClass, EObject rootAutoCommandBar)
+    {
+        int max = 0;
+        for (TreeIterator<EObject> it = formModel.eAllContents(); it.hasNext();)
+        {
+            EObject obj = it.next();
+            if (formItemClass.isInstance(obj) && obj != rootAutoCommandBar)
+            {
+                max = Math.max(max, intFeature(obj, FEATURE_ID));
+            }
+        }
+        return max;
     }
 
     /**
