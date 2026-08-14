@@ -367,27 +367,28 @@ public class MetadataRenameNumberingParityTest
             frontmatterValue(repeated, "contentHash")); //$NON-NLS-1$
     }
 
-    /**
-     * A change point with no stable identity costs the caller the index LOCK, never the preview.
-     * The preview mutates nothing and is the only way to see what a rename would touch, so refusing
-     * it would withdraw the safe half of the tool because the optional half cannot be guaranteed -
-     * and would leave "run it with confirm=true instead" as the caller's only route.
-     */
+    /** An opaque leaf narrows skippability to itself without withholding the tree's index lock. */
     @Test
-    public void testPreviewStillRendersWithoutATokenWhenALeafHasNoStableIdentity() throws Exception
+    public void testPreviewIssuesTokenAndMarksOnlyOpaqueRowUnskippable() throws Exception
     {
         MetadataRenameService service = new MetadataRenameService();
         // A bare NullChange exposes neither a modified element nor affected objects.
-        List<IRefactoring> unidentifiable = refactorings(true, new NullChange("opaque")); //$NON-NLS-1$
+        List<IRefactoring> mixed = refactorings(true,
+            stableChange("stable", "/Project/stable"), new NullChange("opaque")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
-        String preview = renderPreview(service, unidentifiable, "Old", 0, List.of()); //$NON-NLS-1$
+        String preview = renderPreview(service, mixed, "Old", 0, List.of()); //$NON-NLS-1$
+        String contentHash = frontmatterValue(preview, "contentHash"); //$NON-NLS-1$
 
-        assertTrue("the preview itself must still be produced", //$NON-NLS-1$
-            preview.contains("# Refactoring Preview")); //$NON-NLS-1$
-        assertFalse("no token may be issued for a list that cannot be verified", //$NON-NLS-1$
-            preview.contains("contentHash:")); //$NON-NLS-1$
-        assertTrue("the preview must say why disableIndices is unavailable here", //$NON-NLS-1$
-            preview.contains("`disableIndices` is unavailable for this rename")); //$NON-NLS-1$
+        assertNotNull("a mixed stable/opaque tree must still issue a token", contentHash); //$NON-NLS-1$
+        assertEquals(service.changePointContentHash(mixed), contentHash);
+        assertTrue("the optional stable row remains skippable", //$NON-NLS-1$
+            changePointRow(preview, 0).contains("| yes |")); //$NON-NLS-1$
+        assertTrue("the optional opaque row must honestly be marked non-skippable", //$NON-NLS-1$
+            changePointRow(preview, 1).contains("| no |")); //$NON-NLS-1$
+        assertTrue("the footer must keep the disableIndices usage available", //$NON-NLS-1$
+            preview.contains("Use `disableIndices='1,2,3'`")); //$NON-NLS-1$
+        assertTrue("the footer must explain why the opaque row says Skippable: no", //$NON-NLS-1$
+            preview.contains("cannot be proven to be the same one at confirm time")); //$NON-NLS-1$
     }
 
     @Test
@@ -446,6 +447,29 @@ public class MetadataRenameNumberingParityTest
 
         assertNull(service.expectedHashError(refactorings, DisableRequest.parse("0"), //$NON-NLS-1$
             "  \"" + contentHash.toUpperCase(java.util.Locale.ROOT) + "\"  ")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testConfirmAcceptsStableIndexAndRefusesExactlyTheRequestedOpaqueIndex()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        List<IRefactoring> mixed = refactorings(true,
+            stableChange("stable", "/Project/stable"), new NullChange("opaque")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String contentHash = service.changePointContentHash(mixed);
+
+        assertNull("a matching token keeps stable indices usable even beside an opaque leaf", //$NON-NLS-1$
+            service.expectedHashError(mixed, DisableRequest.parse("0"), contentHash)); //$NON-NLS-1$
+
+        String error = service.expectedHashError(mixed, DisableRequest.parse("0,1"), contentHash); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue("the refusal must name exactly the opaque index", error.contains("indices [1]")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the stable index is not part of the refusal", error.contains("[0, 1]")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error.contains("`Skippable: no`")); //$NON-NLS-1$
+        assertTrue(error.contains("cannot be proven to be the same ones at confirm time")); //$NON-NLS-1$
+        assertTrue(error.contains("Nothing was renamed")); //$NON-NLS-1$
+        assertTrue(error.contains("Retry without indices [1]")); //$NON-NLS-1$
+        assertTrue(error.contains("the rest of disableIndices will be skipped as asked")); //$NON-NLS-1$
     }
 
     @Test
@@ -664,7 +688,7 @@ public class MetadataRenameNumberingParityTest
         throws Exception
     {
         Object identity = onlyConstructor(nested("ChangePointIdentity")) //$NON-NLS-1$
-            .newInstance("supplemental", "supplemental"); //$NON-NLS-1$ //$NON-NLS-2$
+            .newInstance("supplemental"); //$NON-NLS-1$
         return onlyConstructor(nested("ChangePoint")) //$NON-NLS-1$
             .newInstance(Integer.valueOf(index), BSL_REF, description, Boolean.TRUE, Boolean.TRUE,
                 Boolean.TRUE, location, identity);
@@ -690,6 +714,21 @@ public class MetadataRenameNumberingParityTest
             }
         }
         fail("frontmatter has no " + key + ":\n" + markdown); //$NON-NLS-1$ //$NON-NLS-2$
+        return null;
+    }
+
+    /** Returns the rendered markdown row for one change-point index. */
+    private static String changePointRow(String markdown, int index)
+    {
+        String prefix = "| " + index + " | "; //$NON-NLS-1$ //$NON-NLS-2$
+        for (String line : markdown.split("\\R")) //$NON-NLS-1$
+        {
+            if (line.startsWith(prefix))
+            {
+                return line;
+            }
+        }
+        fail("preview has no change-point row #" + index + ":\n" + markdown); //$NON-NLS-1$ //$NON-NLS-2$
         return null;
     }
 
