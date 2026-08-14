@@ -13,12 +13,21 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import static org.mockito.Mockito.mock;
+
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
@@ -27,6 +36,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Tests for {@link RunYaxunitTestsTool}.
@@ -472,7 +482,13 @@ public class RunYaxunitTestsToolTest
         // The entry's latch is never counted down, so the ONLY thing that can end this wait is
         // the deadline. The test therefore also carries its own ceiling: an unbounded wait fails
         // it by the elapsed assertion rather than hanging the suite.
-        String prepKey = "ratchet-357-" + System.nanoTime(); //$NON-NLS-1$
+        // The key is the PRODUCTION one, derived from the request itself (#411) — the entry has
+        // to be injected under exactly the key the method will compute, and the project name
+        // carries a nonce so a concurrent test can never land on the same one.
+        RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
+            "TestConfiguration-" + System.nanoTime(), null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, ExternalInfobaseChangesPolicy.DEFAULT, "ratchet"); //$NON-NLS-1$
+        String prepKey = req.prepKey();
         PrepInFlight entry = new PrepInFlight(System.currentTimeMillis());
         // Pretend the job is already running: the CAS is spent, so no Job is scheduled and this
         // call is a pure waiter — exactly the "second identical call" of the bug report.
@@ -481,14 +497,11 @@ public class RunYaxunitTestsToolTest
         LaunchLifecycleUtils.PREP_INFLIGHT.put(prepKey, entry);
         try
         {
-            RunYaxunitTestsTool.PrepRequest req = new RunYaxunitTestsTool.PrepRequest(
-                "TestConfiguration", null, null, "TestConfiguration.SomeApp", //$NON-NLS-1$ //$NON-NLS-2$
-                null, null, ExternalInfobaseChangesPolicy.DEFAULT, "ratchet"); //$NON-NLS-1$
             RunYaxunitTestsTool.CallState phase = new RunYaxunitTestsTool.CallState();
             long budgetMs = 2_000L;
 
             long startedAt = System.currentTimeMillis();
-            String pending = RunYaxunitTestsTool.awaitPreparedOrPending(prepKey, req,
+            String pending = RunYaxunitTestsTool.awaitPreparedOrPending(req,
                 new PreLaunchResult[1], System.currentTimeMillis() + budgetMs, phase);
             long elapsedMs = System.currentTimeMillis() - startedAt;
 
@@ -1012,9 +1025,9 @@ public class RunYaxunitTestsToolTest
     @Test
     public void testRunKeyDistinguishesTagSelections()
     {
-        String smoke = RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, "smoke"));
-        String slow = RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, "slow"));
-        String none = RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, null));
+        String smoke = key(req(null, null, null, "smoke"));
+        String slow = key(req(null, null, null, "slow"));
+        String none = key(req(null, null, null, null));
 
         assertFalse("two different tag filters must not share a run key", smoke.equals(slow));
         // The load-bearing one: if tags were dropped from the formula, a tag-filtered run would
@@ -1023,11 +1036,497 @@ public class RunYaxunitTestsToolTest
             smoke.equals(none));
         assertTrue("the launch config name stays the key root", smoke.startsWith("Cfg:"));
         assertEquals("the same tag filter must be the same run", smoke,
-            RunYaxunitTestsTool.buildRunKey("Cfg", req(null, null, null, "smoke")));
+            key(req(null, null, null, "smoke")));
 
-        // The families are hashed in a fixed order separated by '|': the same word must mean a
+        // The families occupy distinct, length-framed positions: the same word must mean a
         // different run depending on which family it was passed in.
         assertFalse("the same word in a different filter family must be a different run",
-            smoke.equals(RunYaxunitTestsTool.buildRunKey("Cfg", req(null, "smoke", null, null))));
+            smoke.equals(key(req(null, "smoke", null, null))));
+    }
+    // ---------------------------------------------------------------------
+    // Reuse keys (#411)
+    //
+    // Two keys decide whether one call is served by another call's work: the RUN key
+    // (ACTIVE_LAUNCHES, once-only PENDING_FETCH delivery and the report directory — all three
+    // consulted BEFORE preparation) and the PREPARATION key (the single in-flight
+    // recompute+update job). A term missing from either is not a slow path: it is a wrong answer
+    // that looks exactly like a right one.
+    //
+    // The two ratchets are two-WAY on purpose. A field that changes what runs but is absent from
+    // a key hands one caller another caller's report; a field that changes nothing but is present
+    // stops reuse from ever matching, so every call re-runs the whole suite. Both are silent.
+    // ---------------------------------------------------------------------
+
+    /** The RESOLVED launch target the keys below are built for. */
+    private static final String CFG = "Cfg";
+    private static final String PROJ = "Proj";
+    private static final String APP = "App";
+
+    /** A Job display name; the preparation key must not care which one. */
+    private static final String JOB = "YAXUnit pre-launch preparation for Proj";
+
+    /** Builds the request the run path builds, with every field spelled out. */
+    private static RunYaxunitTestsTool.RunRequest request(String extensions, String modules, // NOSONAR the point of this helper is that every field is visible at the call site
+            String tests, String tags, int timeout, boolean updateBeforeLaunch, String updateScope,
+            ExternalInfobaseChangesPolicy policy, boolean debug)
+    {
+        return new RunYaxunitTestsTool.RunRequest(CFG, PROJ, APP, extensions, modules, tests, tags,
+            timeout, updateBeforeLaunch, updateScope, policy, debug);
+    }
+
+    /** The default request every variant below differs from in exactly one field. */
+    private static RunYaxunitTestsTool.RunRequest baseline()
+    {
+        return request(null, null, null, null, 45, true, null,
+            ExternalInfobaseChangesPolicy.OVERRIDE, false);
+    }
+
+    /** The baseline with only {@code updateScope} changed. */
+    private static RunYaxunitTestsTool.RunRequest scoped(String updateScope)
+    {
+        return request(null, null, null, null, 45, true, updateScope,
+            ExternalInfobaseChangesPolicy.OVERRIDE, false);
+    }
+
+    /** The PRODUCTION run key for the resolved target these tests share. */
+    private static String key(RunYaxunitTestsTool.RunRequest req)
+    {
+        return RunYaxunitTestsTool.buildRunKey(CFG, PROJ, APP, req);
+    }
+
+    /** A preparation request with only the fields the key can possibly care about set. */
+    private static RunYaxunitTestsTool.PrepRequest prep(String projectName, String applicationId,
+            String updateScope, ExternalInfobaseChangesPolicy policy, String jobName)
+    {
+        return new RunYaxunitTestsTool.PrepRequest(projectName, null, null, applicationId, null,
+            updateScope, policy, jobName);
+    }
+
+    /**
+     * A call that asked for a FRESH run must never be served by a run that did not refresh.
+     */
+    @Test
+    public void testRunKeyDistinguishesTheFreshnessGuarantee()
+    {
+        String withChain = key(baseline());
+        String withoutChain = key(request(null, null, null, null, 45, false, null,
+            ExternalInfobaseChangesPolicy.OVERRIDE, false));
+
+        assertFalse("updateBeforeLaunch=true asks for a recompiled extension and an updated "
+            + "infobase. A run started with false may have executed a stale .cfe, and its report "
+            + "is indistinguishable from an honest fresh one, so the two must not share a run",
+            withChain.equals(withoutChain));
+    }
+
+    /**
+     * The rebuild scope decides WHICH projects are regenerated and loaded before the run, i.e.
+     * which code the tests execute.
+     */
+    @Test
+    public void testRunKeyDistinguishesTheRebuildScope()
+    {
+        String all = key(baseline());
+        String extA = key(scoped("extension:ExtA"));
+        String extB = key(scoped("extension:ExtB"));
+        String configurationOnly = key(scoped("configuration"));
+
+        assertFalse("a run that rebuilt only ExtA must not answer a call that asked for ExtB",
+            extA.equals(extB));
+        assertFalse("a narrowed rebuild must not answer a call that asked for the full one",
+            extA.equals(all));
+        assertFalse("'configuration' skips the extensions entirely — a different run",
+            configurationOnly.equals(all));
+    }
+
+    /**
+     * The scope is NORMALISED, not stringified. It has a grammar, and spellings that ask for the
+     * same preparation must stay one run: keying the raw string would make an identical retry
+     * start a second full test run.
+     */
+    @Test
+    public void testRunKeyTreatsEquivalentScopesAsOneRun()
+    {
+        String all = key(baseline());
+
+        assertEquals("an omitted scope IS 'all'", all, key(scoped("all")));
+        assertEquals("the keyword is case-insensitive and trimmed", all, key(scoped("  ALL  ")));
+        assertEquals("an empty scope is an omitted scope", all, key(scoped("")));
+        assertEquals("a bare name is the same intent as extension:<name>",
+            key(scoped("extension:ExtA")), key(scoped("ExtA")));
+        assertEquals("the scope names a SET of projects, so the order it was written in is not a "
+            + "different preparation", key(scoped("extension:ExtA,extension:ExtB")),
+            key(scoped(" extension:ExtB , ExtA ")));
+        assertEquals("a repeated name is still one project", key(scoped("extension:ExtA")),
+            key(scoped("ExtA,extension:ExtA")));
+    }
+
+    /**
+     * With the auto-chain off the scope applies to nothing, and the parameter's own contract says
+     * so ("Only applies when updateBeforeLaunch=true"). Keying it anyway would split requests the
+     * tool itself declares identical.
+     */
+    @Test
+    public void testRunKeyIgnoresTheRebuildScopeWhenTheChainIsOff()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        String extA = key(request(null, null, null, null, 45, false, "extension:ExtA", override,
+            false));
+        String extB = key(request(null, null, null, null, 45, false, "extension:ExtB", override,
+            false));
+        String noScope = key(request(null, null, null, null, 45, false, null, override, false));
+
+        assertEquals("with updateBeforeLaunch=false nothing is rebuilt, so the scope cannot make "
+            + "these two different runs", extA, extB);
+        assertEquals("an ignored scope must not split the key away from not passing one at all",
+            extA, noScope);
+    }
+
+    /**
+     * The launch configuration NAME does not pin the target. A caller may pass
+     * {@code applicationId} alongside {@code launchConfigurationName}, and it overrides the
+     * config's own binding, so two calls on one config can execute against two infobases.
+     */
+    @Test
+    public void testRunKeyDistinguishesTheResolvedTarget()
+    {
+        RunYaxunitTestsTool.RunRequest req = baseline();
+        String here = RunYaxunitTestsTool.buildRunKey(CFG, PROJ, APP, req);
+
+        assertFalse("a run against one application must not deliver its report to a call that "
+            + "asked for another", here.equals(RunYaxunitTestsTool.buildRunKey(CFG, PROJ,
+                "OtherApp", req)));
+        assertFalse("nor may a run in one project answer a call about another",
+            here.equals(RunYaxunitTestsTool.buildRunKey(CFG, "OtherProj", APP, req)));
+        assertTrue("the launch config name stays the readable key root", here.startsWith("Cfg:"));
+    }
+
+    /**
+     * Key parts are LENGTH-framed, not joined by a separator character.
+     *
+     * <p>A run-key collision is not a slow path: it is served as a successful, wrong report. The
+     * parts are caller-controlled strings, and with a literal {@code '|'} between them a value
+     * ending in the separator and the next value beginning with it produce ONE key.
+     */
+    @Test
+    public void testRunKeyPartsCannotImpersonateASeparator()
+    {
+        // The pair that collides under the pre-fix formula, where the filter families were
+        // joined with a literal pipe: ("a|", "b") and ("a", "|b") both flatten to "a||b".
+        assertFalse("a separator character inside a filter value must not merge two different "
+            + "requests into one run",
+            key(req("a|", "b", null, null)).equals(key(req("a", "|b", null, null))));
+
+        // And the pair only the FRAMING defends. Every filter family carries a marker of its
+        // own, so a joiner is already unforgeable across those; the resolved project and
+        // application sit next to each other with nothing between them but the separator.
+        // Measured, not assumed: with this assertion written on the filter families instead,
+        // replacing the framing with a plain joiner broke nothing.
+        assertFalse("the boundary between the resolved project and application must be a "
+            + "length, not a character their values can contain",
+            RunYaxunitTestsTool.buildRunKey(CFG, "Proj|", "App", baseline())
+                .equals(RunYaxunitTestsTool.buildRunKey(CFG, "Proj", "|App", baseline())));
+    }
+
+    /**
+     * A filter family's key term is defined by what {@code buildParamsJson} writes for it: two
+     * requests that generate the same file are one run, and two that generate different files are
+     * not. Both directions are asserted, because either alone would be a coincidence.
+     */
+    @Test
+    public void testRunKeyFollowsTheGeneratedFilterExactly()
+    {
+        String padded = "  smoke  ";
+        assertEquals("padding is stripped when the filter is generated...",
+            RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", req(null, null, null, "smoke")),
+            RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", req(null, null, null, padded)));
+        assertEquals("...so it must not start a second, identical run", key(req(null, null, null,
+            "smoke")), key(req(null, null, null, padded)));
+
+        // The other direction: an ABSENT family and a family written as an EMPTY array are
+        // different FILES. The identity stops at what this code can prove — the bytes it
+        // writes — rather than at an assumption about how the framework reads them; that way
+        // round the cost of being wrong is a re-run, not a wrong report. (The pre-fix formula
+        // kept them apart too, so this is not a new split.)
+        assertFalse("an absent tag filter and an empty one generate different files",
+            RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", req(null, null, null, null))
+                .equals(RunYaxunitTestsTool.buildParamsJson("/tmp/j.xml", req(null, null, null,
+                    ","))));
+        assertFalse("...so they must not share a run key",
+            key(req(null, null, null, null)).equals(key(req(null, null, null, ","))));
+    }
+
+    /**
+     * For every declared field of {@code RunRequest}: a request differing from {@link #baseline()}
+     * in EXACTLY that field.
+     */
+    private static Map<String, RunYaxunitTestsTool.RunRequest> runRequestVariants()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        Map<String, RunYaxunitTestsTool.RunRequest> variants = new LinkedHashMap<>();
+        variants.put("configName", new RunYaxunitTestsTool.RunRequest("OtherCfg", PROJ, APP, null,
+            null, null, null, 45, true, null, override, false));
+        variants.put("projectName", new RunYaxunitTestsTool.RunRequest(CFG, "OtherProj", APP, null,
+            null, null, null, 45, true, null, override, false));
+        variants.put("applicationId", new RunYaxunitTestsTool.RunRequest(CFG, PROJ, "OtherApp",
+            null, null, null, null, 45, true, null, override, false));
+        variants.put("extensions", request("Ext", null, null, null, 45, true, null, override,
+            false));
+        variants.put("modules", request(null, "Mod", null, null, 45, true, null, override, false));
+        variants.put("tests", request(null, null, "Mod.Test", null, 45, true, null, override,
+            false));
+        variants.put("tags", request(null, null, null, "smoke", 45, true, null, override, false));
+        variants.put("timeout", request(null, null, null, null, 30, true, null, override, false));
+        variants.put("updateBeforeLaunch", request(null, null, null, null, 45, false, null,
+            override, false));
+        variants.put("updateScope", request(null, null, null, null, 45, true, "configuration",
+            override, false));
+        variants.put("externalChanges", request(null, null, null, null, 45, true, null,
+            ExternalInfobaseChangesPolicy.IMPORT, false));
+        variants.put("debug", request(null, null, null, null, 45, true, null, override, true));
+        return variants;
+    }
+
+    /** {@code RunRequest} fields that must NOT change the run key, each with its reason. */
+    private static Map<String, String> runKeyExclusions()
+    {
+        Map<String, String> excluded = new LinkedHashMap<>();
+        excluded.put("configName", "the RESOLVED config name is the key root; the request's own is "
+            + "null whenever the call addressed the run by project+application");
+        excluded.put("projectName", "the RESOLVED project is keyed instead, so both call styles "
+            + "that reach one target still share a run");
+        excluded.put("applicationId", "the RESOLVED application is keyed instead");
+        excluded.put("timeout", "the caller's waiting window, not what runs: keying it would drop "
+            + "a Pending report the moment a retry asked for a longer one");
+        excluded.put("debug", "the DEBUG path returns before a run key is ever built");
+        return excluded;
+    }
+
+    /**
+     * The ratchet: every field of {@code RunRequest} is classified, and the classification is
+     * PROVED against the production formula in both directions.
+     */
+    @Test
+    public void testEveryRunRequestFieldIsClassifiedForTheRunKey()
+    {
+        Map<String, RunYaxunitTestsTool.RunRequest> variants = runRequestVariants();
+        Map<String, String> excluded = runKeyExclusions();
+        String base = key(baseline());
+        int classified = 0;
+        for (Field field : RunYaxunitTestsTool.RunRequest.class.getDeclaredFields())
+        {
+            if (field.isSynthetic() || Modifier.isStatic(field.getModifiers()))
+            {
+                continue;
+            }
+            String name = field.getName();
+            assertTrue("RunRequest." + name + " is new and nothing records what it means for the "
+                + "run key. Add a variant to runRequestVariants(), then either fold the field into "
+                + "buildRunKey or list it in runKeyExclusions() with the reason it cannot change "
+                + "what runs. Skipping that step is exactly how #409 and #411 happened.",
+                variants.containsKey(name));
+            assertEquals("the variant registered for RunRequest." + name + " must differ from the "
+                + "baseline in EXACTLY that field, or this loop proves nothing about it", name,
+                theOnlyChangedField(baseline(), variants.get(name)));
+            String varied = key(variants.get(name));
+            if (excluded.containsKey(name))
+            {
+                assertEquals("RunRequest." + name + " is excluded from the run key (" + excluded
+                    .get(name) + "), so varying it must NOT split the key: a key that is too wide "
+                    + "never matches, and every call re-runs the whole suite", base, varied);
+            }
+            else
+            {
+                assertFalse("RunRequest." + name + " changes what a run executes, so it must "
+                    + "change the run key. Otherwise a run started with one value can be polled "
+                    + "by — and have its report delivered to — a call that asked for another, and "
+                    + "the answer looks exactly like an honest one", base.equals(varied));
+            }
+            classified++;
+        }
+        assertEquals("runRequestVariants() lists a name RunRequest no longer declares", classified,
+            variants.size());
+        assertTrue("runKeyExclusions() names a field RunRequest does not declare",
+            variants.keySet().containsAll(excluded.keySet()));
+    }
+
+    /**
+     * Two concurrent calls asking to rebuild different things must not share one preparation.
+     */
+    @Test
+    public void testPrepKeyDistinguishesTheRebuildScope()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        String extA = prep(PROJ, APP, "extension:ExtA", override, JOB).prepKey();
+        String extB = prep(PROJ, APP, "extension:ExtB", override, JOB).prepKey();
+        String all = prep(PROJ, APP, null, override, JOB).prepKey();
+
+        assertFalse("only ONE preparation job runs per key, so two scopes under one key means the "
+            + "second caller silently gets the preparation the first one asked for",
+            extA.equals(extB));
+        assertFalse("a narrowed rebuild is not the full one", extA.equals(all));
+    }
+
+    /** The same normalisation as the run key — and for the same reason. */
+    @Test
+    public void testPrepKeyTreatsEquivalentScopesAsOnePreparation()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        String all = prep(PROJ, APP, null, override, JOB).prepKey();
+
+        assertEquals("an omitted scope IS 'all'", all, prep(PROJ, APP, "ALL", override, JOB)
+            .prepKey());
+        assertEquals("the scope is a set, not a spelling", prep(PROJ, APP, "extension:A,B",
+            override, JOB).prepKey(), prep(PROJ, APP, " B , extension:A ", override, JOB)
+                .prepKey());
+    }
+
+    /** The target and the conflict answer were already keyed; keep them pinned. */
+    @Test
+    public void testPrepKeyDistinguishesTheTargetAndTheConflictAnswer()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        String here = prep(PROJ, APP, null, override, JOB).prepKey();
+
+        assertFalse("one of the answers rewrites project sources, so a piggybacking call must "
+            + "never inherit a different caller's answer", here.equals(prep(PROJ, APP, null,
+                ExternalInfobaseChangesPolicy.IMPORT, JOB).prepKey()));
+        assertFalse("a different application is a different infobase to prepare",
+            here.equals(prep(PROJ, "OtherApp", null, override, JOB).prepKey()));
+        assertFalse("a different project is a different preparation",
+            here.equals(prep("OtherProj", APP, null, override, JOB).prepKey()));
+    }
+
+    /**
+     * The RUN and the DEBUG path differ in ONE field — the Job's display name — and they are meant
+     * to share a preparation. Keying the label would give one infobase two in-flight preparations
+     * and run the recompute+update twice.
+     */
+    @Test
+    public void testPrepKeyIgnoresTheJobLabelSoRunAndDebugShareOnePreparation()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        assertEquals("the run and debug preparations of one infobase must be the same entry",
+            prep(PROJ, APP, null, override, "YAXUnit pre-launch preparation for Proj").prepKey(),
+            prep(PROJ, APP, null, override, "YAXUnit debug pre-launch preparation for Proj")
+                .prepKey());
+    }
+
+    /**
+     * For every declared field of {@code PrepRequest}: a request differing from the baseline in
+     * EXACTLY that field.
+     */
+    private static Map<String, RunYaxunitTestsTool.PrepRequest> prepRequestVariants()
+    {
+        ExternalInfobaseChangesPolicy override = ExternalInfobaseChangesPolicy.OVERRIDE;
+        Map<String, RunYaxunitTestsTool.PrepRequest> variants = new LinkedHashMap<>();
+        variants.put("projectName", prep("OtherProj", APP, null, override, JOB));
+        variants.put("launchManager", new RunYaxunitTestsTool.PrepRequest(PROJ,
+            mock(ILaunchManager.class), null, APP, null, null, override, JOB));
+        variants.put("project", new RunYaxunitTestsTool.PrepRequest(PROJ, null,
+            mock(IProject.class), APP, null, null, override, JOB));
+        variants.put("applicationId", prep(PROJ, "OtherApp", null, override, JOB));
+        variants.put("appManager", new RunYaxunitTestsTool.PrepRequest(PROJ, null, null, APP,
+            mock(IApplicationManager.class), null, override, JOB));
+        variants.put("updateScope", prep(PROJ, APP, "configuration", override, JOB));
+        variants.put("externalChanges", prep(PROJ, APP, null,
+            ExternalInfobaseChangesPolicy.IMPORT, JOB));
+        variants.put("jobName", prep(PROJ, APP, null, override, "another job"));
+        return variants;
+    }
+
+    /** {@code PrepRequest} fields that must NOT change the preparation key, with their reasons. */
+    private static Map<String, String> prepKeyExclusions()
+    {
+        Map<String, String> excluded = new LinkedHashMap<>();
+        excluded.put("launchManager", "a platform service handle, not an input");
+        excluded.put("project", "it IS ProjectContext.of(projectName).project(), so projectName "
+            + "already keys it");
+        excluded.put("appManager", "tracked through an OSGi ServiceTracker and legitimately a "
+            + "different object between two calls; keying it would start a duplicate preparation "
+            + "on a service rebind instead of joining the running one");
+        excluded.put("jobName", "the only field that differs between the RUN and the DEBUG call "
+            + "site, which are meant to share one preparation");
+        return excluded;
+    }
+
+    /** The same two-way ratchet for the preparation key. */
+    @Test
+    public void testEveryPrepRequestFieldIsClassifiedForThePrepKey()
+    {
+        Map<String, RunYaxunitTestsTool.PrepRequest> variants = prepRequestVariants();
+        Map<String, String> excluded = prepKeyExclusions();
+        String base = prep(PROJ, APP, null, ExternalInfobaseChangesPolicy.OVERRIDE, JOB).prepKey();
+        int classified = 0;
+        for (Field field : RunYaxunitTestsTool.PrepRequest.class.getDeclaredFields())
+        {
+            if (field.isSynthetic() || Modifier.isStatic(field.getModifiers()))
+            {
+                continue;
+            }
+            String name = field.getName();
+            assertTrue("PrepRequest." + name + " is new and nothing records what it means for the "
+                + "preparation key. Add a variant to prepRequestVariants(), then either fold it "
+                + "into PrepRequest.prepKey() or list it in prepKeyExclusions() with the reason it "
+                + "cannot change what the preparation does.", variants.containsKey(name));
+            assertEquals("the variant registered for PrepRequest." + name + " must differ from the "
+                + "baseline in EXACTLY that field, or this loop proves nothing about it", name,
+                theOnlyChangedField(prep(PROJ, APP, null, ExternalInfobaseChangesPolicy.OVERRIDE,
+                    JOB), variants.get(name)));
+            String varied = variants.get(name).prepKey();
+            if (excluded.containsKey(name))
+            {
+                assertEquals("PrepRequest." + name + " is excluded from the preparation key ("
+                    + excluded.get(name) + "), so varying it must NOT split the key: only one "
+                    + "preparation may be in flight per infobase", base, varied);
+            }
+            else
+            {
+                assertFalse("PrepRequest." + name + " changes what the preparation does, so it "
+                    + "must change the key — one job runs per key, and the caller that arrives "
+                    + "second silently receives the first one's preparation",
+                    base.equals(varied));
+            }
+            classified++;
+        }
+        assertEquals("prepRequestVariants() lists a name PrepRequest no longer declares",
+            classified, variants.size());
+        assertTrue("prepKeyExclusions() names a field PrepRequest does not declare",
+            variants.keySet().containsAll(excluded.keySet()));
+    }
+
+    /**
+     * The name of the ONE field in which {@code variant} differs from {@code baseline}.
+     *
+     * <p>Without this, a ratchet built on a hand-written variant map proves less than it looks:
+     * a variant that changed some OTHER keyed field would satisfy the "must change the key" arm
+     * for a field the key actually ignores, and an "excluded" variant identical to the baseline
+     * would satisfy the "must not change the key" arm without varying anything at all.
+     *
+     * @return the single differing field name, or a description of how many differ when it is
+     *         not exactly one (so the assertion message names the real problem)
+     */
+    private static String theOnlyChangedField(Object baseline, Object variant)
+    {
+        List<String> changed = new ArrayList<>();
+        for (Field field : baseline.getClass().getDeclaredFields())
+        {
+            if (field.isSynthetic() || Modifier.isStatic(field.getModifiers()))
+            {
+                continue;
+            }
+            try
+            {
+                field.setAccessible(true);
+                if (!Objects.equals(field.get(baseline), field.get(variant)))
+                {
+                    changed.add(field.getName());
+                }
+            }
+            catch (ReflectiveOperationException e)
+            {
+                throw new IllegalStateException("cannot read " + field.getName(), e);
+            }
+        }
+        return changed.size() == 1 ? changed.get(0) : changed.toString();
     }
 }

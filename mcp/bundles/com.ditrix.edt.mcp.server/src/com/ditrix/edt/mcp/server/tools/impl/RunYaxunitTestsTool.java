@@ -842,7 +842,8 @@ public class RunYaxunitTestsTool implements IMcpTool
      *
      * Non-blocking with state tracking. Behaviour:
      * <ol>
-     *   <li>Compute stable runKey from the launch config name + filter.</li>
+     *   <li>Compute the stable runKey (see {@link #buildRunKey}) — the launch config name plus
+     *       everything that decides what the run executes.</li>
      *   <li>If a launch is already running for this key — poll up to {@code timeout}s, return result or "Pending".</li>
      *   <li>If no active launch but this key has an UNDELIVERED Pending result — deliver it ONCE, then
      *       forget the key so the next call re-runs.</li>
@@ -907,7 +908,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                     appManager, launchManager, req, deadlineMs, state);
             }
 
-            String runKey = buildRunKey(matchingConfig.getName(), req);
+            String runKey = buildRunKey(matchingConfig.getName(), projectName, applicationId, req);
             Path reportDir = stableReportDir(runKey);
 
             // If a launch is already running for this key, just poll it.
@@ -952,17 +953,16 @@ public class RunYaxunitTestsTool implements IMcpTool
             {
                 if (req.updateBeforeLaunch)
                 {
-                    // The policy is part of the key: a piggybacking call must never inherit a
-                    // DIFFERENT caller's answer to the external-changes modal (one of the answers
-                    // rewrites project sources). Same project+application+policy still share one prep.
-                    String prepKey = LaunchLifecycleUtils.prepKeyFor(projectName, applicationId)
-                        + "|" + req.externalChanges.wireValue(); //$NON-NLS-1$
+                    // What identifies this preparation is derived from the request that drives it
+                    // (see PrepRequest.prepKey): a piggybacking call must never inherit a DIFFERENT
+                    // caller's answer to the external-changes modal (one of the answers rewrites
+                    // project sources) nor a DIFFERENT rebuild scope.
                     final PreLaunchResult[] resultHolder = new PreLaunchResult[1];
                     PrepRequest prepReq = new PrepRequest(projectName, launchManager, project,
                         applicationId, appManager, req.updateScope, req.externalChanges,
                         "YAXUnit pre-launch preparation for " + projectName); //$NON-NLS-1$
 
-                    String pendingOrError = awaitPreparedOrPending(prepKey, prepReq, resultHolder,
+                    String pendingOrError = awaitPreparedOrPending(prepReq, resultHolder,
                         deadlineMs, state);
                     if (pendingOrError != null)
                     {
@@ -1527,14 +1527,12 @@ public class RunYaxunitTestsTool implements IMcpTool
         PreLaunchResult preLaunch = null;
         if (req.updateBeforeLaunch)
         {
-            String prepKey = LaunchLifecycleUtils.prepKeyFor(projectName, applicationId)
-                + "|" + req.externalChanges.wireValue(); //$NON-NLS-1$
             final PreLaunchResult[] resultHolder = new PreLaunchResult[1];
             PrepRequest prepReq = new PrepRequest(projectName, launchManager, project,
                 applicationId, appManager, req.updateScope, req.externalChanges,
                 "YAXUnit debug pre-launch preparation for " + projectName); //$NON-NLS-1$
 
-            String pendingOrError = awaitPreparedOrPending(prepKey, prepReq, resultHolder,
+            String pendingOrError = awaitPreparedOrPending(prepReq, resultHolder,
                 deadlineMs, state);
             if (pendingOrError != null)
             {
@@ -1648,9 +1646,9 @@ public class RunYaxunitTestsTool implements IMcpTool
     /**
      * Shared in-flight / budget / pending block for both the RUN and DEBUG paths.
      *
-     * <p>Acquires (or creates) a {@link PrepInFlight} entry for {@code prepKey}
+     * <p>Acquires (or creates) a {@link PrepInFlight} entry for {@link PrepRequest#prepKey()}
      * via {@link java.util.concurrent.ConcurrentMap#computeIfAbsent}, ensuring only ONE
-     * background Job is ever scheduled for a given {@code (project, applicationId)} key
+     * background Job is ever scheduled for a given preparation key
      * regardless of how many concurrent tool threads arrive: the thread that wins the
      * {@link PrepInFlight#started} CAS constructs and schedules the Job; every other
      * thread simply awaits {@link PrepInFlight#latch} on the same entry.
@@ -1673,7 +1671,11 @@ public class RunYaxunitTestsTool implements IMcpTool
      *       {@code resultHolder[0]} and return {@code null} so the caller proceeds.</li>
      * </ol>
      *
-     * @param prepKey          the in-flight map key (project\u0000applicationId)
+     * <p>The in-flight key is NOT a parameter: it is derived from the request itself via
+     * {@link PrepRequest#prepKey()}, so no caller can guard a preparation with a key that
+     * describes a different one. It used to be spelled out at each of the two call sites, which
+     * is why the missing {@code updateScope} of #411 had to be found and fixed in BOTH.
+     *
      * @param req              the pre-launch preparation pass-throughs (project name,
      *                         launch manager, project, application id, application
      *                         manager and updateScope forwarded to
@@ -1692,9 +1694,10 @@ public class RunYaxunitTestsTool implements IMcpTool
      *         {@code null} when preparation completed successfully and the caller
      *         may proceed
      */
-    static String awaitPreparedOrPending(String prepKey, PrepRequest req, // NOSONAR package-private for the bounded-wait ratchet, which must drive this wait directly
+    static String awaitPreparedOrPending(PrepRequest req, // NOSONAR package-private for the bounded-wait ratchet, which must drive this wait directly
             PreLaunchResult[] resultHolder, long deadlineMs, CallState state)
     {
+        String prepKey = req.prepKey();
         // Stale-entry eviction loop: if an expired or done-with-error entry is in
         // the map, remove it atomically so the computeIfAbsent below creates a fresh
         // one. At most two iterations: one to detect + remove, one to proceed.
@@ -1791,6 +1794,56 @@ public class RunYaxunitTestsTool implements IMcpTool
             this.updateScope = updateScope;
             this.externalChanges = externalChanges;
             this.jobName = jobName;
+        }
+
+        /**
+         * The {@link LaunchLifecycleUtils#PREP_INFLIGHT} key for THIS preparation.
+         *
+         * <p>Derived from the request instead of chosen by the caller. That is the whole point:
+         * the RUN path and the DEBUG path each spelled this string out themselves, and
+         * {@code updateScope} was handed to the preparation without being part of the identity
+         * of that preparation — in both copies — so two concurrent calls with different rebuild
+         * scopes shared one job and the first to start won. Deriving the key here, from the
+         * object the preparation consumes, means a call site can no longer state a DIFFERENT
+         * project, application, policy or scope than the one it is about to prepare with. It is
+         * not a proof that the whole request is captured: the three fields below are excluded
+         * deliberately, and their reasons are what carries that part.
+         *
+         * <p>Keyed: {@code projectName} + {@code applicationId} (via
+         * {@link LaunchLifecycleUtils#prepKeyFor}, the same string as the per-infobase lock), the
+         * external-changes policy — one of its answers rewrites project sources, so a piggybacking
+         * call must never inherit a different caller's answer — and the
+         * {@linkplain LaunchLifecycleUtils#canonicalUpdateScope canonical} update scope, which
+         * decides which projects are rebuilt.
+         *
+         * <p>NOT keyed, deliberately:
+         * <ul>
+         *   <li>{@code jobName} — the ONLY field that differs between the RUN and the DEBUG call
+         *       site. Keying it would give the two tools separate entries and run the preparation
+         *       twice for one infobase, losing the single-in-flight guarantee this map exists
+         *       for;</li>
+         *   <li>{@code project} — it IS {@code ProjectContext.of(projectName).project()}, so
+         *       {@code projectName} already keys it;</li>
+         *   <li>{@code launchManager} / {@code appManager} — platform service handles, not inputs.
+         *       {@code appManager} in particular is tracked through an OSGi {@code ServiceTracker}
+         *       and may legitimately be a different object between two calls; keying it would
+         *       start a duplicate preparation on a service rebind instead of joining the running
+         *       one.</li>
+         * </ul>
+         *
+         * <p>The test filter is not keyed either — it does not affect preparation at all.
+         *
+         * @return the in-flight preparation key; never {@code null}
+         */
+        String prepKey()
+        {
+            // NUL-joined exactly like prepKeyFor's own separator: neither a project nor an
+            // application name can contain it, so the readable prefix can never be confused
+            // with the framed suffix.
+            return LaunchLifecycleUtils.prepKeyFor(projectName, applicationId)
+                + '\u0000'
+                + framed(externalChanges == null ? null : externalChanges.wireValue(),
+                    LaunchLifecycleUtils.canonicalUpdateScope(updateScope));
         }
     }
 
@@ -2307,36 +2360,156 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
-     * Builds the stable run key that identifies one (launch config + filter + conflict policy)
-     * combination.
+     * Builds the stable run key that identifies one (launch target + filter + freshness
+     * guarantee) combination.
      *
      * <p>The launch config name is the key root — stable across the
      * {@code (project, applicationId)} and {@code launchConfigurationName} call styles. Everything
-     * that changes WHICH tests run, or under what answer to EDT's conflict modal they run, is
-     * folded into the hash: the key governs active-launch reuse ({@link #ACTIVE_LAUNCHES}),
-     * once-only pending delivery ({@link #PENDING_FETCH}) and the report directory
-     * ({@link #stableReportDir}). A filter that is NOT in the key would let a run started under
-     * one selection be polled by — and have its report delivered to — a call that asked for a
-     * different one.
+     * that changes WHICH tests run, WHERE they run, or WHAT code they run against is folded into
+     * the hash, because the key governs active-launch reuse ({@link #ACTIVE_LAUNCHES}), once-only
+     * pending delivery ({@link #PENDING_FETCH}) and the report directory
+     * ({@link #stableReportDir}), and all three reuse checks happen BEFORE preparation. A term
+     * that is NOT in the key lets a run started under one request be polled by — and have its
+     * report delivered to — a call that asked for a different one, and the answer is
+     * indistinguishable from an honest fresh run.
+     *
+     * <p>Every term, and why it changes the outcome:
+     * <ul>
+     *   <li>the RESOLVED {@code applicationId} — the config name does NOT pin it: a named launch
+     *       configuration is returned BY NAME, and a caller-supplied {@code applicationId} then
+     *       overrides the config's own binding (see {@code deriveLaunchContext}) and is stamped
+     *       onto the launch working copy. Two calls naming one config and two applications run
+     *       against two infobases;</li>
+     *   <li>the RESOLVED {@code projectName} — the project the pre-launch chain recompiles and
+     *       locks on. (It is NOT the project the client launches with: that one comes from the
+     *       launch configuration itself.) Keying the RESOLVED values rather than the request's is
+     *       also what keeps the two call styles that reach one target sharing a run;</li>
+     *   <li>{@code extensions} / {@code modules} / {@code tests} / {@code tags} — WHICH tests run;
+     *       normalised through {@link #filterKeyPart} so two requests that generate a
+     *       byte-identical {@code xUnitParams.json} filter are one run;</li>
+     *   <li>the auto-chain — {@code updateBeforeLaunch} and {@code updateScope} as a single
+     *       {@linkplain #preLaunchKeyPart term}: whether the extension is recomputed and the
+     *       infobase updated before the run, and which projects that covers. A call asking for
+     *       a refresh must never be answered by a run started without one: that report came
+     *       from a possibly STALE {@code .cfe} and reads exactly like an honest one;</li>
+     *   <li>{@code externalChanges} — how EDT's conflict modal is answered; one of the answers
+     *       rewrites project sources. Kept UNCONDITIONAL, unlike the scope: its contract states
+     *       no applicability condition, so there is nothing declared to lean on. Today the code
+     *       happens to make it inert with the chain off (no preparation runs, and both arm paths
+     *       null the policy), but that is an implementation detail no test or contract holds in
+     *       place; narrowing the key on it would turn a future change into a silently wrong
+     *       report, while keeping it costs at most one extra run.</li>
+     * </ul>
+     *
+     * <p>Deliberately NOT keyed: {@code timeout} (the caller's waiting window — keying it would
+     * drop a Pending report the moment a caller retried with a longer one) and {@code debug} (the
+     * DEBUG path returns before any run key exists). The request's own
+     * {@code configName}/{@code projectName}/{@code applicationId} are not keyed either; their
+     * RESOLVED counterparts are, above.
+     *
+     * <p>Terms are {@linkplain #framed length-framed} rather than joined with a separator. Most
+     * of them are caller-controlled strings, and a separator join is forgeable across any two
+     * adjacent parts whenever one ENDS with the separator and the next BEGINS with it: under
+     * the previous literal {@code "|"} joiner, {@code extensions="a|", modules="b"} and
+     * {@code extensions="a", modules="|b"} were the same key. A collision here is a false HIT —
+     * the quietest failure this method has, since it is served as a successful report. With a
+     * length there is nothing to impersonate. (The digest is then truncated to 48 bits, so the
+     * key is not injective in the cryptographic sense; the framing removes what a caller can hit
+     * by accident, which is the threat model — a caller can always ask for another run directly,
+     * so there is no boundary to attack.)
      *
      * <p>Package-private and static so a test can pin the PRODUCTION formula: this is the exact
-     * method the run path calls, not a reconstruction of it. A test that rebuilt the string itself
-     * would keep passing if the call site dropped an argument.
-     *
-     * <p>It takes the whole {@link RunRequest} rather than the individual fields on purpose: a
-     * call site that had to list them could silently omit one, and an omitted filter fails as a
-     * SHARED run identity — the quietest failure this method has. Passing the request makes that
-     * unrepresentable, and lets the test drive the same object the run path does.
+     * method the run path calls, not a reconstruction of it. It takes the whole {@link RunRequest}
+     * rather than its individual fields on purpose — a call site listing them could silently omit
+     * one, and an omitted term fails as a SHARED run identity. The resolved trio is passed
+     * separately because the request deliberately does not carry the resolved values.
      *
      * @param configName resolved launch configuration name
-     * @param req the request whose filter and conflict policy identify the run
+     * @param projectName the RESOLVED project name the run targets
+     * @param applicationId the RESOLVED application id the run targets (may be empty)
+     * @param req the request whose filter, freshness guarantee and conflict policy identify the run
      * @return the run key
      */
-    static String buildRunKey(String configName, RunRequest req)
+    static String buildRunKey(String configName, String projectName, String applicationId,
+            RunRequest req)
     {
         return configName + ":" //$NON-NLS-1$
-            + sha1(safe(req.extensions) + "|" + safe(req.modules) + "|" + safe(req.tests) //$NON-NLS-1$ //$NON-NLS-2$
-                + "|" + safe(req.tags) + "|" + safe(req.externalChanges.wireValue())); //$NON-NLS-1$ //$NON-NLS-2$
+            + sha1(framed(projectName, applicationId, filterKeyPart(req.extensions),
+                filterKeyPart(req.modules), filterKeyPart(req.tests), filterKeyPart(req.tags),
+                req.externalChanges.wireValue(), preLaunchKeyPart(req)));
+    }
+
+    /**
+     * The pre-launch auto-chain term of the run key: WHETHER the run refreshes what it executes,
+     * and HOW MUCH of it.
+     *
+     * <p>{@code updateBeforeLaunch} and {@code updateScope} are ONE decision, so they are one
+     * term. Writing them as two — a boolean plus a scope that empties itself when the boolean is
+     * false — makes each of them redundant with the other: dropping either one leaves the key
+     * still telling the two cases apart, so neither can be shown to be load-bearing and a
+     * regression in either is invisible to a test. (Measured, not assumed: with both terms
+     * present, deleting the boolean from the formula broke nothing.)
+     *
+     * <p>The scope is folded in only when the chain is on, because the parameter's own contract
+     * says so — "Only applies when updateBeforeLaunch=true", see
+     * {@link #UPDATE_SCOPE_DESCRIPTION} — and the implementation agrees: with the chain off no
+     * preparation is scheduled at all, on either the RUN or the DEBUG path. Keying a scope that
+     * applies to nothing would split requests the tool itself declares identical, and every such
+     * call would re-run the whole suite instead of joining the run already in flight.
+     */
+    private static String preLaunchKeyPart(RunRequest req)
+    {
+        return req.updateBeforeLaunch
+            ? "chain:" + LaunchLifecycleUtils.canonicalUpdateScope(req.updateScope) //$NON-NLS-1$
+            : "no-chain"; //$NON-NLS-1$
+    }
+
+    /**
+     * The key term for one filter family: empty when the family is absent, otherwise {@code "+"}
+     * plus the family exactly as {@link #buildParamsJson} would write it.
+     *
+     * <p>Two requests get the same term precisely when the generated {@code xUnitParams.json}
+     * carries the same filter for that family — no more and no less. That needs both halves:
+     * {@link #splitToList} (trim, drop empty tokens) because {@code " smoke "} and {@code "smoke"}
+     * generate the same array and must be one run, and the {@code "+"} presence marker because
+     * {@code null} (family omitted) and {@code ","} (family written as an empty array) generate
+     * DIFFERENT files.
+     *
+     * <p>The framework very likely treats those two files alike ({@link #buildParamsJson} explains
+     * why an empty list is not a filter), so the marker probably costs one re-run for a caller who
+     * passes a filter of nothing but separators. The identity deliberately stops at what this file
+     * can prove — the bytes it writes — rather than at an assumption about the framework: being
+     * wrong that way costs a re-run, being wrong the other way serves the wrong report. The
+     * previous formula kept these two apart as well, so nothing is lost either.
+     */
+    private static String filterKeyPart(String value)
+    {
+        if (value == null || value.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return "+" + String.join(",", splitToList(value)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Length-frames the parts of a key so the concatenation is injective for arbitrary content.
+     *
+     * <p>Each part is written as {@code <length>:<value>} (netstring framing), so no value can
+     * impersonate a separator: with a plain joiner, a part ENDING in that joiner and the next
+     * part BEGINNING with it produce one key — and a key collision here is served as a
+     * successful, wrong report. The framing is injective over the values it frames; {@code null}
+     * is normalised to the empty string FIRST, deliberately, because every caller of this method
+     * treats an absent value and an empty one as the same thing.
+     */
+    private static String framed(String... parts)
+    {
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts)
+        {
+            String value = safe(part);
+            sb.append(value.length()).append(':').append(value);
+        }
+        return sb.toString();
     }
 
     /**

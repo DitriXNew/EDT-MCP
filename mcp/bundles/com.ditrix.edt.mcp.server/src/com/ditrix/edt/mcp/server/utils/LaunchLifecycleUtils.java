@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -119,8 +120,9 @@ public final class LaunchLifecycleUtils
     public static final String PHASE_DB_UPDATE = "db-update"; //$NON-NLS-1$
 
     /**
-     * Live state of a background pre-launch preparation job keyed by the same
-     * {@code project\u0000applicationId} string as {@link #KEY_LOCKS}.
+     * Live state of a background pre-launch preparation job, keyed by everything that decides
+     * what the preparation DOES (see {@link #PREP_INFLIGHT}), of which the project and
+     * application part is the same string as {@link #KEY_LOCKS}.
      *
      * <p>A tool thread that starts the prep job sets {@code startedAtMs} and adds
      * this entry to {@link #PREP_INFLIGHT}. The background job updates
@@ -275,8 +277,11 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * In-flight preparation map. Keyed by {@code project\u0000applicationId}
-     * (the same string as {@link #KEY_LOCKS}).
+     * In-flight preparation map. Keyed by everything that decides WHAT a preparation does:
+     * {@link #prepKeyFor(String, String)} (the same NUL-joined project+application string as
+     * {@link #KEY_LOCKS}), the external-changes policy, and the canonical update scope. That key
+     * is built by {@code RunYaxunitTestsTool.PrepRequest.prepKey()} FROM the request the
+     * preparation consumes, so it cannot describe a preparation other than the one it guards.
      *
      * <p>Entries are created via {@link ConcurrentMap#computeIfAbsent}; the
      * thread that wins the {@link PrepInFlight#started} CAS schedules the
@@ -919,6 +924,71 @@ public final class LaunchLifecycleUtils
         // only on the success paths so that a failed or aborted prepare never
         // records its content state as prepared.
         return snapshot;
+    }
+
+    /**
+     * Canonical form of an {@code updateScope} value: for scopes that pass
+     * {@link #validateUpdateScope}, sharing this string means asking {@link #resolveUpdateScope}
+     * for the same preparation. The converse does not hold — two scopes can mean the same
+     * preparation and still canonicalise apart; the accepted cases are listed below.
+     *
+     * <p>Exists so a reuse key can carry the scope without splitting requests that mean the same
+     * thing. The scope has a real grammar — {@code null}, {@code ""}, {@code "all"} and
+     * {@code " ALL "} are one value; {@code "A"} is {@code "extension:A"}; {@code "A,B"} is
+     * {@code "B, A"} — so a raw string in a key would be a FALSE MISS: two identical requests
+     * would each start their own run. It lives here, next to the resolver and the validator, and
+     * is built on the SAME {@link #parseRequestedExtensionNames} grammar, so the key asks the
+     * question of the same function the behaviour asks it of instead of re-deriving the answer.
+     *
+     * <p>The four output spaces are disjoint by construction ({@code "all"},
+     * {@code "configuration"}, {@code "extension:<names>"} with a non-empty suffix, and
+     * {@code "raw:<value>"}), so no two differently-behaving scopes can canonicalise together:
+     * <ul>
+     *   <li>{@code null} / blank / {@code all} (case-insensitive) → {@code "all"};</li>
+     *   <li>{@code configuration} (case-insensitive) → {@code "configuration"};</li>
+     *   <li>a token list that yields at least one requested name → {@code "extension:"} plus the
+     *       SORTED, de-duplicated names. Sorted because {@link #resolveUpdateScope} tests
+     *       MEMBERSHIP in that set and takes its ordering from the project list, not from the
+     *       scope string; names are compared case-SENSITIVELY there, so they are not lowercased
+     *       here either;</li>
+     *   <li>a token list that yields no name → {@code "raw:"} plus the trimmed input. That branch
+     *       always fails {@link #validateUpdateScope}, and the error quotes the caller's own
+     *       string, so scopes that are unusable for DIFFERENT reasons ({@code "extension:"} and
+     *       {@code ","}) stay apart instead of one caller receiving the other's message. Two
+     *       unusable scopes differing only in surrounding whitespace, or two unknown names in a
+     *       different order, still share a key and therefore share one failure: the message then
+     *       quotes whichever arrived first. That is error TEXT on input that can never launch,
+     *       not a run served to the wrong caller.</li>
+     * </ul>
+     *
+     * <p>Deliberately topology-INDEPENDENT: it does not ask the workspace which extension projects
+     * exist. That leaves two accepted false misses — {@code "all"} versus {@code "configuration"}
+     * for a configuration with no dependent extensions, and {@code "all"} versus a list naming
+     * every extension — each costing one extra run and never a wrong report. The alternative,
+     * resolving the scope against the live project graph at key time, would make the key change
+     * under the caller's feet between a Pending and its retry.
+     *
+     * @param updateScope the raw {@code updateScope} parameter value (may be {@code null})
+     * @return the canonical form; never {@code null}
+     */
+    public static String canonicalUpdateScope(String updateScope)
+    {
+        String scope = updateScope != null ? updateScope.trim() : ""; //$NON-NLS-1$
+        if (scope.isEmpty() || "all".equalsIgnoreCase(scope)) //$NON-NLS-1$
+        {
+            return "all"; //$NON-NLS-1$
+        }
+        if ("configuration".equalsIgnoreCase(scope)) //$NON-NLS-1$
+        {
+            return "configuration"; //$NON-NLS-1$
+        }
+        List<String> names = new ArrayList<>(parseRequestedExtensionNames(scope));
+        if (names.isEmpty())
+        {
+            return "raw:" + scope; //$NON-NLS-1$
+        }
+        Collections.sort(names);
+        return "extension:" + String.join(",", names); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
