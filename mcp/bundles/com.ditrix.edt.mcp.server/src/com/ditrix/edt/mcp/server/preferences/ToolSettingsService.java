@@ -24,6 +24,22 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
+    private static final Set<String> ANALYSIS_ONLY_V4_ADDITIONS = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
+        "stop_profiling", //$NON-NLS-1$
+        "get_outgoing_structures"); //$NON-NLS-1$
+
+    private static final Set<String> CODE_REVIEW_V4_ADDITIONS = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
+        "stop_profiling"); //$NON-NLS-1$
+
+    private static final Set<String> DEVELOPMENT_V4_ADDITIONS = Set.of(
+        "stop_profiling"); //$NON-NLS-1$
+
     private static final ToolSettingsService INSTANCE = new ToolSettingsService();
 
     private ToolSettingsService()
@@ -87,6 +103,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * still holds for a user who tightened such a preset further. A selection that merely OVERLAPS
      * one (without covering it) is left untouched. See
      * {@link #migrateApplyQuickFixIntoReadOnlyPreset} for why containment rather than equality.
+     * <p>
+     * Version 4 repairs stored preset shapes after previously ungrouped tools joined groups that
+     * those presets disable. It recognizes an older preset by containment after removing both the
+     * newly inherited names, which that store predates, and the default-disabled names, which the
+     * user may intentionally have enabled. Because the recognized shapes are nested, it tests the
+     * most restrictive shape first; otherwise a broader match would add only part of the tools owed
+     * to an Analysis Only store.
      *
      * @param store the preference store to migrate (never {@code null} here)
      */
@@ -126,6 +149,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // reaches a cloud service and may then change the configuration with its
                 // own tools. That is a decision to opt into, not to inherit on upgrade.
                 changed |= disabled.add("ask_workmate"); //$NON-NLS-1$
+            }
+            if (storedVersion < 4)
+            {
+                changed |= migrateRegroupedToolsIntoPresets(disabled);
             }
             if (changed)
             {
@@ -188,6 +215,43 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             }
         }
         return false;
+    }
+
+    /**
+     * Adds the version 4 group-inherited disabled names to the first stored preset shape that
+     * contains all of its older asserted tools.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when at least one newly inherited name was added
+     */
+    private static boolean migrateRegroupedToolsIntoPresets(Set<String> disabled)
+    {
+        Set<String> optional = parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        if (containsOldPresetShape(disabled, ToolPreset.ANALYSIS_ONLY,
+            ANALYSIS_ONLY_V4_ADDITIONS, optional))
+        {
+            return disabled.addAll(ANALYSIS_ONLY_V4_ADDITIONS);
+        }
+        if (containsOldPresetShape(disabled, ToolPreset.CODE_REVIEW,
+            CODE_REVIEW_V4_ADDITIONS, optional))
+        {
+            return disabled.addAll(CODE_REVIEW_V4_ADDITIONS);
+        }
+        if (containsOldPresetShape(disabled, ToolPreset.DEVELOPMENT,
+            DEVELOPMENT_V4_ADDITIONS, optional))
+        {
+            return disabled.addAll(DEVELOPMENT_V4_ADDITIONS);
+        }
+        return false;
+    }
+
+    private static boolean containsOldPresetShape(Set<String> disabled, ToolPreset preset,
+        Set<String> newlyDisabled, Set<String> optional)
+    {
+        Set<String> presetShape = new LinkedHashSet<>(preset.getDisabledTools());
+        presetShape.removeAll(newlyDisabled);
+        presetShape.removeAll(optional);
+        return disabled.containsAll(presetShape);
     }
 
     /**

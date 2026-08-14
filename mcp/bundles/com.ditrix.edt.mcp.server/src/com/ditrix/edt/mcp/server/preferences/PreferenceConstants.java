@@ -87,9 +87,10 @@ public final class PreferenceConstants
     /**
      * Migration version this build applies: 1 = the 'git' tool ships disabled; 2 = a stored
      * Analysis Only / Code Review preset (saved before {@code apply_quick_fix} existed) gains it in
-     * its disabled set, so an upgrading user's read-only preset stays read-only.
+     * its disabled set; 3 = {@code ask_workmate} ships disabled; 4 = stored preset shapes gain the
+     * tools newly disabled through group membership.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 3;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 4;
 
     /** Default: all tools enabled (empty string = no disabled tools) */
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */

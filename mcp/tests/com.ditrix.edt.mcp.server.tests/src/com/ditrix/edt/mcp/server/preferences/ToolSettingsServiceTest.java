@@ -21,6 +21,22 @@ import org.junit.Test;
  */
 public class ToolSettingsServiceTest
 {
+    private static final Set<String> ANALYSIS_ONLY_V4_ADDITIONS = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
+        "stop_profiling", //$NON-NLS-1$
+        "get_outgoing_structures"); //$NON-NLS-1$
+
+    private static final Set<String> CODE_REVIEW_V4_ADDITIONS = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
+        "stop_profiling"); //$NON-NLS-1$
+
+    private static final Set<String> DEVELOPMENT_V4_ADDITIONS = Set.of(
+        "stop_profiling"); //$NON-NLS-1$
+
     // === parseDisabledTools ===
 
     @Test
@@ -465,5 +481,124 @@ public class ToolSettingsServiceTest
             store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
         assertFalse("a selection one tool short of the preset must not be migrated: " + disabled,
             disabled.contains("apply_quick_fix"));
+    }
+
+    @Test
+    public void testMigrationToVersion4RestoresAnalysisOnlyPreset()
+    {
+        Set<String> oldShape = oldPresetShape(ToolPreset.ANALYSIS_ONLY,
+            ANALYSIS_ONLY_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(oldShape, 3);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.containsAll(ANALYSIS_ONLY_V4_ADDITIONS));
+        assertEquals(ToolPreset.ANALYSIS_ONLY, ToolPreset.matchPreset(disabled));
+    }
+
+    @Test
+    public void testMigrationToVersion4RestoresCodeReviewPreset()
+    {
+        Set<String> oldShape = oldPresetShape(ToolPreset.CODE_REVIEW,
+            CODE_REVIEW_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(oldShape, 3);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
+        assertEquals(ToolPreset.CODE_REVIEW, ToolPreset.matchPreset(disabled));
+    }
+
+    @Test
+    public void testMigrationToVersion4RestoresDevelopmentPreset()
+    {
+        Set<String> oldShape = oldPresetShape(ToolPreset.DEVELOPMENT,
+            DEVELOPMENT_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(oldShape, 3);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.containsAll(DEVELOPMENT_V4_ADDITIONS));
+        assertEquals(ToolPreset.DEVELOPMENT, ToolPreset.matchPreset(disabled));
+    }
+
+    @Test
+    public void testMigrationToVersion4ChecksAnalysisOnlyBeforeCodeReview()
+    {
+        Set<String> oldShape = oldPresetShape(ToolPreset.ANALYSIS_ONLY,
+            ANALYSIS_ONLY_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(oldShape, 3);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertTrue(disabledTools(store).contains("get_outgoing_structures")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMigrationToVersion4LeavesOverlappingCustomSelectionUntouched()
+    {
+        Set<String> overlap = Set.of(
+            "debug_launch", //$NON-NLS-1$
+            "write_module_source"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(overlap, 3);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(overlap, disabledTools(store));
+    }
+
+    @Test
+    public void testMigrationDoesNotTouchAStoreAlreadyAtVersion4()
+    {
+        Set<String> oldShape = oldPresetShape(ToolPreset.ANALYSIS_ONLY,
+            ANALYSIS_ONLY_V4_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(oldShape, 4);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(oldShape, disabledTools(store));
+    }
+
+    @Test
+    public void testMigrationToVersion4RecognizesCodeReviewWithGitEnabled()
+    {
+        Set<String> oldShape = oldPresetShape(ToolPreset.CODE_REVIEW,
+            CODE_REVIEW_V4_ADDITIONS);
+        oldShape.remove("git"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(oldShape, 3);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
+        assertFalse(disabled.contains("git")); //$NON-NLS-1$
+    }
+
+    private static Set<String> oldPresetShape(ToolPreset preset, Set<String> additions)
+    {
+        Set<String> oldShape = new HashSet<>(preset.getDisabledTools());
+        oldShape.removeAll(additions);
+        return oldShape;
+    }
+
+    private static PreferenceStore storedDisabledTools(Set<String> disabled, int migrationVersion)
+    {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(PreferenceConstants.PREF_DISABLED_TOOLS,
+            PreferenceConstants.DEFAULT_DISABLED_TOOLS);
+        store.setDefault(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, 0);
+        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS,
+            ToolSettingsService.serializeDisabledTools(disabled));
+        store.setValue(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION, migrationVersion);
+        return store;
+    }
+
+    private static Set<String> disabledTools(PreferenceStore store)
+    {
+        return ToolSettingsService.parseDisabledTools(
+            store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
     }
 }
