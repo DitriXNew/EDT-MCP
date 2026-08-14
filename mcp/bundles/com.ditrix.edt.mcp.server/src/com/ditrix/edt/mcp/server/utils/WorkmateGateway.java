@@ -824,6 +824,12 @@ public class WorkmateGateway
      * and edit the configuration. The trade-off is that the method returns {@code void} - the
      * answer is rendered in the chat panel for a human and never comes back to Java - so this path
      * delivers a question, it does not produce an answer.
+     * <p>
+     * CALL IT FROM A CANCELLABLE BACKGROUND JOB, never from an MCP request thread. Once the SWT
+     * hand-off is claimed this waits for the chat view without a bound of its own: only the
+     * runnable knows whether the question was actually sent, and guessing either way is worse
+     * than waiting (a guessed timeout invites a duplicate question, a guessed success can be a
+     * lie). The caller's cancellation - the job deadline - is what ends the wait.
      *
      * @param project optional EDT project the chat should treat as context; {@code null} selects
      *            Workmate's default project
