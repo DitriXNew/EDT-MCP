@@ -312,15 +312,20 @@ public final class BackgroundJobs implements AutoCloseable
         synchronized (jobsLock)
         {
             ensureOpen();
+            // The running limit is checked FIRST, before anything is discarded: eviction makes
+            // room for a job that is about to be stored, and a start rejected here stores
+            // nothing. Evicting on the way to a refusal would throw away a completed job's
+            // result for nobody, and its owner - still polling by id - would be told the job
+            // never existed.
+            if (inFlight.get() >= maxRunning)
+            {
+                return null;
+            }
             evictOldestCompleted();
             if (jobs.size() >= maxStoredJobs)
             {
                 throw new RejectedExecutionException("Background job registry is full with " //$NON-NLS-1$
                     + maxStoredJobs + " running jobs"); //$NON-NLS-1$
-            }
-            if (inFlight.get() >= maxRunning)
-            {
-                return null;
             }
             jobs.put(record.id, record);
             inFlight.incrementAndGet();

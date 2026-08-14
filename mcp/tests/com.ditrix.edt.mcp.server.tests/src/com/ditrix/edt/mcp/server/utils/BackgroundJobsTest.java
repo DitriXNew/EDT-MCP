@@ -240,6 +240,45 @@ public class BackgroundJobsTest
         }
     }
 
+    /**
+     * A start that is REFUSED stores nothing, so it must not pay for room it never uses. The
+     * eviction that makes that room discards a completed job's result, and its owner is still
+     * entitled to poll for it by id.
+     */
+    @Test
+    public void testRefusedStartDoesNotDiscardARetainedResult() throws Exception
+    {
+        try (BackgroundJobs jobs = new BackgroundJobs(2, 2))
+        {
+            JobSnapshot done = jobs.start(60_000L, 5, "start", progress -> "keep me"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNotNull(done);
+            assertEquals(Status.DONE, jobs.await(done.getId(), 5_000L).getStatus());
+
+            CountDownLatch release = new CountDownLatch(1);
+            CountDownLatch busy = new CountDownLatch(1);
+            JobSnapshot running = jobs.start(60_000L, 1, "start", progress -> { //$NON-NLS-1$
+                busy.countDown();
+                release.await();
+                return "busy"; //$NON-NLS-1$
+            });
+            assertNotNull(running);
+            assertTrue(busy.await(2, TimeUnit.SECONDS));
+
+            try
+            {
+                // The registry is at capacity AND at its running limit, so this is refused.
+                assertNull(jobs.start(60_000L, 1, "start", progress -> "no room")); //$NON-NLS-1$ //$NON-NLS-2$
+                assertNotNull("the refused start evicted a result nobody replaced", //$NON-NLS-1$
+                    jobs.get(done.getId()));
+                assertEquals("keep me", jobs.get(done.getId()).getResult()); //$NON-NLS-1$
+            }
+            finally
+            {
+                release.countDown();
+            }
+        }
+    }
+
     @Test
     public void testWorkRunsOnNamedDaemonWorker()
     {
