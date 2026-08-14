@@ -156,8 +156,9 @@ public class OrphanedJavadocTest
             + "It can name something that is not an orphan:\n" //$NON-NLS-1$
             + "  - a pair of blocks in front of a 'package' or an 'import', which document nothing but\n" //$NON-NLS-1$
             + "    sit where a top-level type could.\n" //$NON-NLS-1$
-            + "  - a pair in front of an initializer block, or after a brace that merely closed a field\n" //$NON-NLS-1$
-            + "    initializer ('int[] a = {1} /** x */ /** y */;').\n" //$NON-NLS-1$
+            + "  - a pair in front of an initializer block, after a brace that merely closed a\n" //$NON-NLS-1$
+            + "    field initializer ('int[] a = {1} /** x */ /** y */;'), or after the body of an\n" //$NON-NLS-1$
+            + "    enum constant and before the ',' that ends it.\n" //$NON-NLS-1$
             + "It can stay silent where there IS one:\n" //$NON-NLS-1$
             + "  - anything past a declaration's first token: inside '(', '<' or '[', in an\n" //$NON-NLS-1$
             + "    extends/implements/throws clause, or in an initializer expression.\n" //$NON-NLS-1$
@@ -167,7 +168,7 @@ public class OrphanedJavadocTest
             + "    translates before lexing and this does not, so a type body is never entered.\n" //$NON-NLS-1$
             + "  - a file whose lines end with a bare CR: '//' swallows the rest of it, and every line\n" //$NON-NLS-1$
             + "    number it could still report would be 1.\n" //$NON-NLS-1$
-            + "  - an annotation TYPE body ('@interface A { .. }'), an anonymous class body, a record\n" //$NON-NLS-1$
+            + "  - an anonymous class body, a record\n" //$NON-NLS-1$
             + "    whose name does not directly follow the keyword (generic, or with a comment between),\n" //$NON-NLS-1$
             + "    a second declarator, an enum constant after the first, and a block left after the\n" //$NON-NLS-1$
             + "    last declaration in a file.\n" //$NON-NLS-1$
@@ -1133,6 +1134,24 @@ public class OrphanedJavadocTest
             List.of(), orphanedJavadocLines(
                 "class A { void m(/** one */ /** two */ int x) {} }")); //$NON-NLS-1$
 
+        // '@interface' declares a TYPE; it is not an annotation on something. Consuming it as
+        // one kept the member position open across it, and the blocks after it were reported.
+        assertEquals("'@interface' is a declaration, not an annotation", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines("@interface /** first */ /** second */ A {}")); //$NON-NLS-1$
+        assertEquals("an annotation whose NAME merely begins with those letters is still " //$NON-NLS-1$
+            + "an annotation", List.of(Integer.valueOf(1)), //$NON-NLS-1$
+            orphanedJavadocLines("class C { /** a */ @interfaceLike /** b */ int f; }")); //$NON-NLS-1$
+
+        assertEquals("and an ordinary annotation is still consumed as one", //$NON-NLS-1$
+            List.of(Integer.valueOf(5)), orphanedJavadocLines(String.join("\n", //$NON-NLS-1$
+                "class C", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    /** Attached. */", //$NON-NLS-1$
+                "    @Deprecated", //$NON-NLS-1$
+                "    /** Dropped. */", //$NON-NLS-1$
+                "    void m() {}", //$NON-NLS-1$
+                "}"))); //$NON-NLS-1$
+
         // 5. A type keyword read INSIDE an argument list must not survive the ')' that ends
         // it. Its own '{' is inside those parentheses and is never pushed, so the flag can
         // only ever leak - here onto the next lambda, whose body would then be judged as a
@@ -1994,6 +2013,17 @@ public class OrphanedJavadocTest
     private static int skipAnnotation(String source, int at)
     {
         int i = skipWhitespace(source, at + 1);
+        // '@interface' is a type DECLARATION, not an annotation use. Read as an annotation
+        // named 'interface' it kept the member position open across itself, and the blocks
+        // after it were then reported as a pair.
+        // The identifier boundary matters: '@interfaceLike' is an ordinary annotation whose
+        // name merely begins with those letters, and swallowing it here would be a new miss.
+        int afterKeyword = i + "interface".length(); //$NON-NLS-1$
+        if (source.startsWith("interface", i) && (afterKeyword >= source.length() //$NON-NLS-1$
+            || !Character.isJavaIdentifierPart(source.charAt(afterKeyword))))
+        {
+            return at + 1;
+        }
         int nameEnd = -1;
         while (i < source.length() && Character.isJavaIdentifierStart(source.charAt(i)))
         {
