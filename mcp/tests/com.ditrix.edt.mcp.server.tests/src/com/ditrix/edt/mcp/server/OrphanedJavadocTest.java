@@ -135,9 +135,10 @@ public class OrphanedJavadocTest
      * a head that nothing preceded; and a PAIR of blocks around the {@code static} of an
      * initializer, which no javadoc can ever attach to. Four rules settle all seven — an
      * accusation needs a place where a DECLARATION could stand ({@code depth == 0}, inside a
-     * type body or at file level); it must not be past a declaration's {@code =}; the head
-     * accusation needs a pair to choose between; and that pair must be split by an
-     * ANNOTATION, the one head-opening token that cannot also begin a non-declaration.
+     * type body or at file level, and outside any {@code <} type list); it must not be past a
+     * declaration's {@code =}; the head accusation needs a pair to choose between; and that
+     * pair must be split by an ANNOTATION, the one head-opening token that cannot also begin
+     * a non-declaration.
      * <p>
      * Every one was found by REVIEW of this change, not by the corpus: the repository scan
      * reported the same single site before and after all seven. A shape nobody has written
@@ -178,7 +179,9 @@ public class OrphanedJavadocTest
             + "  - a record whose name is not directly followed by its component list - a generic\n" //$NON-NLS-1$
             + "    one ('record Pair<A, B>(..)'), or one with a comment after the keyword - is not\n" //$NON-NLS-1$
             + "    recognised as a type, so its members go unjudged.\n" //$NON-NLS-1$
-            + "  - an anonymous class body counts as code, and nothing inside a '(' is judged at all.\n" //$NON-NLS-1$
+            + "  - an anonymous class body counts as code, and nothing inside a '(' or between a\n" //$NON-NLS-1$
+            + "    '<' and its '>' is judged at all. A '<' that is really a comparison suppresses\n" //$NON-NLS-1$
+            + "    until a '>' cancels it or its declaration ends at the ';'.\n" //$NON-NLS-1$
             + "  - a block left after the LAST declaration in a file is never flushed, so an orphan\n" //$NON-NLS-1$
             + "    at end of file is not reported.\n" //$NON-NLS-1$
             + "Details: OrphanedJavadocTest."; //$NON-NLS-1$
@@ -1263,6 +1266,135 @@ public class OrphanedJavadocTest
     }
 
     /**
+     * Angle brackets hold TYPES, never members — a type argument list
+     * ({@code Map<String, Integer>}), a type parameter list ({@code class C<T, U>}), a
+     * wildcard bound. Parentheses could not see them, so a block inside one was judged as
+     * though it stood among a type's members: two adjacent blocks read as a discarded pair,
+     * and a {@code TYPE_PARAMETER} annotation after the list's comma read as the first token
+     * of a fresh declaration. Both were reported by review with a {@code javac --release 17}
+     * check, so the input is legal and one such class anywhere in a scanned source root would
+     * redden the build.
+     * <p>
+     * One rule for the whole family, not one per shape: the two the review named are here
+     * alongside the two it did not (a bounded wildcard, a generic METHOD's type parameters),
+     * and all four go quiet together.
+     */
+    @Test
+    public void detectorNeverAccusesInsideAngleBrackets()
+    {
+        String[][] shapes = {
+            {"a type argument list", //$NON-NLS-1$
+                "class C", "{", "    Map</** first */ /** second */ String, Integer> v;", "}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"an annotated type PARAMETER", //$NON-NLS-1$
+                "class C<T, /** first */ @TA /** second */ U>", "{", "", "}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"a generic METHOD's type parameters", //$NON-NLS-1$
+                "class C", "{", "    <T, /** first */ @TA /** second */ U> void m() {}", "}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"a bounded wildcard", //$NON-NLS-1$
+                "class C", "{", "    List<? extends /** a */ /** b */ Number> xs;", "}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            {"a superclass' type arguments", //$NON-NLS-1$
+                "class C extends B</** a */ /** b */ String>", "{", "", "}"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        };
+        for (String[] shape : shapes)
+        {
+            assertEquals("a block inside " + shape[0] + " is not among a type's members", //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(), orphanedJavadocLines(
+                    String.join("\n", shape[1], shape[2], shape[3], shape[4]))); //$NON-NLS-1$
+        }
+
+        // The suppression must END, or one generic signature would silence the whole file.
+        // Each control below puts a REAL orphan after the angle brackets: the first two close
+        // theirs properly, the third never closes it at all ('1 < 2' is a comparison), and the
+        // fourth spells a '>' with no '<' before it, in a lambda arrow.
+        String[][] controls = {
+            {"a closed type argument list", "    Map<String, Integer> v;"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"nested type arguments closed by '>>'", "    Map<String, List<Integer>> v;"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"an unmatched '<' that is really a comparison", //$NON-NLS-1$
+                "    static final boolean B = 1 < 2;"}, //$NON-NLS-1$
+            {"a lambda arrow's '>'", "    Runnable r = () -> doIt();"}, //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (String[] control : controls)
+        {
+            String source = String.join("\n", //$NON-NLS-1$
+                "class C", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                control[1],
+                "", //$NON-NLS-1$
+                "    /** Orphan. */", //$NON-NLS-1$
+                "    /** Documents f. */", //$NON-NLS-1$
+                "    int f;", //$NON-NLS-1$
+                "}"); //$NON-NLS-1$
+            assertEquals("after " + control[0] + " the rest of the type is judged again", //$NON-NLS-1$ //$NON-NLS-2$
+                List.of(Integer.valueOf(5)), orphanedJavadocLines(source));
+        }
+
+        // The list must close where it really closes, not merely at the next ';'. Here the
+        // blocks stand AFTER the '>' and before the ';', so only the closing bracket itself
+        // can put the detector back on duty in time to see them.
+        assertEquals("the list ends at its '>', not at the ';' that ends the declaration", //$NON-NLS-1$
+            List.of(Integer.valueOf(3)), orphanedJavadocLines(String.join("\n", //$NON-NLS-1$
+                "class C", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    Map<String, Integer> /** one */ /** two */ v;", //$NON-NLS-1$
+                "}"))); //$NON-NLS-1$
+
+        // The count must not go NEGATIVE on a stray '>', or the next '<' brings it back to
+        // zero and un-suppresses the middle of an expression. Legal Java, and the only shape
+        // found where the floor itself decides the answer.
+        assertEquals("a stray '>' must not let the following '<' un-suppress", //$NON-NLS-1$
+            List.of(), orphanedJavadocLines(String.join("\n", //$NON-NLS-1$
+                "@interface A", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    boolean v() default 3 > 2 && 1 < /** first */ /** second */ 2;", //$NON-NLS-1$
+                "}"))); //$NON-NLS-1$
+
+        // The type HEAD's own list must not swallow the body either.
+        assertEquals("a generic type head is suppressed, its body is not", //$NON-NLS-1$
+            List.of(Integer.valueOf(3)), orphanedJavadocLines(String.join("\n", //$NON-NLS-1$
+                "class C<T, U> implements Map<T, U>", //$NON-NLS-1$
+                "{", //$NON-NLS-1$
+                "    /** Orphan. */", //$NON-NLS-1$
+                "    /** Documents f. */", //$NON-NLS-1$
+                "    int f;", //$NON-NLS-1$
+                "}"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The identity keeps the block's own asterisks and slashes, and drops only the STRUCTURE:
+     * the {@code /**}, the {@code *}{@code /} and the {@code *} margin of a continuation line.
+     * Removing them everywhere made two different blocks share one identity, which defeats
+     * the point of keying the allow-list on identity at all — the pardon of a fixed block
+     * would transfer to a look-alike while {@link #stalePardons} reported nothing missing.
+     */
+    @Test
+    public void identityKeepsTheProsesOwnAsterisksAndSlashes()
+    {
+        String plain = identityOf("/** Alpha beta. */", 0, 18); //$NON-NLS-1$
+        String emphasised = identityOf("/** *Alpha* beta. */", 0, 20); //$NON-NLS-1$
+        assertEquals("the structure is still removed", "Alpha beta.", plain); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("and emphasis is part of the text", "*Alpha* beta.", emphasised); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The collision this exists to prevent, asserted on the DECISION and not only on the
+        // strings: one pardon must no longer cover both blocks.
+        List<String> pardoned = List.of(plain);
+        assertTrue("the pardoned block stays pardoned", //$NON-NLS-1$
+            unpardoned("A.java", List.of(new Orphan(3, plain)), pardoned).isEmpty()); //$NON-NLS-1$
+        assertEquals("the look-alike is a different block and must be reported", //$NON-NLS-1$
+            1, unpardoned("A.java", List.of(new Orphan(9, emphasised)), pardoned).size()); //$NON-NLS-1$
+
+        // A slash inside the prose counts too - a URL is the everyday case.
+        assertTrue("two blocks differing only by a slash are different identities", //$NON-NLS-1$
+            !identityOf("/** See http://a.example */", 0, 27) //$NON-NLS-1$
+                .equals(identityOf("/** See http:a.example */", 0, 25))); //$NON-NLS-1$
+
+        // ...while the javadoc margin of a continuation line is still structure.
+        assertEquals("the '*' margin is dropped, the text is not", //$NON-NLS-1$
+            "Alpha. <p>Beta.", identityOf("/**\n * Alpha.\n * <p>Beta.\n */", 0, 29)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a continuation line that begins with emphasis keeps it", //$NON-NLS-1$
+            "Alpha. *Beta* gamma.", //$NON-NLS-1$
+            identityOf("/**\n * Alpha.\n * *Beta* gamma.\n */", 0, 34)); //$NON-NLS-1$
+    }
+
+    /**
      * The {@code record} decision reaching all the way through the lexer, on the one shape
      * found that gets from {@code record instanceof X} to a <code>{</code> at depth 0 without
      * a {@code ;}, {@code ,}, {@code :} or <code>}</code> clearing the type flag on the way:
@@ -1487,8 +1619,8 @@ public class OrphanedJavadocTest
      *       written for was deleted and left it behind.</li>
      * </ul>
      * All three are gated on the block standing where a DECLARATION could stand: inside a
-     * type body, outside any unclosed {@code (}, and before a declaration's {@code =} rather
-     * than in the initializer that follows it. Executable code and expressions hold no
+     * type body, outside any unclosed {@code (} and any {@code <} type list, and before a
+     * declaration's {@code =} rather than in the initializer that follows it. Executable code and expressions hold no
      * members, so a block there is an ordinary comment — and a refusal naming one would ask
      * the reader to move it back to a declaration that does not exist. Every shape this gate
      * rules out was a real accusation this detector used to make on legal code.
@@ -1552,6 +1684,15 @@ public class OrphanedJavadocTest
         // 'int f = expr', and punctuation begins anything at all. Every wrong accusation this
         // detector was measured making came through one of those, never through '@'.
         boolean headOpenedByAnnotation = false;
+        // Open '<' at depth 0: a TYPE ARGUMENT list ('Map<String, Integer>') or a TYPE
+        // PARAMETER list ('class C<T, U>'). Both hold types, never members, and both may
+        // legally carry an annotation and a comma - which is how a block inside one got read
+        // as a declaration prefix. Parentheses alone could not see them: '<' is not '('.
+        //
+        // A plain comparison ('1 < 2') also counts, and that is deliberate. It can only
+        // SUPPRESS, never accuse, and the reset at ';' '{' '}' below keeps an unmatched '<'
+        // from silencing anything beyond the declaration it appears in.
+        int angleDepth = 0;
         StringBuilder word = new StringBuilder();
         while (i < source.length())
         {
@@ -1635,8 +1776,8 @@ public class OrphanedJavadocTest
                     // all hold expressions, never members, so a block in one is an ordinary
                     // comment - and there is no declaration below it to be moved back to,
                     // which is the only thing this ratchet ever asks anyone to do.
-                    boolean whereADeclarationCouldBe =
-                        depth == 0 && !pastAssignment && inTypeBody(typeBody);
+                    boolean whereADeclarationCouldBe = depth == 0 && angleDepth == 0
+                        && !pastAssignment && inTypeBody(typeBody);
                     if (pending >= 0 && whereADeclarationCouldBe)
                     {
                         orphans.put(Integer.valueOf(pending), new Orphan(pendingLine, pendingText));
@@ -1698,6 +1839,7 @@ public class OrphanedJavadocTest
                 sawTypeKeyword = false;
                 headOpen = false;
                 pastAssignment = false;
+                angleDepth = 0;
             }
             else if (c == '}' && depth == 0)
             {
@@ -1713,6 +1855,7 @@ public class OrphanedJavadocTest
                 pastAssignment = outside != null && outside.booleanValue();
                 sawTypeKeyword = false;
                 headOpen = false;
+                angleDepth = 0;
             }
             else if (c == ')')
             {
@@ -1737,6 +1880,23 @@ public class OrphanedJavadocTest
                 // the expression back under judgement. The cost is a MISS on the second
                 // declarator of 'int a = 1, /** note */ b = 2;', which is the safe direction.
                 pastAssignment = c != ';' && pastAssignment;
+                // A type list cannot span a ';', so an unmatched '<' cannot silence more
+                // than the one declaration it was written in.
+                angleDepth = c == ';' ? 0 : angleDepth;
+            }
+            else if (c == '<' && depth == 0)
+            {
+                angleDepth++;
+                headOpen = true;
+            }
+            else if (c == '>' && depth == 0)
+            {
+                // Floored, because '->', '>>' and a plain comparison also spell a '>' here.
+                // Without the floor a stray '>' would go NEGATIVE and the next '<' would come
+                // back to zero, un-suppressing the middle of an expression:
+                // 'default 3 > 2 && 1 < /** a */ /** b */ 2;' is legal and would be accused.
+                angleDepth = Math.max(0, angleDepth - 1);
+                headOpen = true;
             }
             else if (c == '=' && depth == 0)
             {
@@ -1867,35 +2027,58 @@ public class OrphanedJavadocTest
      * opening with the same words would share one pardon, and fixing the pardoned one while
      * adding the other would keep every check green. {@link #display} does the shortening,
      * and only for the message.
+     * <p>
+     * Only the STRUCTURE is removed — the opening {@code /**}, the closing {@code *}{@code /}
+     * and the {@code *} margin at the head of each continuation line. Asterisks and slashes
+     * inside the prose are kept: dropping them everywhere made {@code /** Alpha beta. *}{@code /}
+     * and {@code /** *Alpha* beta. *}{@code /} the same identity, which is exactly the
+     * collision an identity is supposed to prevent — a pardon would transfer between them and
+     * {@link #stalePardons} would not notice the original had gone.
      *
      * @param source the whole file
      * @param from the offset of the block's {@code /**}
      * @param to the offset just past its {@code *}{@code /}
-     * @return the whole block's text, whitespace-normalised
+     * @return the block's text without its structure, whitespace-normalised
      */
     static String identityOf(String source, int from, int to)
     {
         String body = source.substring(from, Math.min(to, source.length()));
-        StringBuilder out = new StringBuilder();
-        boolean space = true;
-        for (int at = 0; at < body.length(); at++)
+        if (body.startsWith("/**")) //$NON-NLS-1$
         {
-            char c = body.charAt(at);
-            if (c == '/' || c == '*')
+            body = body.substring(3);
+        }
+        if (body.endsWith("*/")) //$NON-NLS-1$
+        {
+            body = body.substring(0, body.length() - 2);
+        }
+        StringBuilder out = new StringBuilder();
+        String[] lines = body.split("\n", -1); //$NON-NLS-1$
+        for (int at = 0; at < lines.length; at++)
+        {
+            String line = lines[at];
+            if (at > 0)
             {
-                continue;
+                // The javadoc margin, and ONLY it: one leading '*' after the indent, so a line
+                // that really begins with emphasis (' * *bold* text') keeps its own asterisks.
+                int cut = 0;
+                while (cut < line.length() && Character.isWhitespace(line.charAt(cut)))
+                {
+                    cut++;
+                }
+                line = cut < line.length() && line.charAt(cut) == '*' ? line.substring(cut + 1)
+                    : line.substring(cut);
             }
-            if (Character.isWhitespace(c))
+            for (String word : line.trim().split("\\s+")) //$NON-NLS-1$
             {
-                space = true;
-                continue;
+                if (!word.isEmpty())
+                {
+                    if (out.length() > 0)
+                    {
+                        out.append(' ');
+                    }
+                    out.append(word);
+                }
             }
-            if (space && out.length() > 0)
-            {
-                out.append(' ');
-            }
-            space = false;
-            out.append(c);
         }
         return out.toString();
     }
