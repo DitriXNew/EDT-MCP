@@ -118,7 +118,10 @@ public class AskWorkmateToolTest
         String waitDescription = properties.getAsJsonObject("waitSeconds") //$NON-NLS-1$
             .get("description").getAsString(); //$NON-NLS-1$
         assertTrue(timeoutDescription.contains("total wall-clock budget")); //$NON-NLS-1$
-        assertTrue(timeoutDescription.contains("becomes failed")); //$NON-NLS-1$
+        // Both halves of the promise, because half of it would mislead: the budget fails the
+        // job, EXCEPT once the request has reached Workmate and can no longer be taken back.
+        assertTrue(timeoutDescription.contains("the job is failed")); //$NON-NLS-1$
+        assertTrue(timeoutDescription.contains("cannot be taken back")); //$NON-NLS-1$
         assertTrue(waitDescription.contains("single start or poll call")); //$NON-NLS-1$
         assertTrue(waitDescription.contains("0 to 45")); //$NON-NLS-1$
     }

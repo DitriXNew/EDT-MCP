@@ -18,7 +18,10 @@
   alone, calls no tools and inspects nothing.
 - `timeoutSeconds` is the total wall-clock budget for the background job across
   every poll. It must be positive and defaults to 300 seconds. When this budget
-  expires, the job becomes `failed`.
+  expires, the job becomes `failed` - unless the request has already reached
+  Workmate, which cannot be taken back: the job then waits for Workmate's own
+  outcome instead, because a retryable timeout would invite a second run of
+  work that is already under way.
 - `waitSeconds` bounds only the current start or poll call. It defaults to 5 and
   accepts values from 0 through 45; use 0 to return immediately. It never extends
   the job's total `timeoutSeconds` budget.

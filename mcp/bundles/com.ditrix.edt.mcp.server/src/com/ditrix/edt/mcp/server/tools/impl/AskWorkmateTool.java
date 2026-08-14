@@ -159,7 +159,10 @@ public class AskWorkmateTool implements IMcpTool
                 "Start mode only: total wall-clock budget for the background job across all " //$NON-NLS-1$
                     + "polls, in seconds; defaults to " + DEFAULT_TIMEOUT_SECONDS //$NON-NLS-1$
                     + " and accepts 1 to " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
-                    + ". After this budget the job becomes failed. This is not the per-call " //$NON-NLS-1$
+                    + ". After this budget the job is failed - unless the request has already " //$NON-NLS-1$
+                    + "reached Workmate, which cannot be taken back: the job then reports " //$NON-NLS-1$
+                    + "Workmate's own outcome rather than a retryable timeout, because a retry " //$NON-NLS-1$
+                    + "would run the same work twice. This is not the per-call " //$NON-NLS-1$
                     + "waitSeconds budget.") //$NON-NLS-1$
             .integerProperty(KEY_WAIT_SECONDS,
                 "Maximum time this single start or poll call may wait for completion, in " //$NON-NLS-1$

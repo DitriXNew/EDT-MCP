@@ -10,7 +10,7 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
 | projectName | — | string | Start mode only: optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context. |
 | maxToolRounds | — | integer | Start mode only: optional positive limit for Workmate's internal tool-call rounds. |
 | skillName | — | string | Start mode only: optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing. |
-| timeoutSeconds | — | integer | Start mode only: total wall-clock budget for the background job across all polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job becomes failed. This is not the per-call waitSeconds budget. |
+| timeoutSeconds | — | integer | Start mode only: total wall-clock budget for the background job across all polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job is failed - unless the request has already reached Workmate, which cannot be taken back: the job then reports Workmate's own outcome rather than a retryable timeout, because a retry would run the same work twice. This is not the per-call waitSeconds budget. |
 | waitSeconds | — | integer | Maximum time this single start or poll call may wait for completion, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget. |
 | workmateTool | — | string | Exact name of a Workmate tool to invoke directly, e.g. 'JShellSession', 'JShellManual' or 'JShell'. Passing this parameter selects the direct tool mode by itself: question and mode are not used, and no language model is involved, so the tool either runs or returns its own error. |
 | workmateArgs | — | string | Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or {"scope":"eclipse","code":"..."}. Defaults to an empty object. |
@@ -38,7 +38,10 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
   alone, calls no tools and inspects nothing.
 - `timeoutSeconds` is the total wall-clock budget for the background job across
   every poll. It must be positive and defaults to 300 seconds. When this budget
-  expires, the job becomes `failed`.
+  expires, the job becomes `failed` - unless the request has already reached
+  Workmate, which cannot be taken back: the job then waits for Workmate's own
+  outcome instead, because a retryable timeout would invite a second run of
+  work that is already under way.
 - `waitSeconds` bounds only the current start or poll call. It defaults to 5 and
   accepts values from 0 through 45; use 0 to return immediately. It never extends
   the job's total `timeoutSeconds` budget.
