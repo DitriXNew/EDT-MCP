@@ -77,14 +77,14 @@ public class AskWorkmateToolTest
     }
 
     @Test
-    public void testSchemaDeclaresBothModesAndWaitBudgets()
+    public void testSchemaDeclaresStartModesAndWaitBudgets()
     {
         JsonObject schema = JsonParser.parseString(
             tool(stubReturning("answer", null)).getInputSchema()) //$NON-NLS-1$
             .getAsJsonObject();
         JsonObject properties = schema.getAsJsonObject("properties"); //$NON-NLS-1$
         assertTrue(properties.has("question")); //$NON-NLS-1$
-        assertTrue(properties.has("jobId")); //$NON-NLS-1$
+        assertFalse(properties.has("jobId")); //$NON-NLS-1$
         assertTrue(properties.has("projectName")); //$NON-NLS-1$
         assertTrue(properties.has("maxToolRounds")); //$NON-NLS-1$
         assertTrue(properties.has("skillName")); //$NON-NLS-1$
@@ -94,7 +94,7 @@ public class AskWorkmateToolTest
         assertTrue(properties.has("workmateArgs")); //$NON-NLS-1$
         assertTrue(properties.has("mode")); //$NON-NLS-1$
         assertTrue(properties.has("shareMcpTools")); //$NON-NLS-1$
-        assertEquals(11, properties.size());
+        assertEquals(10, properties.size());
 
         // The mode description must warn that chat answers never come back through
         // MCP, otherwise a caller picks 'chat' expecting a returned answer.
@@ -117,27 +117,26 @@ public class AskWorkmateToolTest
             .get("description").getAsString(); //$NON-NLS-1$
         String waitDescription = properties.getAsJsonObject("waitSeconds") //$NON-NLS-1$
             .get("description").getAsString(); //$NON-NLS-1$
-        assertTrue(timeoutDescription.contains("total wall-clock budget")); //$NON-NLS-1$
+        assertTrue(timeoutDescription.contains("Total wall-clock budget")); //$NON-NLS-1$
         // Both halves of the promise, because half of it would mislead: the budget fails the
         // job, EXCEPT once the request has reached Workmate and can no longer be taken back.
         assertTrue(timeoutDescription.contains("the job is failed")); //$NON-NLS-1$
         assertTrue(timeoutDescription.contains("cannot be taken back")); //$NON-NLS-1$
-        assertTrue(waitDescription.contains("single start or poll call")); //$NON-NLS-1$
+        assertTrue(waitDescription.contains("this start call")); //$NON-NLS-1$
         assertTrue(waitDescription.contains("0 to 45")); //$NON-NLS-1$
     }
 
     @Test
-    public void testMissingAndBlankModeArgumentsAreActionable()
+    public void testMissingAndBlankStartArgumentsAreActionable()
     {
         AskWorkmateTool tool = tool(stubReturning("unused", null)); //$NON-NLS-1$
         String missing = tool.execute(Collections.emptyMap());
-        assertErrorContains(missing, "requires one mode", "question", "jobId"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertErrorContains(missing, "requires a non-empty question", "workmateTool", //$NON-NLS-1$ //$NON-NLS-2$
+            "get_job_status"); //$NON-NLS-1$
 
         String blankQuestion = tool.execute(params("question", "   ")); //$NON-NLS-1$ //$NON-NLS-2$
         assertErrorContains(blankQuestion, "non-whitespace", "retry ask_workmate"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        String blankJob = tool.execute(params("jobId", "   ")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertErrorContains(blankJob, "jobId", "non-empty", "without question"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
@@ -198,7 +197,7 @@ public class AskWorkmateToolTest
     }
 
     @Test
-    public void testPollReturnsCompletedAnswerReasoningProgressAndCount() throws Exception
+    public void testSharedStatusToolReturnsCompletedAnswerReasoningProgressAndCount() throws Exception
     {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -213,9 +212,7 @@ public class AskWorkmateToolTest
         assertTrue(entered.await(1, TimeUnit.SECONDS));
         release.countDown();
 
-        Map<String, String> poll = params("jobId", jobId); //$NON-NLS-1$
-        poll.put("waitSeconds", "1"); //$NON-NLS-1$ //$NON-NLS-2$
-        String done = tool.execute(poll);
+        String done = pollLatestJob(jobId, 1);
         assertJobStatus(done, "done"); //$NON-NLS-1$
         assertTrue(done.contains("| assistantMessages | 3 |")); //$NON-NLS-1$
         assertTrue(done.contains("## Answer\n\nThe answer")); //$NON-NLS-1$
@@ -223,25 +220,6 @@ public class AskWorkmateToolTest
         assertContains(done, "Accepted the question", "Located the 1C:Workmate plugin", //$NON-NLS-1$ //$NON-NLS-2$
             "Obtained the Workmate conversation facade", "Sent the request to Workmate", //$NON-NLS-1$ //$NON-NLS-2$
             "Received the Workmate response"); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testUnknownJobIdIsActionable()
-    {
-        AskWorkmateTool tool = tool(stubReturning("unused", null)); //$NON-NLS-1$
-        String result = tool.execute(params("jobId", "missing-job-42")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertErrorContains(result, "Unknown ask_workmate jobId 'missing-job-42'", //$NON-NLS-1$
-            "Check the value", "start a new job", "question instead of jobId"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-    }
-
-    @Test
-    public void testQuestionAndJobIdTogetherAreActionable()
-    {
-        AskWorkmateTool tool = tool(stubReturning("unused", null)); //$NON-NLS-1$
-        Map<String, String> both = params("question", "q"); //$NON-NLS-1$ //$NON-NLS-2$
-        both.put("jobId", "job-1"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertErrorContains(tool.execute(both), "mutually exclusive", //$NON-NLS-1$
-            "only question", "only jobId", "poll"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
@@ -257,9 +235,7 @@ public class AskWorkmateToolTest
         String jobId = extractJobId(tool.execute(start));
         assertTrue(entered.await(1, TimeUnit.SECONDS));
 
-        Map<String, String> poll = params("jobId", jobId); //$NON-NLS-1$
-        poll.put("waitSeconds", "2"); //$NON-NLS-1$ //$NON-NLS-2$
-        String failed = tool.execute(poll);
+        String failed = pollLatestJob(jobId, 2);
         release.countDown();
         assertJobStatus(failed, "failed"); //$NON-NLS-1$
         assertContains(failed, "total timeoutSeconds budget of 1 seconds", //$NON-NLS-1$
@@ -622,15 +598,12 @@ public class AskWorkmateToolTest
         String jobId = extractJobId(tool.execute(start));
         assertTrue(entered.await(2, TimeUnit.SECONDS));
 
-        Map<String, String> poll = params("jobId", jobId); //$NON-NLS-1$
-        poll.put("waitSeconds", "2"); //$NON-NLS-1$ //$NON-NLS-2$
-        String afterBudget = tool.execute(poll);
+        String afterBudget = pollLatestJob(jobId, 2);
         assertJobStatus(afterBudget, "running"); //$NON-NLS-1$
         assertContains(afterBudget, "expired after the request was already handed over"); //$NON-NLS-1$
 
         release.countDown();
-        poll.put("waitSeconds", "5"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertJobStatus(tool.execute(poll), "done"); //$NON-NLS-1$
+        assertJobStatus(pollLatestJob(jobId, 5), "done"); //$NON-NLS-1$
     }
 
     @Test
@@ -805,6 +778,14 @@ public class AskWorkmateToolTest
         return new AskWorkmateTool(gateway, registry);
     }
 
+    private String pollLatestJob(String jobId, int waitSeconds)
+    {
+        BackgroundJobs registry = registries.get(registries.size() - 1);
+        Map<String, String> params = params("jobId", jobId); //$NON-NLS-1$
+        params.put("waitSeconds", Integer.toString(waitSeconds)); //$NON-NLS-1$
+        return new GetJobStatusTool(registry).execute(params);
+    }
+
     private String executeWithFailure(GatewayException failure)
     {
         return tool(stubThrowing(failure)).execute(params("question", "q")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -898,7 +879,7 @@ public class AskWorkmateToolTest
     {
         assertNotNull(markdown);
         assertTrue("Expected status '" + status + "' in: " + markdown, //$NON-NLS-1$ //$NON-NLS-2$
-            markdown.startsWith("# Workmate job: " + status)); //$NON-NLS-1$
+            markdown.startsWith("# Background job: " + status)); //$NON-NLS-1$
         assertTrue(markdown.contains("| status | " + status + " |")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(markdown.contains("| elapsed |")); //$NON-NLS-1$
         assertTrue(markdown.contains("## Progress")); //$NON-NLS-1$

@@ -76,6 +76,10 @@ public class ToolPresetTest
             disabled.contains("build_external_objects")); //$NON-NLS-1$
         assertTrue("Should disable set_infobase_credentials", //$NON-NLS-1$
             disabled.contains("set_infobase_credentials")); //$NON-NLS-1$
+        assertTrue("Should disable destructive cancel_job", //$NON-NLS-1$
+            disabled.contains("cancel_job")); //$NON-NLS-1$
+        assertTrue("Should disable get_job_status with its disabled job owners", //$NON-NLS-1$
+            disabled.contains("get_job_status")); //$NON-NLS-1$
 
         // Should NOT disable core, problems, code intelligence, tags
         assertFalse("Should not disable get_edt_version", disabled.contains("get_edt_version"));
@@ -108,6 +112,10 @@ public class ToolPresetTest
             disabled.contains("build_external_objects")); //$NON-NLS-1$
         assertTrue("Should disable set_infobase_credentials", //$NON-NLS-1$
             disabled.contains("set_infobase_credentials")); //$NON-NLS-1$
+        assertTrue("Should disable destructive cancel_job", //$NON-NLS-1$
+            disabled.contains("cancel_job")); //$NON-NLS-1$
+        assertTrue("Should disable get_job_status with its disabled job owners", //$NON-NLS-1$
+            disabled.contains("get_job_status")); //$NON-NLS-1$
         assertFalse("Should not disable the read-only export_common_picture", //$NON-NLS-1$
             disabled.contains("export_common_picture")); //$NON-NLS-1$
     }

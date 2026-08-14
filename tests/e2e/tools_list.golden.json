@@ -194,6 +194,32 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Preview or cancel a background job by jobId. Destructive: omitting confirm or passing confirm=false only describes the owning tool, state, and progress; confirm=true acts only while the work can still be recalled. Full parameters and examples: call get_tool_guide('cancel_job').",
+    "inputSchema": {
+      "properties": {
+        "confirm": {
+          "description": "true = request cancellation; false or omitted = preview only, with no change.",
+          "type": "boolean"
+        },
+        "jobId": {
+          "description": "Background job id returned by the tool that started the job.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobId"
+      ],
+      "type": "object"
+    },
+    "name": "cancel_job",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
@@ -1955,6 +1981,32 @@
       "type": "object"
     },
     "name": "get_form_screenshot",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Poll any background job by the jobId returned from its owning tool. Returns the current state, progress journal, and terminal result; optionally waits for a transport-safe interval. Full parameters and examples: call get_tool_guide('get_job_status').",
+    "inputSchema": {
+      "properties": {
+        "jobId": {
+          "description": "Background job id returned by the tool that started the job.",
+          "type": "string"
+        },
+        "waitSeconds": {
+          "description": "Maximum time this poll may wait for a terminal state, in seconds; defaults to 5 and accepts 0 to 45. Use 0 to return immediately.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "jobId"
+      ],
+      "type": "object"
+    },
+    "name": "get_job_status",
     "outputSchema": null
   },
   {

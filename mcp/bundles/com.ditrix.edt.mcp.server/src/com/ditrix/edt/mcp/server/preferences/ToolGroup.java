@@ -43,11 +43,12 @@ public enum ToolGroup
         "get_tags", "get_objects_by_tags"), //$NON-NLS-1$ //$NON-NLS-2$
 
     APPLICATIONS("applications", "Applications & Testing", //$NON-NLS-1$ //$NON-NLS-2$
-        "Application and infobase management, external-object builds, launch, testing, and Workmate", //$NON-NLS-1$
+        "Application and infobase management, external-object builds, launch, testing, " //$NON-NLS-1$
+            + "background jobs, and Workmate", //$NON-NLS-1$
         "get_applications", "list_configurations", "create_launch_config", "delete_launch_config", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "create_infobase", "delete_infobase", "update_database", "debug_launch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "terminate_launch", "run_yaxunit_tests", "ask_workmate", "build_external_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "set_infobase_credentials"), //$NON-NLS-1$
+        "terminate_launch", "run_yaxunit_tests", "ask_workmate", "get_job_status", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "cancel_job", "build_external_objects", "set_infobase_credentials"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
     DEBUG("debug", "Debugging", //$NON-NLS-1$ //$NON-NLS-2$
         "Breakpoints, stepping, variables, expression evaluation, and profiling", //$NON-NLS-1$

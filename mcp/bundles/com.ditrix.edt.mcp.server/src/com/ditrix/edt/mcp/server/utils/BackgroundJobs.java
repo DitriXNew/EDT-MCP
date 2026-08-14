@@ -48,7 +48,8 @@ public final class BackgroundJobs implements AutoCloseable
     {
         RUNNING("running"), //$NON-NLS-1$
         DONE("done"), //$NON-NLS-1$
-        FAILED("failed"); //$NON-NLS-1$
+        FAILED("failed"), //$NON-NLS-1$
+        CANCELLED("cancelled"); //$NON-NLS-1$
 
         private final String value;
 
@@ -58,6 +59,30 @@ public final class BackgroundJobs implements AutoCloseable
         }
 
         /** @return stable lower-case value used in tool output */
+        public String value()
+        {
+            return value;
+        }
+    }
+
+    /** Result of an explicit cancellation request. */
+    public enum CancellationOutcome
+    {
+        /** The job was stopped before its work crossed the commit handshake. */
+        CANCELLED("cancelled"), //$NON-NLS-1$
+        /** The owning tool already handed the request over, so it cannot be recalled. */
+        ALREADY_COMMITTED("alreadyCommitted"), //$NON-NLS-1$
+        /** The job was already done, failed, or cancelled when the request arrived. */
+        ALREADY_TERMINAL("alreadyTerminal"); //$NON-NLS-1$
+
+        private final String value;
+
+        CancellationOutcome(String value)
+        {
+            this.value = value;
+        }
+
+        /** @return stable value used in tool output */
         public String value()
         {
             return value;
@@ -91,6 +116,7 @@ public final class BackgroundJobs implements AutoCloseable
     public static final class JobSnapshot
     {
         private final String id;
+        private final String owningTool;
         private final Status status;
         private final long startedAtMs;
         private final long completedAtMs;
@@ -99,10 +125,11 @@ public final class BackgroundJobs implements AutoCloseable
         private final Object result;
         private final String errorMessage;
 
-        JobSnapshot(String id, Status status, long startedAtMs, long completedAtMs,
+        JobSnapshot(String id, String owningTool, Status status, long startedAtMs, long completedAtMs,
             long elapsedMs, List<ProgressEntry> progress, Object result, String errorMessage)
         {
             this.id = id;
+            this.owningTool = owningTool;
             this.status = status;
             this.startedAtMs = startedAtMs;
             this.completedAtMs = completedAtMs;
@@ -115,6 +142,12 @@ public final class BackgroundJobs implements AutoCloseable
         public String getId()
         {
             return id;
+        }
+
+        /** @return MCP tool that created and owns this job */
+        public String getOwningTool()
+        {
+            return owningTool;
         }
 
         public Status getStatus()
@@ -150,6 +183,29 @@ public final class BackgroundJobs implements AutoCloseable
         public String getErrorMessage()
         {
             return errorMessage;
+        }
+    }
+
+    /** Atomic cancellation decision together with the resulting job snapshot. */
+    public static final class CancellationResult
+    {
+        private final CancellationOutcome outcome;
+        private final JobSnapshot snapshot;
+
+        CancellationResult(CancellationOutcome outcome, JobSnapshot snapshot)
+        {
+            this.outcome = outcome;
+            this.snapshot = snapshot;
+        }
+
+        public CancellationOutcome getOutcome()
+        {
+            return outcome;
+        }
+
+        public JobSnapshot getSnapshot()
+        {
+            return snapshot;
         }
     }
 
@@ -273,15 +329,22 @@ public final class BackgroundJobs implements AutoCloseable
     /**
      * Starts a job with a total wall-clock budget measured from submission.
      *
+     * @param owningTool MCP tool that creates and owns the job
      * @param timeoutMs total job budget in milliseconds
      * @param initialProgress first domain-specific progress message
      * @param work work to execute off the caller thread
      * @return initial snapshot, usually {@link Status#RUNNING}
      * @throws RejectedExecutionException when the registry is stopped or full of running jobs
      */
-    public JobSnapshot start(long timeoutMs, String initialProgress, JobWork work)
+    public JobSnapshot start(String owningTool, long timeoutMs, String initialProgress, JobWork work)
     {
-        return start(timeoutMs, Integer.MAX_VALUE, initialProgress, work);
+        return start(owningTool, timeoutMs, Integer.MAX_VALUE, initialProgress, work);
+    }
+
+    /** Package-local compatibility overload for lifecycle tests; production callers name an owner. */
+    JobSnapshot start(long timeoutMs, String initialProgress, JobWork work)
+    {
+        return start("background_jobs_test", timeoutMs, initialProgress, work); //$NON-NLS-1$
     }
 
     /**
@@ -293,6 +356,7 @@ public final class BackgroundJobs implements AutoCloseable
      * count was meant to enforce. Admission has to be part of the insertion, not a check
      * before it.
      *
+     * @param owningTool MCP tool that creates and owns the job
      * @param timeoutMs total job budget in milliseconds
      * @param maxRunning admit only while strictly fewer jobs are running
      * @param initialProgress first domain-specific progress message
@@ -300,14 +364,20 @@ public final class BackgroundJobs implements AutoCloseable
      * @return the initial snapshot, or {@code null} when the running limit is reached
      * @throws RejectedExecutionException when the registry is stopped or full
      */
-    public JobSnapshot start(long timeoutMs, int maxRunning, String initialProgress, JobWork work)
+    public JobSnapshot start(String owningTool, long timeoutMs, int maxRunning,
+        String initialProgress, JobWork work)
     {
+        if (owningTool == null || owningTool.isBlank())
+        {
+            throw new IllegalArgumentException("Background job owning tool must not be blank"); //$NON-NLS-1$
+        }
         if (work == null)
         {
             throw new IllegalArgumentException("Background job work must not be null"); //$NON-NLS-1$
         }
         long boundedTimeoutMs = Math.max(1L, timeoutMs);
-        JobRecord record = new JobRecord(UUID.randomUUID().toString(), initialProgress);
+        JobRecord record = new JobRecord(UUID.randomUUID().toString(), owningTool,
+            initialProgress);
 
         synchronized (jobsLock)
         {
@@ -376,6 +446,12 @@ public final class BackgroundJobs implements AutoCloseable
         return record.snapshot();
     }
 
+    /** Package-local compatibility overload for lifecycle tests; production callers name an owner. */
+    JobSnapshot start(long timeoutMs, int maxRunning, String initialProgress, JobWork work)
+    {
+        return start("background_jobs_test", timeoutMs, maxRunning, initialProgress, work); //$NON-NLS-1$
+    }
+
     /** @return current job snapshot, or {@code null} when the id is unknown/evicted */
 
     public JobSnapshot get(String jobId)
@@ -408,6 +484,38 @@ public final class BackgroundJobs implements AutoCloseable
         }
         record.await(Math.max(0L, waitMs));
         return record.snapshot();
+    }
+
+    /**
+     * Requests cancellation through the same commit handshake used by deadlines.
+     * <p>
+     * The decision is atomic with {@link ProgressReporter#tryCommit()}: either cancellation
+     * wins while the work can still be abandoned, or the work has already been handed to an
+     * external service and this method reports {@link CancellationOutcome#ALREADY_COMMITTED}
+     * without interrupting it. Reporting the latter as cancelled would invite a retry of work
+     * that is already in flight.
+     *
+     * @param jobId job identifier
+     * @return the cancellation decision and latest snapshot, or {@code null} for an unknown id
+     */
+    public CancellationResult cancel(String jobId)
+    {
+        JobRecord record;
+        synchronized (jobsLock)
+        {
+            record = jobs.get(jobId);
+        }
+        if (record == null)
+        {
+            return null;
+        }
+
+        CancellationOutcome outcome = record.cancel();
+        if (outcome == CancellationOutcome.CANCELLED)
+        {
+            record.cancelWork();
+        }
+        return new CancellationResult(outcome, record.snapshot());
     }
 
     @Override
@@ -582,6 +690,7 @@ public final class BackgroundJobs implements AutoCloseable
     private static final class JobRecord
     {
         private final String id;
+        private final String owningTool;
         private final long startedAtMs = System.currentTimeMillis();
         private final long startedAtNanos = System.nanoTime();
         private final List<ProgressEntry> progress = new ArrayList<>();
@@ -607,9 +716,10 @@ public final class BackgroundJobs implements AutoCloseable
         private final AtomicReference<WorkState> workState =
             new AtomicReference<>(WorkState.NOT_STARTED);
 
-        JobRecord(String id, String initialProgress)
+        JobRecord(String id, String owningTool, String initialProgress)
         {
             this.id = id;
+            this.owningTool = owningTool;
             addProgress(initialProgress);
         }
 
@@ -729,6 +839,37 @@ public final class BackgroundJobs implements AutoCloseable
             return fail(message, committedNote);
         }
 
+        /**
+         * Atomically cancels only work that has not crossed {@link #tryCommit()}.
+         *
+         * @return the honest outcome of this cancellation request
+         */
+        synchronized CancellationOutcome cancel()
+        {
+            if (status != Status.RUNNING)
+            {
+                return CancellationOutcome.ALREADY_TERMINAL;
+            }
+            if (committed)
+            {
+                addProgress("Cancellation was requested, but the owning tool had already " //$NON-NLS-1$
+                    + "handed the work over and it cannot be recalled."); //$NON-NLS-1$
+                return CancellationOutcome.ALREADY_COMMITTED;
+            }
+
+            progress.add(new ProgressEntry(System.currentTimeMillis(),
+                "Cancelled before the owning tool handed the work over.")); //$NON-NLS-1$
+            status = Status.CANCELLED;
+            completedAtMs = System.currentTimeMillis();
+            completedAtNanos = System.nanoTime();
+            if (deadlineFuture != null)
+            {
+                deadlineFuture.cancel(false);
+            }
+            completed.countDown();
+            return CancellationOutcome.CANCELLED;
+        }
+
         private boolean fail(String message, String committedNote)
         {
             ScheduledFuture<?> deadline;
@@ -824,7 +965,7 @@ public final class BackgroundJobs implements AutoCloseable
             long endNanos = status == Status.RUNNING ? System.nanoTime() : completedAtNanos;
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(
                 Math.max(0L, endNanos - startedAtNanos));
-            return new JobSnapshot(id, status, startedAtMs, completedAtMs, elapsedMs,
+            return new JobSnapshot(id, owningTool, status, startedAtMs, completedAtMs, elapsedMs,
                 new ArrayList<>(progress), result, errorMessage);
         }
     }

@@ -1,30 +1,27 @@
 # ask_workmate
 
-Start or poll a background question to the 1C:Workmate plugin without holding an MCP request open for the full cloud conversation. Requires a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call get_tool_guide('ask_workmate').
+Start a background question to the 1C:Workmate plugin and return its jobId. Poll the job with get_job_status instead of calling ask_workmate again. Requires a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call get_tool_guide('ask_workmate').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
-| question | — | string | Start mode: non-empty question or instruction to send to 1C:Workmate. Required when jobId is omitted; mutually exclusive with jobId. |
-| jobId | — | string | Poll mode: id returned by an earlier ask_workmate call. Required when question is omitted; mutually exclusive with question. |
-| projectName | — | string | Start mode only: optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context. |
-| maxToolRounds | — | integer | Start mode only: optional positive limit for Workmate's internal tool-call rounds. |
-| skillName | — | string | Start mode only: optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing. |
-| timeoutSeconds | — | integer | Start mode only: total wall-clock budget for the background job across all polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job is failed - unless the request has already reached Workmate, which cannot be taken back: the job then reports Workmate's own outcome rather than a retryable timeout, because a retry would run the same work twice. This is not the per-call waitSeconds budget. |
-| waitSeconds | — | integer | Maximum time this single start or poll call may wait for completion, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget. |
+| question | — | string | Non-empty question or instruction to send to 1C:Workmate. Required unless workmateTool selects direct tool mode. |
+| projectName | — | string | Optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context. |
+| maxToolRounds | — | integer | Optional positive limit for Workmate's internal tool-call rounds. |
+| skillName | — | string | Optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing. |
+| timeoutSeconds | — | integer | Total wall-clock budget for the background job across all get_job_status polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job is failed - unless the request has already reached Workmate, which cannot be taken back: the job then reports Workmate's own outcome rather than a retryable timeout, because a retry would run the same work twice. This is not the per-call waitSeconds budget. |
+| waitSeconds | — | integer | Maximum time this start call may wait for completion before returning its job snapshot, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget. |
 | workmateTool | — | string | Exact name of a Workmate tool to invoke directly, e.g. 'JShellSession', 'JShellManual' or 'JShell'. Passing this parameter selects the direct tool mode by itself: question and mode are not used, and no language model is involved, so the tool either runs or returns its own error. |
 | workmateArgs | — | string | Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or {"scope":"eclipse","code":"..."}. Defaults to an empty object. |
-| shareMcpTools | — | boolean | Start mode only: when true, the question is prefixed with instructions that let Workmate call EDT-MCP's own tools through this plugin's in-process bridge, so it can inspect the real project instead of answering from general 1C knowledge. Defaults to true for mode 'answer' and to false for mode 'chat', where the project's own .workmate rules already carry the same instructions; pass true there for a project that has no such rules. |
-| mode | — | string | Start mode only: 'answer' (default) runs Workmate's tool loop and RETURNS its answer as text: it inspects the project with its own tools and, through this plugin's bridge, with EDT-MCP's, so it can also change code and metadata. 'chat' hands the same question to Workmate's agentic chat instead; the work happens there and its answer is rendered in the EDT chat panel for a human, so it is NOT returned here. Prefer 'answer' unless a human should continue the conversation in the panel. |
+| shareMcpTools | — | boolean | When true, the question is prefixed with instructions that let Workmate call EDT-MCP's own tools through this plugin's in-process bridge, so it can inspect the real project instead of answering from general 1C knowledge. Defaults to true for mode 'answer' and to false for mode 'chat', where the project's own .workmate rules already carry the same instructions; pass true there for a project that has no such rules. |
+| mode | — | string | 'answer' (default) runs Workmate's tool loop and RETURNS its answer as text: it inspects the project with its own tools and, through this plugin's bridge, with EDT-MCP's, so it can also change code and metadata. 'chat' hands the same question to Workmate's agentic chat instead; the work happens there and its answer is rendered in the EDT chat panel for a human, so it is NOT returned here. Prefer 'answer' unless a human should continue the conversation in the panel. |
 
 ## Guide
 ## Parameter details
 
-- `question` starts a new background conversation. It must contain
-  non-whitespace text and is mutually exclusive with `jobId`.
-- `jobId` polls a job started by an earlier call. Pass it without `question`.
-  Poll responses include the current status, elapsed time, timestamped progress,
-  and the answer/reasoning once ready.
+- `question` starts a new background conversation and must contain
+  non-whitespace text. It is required unless `workmateTool` selects direct tool
+  mode.
 - `projectName` applies only when starting. When present, it must name an open
   EDT project; use `list_projects` to discover valid names. When omitted,
   Workmate receives its `ProjectId.Default` context.
@@ -37,14 +34,15 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
   knowing about only to avoid it - under `raw` the cloud answers from the model
   alone, calls no tools and inspects nothing.
 - `timeoutSeconds` is the total wall-clock budget for the background job across
-  every poll. It must be positive and defaults to 300 seconds. When this budget
+  every `get_job_status` poll. It must be positive and defaults to 300 seconds. When this budget
   expires, the job becomes `failed` - unless the request has already reached
   Workmate, which cannot be taken back: the job then waits for Workmate's own
   outcome instead, because a retryable timeout would invite a second run of
   work that is already under way.
-- `waitSeconds` bounds only the current start or poll call. It defaults to 5 and
-  accepts values from 0 through 45; use 0 to return immediately. It never extends
-  the job's total `timeoutSeconds` budget.
+- `waitSeconds` bounds only the initial `ask_workmate` call. It defaults to 5 and
+  accepts values from 0 through 45; use 0 to return immediately with the job id.
+  Later waits belong to `get_job_status`. Neither wait extends the job's total
+  `timeoutSeconds` budget.
 - `mode` applies only when starting and selects what happens to the question.
   `answer` (the default) runs Workmate's tool loop and returns its answer as
   text: it inspects the project with its own tools and, through this plugin's
@@ -79,10 +77,10 @@ Start without a project context and return immediately:
 }
 ```
 
-Poll the returned job:
+Poll the returned job through the shared polling surface:
 
 ```json
-{"jobId":"<id returned by the start call>","waitSeconds":5}
+{"tool":"get_job_status","arguments":{"jobId":"<id returned by ask_workmate>","waitSeconds":5}}
 ```
 
 Start in one EDT project's context and wait briefly for a fast answer:
@@ -109,8 +107,9 @@ The tool requires a compatible 1C:Workmate installation in the same EDT JVM.
 EDT-MCP does not compile against Workmate and does not add the 1C repository to
 its target platform; the integration is discovered at runtime through OSGi and
 reflection. A missing or changed Workmate installation is returned as an
-actionable `failed` job status, not as an escaped exception. Unknown job ids and
-invalid start/poll argument combinations are returned as actionable tool errors.
+actionable `failed` job status, not as an escaped exception. Poll any returned
+job id with `get_job_status`; an unknown or expired id is reported there with
+instructions to start a new job with its owning tool.
 Before sending, the adapter also checks Workmate's public `ISettings`: the plugin
 must be enabled and `hasClientToken()` must report a configured access key.
 
