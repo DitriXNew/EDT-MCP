@@ -434,12 +434,24 @@ public class AskWorkmateToolTest
         }
     }
 
+    /**
+     * With no project named there is nothing truthful to put in projectName, and the example
+     * exists to be RUN: a placeholder would make Workmate's very first bridge call fail with
+     * "project not found" instead of proving the bridge works. So the example becomes the
+     * discovery call that takes no arguments at all.
+     */
     @Test
-    public void testPreambleNamesTheProjectOnlyWhenTheCallerGaveOne()
+    public void testPreambleWithoutAProjectShowsAnExampleThatRunsAsWritten()
     {
         AtomicReference<String> sent = new AtomicReference<>();
         tool(questionCapturingGateway(sent)).execute(params("question", "q")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(sent.get().contains("<project>")); //$NON-NLS-1$
+
+        String preamble = sent.get();
+        assertFalse("a placeholder would be executed verbatim: " + preamble, //$NON-NLS-1$
+            preamble.contains("<project>")); //$NON-NLS-1$
+        assertTrue(preamble.contains("mcp.apply(\"list_projects\", \"{}\")")); //$NON-NLS-1$
+        assertFalse("no projectName argument can be honest here", //$NON-NLS-1$
+            preamble.contains("projectName")); //$NON-NLS-1$
     }
 
     /**

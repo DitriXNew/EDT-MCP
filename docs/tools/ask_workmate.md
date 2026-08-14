@@ -14,7 +14,7 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
 | waitSeconds | — | integer | Maximum time this single start or poll call may wait for completion, in seconds; defaults to 5, accepts 0 to 45. Use 0 to return immediately. This does not extend the job's total timeoutSeconds budget. |
 | workmateTool | — | string | Exact name of a Workmate tool to invoke directly, e.g. 'JShellSession', 'JShellManual' or 'JShell'. Passing this parameter selects the direct tool mode by itself: question and mode are not used, and no language model is involved, so the tool either runs or returns its own error. |
 | workmateArgs | — | string | Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or {"scope":"eclipse","code":"..."}. Defaults to an empty object. |
-| shareMcpTools | — | boolean | Start mode only: when true (the default), the question is prefixed with instructions that let Workmate call EDT-MCP's own tools through this plugin's in-process bridge, so it can inspect the real project instead of answering from general 1C knowledge. Pass false to send the question verbatim and leave Workmate on its own tools. |
+| shareMcpTools | — | boolean | Start mode only: when true, the question is prefixed with instructions that let Workmate call EDT-MCP's own tools through this plugin's in-process bridge, so it can inspect the real project instead of answering from general 1C knowledge. Defaults to true for mode 'answer' and to false for mode 'chat', where the project's own .workmate rules already carry the same instructions; pass true there for a project that has no such rules. |
 | mode | — | string | Start mode only: 'answer' (default) runs Workmate's tool loop and RETURNS its answer as text: it inspects the project with its own tools and, through this plugin's bridge, with EDT-MCP's, so it can also change code and metadata. 'chat' hands the same question to Workmate's agentic chat instead; the work happens there and its answer is rendered in the EDT chat panel for a human, so it is NOT returned here. Prefer 'answer' unless a human should continue the conversation in the panel. |
 
 ## Guide
@@ -50,6 +50,12 @@ Start or poll a background question to the 1C:Workmate plugin without holding an
   and the answer is rendered in the EDT chat panel for a human, so it is **not**
   returned through MCP - the job completes with a handoff note. Prefer `answer`
   unless a human should carry the conversation on in the panel.
+- `shareMcpTools` prefixes the question with the instructions Workmate needs to
+  call EDT-MCP's tools through this plugin's in-process bridge. It defaults to
+  true for `answer`, where nothing else would tell Workmate the bridge exists,
+  and to false for `chat`, which loads the project's own `.workmate` rules and
+  already finds the same instructions there. Pass it explicitly for a chat on a
+  project that carries no such rules.
 - `workmateTool` runs one of Workmate's OWN tools directly, with no language
   model in the loop, so the tool either runs or returns its own error. Pass the
   exact tool name, for example `JShellSession`, `JShellManual` or `JShell`.

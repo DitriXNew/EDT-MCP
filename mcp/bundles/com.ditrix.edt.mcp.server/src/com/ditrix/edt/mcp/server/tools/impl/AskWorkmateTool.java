@@ -24,6 +24,7 @@ import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressEntry;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway;
@@ -271,8 +272,10 @@ public class AskWorkmateTool implements IMcpTool
                 "Accepted the direct Workmate tool call.", progress -> { //$NON-NLS-1$
                     try
                     {
+                        // Commit-capable, not progress::add: a Workmate tool can run arbitrary
+                        // code, and once it is invoked no timeout can take that back.
                         String out = gateway.callWorkmateTool(workmateTool, workmateArgs,
-                            jobTimeoutSeconds, progress::add);
+                            jobTimeoutSeconds, jobProgress(progress));
                         return new WorkmateResponse(out == null || out.isEmpty()
                             ? "(the tool returned no text)" : out, null); //$NON-NLS-1$
                     }
@@ -306,12 +309,48 @@ public class AskWorkmateTool implements IMcpTool
      * @param projectName optional project the caller asked about, used in the example
      * @return the preamble, ending with a blank line before the question
      */
+    /**
+     * Adapts a job's reporter to the gateway's listener, carrying BOTH directions: progress out,
+     * and the commit handshake back - which is what keeps a job whose request is already on its
+     * way from being published as a retryable failure.
+     *
+     * @param progress the running job's reporter
+     * @return a listener bound to that job
+     */
+    private static ProgressListener jobProgress(ProgressReporter progress)
+    {
+        return new ProgressListener()
+        {
+            @Override
+            public void onProgress(String message)
+            {
+                progress.add(message);
+            }
+
+            @Override
+            public boolean onTryCommit()
+            {
+                return progress.tryCommit();
+            }
+        };
+    }
+
     static String mcpBridgePreamble(String projectName)
     {
+        // The example has to RUN as written - the whole point of the preamble is that Workmate
+        // may execute it without improvising Java API. With no project named there is nothing
+        // truthful to put in projectName, and a placeholder would make the snippet fail with
+        // "project not found" instead of demonstrating the bridge, so the example becomes the
+        // discovery call that needs no arguments at all.
+        //
         // The name lands inside a JSON string inside a Java string literal, so a quote or
         // a backslash in it would otherwise produce a snippet that does not compile.
-        String project = projectName == null ? "<project>" //$NON-NLS-1$
-            : projectName.replace("\\", "\\\\\\\\").replace("\"", "\\\\\\\""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        String example = projectName == null
+            ? "mcp.apply(\"list_projects\", \"{}\")" //$NON-NLS-1$
+            : "mcp.apply(\"get_metadata_objects\", " //$NON-NLS-1$
+                + "\"{\\\"projectName\\\":\\\"" //$NON-NLS-1$
+                + projectName.replace("\\", "\\\\\\\\").replace("\"", "\\\\\\\"") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                + "\\\",\\\"metadataType\\\":\\\"Catalog\\\"}\")"; //$NON-NLS-1$
         return "The EDT-MCP plugin runs in this same EDT and publishes its entry point as an " //$NON-NLS-1$
             + "ordinary OSGi service under the JDK type " //$NON-NLS-1$
             + "java.util.function.BiFunction<String,String,String> with the service property " //$NON-NLS-1$
@@ -329,8 +368,7 @@ public class AskWorkmateTool implements IMcpTool
             + "var refs = ctx.getServiceReferences(java.util.function.BiFunction.class, " //$NON-NLS-1$
             + "\"(edt.mcp.bridge=v1)\");\n" //$NON-NLS-1$
             + "var mcp = ctx.getService(refs.iterator().next());\n" //$NON-NLS-1$
-            + "System.out.println(mcp.apply(\"get_metadata_objects\", " //$NON-NLS-1$
-            + "\"{\\\"projectName\\\":\\\"" + project + "\\\",\\\"metadataType\\\":\\\"Catalog\\\"}\"));\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "System.out.println(" + example + ");\n" //$NON-NLS-1$
             + "}\n\n" //$NON-NLS-1$
             + "Reuse one session for follow-up calls. Report what the tool actually " //$NON-NLS-1$
             + "returned and never invent a result.\n\n" //$NON-NLS-1$
@@ -453,31 +491,21 @@ public class AskWorkmateTool implements IMcpTool
             JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
                 MAX_CONCURRENT_JOBS,
                 "Accepted the question.", progress -> { //$NON-NLS-1$
+                    // Not progress::add: every path below reaches a point after which its
+                    // request can no longer be taken back - the chat hand-off, and equally the
+                    // facade and direct-tool dispatches, because Workmate's tools change this
+                    // configuration. Past that point the job must never be published as a
+                    // retryable failure, or the retry performs the same work twice.
+                    ProgressListener listener = jobProgress(progress);
                     try
                     {
                         if (chatMode)
                         {
-                            // Not progress::add: the hand-off also reports the point after
-                            // which this job must never be published as a retryable failure,
-                            // because a retry would ask the chat the same question twice.
-                            gateway.pushToChat(jobProject, jobQuestion, new ProgressListener()
-                            {
-                                @Override
-                                public void onProgress(String message)
-                                {
-                                    progress.add(message);
-                                }
-
-                                @Override
-                                public boolean onTryCommit()
-                                {
-                                    return progress.tryCommit();
-                                }
-                            });
+                            gateway.pushToChat(jobProject, jobQuestion, listener);
                             return new WorkmateResponse(chatHandoffAnswer(), null);
                         }
                         WorkmateResponse response = gateway.ask(jobProject, jobQuestion,
-                            maxToolRounds, skillName, jobTimeoutSeconds, progress::add);
+                            maxToolRounds, skillName, jobTimeoutSeconds, listener);
                         if (response == null || trimToNull(response.getText()) == null)
                         {
                             throw new WorkmateJobException(emptyAnswerMessage());

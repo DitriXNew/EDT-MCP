@@ -425,10 +425,16 @@ public final class BackgroundJobs implements AutoCloseable
             // handed over must not be published as "cancelled, try again", because the retry
             // after the restart would perform the action a second time. The pool is torn down
             // either way below - what is at stake here is only what a poller is told.
-            record.failUnlessCommitted("EDT-MCP is stopping; the background job was cancelled.", //$NON-NLS-1$
+            if (record.failUnlessCommitted(
+                "EDT-MCP is stopping; the background job was cancelled.", //$NON-NLS-1$
                 "EDT-MCP is stopping, but this request was already handed over and cannot be " //$NON-NLS-1$
-                    + "taken back."); //$NON-NLS-1$
-            record.cancelWork();
+                    + "taken back.")) //$NON-NLS-1$
+            {
+                // Only what was actually failed gets cancelled, exactly as on the deadline path:
+                // interrupting a committed job would turn into a gateway failure and publish a
+                // retryable error over a request that is already on its way.
+                record.cancelWork();
+            }
         }
 
         deadlines.shutdownNow();

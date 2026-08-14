@@ -340,6 +340,16 @@ public class WorkmateGateway
             Object cancellationToken = createCancellationToken(cancellationTokenClass, cancelled);
             Method sendAsync = requireMethod(facadeClass, "sendAsync", requestClass, //$NON-NLS-1$
                 cancellationTokenClass);
+
+            // Dispatching is irreversible in the way that matters: Workmate's tool loop can edit
+            // this configuration, and the cancellation token stops us WAITING, not the edits
+            // already made. So the job is committed first - a later "timed out, start a new job"
+            // would invite a retry that runs those edits a second time.
+            if (!progress.onTryCommit())
+            {
+                throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
+                    + "before the question could be sent, so it was not sent"); //$NON-NLS-1$
+            }
             Object futureValue = invoke(sendAsync, facade, request, cancellationToken);
             if (!(futureValue instanceof CompletableFuture<?>))
             {
@@ -472,6 +482,13 @@ public class WorkmateGateway
                 cancellationTokenClass);
             progress.onProgress("Invoking Workmate tool '" + toolName + "' directly."); //$NON-NLS-1$ //$NON-NLS-2$
 
+            // Same reason as the facade above: a Workmate tool can run arbitrary code (JShell)
+            // or change the configuration, and cancelling the wait does not undo that.
+            if (!progress.onTryCommit())
+            {
+                throw GatewayException.callFailed("the job was already reported as finished " //$NON-NLS-1$
+                    + "before tool '" + toolName + "' could be invoked, so it was not invoked"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
             Object futureValue = invoke(callTools, tools, calls, token);
             if (!(futureValue instanceof CompletableFuture<?>))
             {

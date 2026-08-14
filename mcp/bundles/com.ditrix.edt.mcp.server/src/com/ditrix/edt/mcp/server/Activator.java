@@ -98,24 +98,13 @@ public class Activator extends AbstractUIPlugin
             mcpServer.registerTools();
         }
 
-        // Publish the stable in-process bridge in every OSGi runtime, including the
-        // headless test application. It is registered under three names: the
-        // interface's STRING name (for consumers that resolve it reflectively) plus
-        // the JDK function types, so a consumer that cannot see the bridge package -
-        // an AI assistant running a JShell snippet, for instance - still gets a typed
-        // handle. The service property tells those JDK-typed lookups apart from any
-        // other BiFunction/Supplier service in the runtime.
-        Dictionary<String, Object> bridgeProperties = new Hashtable<>();
-        bridgeProperties.put(IEdtMcpBridge.SERVICE_PROPERTY, IEdtMcpBridge.SERVICE_PROPERTY_VALUE);
-        bridgeRegistration = context.registerService(
-            new String[] { IEdtMcpBridge.class.getName(), BiFunction.class.getName(),
-                Supplier.class.getName() },
-            new EdtMcpBridge(), bridgeProperties);
-
         // In Tycho headless test runtime, avoid eager workspace/UI/platform initialization.
         // This prevents background platform startup races that can fail the test process.
         if (headless)
         {
+            // The bridge is still published here: the headless test application has no EDT
+            // services to wait for, and the bridge's own contract is what those tests exercise.
+            publishBridge(context);
             logInfo("EDT MCP Server plugin started in headless mode (startup integrations skipped)"); //$NON-NLS-1$
             return;
         }
@@ -123,11 +112,39 @@ public class Activator extends AbstractUIPlugin
         // Initialize service trackers
         services.init(context);
 
+        // AFTER the trackers, never before: the bridge advertises the whole catalogue, and a
+        // consumer that reacts to the service appearing - an OSGi listener, a sibling bundle -
+        // would otherwise call tools whose EDT services (IBmModelManager, ICheckScheduler) are
+        // still null and get transient "service unavailable" failures. Visibility of the
+        // service has to mean the tools it advertises are usable.
+        publishBridge(context);
+
         // Run startup orchestration (group service + UI integrations) in the
         // same order as before.
         orchestrator.start(headless);
 
         logInfo("EDT MCP Server plugin started"); //$NON-NLS-1$
+    }
+
+    /**
+     * Publishes the stable in-process bridge.
+     * <p>
+     * Registered under three names: the interface's STRING name (for consumers that resolve it
+     * reflectively) plus the JDK function types, so a consumer that cannot see the bridge
+     * package - an AI assistant running a JShell snippet, for instance - still gets a typed
+     * handle. The service property tells those JDK-typed lookups apart from any other
+     * BiFunction/Supplier service in the runtime.
+     *
+     * @param context the bundle context to register in
+     */
+    private void publishBridge(BundleContext context)
+    {
+        Dictionary<String, Object> bridgeProperties = new Hashtable<>();
+        bridgeProperties.put(IEdtMcpBridge.SERVICE_PROPERTY, IEdtMcpBridge.SERVICE_PROPERTY_VALUE);
+        bridgeRegistration = context.registerService(
+            new String[] { IEdtMcpBridge.class.getName(), BiFunction.class.getName(),
+                Supplier.class.getName() },
+            new EdtMcpBridge(), bridgeProperties);
     }
 
     @Override
