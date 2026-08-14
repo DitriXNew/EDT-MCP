@@ -69,6 +69,13 @@ Anything else is **rejected** with an actionable error naming the supported set.
 
 Also rejected wherever they appear: the `--upload-pack` / `--receive-pack` / `--exec` remote/step-program options, the `--config` / `--config-env` inline-config, the `--git-dir` / `--work-tree` / `--exec-path` / `--namespace` repository redirections, and `--ext-diff` / `--output` / `--help` / `--no-index` (external driver / arbitrary file write / man viewer / reading files outside the repo), plus `--strategy` everywhere and a single-dash token that can carry `-s` on `merge`/`pull` - the cluster spells it too (`-nspwn` is `-n -s pwn`), while a value-taking letter ends it, so `-Xours` and `-mfixes` stay allowed, as do `cherry-pick -s`/`revert -s` (there `-s` is `--signoff`) (git runs the strategy as the program `git-<strategy>` from `PATH`; `-X`/`--strategy-option`, which only configures the built-in strategy, stays allowed), plus the options that take an arbitrary FILE as their value - `--contents` (`blame` prints it), `--file` / `-F` on `commit`/`tag`/`merge` (it lands in the message), `--template` and `--pathspec-from-file` - and any **global** option before the subcommand (e.g. `-c core.sshCommand=...`), since the first token must be a bare subcommand. Transports are restricted (`GIT_ALLOW_PROTOCOL`) to the safe set, so a `ext::` / `fd::` transport-helper remote (which would run an arbitrary command) is refused. A `file://` remote is refused too - git would read, and on a push WRITE, a repository anywhere on disk, and that path sits inside a URI where the repository-containment check cannot see it (a local remote written as a plain path is covered by that check).
 
+The blocked file/output options also include:
+
+- `--ignore-revs-file` - takes an arbitrary-file operand.
+- `--exclude-from` - takes an arbitrary-file operand.
+- `--exclude-per-directory` - resolves relative to every directory Git walks, so a value such as `../../x` can escape the work tree.
+- `--encoding` - can make Git emit non-UTF-8 bytes that defeat the credential redaction.
+
 ## Result
 JSON: `{ "success": <exit==0>, "exitCode": <n>, "command": "git ...", "output": "<combined stdout+stderr>" }`. A non-zero `exitCode` (a rejected push, a merge conflict, ...) is `success: false` with git's own message in `output` - never a false success. `output` is capped (`truncated: true` when it was cut). The op is bounded to 120 seconds; a stalled command is killed with a timeout error.
 
