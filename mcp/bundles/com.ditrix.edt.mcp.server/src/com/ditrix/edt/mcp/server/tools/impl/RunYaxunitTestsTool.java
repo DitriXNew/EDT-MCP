@@ -939,9 +939,12 @@ public class RunYaxunitTestsTool implements IMcpTool
             // The tool thread waits on the job's latch; if the prep is not done
             // within the budget it returns a "Pending (preparation)" response and
             // the caller retries with the same arguments. The launch (Phase 3) is
-            // NEVER run in the background — only the prep. A single in-flight
-            // entry per (project, applicationId) prevents a second job from
-            // starting while one is already running.
+            // NEVER run in the background — only the prep. One in-flight entry
+            // per PREPARATION (see PrepRequest.prepKey: the project and the
+            // application, plus the conflict policy and the rebuild scope)
+            // prevents a second job for the same one from starting while it
+            // is already running — and lets two calls that asked for DIFFERENT
+            // preparations of the same infobase each get the one they asked for.
             //
             // Phase 3 (spawn) still runs under the per-key lock — this serialises
             // the spawn across both YAXUnit tools for the same IB and closes the
@@ -1806,8 +1809,11 @@ public class RunYaxunitTestsTool implements IMcpTool
          * scopes shared one job and the first to start won. Deriving the key here, from the
          * object the preparation consumes, means a call site can no longer state a DIFFERENT
          * project, application, policy or scope than the one it is about to prepare with. It is
-         * not a proof that the whole request is captured: the three fields below are excluded
-         * deliberately, and their reasons are what carries that part.
+         * not a proof that the whole request is captured: the fields below are excluded
+         * deliberately, and their reasons are what carries that part. In particular {@code project}
+         * is excluded because BOTH call sites derive it from {@code projectName} — the type does
+         * not enforce that, so a future call site that passed an unrelated project would key it
+         * under the wrong name.
          *
          * <p>Keyed: {@code projectName} + {@code applicationId} (via
          * {@link LaunchLifecycleUtils#prepKeyFor}, the same string as the per-infobase lock), the
@@ -2513,7 +2519,11 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
-     * Computes a short hex SHA-1 hash for filter parts so the runKey is bounded.
+     * Computes a short hex SHA-1 hash of the framed run-key identity (target, filter,
+     * conflict policy and pre-launch chain) so the runKey stays bounded in length.
+     *
+     * <p>Six digest bytes: the key is therefore not injective, and {@link #buildRunKey}
+     * explains why that is accepted.
      */
     private static String sha1(String input)
     {
@@ -2547,6 +2557,10 @@ public class RunYaxunitTestsTool implements IMcpTool
      * ({@code ЗначениеЗаполнено}), so an empty list and an absent key mean the same thing to the
      * framework — "do not filter on this" — and writing an empty array would be a promise the
      * framework does not keep.
+     *
+     * <p>"Non-empty" is decided on the raw comma-string, not on the parsed list, so one input
+     * does still write {@code []}: a value made only of separators ({@code ","}). Left as is —
+     * the file it produces is what {@link #filterKeyPart} keys on, and the two must agree.
      *
      * <p>Package-private and static so the generated filter can be asserted directly; this is the
      * method both the RUN and the DEBUG path call, and it reads the filter families off the request
