@@ -667,9 +667,12 @@ public class MetadataRenameService
 
     /**
      * Serializes every field that can change what an index means, plus the signature-only stable
-     * leaf identity. Optionality controls whether confirm may disable the current leaf, and enabled
-     * is its default apply state, so omitting either would let a materially different tree reuse the
-     * preview token. The identity distinguishes leaves whose rendered fields happen to be equal.
+     * leaf identity. Optionality controls whether confirm may disable the current leaf. For a native
+     * point, enabled is the leaf's default apply state and nativeItemChecked is the owning item's
+     * independent execution gate; for a plain point, enabled remains the item's checked state and
+     * nativeItemChecked is absent. The explicit native/plain state kind keeps those two meanings from
+     * collapsing into one ambiguous boolean. The identity distinguishes leaves whose rendered fields
+     * happen to be equal.
      */
     private static String changePointSignature(List<ChangePoint> changePoints)
     {
@@ -694,7 +697,11 @@ public class MetadataRenameService
                 .append(changePoint.lineNumber).append(HASH_FIELD_SEPARATOR)
                 .append(changePoint.columnNumber).append(HASH_FIELD_SEPARATOR)
                 .append(changePoint.optional).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.nativeItemChecked == null ? "plain" : "native") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(HASH_FIELD_SEPARATOR)
                 .append(changePoint.enabled).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.nativeItemChecked == null ? "" : changePoint.nativeItemChecked) //$NON-NLS-1$
+                .append(HASH_FIELD_SEPARATOR)
                 .append(changePoint.signatureIdentity.stableValue);
             first = false;
         }
@@ -727,7 +734,7 @@ public class MetadataRenameService
                 if (nativeChange != null)
                 {
                     ScanContext ctx = new ScanContext(exactMatches, allChanges, indexCounter, title,
-                        item.isOptional(), oldName);
+                        nativeItem.isOptional(), nativeItem.isChecked(), oldName);
                     collectFlatChanges(nativeChange, null, null, ctx);
                 }
             }
@@ -747,7 +754,7 @@ public class MetadataRenameService
                 allChanges.add(new ChangePoint(
                     indexCounter[0]++, "rename", //$NON-NLS-1$
                     item.getName(), false, item.isChecked(),
-                    CodeLocation.of(null, null), ChangePointIdentity.forPlainItem(item)));
+                    null, CodeLocation.of(null, null), ChangePointIdentity.forPlainItem(item)));
             }
         }
     }
@@ -1063,6 +1070,8 @@ public class MetadataRenameService
         final String description;
         final boolean optional;
         final boolean enabled;
+        /** Owning native item's checked state; absent for a plain item change point. */
+        final Boolean nativeItemChecked;
         final int lineNumber;
         final int columnNumber;
         final String codeContext;
@@ -1070,7 +1079,8 @@ public class MetadataRenameService
         final ChangePointIdentity signatureIdentity;
 
         ChangePoint(int index, String type, String description,
-            boolean optional, boolean enabled, CodeLocation location, ChangePointIdentity signatureIdentity)
+            boolean optional, boolean enabled, Boolean nativeItemChecked, CodeLocation location,
+            ChangePointIdentity signatureIdentity)
         {
             this.index = index;
             this.type = type;
@@ -1079,6 +1089,7 @@ public class MetadataRenameService
             this.description = description;
             this.optional = optional;
             this.enabled = enabled;
+            this.nativeItemChecked = nativeItemChecked;
             this.lineNumber = location.lineNumber;
             this.columnNumber = location.columnNumber;
             this.codeContext = location.codeContext;
@@ -1139,9 +1150,10 @@ public class MetadataRenameService
     /**
      * Immutable per-scan context threaded through the change-tree walk and the per-leaf scan helpers.
      * Bundles the state that stays constant for one top-level refactoring item: the exact-match index,
-     * the change-point accumulator, the shared leaf-index counter, the refactoring title, the optional
-     * flag and the old object name. Carried so the recursive/scan helpers stay within the parameter
-     * limit while reading exactly the same values in the same order as before.
+     * the change-point accumulator, the shared leaf-index counter, the refactoring title, and the
+     * owning native item's optional and checked flags, plus the old object name. Carried so the
+     * recursive/scan helpers stay within the parameter limit while every native leaf receives the
+     * same item-level execution state.
      */
     private static final class ScanContext
     {
@@ -1150,16 +1162,18 @@ public class MetadataRenameService
         final int[] indexCounter;
         final String refactoringTitle;
         final boolean optional;
+        final boolean nativeItemChecked;
         final String oldName;
 
         ScanContext(Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
-            String refactoringTitle, boolean optional, String oldName)
+            String refactoringTitle, boolean optional, boolean nativeItemChecked, String oldName)
         {
             this.exactMatches = exactMatches;
             this.result = result;
             this.indexCounter = indexCounter;
             this.refactoringTitle = refactoringTitle;
             this.optional = optional;
+            this.nativeItemChecked = nativeItemChecked;
             this.oldName = oldName;
         }
     }
@@ -1254,7 +1268,8 @@ public class MetadataRenameService
         ctx.result.add(new ChangePoint(
             leafIndex, BSL_REF,
             change.getName(), ctx.optional, change.isEnabled(),
-            CodeLocation.of(scan.fqn, scan.project), scan.signatureIdentity));
+            Boolean.valueOf(ctx.nativeItemChecked), CodeLocation.of(scan.fqn, scan.project),
+            scan.signatureIdentity));
     }
 
     /** Emits one change point per resolved exact-match, defaulting fqn/project to the leaf context. */
@@ -1268,6 +1283,7 @@ public class MetadataRenameService
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
+                Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
                     exactMatch.codeContext, exactMatch.methodName), scan.signatureIdentity));
         }
@@ -1362,6 +1378,7 @@ public class MetadataRenameService
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
+                Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
                     matchedCodeContext, matchedMethodName), scan.signatureIdentity));
         }
@@ -1513,7 +1530,7 @@ public class MetadataRenameService
             List<ChangePoint> edtChanges = new ArrayList<>();
             int[] indexCounter = {0};
             ScanContext ctx = new ScanContext(exactMatches, edtChanges, indexCounter, "edt-preview", false, //$NON-NLS-1$
-                targetObject.getName());
+                true, targetObject.getName());
             collectFlatChanges(edtChange, null, null, ctx);
             return edtChanges;
         }
@@ -1573,6 +1590,7 @@ public class MetadataRenameService
                 original.description,
                 original.optional,
                 original.enabled,
+                original.nativeItemChecked,
                 new CodeLocation(
                     edt.fqn != null ? edt.fqn : original.fqn,
                     edt.project != null ? edt.project : original.project,

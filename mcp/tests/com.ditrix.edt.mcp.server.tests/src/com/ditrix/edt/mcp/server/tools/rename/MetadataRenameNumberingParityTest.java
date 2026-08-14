@@ -316,6 +316,22 @@ public class MetadataRenameNumberingParityTest
     }
 
     @Test
+    public void testNativeItemCheckedStateFlipChangesContentHash()
+    {
+        MetadataRenameService service = new MetadataRenameService();
+        Change checkedItemLeaf = stableChange("same", "/Project/target"); //$NON-NLS-1$ //$NON-NLS-2$
+        Change uncheckedItemLeaf = stableChange("same", "/Project/target"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the leaf state is unchanged between builds", checkedItemLeaf.isEnabled()); //$NON-NLS-1$
+        assertTrue("the leaf state is unchanged between builds", uncheckedItemLeaf.isEnabled()); //$NON-NLS-1$
+        String checked = service.changePointContentHash(refactorings(true, true, checkedItemLeaf));
+        String unchecked = service.changePointContentHash(refactorings(true, false, uncheckedItemLeaf));
+
+        assertNotEquals("a native item's default execution state must invalidate the preview token", //$NON-NLS-1$
+            checked, unchecked);
+    }
+
+    @Test
     public void testEqualLookingLeavesWithDifferentStableTargetsCannotSwapUndetected()
     {
         MetadataRenameService service = new MetadataRenameService();
@@ -477,6 +493,11 @@ public class MetadataRenameNumberingParityTest
     /** One native item containing the supplied leaves and exposing the requested skippability. */
     private static List<IRefactoring> refactorings(boolean optional, Change... changes)
     {
+        return refactorings(optional, true, changes);
+    }
+
+    private static List<IRefactoring> refactorings(boolean optional, boolean checked, Change... changes)
+    {
         CompositeChange root;
         if (changes.length == 1 && changes[0] instanceof CompositeChange composite)
         {
@@ -490,7 +511,7 @@ public class MetadataRenameNumberingParityTest
                 root.add(change);
             }
         }
-        INativeChangeRefactoringItem item = nativeItem(root, optional);
+        INativeChangeRefactoringItem item = nativeItem(root, optional, checked);
         IRefactoring refactoring = mock(IRefactoring.class);
         when(refactoring.getTitle()).thenReturn("Rename"); //$NON-NLS-1$
         when(refactoring.getItems()).thenReturn(List.of(item));
@@ -511,9 +532,15 @@ public class MetadataRenameNumberingParityTest
 
     private static INativeChangeRefactoringItem nativeItem(Change change, boolean optional)
     {
+        return nativeItem(change, optional, true);
+    }
+
+    private static INativeChangeRefactoringItem nativeItem(Change change, boolean optional, boolean checked)
+    {
         INativeChangeRefactoringItem item = mock(INativeChangeRefactoringItem.class);
         when(item.getNativeChange()).thenReturn(change);
         when(item.isOptional()).thenReturn(optional);
+        when(item.isChecked()).thenReturn(checked);
         return item;
     }
 
@@ -607,7 +634,7 @@ public class MetadataRenameNumberingParityTest
     private static Object newScanContext(List<Object> rows, int[] counter) throws Exception
     {
         Constructor<?> ctor = onlyConstructor(nested("ScanContext")); //$NON-NLS-1$
-        return ctor.newInstance(Map.of(), rows, counter, "title", Boolean.TRUE, "Calc"); //$NON-NLS-1$ //$NON-NLS-2$
+        return ctor.newInstance(Map.of(), rows, counter, "title", Boolean.TRUE, Boolean.TRUE, "Calc"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static Object newLeafScan() throws Exception
@@ -640,7 +667,7 @@ public class MetadataRenameNumberingParityTest
             .newInstance("supplemental", "supplemental"); //$NON-NLS-1$ //$NON-NLS-2$
         return onlyConstructor(nested("ChangePoint")) //$NON-NLS-1$
             .newInstance(Integer.valueOf(index), BSL_REF, description, Boolean.TRUE, Boolean.TRUE,
-                location, identity);
+                Boolean.TRUE, location, identity);
     }
 
     private static String renderPreview(MetadataRenameService service,
