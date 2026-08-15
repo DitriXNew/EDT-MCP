@@ -1053,7 +1053,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "debug_launch",
-  "chosen": "debug_launch"
+  "chosen": "debug_launch",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "q110",
@@ -1363,7 +1366,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "set_infobase_credentials",
-  "chosen": "set_infobase_credentials"
+  "chosen": "set_infobase_credentials",
+  "bad_selector": [
+   "set_infobase_credentials"
+  ]
  },
  {
   "id": "q142",
@@ -1371,7 +1377,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "set_infobase_credentials",
-  "chosen": "set_infobase_credentials"
+  "chosen": "set_infobase_credentials",
+  "bad_selector": [
+   "set_infobase_credentials"
+  ]
  },
  {
   "id": "q143",
@@ -2807,7 +2816,10 @@
   ],
   "tool_ok": true,
   "expected": "debug_launch",
-  "chosen": "debug_launch"
+  "chosen": "debug_launch",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "q296",
@@ -3006,7 +3018,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "set_infobase_credentials",
-  "chosen": "set_infobase_credentials"
+  "chosen": "set_infobase_credentials",
+  "bad_selector": [
+   "set_infobase_credentials"
+  ]
  },
  {
   "id": "q315",
@@ -3680,6 +3695,7 @@
   ],
   "coverage": "3/3",
   "bad_selector": [
+   "set_infobase_credentials",
    "update_database",
    "update_database"
   ],
@@ -3852,7 +3868,10 @@
   "id": "c055",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c056",
@@ -3864,7 +3883,10 @@
   "id": "c057",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c058",
@@ -4097,6 +4119,9 @@
    "debug_launch"
   ],
   "coverage": "3/3",
+  "bad_selector": [
+   "debug_launch"
+  ],
   "twophase": "strict"
  },
  {
@@ -4250,7 +4275,10 @@
   "id": "c103",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c104",

@@ -45,6 +45,24 @@ SELECTORS = {
     "remove_breakpoint": [{"breakpointId": PRESENT},
                           {"modulePath": PRESENT, "lineNumber": PRESENT},
                           {"module": PRESENT, "lineNumber": PRESENT}],
+    # Found by GREPPING every tool for selector-shaped rejections instead of waiting for
+    # the next review round to name one. Review had found four, one per round; the grep
+    # found three more in one pass, which says the per-round drip was a sampling artefact
+    # of how they were being discovered, not evidence that four was the true number.
+    "debug_launch": [{"launchConfigurationName": PRESENT},
+                     {"projectName": PRESENT, "applicationId": PRESENT}],
+    "set_infobase_credentials": [{"launchConfigurationName": PRESENT},
+                                 {"projectName": PRESENT, "applicationId": PRESENT}],
+    "write_module_source": [{"modulePath": PRESENT}, {"objectName": PRESENT}],
+}
+
+# A DIFFERENT shape: parameters the tool refuses to receive TOGETHER. `selector_ok` asks
+# "is at least one accepted combination present"; this asks "is a forbidden pair present",
+# and no amount of entries in SELECTORS expresses it.
+EXCLUSIVE = {
+    # get_project_errors refuses both filters at once rather than guessing which matching
+    # semantics to apply - `objects` is a substring filter, `objectFqns` an exact address.
+    "get_project_errors": [("objects", "objectFqns")],
 }
 
 
@@ -56,6 +74,9 @@ def selector_ok(tool, args):
         # together is rejected). "gate" is NOT a selector problem - the selection is
         # fine, the call merely lacks confirm - so it must not count as one.
         return terminate_launch_verdict(args) != "invalid"
+    for left, right in EXCLUSIVE.get(tool, ()):
+        if args.get(left) and args.get(right):
+            return False
     combos = SELECTORS.get(tool)
     if not combos:
         return True

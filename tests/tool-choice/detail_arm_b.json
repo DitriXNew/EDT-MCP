@@ -976,7 +976,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "debug_launch",
-  "chosen": "debug_launch"
+  "chosen": "debug_launch",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "q110",
@@ -1243,7 +1246,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "set_infobase_credentials",
-  "chosen": "set_infobase_credentials"
+  "chosen": "set_infobase_credentials",
+  "bad_selector": [
+   "set_infobase_credentials"
+  ]
  },
  {
   "id": "q142",
@@ -1251,7 +1257,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "set_infobase_credentials",
-  "chosen": "set_infobase_credentials"
+  "chosen": "set_infobase_credentials",
+  "bad_selector": [
+   "set_infobase_credentials"
+  ]
  },
  {
   "id": "q143",
@@ -2536,7 +2545,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "debug_launch",
-  "chosen": "debug_launch"
+  "chosen": "debug_launch",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "q296",
@@ -2736,7 +2748,10 @@
   ],
   "tool_ok": true,
   "expected": "set_infobase_credentials",
-  "chosen": "get_applications"
+  "chosen": "get_applications",
+  "bad_selector": [
+   "set_infobase_credentials"
+  ]
  },
  {
   "id": "q315",
@@ -3089,13 +3104,19 @@
   "id": "c003",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c004",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c005",
@@ -3516,7 +3537,10 @@
   "id": "c055",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c056",
@@ -3530,7 +3554,8 @@
   "guides": [],
   "coverage": "4/4",
   "bad_selector": [
-   "remove_breakpoint"
+   "remove_breakpoint",
+   "debug_launch"
   ]
  },
  {
@@ -3737,6 +3762,9 @@
    "debug_launch"
   ],
   "coverage": "3/3",
+  "bad_selector": [
+   "debug_launch"
+  ],
   "twophase": "confirm"
  },
  {
@@ -3884,7 +3912,10 @@
   "id": "c103",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "debug_launch"
+  ]
  },
  {
   "id": "c104",
