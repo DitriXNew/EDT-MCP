@@ -126,7 +126,8 @@ public class CreateGitBranchTool implements IMcpTool
                 + "to the current HEAD.") //$NON-NLS-1$
             .booleanProperty(KEY_CHECKOUT,
                 "Check out the new branch immediately after creating it (bounded background Job, " //$NON-NLS-1$
-                + "up to 120 s). Default false.") //$NON-NLS-1$
+                + "up to 120 s). Default FALSE - the branch is created and the working tree STAYS " //$NON-NLS-1$
+                + "on the current branch, so later edits land there unless you pass true.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Optional: application id from get_applications to attach to the new branch's " //$NON-NLS-1$
                 + "context (the base is FOR this branch).") //$NON-NLS-1$

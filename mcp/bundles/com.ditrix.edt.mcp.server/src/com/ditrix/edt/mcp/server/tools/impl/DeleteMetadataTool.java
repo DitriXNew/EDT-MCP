@@ -254,7 +254,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "md-refactoring path removing an object also removes what references it. Two-phase: call once " //$NON-NLS-1$
             + "WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A " //$NON-NLS-1$
             + "delete that would break references is blocked; force=true overrides that block and can leave " //$NON-NLS-1$
-            + "dangling references behind. Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
+            + "dangling references behind. EXCEPTION - an owned FORM object, a FORM member or an XDTO " //$NON-NLS-1$
+            + "package member is removed straight from its container: NOTHING blocks it (force is " //$NON-NLS-1$
+            + "ignored) and no cross-object cascade runs, so references from elsewhere (a field's " //$NON-NLS-1$
+            + "dataPath, a command, an XDTO type) are left broken - check with find_references first. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
     @Override

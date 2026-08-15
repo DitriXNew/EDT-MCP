@@ -267,6 +267,7 @@
           "type": "string"
         },
         "checkout": {
+          "description": "Check out the new branch immediately after creating it (bounded background Job, up to 120 s). Default FALSE - the branch is created and the working tree STAYS on the current branch, so later edits land there unless you pass true.",
           "type": "boolean"
         },
         "projectName": {
@@ -1100,7 +1101,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force=true overrides that block and can leave dangling references behind. Parameters and examples: get_tool_guide('delete_metadata').",
+    "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force=true overrides that block and can leave dangling references behind. EXCEPTION - an owned FORM object, a FORM member or an XDTO package member is removed straight from its container: NOTHING blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a field's dataPath, a command, an XDTO type) are left broken - check with find_references first. Parameters and examples: get_tool_guide('delete_metadata').",
     "inputSchema": {
       "properties": {
         "confirm": {
@@ -1362,6 +1363,7 @@
           "type": "string"
         },
         "variant": {
+          "description": "Optional. Which variant to decode to PNG: 'best' (the best raster variant), 'svg' (the vector variant, rasterized), or an exact variant/entry name from the 'variants' list. Omit it to return the inventory only (no image bytes).",
           "type": "string"
         }
       },
@@ -4139,7 +4141,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Translate a 1C configuration into target languages. Parameters and examples: get_tool_guide('translate_configuration').",
+    "description": "SYNCHRONIZE a 1C configuration's translated artifacts with the target languages. Does NOT translate anything itself: it regenerates the artifacts from translations ALREADY present in the bound dictionary storages, so text absent from the dictionaries stays untranslated - fill the dictionaries first (generate_translation_strings). Parameters and examples: get_tool_guide('translate_configuration').",
     "inputSchema": {
       "properties": {
         "projectName": {

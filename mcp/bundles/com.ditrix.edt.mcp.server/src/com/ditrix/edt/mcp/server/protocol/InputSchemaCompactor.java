@@ -170,6 +170,15 @@ public final class InputSchemaCompactor
         // warning that those bodies can carry infobase and personal data is the only thing
         // standing between a diagnostic call and handing the model live data.
         keep.put("get_mcp_history", asSet("includeBodies")); //$NON-NLS-1$ //$NON-NLS-2$
+        // An "optional" parameter that silently switches the tool between two MODES: omit it
+        // and the call returns the variant inventory with NO image bytes at all. Measured, not
+        // supposed - on the benchmark question asking for the picture's binary data, the arm
+        // holding the full prose passed variant='best' and the arm without it passed nothing.
+        keep.put("export_common_picture", asSet("variant")); //$NON-NLS-1$ //$NON-NLS-2$
+        // checkout defaults to FALSE: the branch is created and the working tree stays on the
+        // old branch. A caller who reads "start isolated work" and skips this parameter then
+        // commits the isolated work to the branch it meant to leave.
+        keep.put("create_git_branch", asSet("checkout")); //$NON-NLS-1$ //$NON-NLS-2$
         // force=true escalates a polite stop to an OS-level process kill and can lose
         // unsaved 1C state - a second, harsher mode the tool description does not cover.
         keep.put("terminate_launch", asSet("force")); //$NON-NLS-1$ //$NON-NLS-2$
