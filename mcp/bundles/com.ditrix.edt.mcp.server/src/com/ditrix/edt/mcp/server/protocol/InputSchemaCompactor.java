@@ -123,7 +123,12 @@ public final class InputSchemaCompactor
         // Two filters that are mutually exclusive and differ in matching semantics.
         keep.put("get_project_errors", asSet("objects", "objectFqns")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // 'callers' vs 'callees' - the enum values alone do not say which way they point.
-        keep.put("get_method_call_hierarchy", asSet("direction")); //$NON-NLS-1$ //$NON-NLS-2$
+        // methodName is REQUIRED for callers/callees and optional only for the module-wide
+        // 'outgoing' mode - a conditional the schema states nowhere. The committed
+        // benchmark shows the failure: V3 and V4 both planned direction='callers' with a
+        // module path and no methodName, which the tool rejects before looking anything up.
+        keep.put("get_method_call_hierarchy", //$NON-NLS-1$
+            asSet("direction", "methodName")); //$NON-NLS-1$ //$NON-NLS-2$
         // A scope limit that makes the tool inapplicable: FILE infobases only.
         keep.put("create_infobase", asSet("infobaseFile")); //$NON-NLS-1$ //$NON-NLS-2$
         // The lost-update guard: what the hash is and where it comes from.
@@ -211,8 +216,11 @@ public final class InputSchemaCompactor
         // from the base configuration - and the enum alone cannot say "except for this
         // project kind". Merged with autoSortTopObjects: one put() per tool, or the
         // second call silently wins (the trap caught in rounds 16 and 18).
+        // version joins scriptVariant: BOTH are rejected outright for an extension, which
+        // inherits them from the base configuration. Same shape, same tool, one entry -
+        // a second keep.put() for create_project would silently drop the first.
         keep.put("create_project", //$NON-NLS-1$
-            asSet("autoSortTopObjects", "scriptVariant")); //$NON-NLS-1$ //$NON-NLS-2$
+            asSet("autoSortTopObjects", "scriptVariant", "version")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after

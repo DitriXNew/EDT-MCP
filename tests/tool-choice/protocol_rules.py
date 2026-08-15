@@ -59,6 +59,34 @@ SELECTORS = {
 # A DIFFERENT shape: parameters the tool refuses to receive TOGETHER. `selector_ok` asks
 # "is at least one accepted combination present"; this asks "is a forbidden pair present",
 # and no amount of entries in SELECTORS expresses it.
+# A THIRD shape: a requirement that depends on ANOTHER argument's value. Neither
+# SELECTORS ("one of these combinations") nor EXCLUSIVE ("not these two together")
+# expresses it, and the schema expresses it least of all - `required` is a flat list.
+def _hierarchy_needs_method(args):
+    """methodName is required unless direction is the module-wide 'outgoing' mode."""
+    if str(args.get("direction", "")).strip() == "outgoing":
+        return True
+    return bool(str(args.get("methodName") or "").strip())
+
+
+def _definition_needs_module(args):
+    """modulePath is required when `symbol` is an UNQUALIFIED method name.
+
+    GoToDefinitionTool: "modulePath is required for an unqualified method name". A
+    qualified symbol (Module.Method, Catalog.X) carries its own address; a bare name
+    does not, and the tool returns before performing any lookup.
+    """
+    symbol = str(args.get("symbol") or "").strip()
+    if not symbol or "." in symbol:
+        return True
+    return bool(str(args.get("modulePath") or "").strip())
+
+
+CONDITIONAL = {
+    "get_method_call_hierarchy": [_hierarchy_needs_method],
+    "go_to_definition": [_definition_needs_module],
+}
+
 EXCLUSIVE = {
     # get_project_errors refuses both filters at once rather than guessing which matching
     # semantics to apply - `objects` is a substring filter, `objectFqns` an exact address.
@@ -74,6 +102,9 @@ def selector_ok(tool, args):
         # together is rejected). "gate" is NOT a selector problem - the selection is
         # fine, the call merely lacks confirm - so it must not count as one.
         return terminate_launch_verdict(args) != "invalid"
+    for rule in CONDITIONAL.get(tool, ()):
+        if not rule(args):
+            return False
     for left, right in EXCLUSIVE.get(tool, ()):
         if args.get(left) and args.get(right):
             return False

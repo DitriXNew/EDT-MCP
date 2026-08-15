@@ -2336,7 +2336,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "go_to_definition",
-  "chosen": "go_to_definition"
+  "chosen": "go_to_definition",
+  "bad_selector": [
+   "go_to_definition"
+  ]
  },
  {
   "id": "q274",

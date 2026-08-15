@@ -2595,7 +2595,10 @@
   ],
   "tool_ok": true,
   "expected": "go_to_definition",
-  "chosen": "go_to_definition"
+  "chosen": "go_to_definition",
+  "bad_selector": [
+   "go_to_definition"
+  ]
  },
  {
   "id": "q274",
@@ -3930,7 +3933,10 @@
   "id": "c063",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "get_method_call_hierarchy"
+  ]
  },
  {
   "id": "c064",
@@ -4160,7 +4166,10 @@
   "id": "c091",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "go_to_definition"
+  ]
  },
  {
   "id": "c092",
@@ -4308,6 +4317,9 @@
   "coverage": "2/3",
   "missing_tools": [
    "read_method_source"
+  ],
+  "bad_selector": [
+   "go_to_definition"
   ]
  },
  {

@@ -3325,6 +3325,9 @@
   "coverage": "1/2",
   "missing_tools": [
    "find_references"
+  ],
+  "bad_selector": [
+   "go_to_definition"
   ]
  },
  {

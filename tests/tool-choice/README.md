@@ -50,10 +50,16 @@ what was measured to be load-bearing.
   These are where a thin description should hurt most, so they carry their own metric:
   how much of the required tool set the plan covers.
 
-58 of the 503 involve a destructive operation - 56 scored as preview->confirm and 2
-(`terminate_launch`) as a confirm GATE, because that tool answers an unconfirmed
-`all=true` with "Confirmation required" rather than with a preview. Counting the two
-together was crediting a refusal as a preview.
+58 of the 503 involve a destructive operation - 56 labelled preview->confirm and 2
+(`terminate_launch`) a confirm GATE, because that tool answers an unconfirmed `all=true`
+with "Confirmation required" rather than with a preview. Counting the two together was
+crediting a refusal as a preview.
+
+**The safety metric is scored over 55, not 56, and that is a GAP, not a definition.**
+q357 (`cancel_job`) has no answer in any arm - the three questions added for the job
+tools, q356-q358, were never run - so the tool they were added to cover still contributes
+no measured behaviour. The grader prints `отвечено вопросов 500/503`; do not read the
+503 as coverage.
 
 Each arm is staged in a blind directory (`arms/arm_a|b|c|d`) so the runner cannot tell
 which variant it is holding. A runner gets the catalog and nothing else — no repository
@@ -124,14 +130,14 @@ An empty list means "no suitable tool exists".
 |---|---:|---:|---:|---:|
 | Верный тул (одношаговые) | 100% | 98.9% | 99.2% | **100%** |
 | Покрытие плана (сценарии) | 97.8% | 97.3% | 97.3% | 97.3% |
-| Вызовов без обязательного параметра или рабочего селектора | 76/882 | 73/853 | 76/845 | 76/905 |
-| — из них разных ЗАПРОСОВ с плохим селектором | 46 | 51 | 41 | 48 |
+| Вызовов без обязательного параметра или рабочего селектора | 77/882 | 74/853 | 80/845 | 80/905 |
+| — из них разных ЗАПРОСОВ с плохим селектором | 47 | 52 | 45 | 52 |
 | Устаревший алиас выбран | 0/6 | 6/6 | 4/6 | **0/6** |
 | **preview→confirm (55 разрушающих)** | 45% | 33% | 20% | **67%** |
 | Гейт confirm (`terminate_launch`, 2 запроса) | 2/2 | 2/2 | 2/2 | 2/2 |
 | — лишний отклонённый вызов до confirm | 0 | 0 | 0 | 2 |
-| Каталог в контексте на старте (ток, из `grade.py`) | ~28K | ~21K | ~7K | **~12K** |
-| Взвешенный балл | 8.80 | 8.16 | 7.90 | 8.77 |
+| Каталог в контексте на старте (ток, из `grade.py`) | ~28K | ~21K | ~7K | **~13K** |
+| Взвешенный балл | 8.80 | 8.16 | 7.89 | 8.76 |
 
 **Ветвь V4 в этой таблице СТАРШЕ того, что едет в прод.** Ответы собраны до раундов
 9-17, которые вернули на провод ещё восемнадцать фактов (форма значения, мутирующее умолчание,
@@ -145,12 +151,12 @@ An empty list means "no suitable tool exists".
 Строка селекторов читается по второй половине, а не по первой. Счётчик считает ВЫЗОВЫ, а
 двухфазный протокол шлёт одни и те же аргументы дважды — один неверный селектор стоит V4
 двух вызовов там, где одношаговой ветви он стоит одного. По вызовам V4 выглядит вдвое
-хуже V1 (69 против 54), по запросам разница исчезает (48 против 46). Это цена самой
+хуже V1 (73 против 55), по запросам разница исчезает (52 против 47). Это цена самой
 безопасной последовательности, а не отдельная небрежность; ни одна ветвь этот селектор
 из схемы не видит — его там нет.
 
 **Read the composite as a tie, and the safety column as the reason to ship V4.** The
-weighted total is 8.80 for V1 against 8.77 for V4 - V1 is nominally ahead, and an earlier
+weighted total is 8.80 for V1 against 8.76 for V4 - V1 is nominally ahead, and an earlier
 version of this README claimed the opposite ordering plus "V4 beats V1 on every axis
 except wide-session cost". Both were wrong. V4 is behind on plan completeness (9.7 vs
 9.8), on key-argument fill (9.6 vs 9.7) and heavily on wide-session context (5.4 vs 10.0);

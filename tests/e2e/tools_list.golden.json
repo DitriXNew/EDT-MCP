@@ -714,6 +714,7 @@
           "type": "string"
         },
         "version": {
+          "description": "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; for extension: REJECTED — version is always inherited from the base configuration). Default: Version.LATEST when omitted.",
           "type": "string"
         }
       },
@@ -2115,6 +2116,7 @@
           "type": "integer"
         },
         "methodName": {
+          "description": "Name of the procedure/function (case-insensitive). Required for direction 'callers'/'callees'; optional for 'outgoing' (omit to aggregate the whole module).",
           "type": "string"
         },
         "modulePath": {
