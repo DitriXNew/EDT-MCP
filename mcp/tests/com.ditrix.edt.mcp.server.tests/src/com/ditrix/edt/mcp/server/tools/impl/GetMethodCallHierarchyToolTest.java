@@ -427,7 +427,263 @@ public class GetMethodCallHierarchyToolTest
             new GetMethodCallHierarchyTool().getResultFileName(new HashMap<>()));
     }
 
+    // ==================== depth: schema + the callers-only guard ====================
+
+    @Test
+    public void testSchemaDeclaresDepth()
+    {
+        String schema = new GetMethodCallHierarchyTool().getInputSchema();
+        assertTrue("depth property declared", schema.contains("\"depth\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The schema must say that depth>1 changes what `limit` MEANS, because it stops being an
+        // output cap and becomes an execution budget.
+        assertTrue("schema warns that limit bounds the walk itself", //$NON-NLS-1$
+            schema.contains("execution budget")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionWarnsThatDynamicCallsAreInvisible()
+    {
+        // A caller reading "complete" must not read it as "nothing else calls this method": a
+        // static scan cannot see Execute/Eval or a handler named by string. This belongs in the
+        // contract the agent reads, not only in the response body.
+        String desc = new GetMethodCallHierarchyTool().getDescription();
+        assertTrue(desc.contains("STATIC invocations only")); //$NON-NLS-1$
+        assertTrue(desc.contains("Execute/Eval")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDepthAboveOneIsRejectedForCallees()
+    {
+        // Rejected BEFORE any workbench access: the callees path reports raw invocation names and
+        // never resolves them to a defining module, so recursing it would invent a graph.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("methodName", "DoWork"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("direction", "callees"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("depth", "3"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetMethodCallHierarchyTool().execute(params);
+        assertTrue(result.contains("depth above 1")); //$NON-NLS-1$
+        // The error must point at what DOES work, not just refuse.
+        assertTrue(result.contains("callers")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDepthAboveOneIsRejectedForOutgoing()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("direction", "outgoing"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("depth", "2"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new GetMethodCallHierarchyTool().execute(params);
+        assertTrue(result.contains("depth above 1")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDepthClampedBackToOneIsAcceptedForEveryDirection()
+    {
+        // depth=0 clamps to 1, i.e. it asks for the single hop every direction supports. Rejecting
+        // it would refuse a request that is identical to omitting the parameter.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("methodName", "DoWork"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("direction", "callees"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("depth", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = runWithoutLiveModel(() -> new GetMethodCallHierarchyTool().execute(params));
+        if (result != null)
+        {
+            assertFalse("a clamped-to-1 depth must not trip the callers-only guard", //$NON-NLS-1$
+                result.contains("depth above 1")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testDepthAboveMaxIsClampedNotRejected()
+    {
+        // A depth beyond the ceiling is clamped (house style for integer knobs), so it must reach
+        // the live-model path rather than come back as an argument error.
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "CommonModules/Foo/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("methodName", "DoWork"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("depth", "99"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = runWithoutLiveModel(() -> new GetMethodCallHierarchyTool().execute(params));
+        if (result != null)
+        {
+            assertFalse(result.contains("depth above 1")); //$NON-NLS-1$
+            assertFalse(result.contains("depth must be")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testDepthCeilingIsFive()
+    {
+        assertEquals(5, GetMethodCallHierarchyTool.MAX_DEPTH);
+        assertEquals(1, GetMethodCallHierarchyTool.DEFAULT_DEPTH);
+    }
+
+    // ==================== the whole-identifier prefilter (pure) ====================
+
+    @Test
+    public void testPrefilterMatchesAWholeIdentifier()
+    {
+        assertTrue(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "Результат = Add(1, 2);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$ Результат
+    }
+
+    @Test
+    public void testPrefilterIsCaseInsensitive()
+    {
+        // BSL identifiers are case-insensitive, so the prefilter must not care how the call is spelled.
+        assertTrue(GetMethodCallHierarchyTool.mentionsAnyIdentifier("X = ADD(1);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(GetMethodCallHierarchyTool.mentionsAnyIdentifier("X = aDd(1);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPrefilterSurvivesUnusualSpacingAndLineBreaks()
+    {
+        // The token is the identifier, not the call shape: whitespace, newlines and a gap before the
+        // parenthesis must not hide it. This is the "obviously true" claim that has to be pinned,
+        // because the whole level-batched prefilter rests on it.
+        assertTrue(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "Результат =\r\n\t Add \t (1,\n 2);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$ Результат
+        assertTrue("a call at the very end of the text still ends an identifier", //$NON-NLS-1$
+            GetMethodCallHierarchyTool.mentionsAnyIdentifier("Add", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a call at the very start is found too", //$NON-NLS-1$
+            GetMethodCallHierarchyTool.mentionsAnyIdentifier("Add(1);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPrefilterRejectsASubstringOfALongerIdentifier()
+    {
+        // This is what makes ONE pass per level enough instead of one per name: a substring test
+        // would parse this module for nothing. A real call to Add always writes Add as a whole token.
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "AddItem(1); ПодготовитьAddressКлиента();", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$ ПодготовитьAddressКлиента
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier("Add_2();", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier("PreAdd();", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPrefilterMatchesACyrillicIdentifier()
+    {
+        // 1C code is routinely written in Russian; the identifier class must include Cyrillic
+        // letters, or a whole dialect would silently stop being prefiltered.
+        assertTrue(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "Х = Вычисление.Маркер();", names("маркер"))); //$NON-NLS-1$ //$NON-NLS-2$ Х = Вычисление.Маркер(); маркер
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "МаркерОтгрузки();", names("маркер"))); //$NON-NLS-1$ //$NON-NLS-2$ МаркерОтгрузки маркер
+    }
+
+    @Test
+    public void testPrefilterMatchesAnyOfSeveralNamesInOnePass()
+    {
+        // The level-batched search tests the WHOLE frontier against each file in one scan.
+        assertTrue(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "Z = Third();", names("first", "second", "third"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "Z = Fourth();", names("first", "second", "third"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    @Test
+    public void testPrefilterHandlesDegenerateInput()
+    {
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier(null, names("add"))); //$NON-NLS-1$
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier("Add(1);", null)); //$NON-NLS-1$
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier("Add(1);", //$NON-NLS-1$
+            new java.util.HashSet<>()));
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier("", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("punctuation only must terminate cleanly", //$NON-NLS-1$
+            GetMethodCallHierarchyTool.mentionsAnyIdentifier("=== ;;; ///", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testPrefilterSplitsOnACharacterBslCannotPutInAnIdentifier()
+    {
+        // A supplementary-plane letter is NOT a BSL identifier character - EDT's lexer treats it as
+        // invalid input and still tokenizes the identifier next to it. The prefilter must therefore
+        // SPLIT there, so the real call is still found and the file still becomes a candidate.
+        //
+        // The two possible mistakes are not symmetric, and that asymmetry is the whole rule:
+        // splitting too eagerly costs one wasted module parse, while joining too eagerly hides a
+        // real call behind a token that matches nothing - a lost caller with no trace in the
+        // report. This test pins the safe direction.
+        String outsideBmp = new String(Character.toChars(0x10400));
+        assertTrue("the call to Add next to an invalid character must still be found", //$NON-NLS-1$
+            GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+                "X = " + outsideBmp + "Add(1);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Ordinary whole-identifier behaviour is unaffected on either side of the split.
+        assertFalse(GetMethodCallHierarchyTool.mentionsAnyIdentifier(
+            "X = " + outsideBmp + "AddItem(1);", names("add"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    // ==================== case folding: ONE relation, not two ====================
+
+    @Test
+    public void testFoldCaseAgreesWithEqualsIgnoreCase()
+    {
+        // The batched search looks a target up in a hash map and then judges it with
+        // equalsIgnoreCase. If the two relations disagree anywhere, the map never offers the
+        // target to the predicate and the caller goes missing with nothing to show it was skipped.
+        // Samples the scripts BSL is actually written in, plus a SUPPLEMENTARY-plane pair, which
+        // is where a per-char fold and equalsIgnoreCase part company. No BSL identifier reaches
+        // outside the BMP, so that pair is defensive rather than a real caller being rescued - it
+        // just removes the need to argue about where the two relations diverge.
+        String[][] equalPairs = {
+            {"DoWork", "dowork"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"DoWork", "DOWORK"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"ПолучитьДанные", "получитьданные"}, //$NON-NLS-1$ ПолучитьДанные получитьданные
+            {"Маркер", "МАРКЕР"}, //$NON-NLS-1$ Маркер МАРКЕР
+            {"Работа_2", "работа_2"}, //$NON-NLS-1$ Работа_2 работа_2
+            // Deseret capital vs small long I: one code point each, outside the BMP.
+            {new String(Character.toChars(0x10400)), new String(Character.toChars(0x10428))},
+        };
+        for (String[] pair : equalPairs)
+        {
+            assertTrue("equalsIgnoreCase says these are the same identifier: " //$NON-NLS-1$
+                + pair[0] + " / " + pair[1], pair[0].equalsIgnoreCase(pair[1])); //$NON-NLS-1$
+            assertEquals("so foldCase must map them to the same key: " //$NON-NLS-1$
+                + pair[0] + " / " + pair[1], //$NON-NLS-1$
+                GetMethodCallHierarchyTool.foldCase(pair[0]),
+                GetMethodCallHierarchyTool.foldCase(pair[1]));
+        }
+
+        // And the converse: genuinely different identifiers must NOT collide.
+        assertFalse(GetMethodCallHierarchyTool.foldCase("Add") //$NON-NLS-1$
+            .equals(GetMethodCallHierarchyTool.foldCase("AddItem"))); //$NON-NLS-1$
+        assertFalse(GetMethodCallHierarchyTool.foldCase("Маркер") //$NON-NLS-1$ Маркер
+            .equals(GetMethodCallHierarchyTool.foldCase("Marker"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFoldCaseHandlesDegenerateInput()
+    {
+        assertEquals("", GetMethodCallHierarchyTool.foldCase("")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("_", GetMethodCallHierarchyTool.foldCase("_")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("123", GetMethodCallHierarchyTool.foldCase("123")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ==================== helpers ====================
+
+    /**
+     * Builds the name set the prefilter takes, folded exactly the way the production caller folds
+     * it. Building it with a different folding would test a set the tool never actually passes.
+     *
+     * @param values the identifiers to look for, in any case
+     * @return the folded set
+     */
+    private static java.util.Set<String> names(String... values)
+    {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (String v : values)
+        {
+            out.add(GetMethodCallHierarchyTool.foldCase(v));
+        }
+        return out;
+    }
+
 
     /**
      * Extracts the {@code "required":[...]} array literal from a built JSON schema so a
