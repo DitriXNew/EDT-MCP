@@ -203,10 +203,13 @@ right plan whether the catalog is 28K tokens or 7K.
 
 What the cut actually costs:
 
-- **The two-phase `confirm` protocol.** Strict preview→confirm on the 57 destructive
-  requests: V1 25/57 (44%), V2 18/57 (32%), V3 11/57 (19%). Every arm knows the `confirm`
-  parameter exists (56/57 pass `confirm: true` somewhere); what the short descriptions
-  lose is *looking before deleting*. Strict means the confirm applies the same arguments
+- **The two-phase `confirm` protocol.** Strict preview→confirm on the 55 preview-capable
+  destructive requests: V1 25/55 (45%), V2 18/55 (33%), V3 11/55 (20%). Every arm knows
+  the `confirm` parameter exists (54/55 pass `confirm: true` somewhere); what the short
+  descriptions lose is *looking before deleting*. The denominator is 55, not 57, because
+  `terminate_launch`'s two requests moved to the confirm-GATE line - that tool answers an
+  unconfirmed `all=true` with a refusal, not a preview, so scoring it here counted the
+  refusal as the preview. Strict means the confirm applies the same arguments
   the preview showed - a confirm that adds `deleteContent`, `force` or
   `deleteDatabaseFiles` destroys more than was ever previewed and is not counted.
 - **The deprecated alias.** `debug_yaxunit_tests` is a deprecated alias of

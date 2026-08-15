@@ -700,6 +700,7 @@
           "type": "string"
         },
         "scriptVariant": {
+          "description": "Script variant (Russian or English). configuration: sets the Configuration scriptVariant and default Language code (default Russian). externalObjects: applied post-create via setScriptVariant (non-fatal on failure). extension: REJECTED — scriptVariant is always inherited from the base configuration.",
           "enum": [
             "Russian",
             "English"
@@ -2156,6 +2157,7 @@
           "type": "string"
         },
         "responseFormat": {
+          "description": "Output verbosity. concise (default) = leaner methods table (drops Parameters and Description columns); detailed = full table with signatures and doc-comments.",
           "enum": [
             "concise",
             "detailed"
@@ -3727,6 +3729,7 @@
           "type": "string"
         },
         "projectName": {
+          "description": "EDT project name (required when modulePath is module-relative)",
           "type": "string"
         }
       },

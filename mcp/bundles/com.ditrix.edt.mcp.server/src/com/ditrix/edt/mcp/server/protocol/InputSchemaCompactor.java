@@ -197,11 +197,27 @@ public final class InputSchemaCompactor
         // asking for an API usually wants. The default is the lossy mode, and only this
         // prose says so.
         keep.put("get_platform_documentation", asSet("responseFormat")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Same lossy default, same consequence: concise drops the Parameters and
+        // Description columns, so a caller asking for a module's API gets method names
+        // and structure - and cannot tell that the signatures were dropped rather than
+        // absent. includeComments=true does not bring them back.
+        keep.put("get_module_structure", asSet("responseFormat")); //$NON-NLS-1$ //$NON-NLS-2$
+        // A CONDITIONAL requirement the schema cannot state: with the advertised
+        // EDT-relative modulePath ('CommonModules/Foo/Module.bsl') the call is rejected
+        // unless projectName is also given. Compacted, projectName reads as independently
+        // optional, so the most typical call shape fails before setting anything.
+        keep.put("set_breakpoint", asSet(McpKeys.PROJECT_NAME)); //$NON-NLS-1$
+        // scriptVariant is REJECTED outright for an extension - it is always inherited
+        // from the base configuration - and the enum alone cannot say "except for this
+        // project kind". Merged with autoSortTopObjects: one put() per tool, or the
+        // second call silently wins (the trap caught in rounds 16 and 18).
+        keep.put("create_project", //$NON-NLS-1$
+            asSet("autoSortTopObjects", "scriptVariant")); //$NON-NLS-1$ //$NON-NLS-2$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after
         // the project has been created.
-        keep.put("create_project", asSet("autoSortTopObjects")); //$NON-NLS-1$ //$NON-NLS-2$
+
         // Default refresh=false may reuse the pre-existing render buffer, i.e. return the
         // form as it looked BEFORE the caller's edit. Only refresh=true guarantees a real
         // render or an explicit failure. A stale screenshot is indistinguishable from a
