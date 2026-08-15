@@ -2221,8 +2221,7 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * The refusal for an unusable {@code commondir}, naming THE fault this pointer hit and whose
-     * limit it is.
+     * The refusal for an unusable {@code commondir}, naming THE fault this pointer hit.
      * <p>
      * It names one fault rather than listing every fault that exists, and that is the whole point.
      * The earlier version pasted in every reason and left the operator to work out

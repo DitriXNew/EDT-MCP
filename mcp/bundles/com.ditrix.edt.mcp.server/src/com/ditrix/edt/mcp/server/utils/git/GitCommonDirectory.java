@@ -120,10 +120,13 @@ public final class GitCommonDirectory
         LAYOUT_UNREADABLE("the git directory's layout could not be read", false), //$NON-NLS-1$
 
         /**
-         * It is not a regular file. Measured: with a DIRECTORY in its place git answers
-         * {@code fatal: failed to read .../commondir} - but a FIFO would block it instead, and
-         * neither outcome is why this refuses. This refuses because opening a named pipe with no
-         * writer never returns, and nothing here may wait without a bound.
+         * It is not a regular file.
+         * <p>
+         * The reason needs no git outcome at all, and deliberately does not reach for one: opening
+         * a named pipe with no writer never returns HERE, and this runs before the call that would
+         * have had a deadline. Nothing in this plug-in may make an unattended request wait without
+         * a bound. (What git does with a FIFO in this position was never probed - no fixture for it
+         * exists on the platform this was written on - so nothing is said about it.)
          */
         NOT_A_REGULAR_FILE("it is not a regular file", true), //$NON-NLS-1$
 
@@ -171,8 +174,12 @@ public final class GitCommonDirectory
         NOT_A_DIRECTORY("what it names is not a directory", true), //$NON-NLS-1$
 
         /**
-         * It holds a NUL byte. Measured: git treats a NUL as the end of the string, resolves the
-         * {@code ../..} in front of it and carries on. We refuse, because silently
+         * It holds a NUL byte.
+         * <p>
+         * The measurement behind the split lives here, in evidence, and NOT in {@link #reason()},
+         * which is operator-facing text: git treats a NUL as the end of the string, resolves the
+         * {@code ../..} in front of it and carries on. Refusing anyway is this code's decision -
+         * truncating a pointer at a byte would resolve a DIFFERENT directory than the file names. We refuse, because silently
          * truncating a pointer at a byte would resolve a DIFFERENT directory than the one the file
          * names - the failure this whole class exists to stop.
          * <p>
@@ -180,7 +187,7 @@ public final class GitCommonDirectory
          * two arrive through the same {@code InvalidPathException} and git was measured to survive
          * this one and to die on that one.
          */
-        PATH_HOLDS_NUL("it holds a NUL byte, which git reads as the end of the path", true), //$NON-NLS-1$
+        PATH_HOLDS_NUL("it holds a NUL byte", true), //$NON-NLS-1$
 
         /**
          * The platform will not accept it as a path for some other reason - on Windows, a trailing
@@ -429,10 +436,10 @@ public final class GitCommonDirectory
             throw new FaultException(Fault.LAYOUT_UNREADABLE, e);
         }
         // Past the existence test, and now FOLLOWING links, because what has to be a regular file is
-        // what will be OPENED. A symbolic link to one is fine - git reads through it too - but a
-        // FIFO is not: opening a named pipe with no writer blocks for ever, and this runs before the
-        // command that would have had a deadline. git blocks there as well; that is not a licence to,
-        // because nothing in this plug-in may make an unattended call wait without a bound.
+        // what will be OPENED. A symbolic link to one is fine - git reads through it too, measured
+        // - but a FIFO is not: opening a named pipe with no writer blocks for ever HERE, and this
+        // runs before the command that would have had a deadline. Nothing in this plug-in may make
+        // an unattended call wait without a bound, which settles it without asking what git does.
         //
         // What this does NOT close, said plainly rather than left to be discovered: the file is
         // STATTED here and OPENED below, and Java has no non-blocking open to fuse the two. Swap a
@@ -450,17 +457,17 @@ public final class GitCommonDirectory
             throw new FaultException(Fault.EMPTY);
         }
         // BEFORE the ambiguity test, because a pointer can be both and the NUL is the more
-        // specific fact: git carries on past one (measured), so filing it under a Windows-rooting
-        // ambiguity would attach the wrong ownership and the wrong repair to it.
+        // specific fact about it. Filing it under a Windows-rooting ambiguity would name a fault
+        // whose repair is "fix the prefix" for a file whose actual problem is a NUL anywhere in it.
         if (value.indexOf('\0') >= 0)
         {
             throw new FaultException(Fault.PATH_HOLDS_NUL);
         }
         File named = new File(value);
-        // Spelled-ness BEFORE rooting. Both are refusals, but they carry opposite ownership: a
-        // trailing tab is a fault git shares, a rooted spelling is ours alone. Testing rooting
-        // first made '\shared<TAB>' - just as unusable as '../..<TAB>' - come out as OUR limit,
-        // purely because it happened to start with a separator.
+        // Spelled-ness BEFORE rooting, so that WHICH fault fires does not turn on an irrelevant
+        // prefix. '\shared<TAB>' is unusable for exactly the reason '../..<TAB>' is, and reporting
+        // it as a rooting ambiguity would name the wrong fault and offer the wrong repair - the tab
+        // is what has to be removed, not the prefix.
         try
         {
             named.toPath();
@@ -487,9 +494,9 @@ public final class GitCommonDirectory
         File resolved = named.isAbsolute() ? named : new File(gitDir, value);
         // Not File.isDirectory(), which answers false for "it is not one" AND for "I could not
         // find out" alike - so a directory that exists and cannot be statted would be reported as
-        // the fault git dies on, when it is really ours. Both still refuse; what changes is that
-        // the operator is told which fault they hit. (Found while making this list the single
-        // source - it had been hiding inside NOT_A_DIRECTORY.)
+        // one that is missing, and an operator sent to look for it. Both still refuse; what changes
+        // is which fault they are told about. (Found while making this list the single source - it
+        // had been hiding inside NOT_A_DIRECTORY.)
         if (!resolvesToDirectory(resolved, value))
         {
             throw new FaultException(Fault.NOT_A_DIRECTORY);
@@ -554,10 +561,8 @@ public final class GitCommonDirectory
      * not be looked at" - two faults, and {@link File#isDirectory} answers {@code false} to both.
      * <p>
      * Both still refuse, so this changes no outcome; what it changes is which fault the operator is
-     * told about. An
-     * existing directory that cannot be statted is OUR limit, not git's, and reporting it as
-     * "what it names is not a directory" would send someone to look for a missing directory that is
-     * in fact right there.
+     * told about. Reporting a directory that exists but cannot be statted as "what it names is not
+     * a directory" would send someone to look for a missing directory that is in fact right there.
      * <p>
      * The {@link File#toPath} conversion is inside the guard on purpose: a value the platform cannot
      * even spell as a path ({@code ../..} with a trailing tab, on Windows) makes it throw
@@ -625,8 +630,8 @@ public final class GitCommonDirectory
     }
 
     /**
-     * Which fault a path the platform will not accept deserves - the one case git survives, or the
-     * one it was measured to die on.
+     * Which fault a path the platform will not accept deserves - the one whose cause is a NUL
+     * byte, or the rest.
      *
      * @param value the pointer's content
      * @return {@link Fault#PATH_HOLDS_NUL} when it holds a NUL, {@link Fault#UNSPELLABLE_PATH}

@@ -389,12 +389,12 @@ public class GitCommonDirectoryTest
     }
 
     @Test
-    public void testARootedButUNSPELLABLEPointerIsGitsFaultNotOurs() throws Exception
+    public void testARootedButUNSPELLABLEPointerIsNotARootingAmbiguity() throws Exception
     {
         // Which fault fires must not turn on an irrelevant prefix. A trailing tab makes a pointer
-        // to git (measured: fatal: not a git repository) whether or not it happens to start with a
-        // separator - so '\shared<TAB>' is the same fault as '../..<TAB>', and calling it a
-        // rooting ambiguity would hand the operator OUR ownership for git's failure.
+        // unusable whether or not it happens to start with a separator - so '\shared<TAB>' has the
+        // same problem as '../..<TAB>', and reporting it as a rooting ambiguity would name the
+        // wrong fault and offer the wrong repair: the tab is what has to go, not the prefix.
         //
         // Testing rooting before spelling produced exactly that, which is why the path is validated
         // first now.
@@ -414,6 +414,8 @@ public class GitCommonDirectoryTest
         {
             assertEquals("the tab makes it unspellable, and that outranks the rooted prefix", //$NON-NLS-1$
                 GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
+            // What git makes of either spelling is not asserted here and is not this test's
+            // business - it was measured separately and lives in the PR body.
             // The FAULT is what matters; ownership turned out to be a property of the
             // platform rather than of the pointer, and is no longer claimed.
         }
@@ -423,8 +425,9 @@ public class GitCommonDirectoryTest
     public void testANonAsciiDriveLetterIsNotADriveAtAll() throws Exception
     {
         // Windows drive letters are A-Z. Character.isLetter() accepts a Cyrillic one, and reading
-        // it as a drive would label a plainly invalid path as an ambiguity this tool OWNS - telling
-        // an operator "git may well carry on past it" about a pointer git cannot use either.
+        // it as a drive would name a rooting ambiguity - and send the operator to fix a prefix -
+        // for a path the platform will not accept at all. Which fault fires decides which repair
+        // the operator is offered, so it has to be the right one.
         Assume.assumeTrue("only Windows has drive letters to mistake", File.separatorChar == '\\'); //$NON-NLS-1$
         char cyrillicZhe = (char)0x0416;
         Linked linked =
@@ -502,10 +505,9 @@ public class GitCommonDirectoryTest
     @Test
     public void testAPointerHoldingANulByteIsOursToRefuseAndSaysSo() throws Exception
     {
-        // git reads a NUL as the end of the path and carries on with what precedes it - so this is
-        // OUR refusal, not one git shares, and it must be labelled that way in the enumeration that
-        // is now the single source. Truncating at the byte the way git does would resolve a
-        // DIFFERENT directory than the file names, which is the failure this class exists to stop.
+        // Truncating a pointer at a byte would resolve a DIFFERENT directory than the file names,
+        // which is the failure this class exists to stop - and that reason stands on its own, with
+        // no reference to what git does with the same file.
         Linked linked = newLinkedWorktree("common-dir-nul", "placeholder\n"); //$NON-NLS-1$ //$NON-NLS-2$
         Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
             new byte[]{'.', '.', '/', '.', '.', 0, 'j', 'u', 'n', 'k', '\n'});
@@ -573,6 +575,58 @@ public class GitCommonDirectoryTest
     }
 
     // ==================== the ratchet: the enumeration cannot drift from the code ====================
+
+    @Test
+    public void testEveryFaultsWordsArePinnedLiterally()
+    {
+        // reason() is not a label - it is the sentence an operator reads in the refusal, so it is
+        // contract text and gets pinned like any other.
+        //
+        // It also closes a hole a reviewer found downstream: the test that checks the remaining
+        // faults all render in the ordinary shape builds its expectation with the LIVE reason(),
+        // exactly as production does. Append a phrase to a reason and both sides moved together and
+        // stayed green. Pinned here, that append fails before it can cancel out anywhere else.
+        Map<GitCommonDirectory.Fault, String> words =
+            new EnumMap<>(GitCommonDirectory.Fault.class);
+        words.put(GitCommonDirectory.Fault.UNREADABLE, "it could not be read"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.LAYOUT_UNREADABLE,
+            "the git directory's layout could not be read"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.NOT_A_REGULAR_FILE, "it is not a regular file"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.TOO_LARGE, "it is larger than this tool will read"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.NOT_UTF_8, "it is not valid UTF-8"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT,
+            "Windows roots it somewhere this tool cannot reproduce"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.EMPTY,
+            "it is empty, or holds nothing but a line terminator"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.NOT_A_DIRECTORY, "what it names is not a directory"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.PATH_HOLDS_NUL, "it holds a NUL byte"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.UNSPELLABLE_PATH,
+            "the platform cannot use it as a path"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.TARGET_UNREADABLE,
+            "what it names could not be looked at"); //$NON-NLS-1$
+
+        assertEquals("every Fault's words must be pinned - an unpinned one can be reworded, and " //$NON-NLS-1$
+            + "it is what the operator reads", //$NON-NLS-1$
+            EnumSet.allOf(GitCommonDirectory.Fault.class), words.keySet());
+        for (Map.Entry<GitCommonDirectory.Fault, String> e : words.entrySet())
+        {
+            assertEquals(e.getKey() + ": its words are contract text", //$NON-NLS-1$
+                e.getValue(), e.getKey().reason());
+            // Not the word "git" - LAYOUT_UNREADABLE names the git DIRECTORY, a filesystem object,
+            // and that is a fact about the repository rather than a claim about the program. What
+            // may not appear is git as a SUBJECT doing something, because reason() goes straight
+            // into the refusal.
+            for (String verb : new String[]{"git reads", "git can", "git will", "git would", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "git carries", "git fails", "git rejects", "git dies", "native git"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            {
+                assertFalse(e.getKey() + ": its words may not say what git DOES - that is the " //$NON-NLS-1$
+                    + "claim this change removed, and reason() goes straight into the refusal", //$NON-NLS-1$
+                    e.getValue().contains(verb));
+            }
+        }
+    }
+
+
 
     @Test
     public void testEveryFaultIsReachableAndEveryReachableFaultIsEnumerated() throws Exception

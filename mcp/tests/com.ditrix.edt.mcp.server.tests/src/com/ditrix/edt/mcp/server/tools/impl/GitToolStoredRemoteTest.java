@@ -1998,46 +1998,120 @@ public class GitToolStoredRemoteTest
             + "code: " + confirmed, confirmed.contains("commondir")); //$NON-NLS-1$
     }
 
+    // One @Test per rendered shape, deliberately, and not four assertions in one method: JUnit
+    // stops a method at its first failing assertion, so a single method would prove only that the
+    // FIRST pin is load-bearing. Split, a phrase added to the common part of the message reddens
+    // all four - which is the demonstration that each shape is pinned, not just the one that runs
+    // first.
+
     @Test
-    public void testNoRefusalNamesASideForANYFault()
+    public void testTheUnclassifiedRefusalIsPinnedLiterally()
     {
-        // What the collapse GUARANTEES, pinned over every member rather than sampled.
+        assertEquals(PIN_UNCLASSIFIED, GitTool.commonDirRefusal(null));
+    }
+
+    @Test
+    public void testTheUnconfirmedRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_UNCONFIRMED,
+            GitTool.commonDirRefusal(GitCommonDirectory.Fault.LAYOUT_UNREADABLE));
+    }
+
+    @Test
+    public void testTheTargetUnreadableRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_TARGET,
+            GitTool.commonDirRefusal(GitCommonDirectory.Fault.TARGET_UNREADABLE));
+    }
+
+    @Test
+    public void testTheOrdinaryRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_ORDINARY, GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY));
+    }
+
+    @Test
+    public void testEveryOtherFaultTakesTheOrdinaryShape()
+    {
+        // THE ratchet for "no refusal names a side", in its final form, and the form matters.
         //
-        // The refusal used to say whose limit the fault was. Measured against git 2.35.1, FIVE of
-        // eleven were wrong - and the decisive one shows the claim could not be fixed, only
-        // dropped: a commondir of '\shared' makes git answer 'fatal: not a git repository' on
-        // Windows and is an ordinary relative path git resolves happily on POSIX. The same bytes,
-        // opposite answers, so no constant could have been right on both.
+        // First attempt: a blacklist of phrases. A reviewer showed it could not see a NEW phrase.
+        // Second attempt: a relation - two faults sharing a repair tail must differ only in their
+        // own words. A reviewer showed it could not see a sentence added to the COMMON part, which
+        // lands on both sides of the equality and cancels out.
+        //
+        // Both looked at a RELATION between outputs instead of at the output. A literal cannot be
+        // fooled that way: any sentence added anywhere, to the shared part or to one branch, moves
+        // the text and fails here. It costs a mechanical update whenever the wording changes on
+        // purpose, and that cost is the point - the wording of a refusal is a contract, and this is
+        // the only shape of check that has caught every attempt to slip something into it.
+        // Every other fault takes the ordinary shape, so they are pinned by substitution rather
+        // than by a literal each: what varies is exactly the fault's own words and nothing else.
         for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
         {
-            String refusal = GitTool.commonDirRefusal(fault);
-            assertTrue(fault + ": every refusal must still name the fault it hit: " + refusal, //$NON-NLS-1$
-                refusal.contains(fault.reason()));
-            for (String side : new String[]{"THIS TOOL's limit", "git was measured to fail", //$NON-NLS-1$ //$NON-NLS-2$
-                "git may well carry on", "would have hit anyway", //$NON-NLS-1$ //$NON-NLS-2$
-                "has not been established either way"}) //$NON-NLS-1$
+            if (fault == GitCommonDirectory.Fault.LAYOUT_UNREADABLE
+                || fault == GitCommonDirectory.Fault.TARGET_UNREADABLE)
             {
-                assertFalse(fault + ": no refusal may claim whose limit it is - that depends on " //$NON-NLS-1$
-                    + "the platform and the git version, not on the fault: " + refusal, //$NON-NLS-1$
-                    refusal.contains(side));
+                continue;
             }
+            assertEquals(fault + " must take the ordinary shape, differing only in its reason", //$NON-NLS-1$
+                PIN_ORDINARY.replace(GitCommonDirectory.Fault.EMPTY.reason(), fault.reason()),
+                GitTool.commonDirRefusal(fault));
         }
-        assertFalse("nor may the unclassified one", //$NON-NLS-1$
-            GitTool.commonDirRefusal(null).contains("git was measured to fail")); //$NON-NLS-1$
-
-        // The blacklist above is a FLOOR - it only knows the phrases the old renderer used, so a
-        // NEW sentence naming a side would walk straight past it. What follows is the property
-        // itself, and it needs no list: two faults that share a repair tail must produce messages
-        // that differ ONLY in the fault's own words. Any sentence added per-fault - about git or
-        // anything else - breaks that equality, whatever it happens to say.
-        GitCommonDirectory.Fault a = GitCommonDirectory.Fault.EMPTY;
-        GitCommonDirectory.Fault b = GitCommonDirectory.Fault.NOT_A_DIRECTORY;
-        assertEquals("two faults with the same repair must differ only in their reason - a " //$NON-NLS-1$
-            + "message that says anything else ABOUT the fault is saying something this code " //$NON-NLS-1$
-            + "does not know", //$NON-NLS-1$
-            GitTool.commonDirRefusal(a).replace(a.reason(), "<R>"), //$NON-NLS-1$
-            GitTool.commonDirRefusal(b).replace(b.reason(), "<R>")); //$NON-NLS-1$
     }
+
+    private static final String PIN_UNCLASSIFIED =
+        "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
+            + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. Check the repository in a terminal. The failure is of a kind this tool does not " //$NON-NLS-1$
+            + "classify. If this worktree has a 'commondir' file, repair that file itself: it must be a " //$NON-NLS-1$
+            + "regular file holding exactly one line, the path to the shared repository. That path may " //$NON-NLS-1$
+            + "be absolute; when it is relative it is resolved against the directory the file sits in, " //$NON-NLS-1$
+            + "which is what 'git worktree add' writes ('../..'). A working absolute spelling does not " //$NON-NLS-1$
+            + "need to be made relative. Do NOT reach for 'git worktree repair' - measured on git " //$NON-NLS-1$
+            + "2.35.1, it does not touch this file at all, and reports the unrelated '.git file broken' " //$NON-NLS-1$
+            + "while leaving the fault exactly where it was. This tool logs only the failure's " //$NON-NLS-1$
+            + "exception types."; //$NON-NLS-1$
+
+    private static final String PIN_UNCONFIRMED =
+        "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
+            + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. Check the repository in a terminal. The fault: the git directory's layout could " //$NON-NLS-1$
+            + "not be read. This tool refused rather than run blind; whether native git can use this " //$NON-NLS-1$
+            + "repository is not something it determines - check that in a terminal. Check the git " //$NON-NLS-1$
+            + "directory of this project in a terminal: whether it exists, whether it can be read, and " //$NON-NLS-1$
+            + "whether its path is one this platform accepts. This tool logs only the failure's " //$NON-NLS-1$
+            + "exception types."; //$NON-NLS-1$
+
+    private static final String PIN_TARGET =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
+            + "pointer to the shared repository holding the configuration and the remotes - could not " //$NON-NLS-1$
+            + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
+            + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
+            + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. The fault: what it names could not be looked at. This tool refused rather than " //$NON-NLS-1$
+            + "run blind; whether native git can use this repository is not something it determines - " //$NON-NLS-1$
+            + "check that in a terminal. The 'commondir' file itself may be perfectly good: what it " //$NON-NLS-1$
+            + "POINTS AT is what could not be examined. Check that directory in a terminal - that it " //$NON-NLS-1$
+            + "exists, and that this user may read it - before editing the pointer, which may need no " //$NON-NLS-1$
+            + "change at all. This tool logs only the failure's exception types."; //$NON-NLS-1$
+
+    private static final String PIN_ORDINARY =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
+            + "pointer to the shared repository holding the configuration and the remotes - could not " //$NON-NLS-1$
+            + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
+            + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
+            + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. The fault: it is empty, or holds nothing but a line terminator. This tool refused " //$NON-NLS-1$
+            + "rather than run blind; whether native git can use this repository is not something it " //$NON-NLS-1$
+            + "determines - check that in a terminal. If this worktree has a 'commondir' file, repair " //$NON-NLS-1$
+            + "that file itself: it must be a regular file holding exactly one line, the path to the " //$NON-NLS-1$
+            + "shared repository. That path may be absolute; when it is relative it is resolved against " //$NON-NLS-1$
+            + "the directory the file sits in, which is what 'git worktree add' writes ('../..'). A " //$NON-NLS-1$
+            + "working absolute spelling does not need to be made relative. Do NOT reach for 'git " //$NON-NLS-1$
+            + "worktree repair' - measured on git 2.35.1, it does not touch this file at all, and " //$NON-NLS-1$
+            + "reports the unrelated '.git file broken' while leaving the fault exactly where it was. " //$NON-NLS-1$
+            + "This tool logs only the failure's exception types."; //$NON-NLS-1$
 
     // ==================== the pre-flight execute() actually runs ====================
 
