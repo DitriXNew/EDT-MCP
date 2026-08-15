@@ -65,6 +65,7 @@ function main() {
   } else {
     if (inImpl) {
       tips.push('cross-tool contract — use /edt-mcp-tool-conventions (param naming, ToolResult.error, shared resolvers, schema↔code)');
+      tips.push('touching getDescription() or a parameter description? — use /edt-mcp-tool-descriptions (cut the capability index, KEEP the protocol clause and make it imperative; moving a rule to the guide deletes it; A/B it through tests/tool-choice/ before shipping)');
     }
     if (isMetadata || isBslCode) {
       tips.push('1C ru/en correctness — use /edt-mcp-bilingual (synonym keyed by language CODE, resolve by Name, dialect-aware vs literal)');
