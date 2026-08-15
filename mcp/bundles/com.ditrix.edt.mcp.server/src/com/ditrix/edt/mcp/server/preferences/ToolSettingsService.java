@@ -24,6 +24,95 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
+    private static final Set<String> ANALYSIS_ONLY_V4_ADDITIONS = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
+        "stop_profiling", //$NON-NLS-1$
+        "get_outgoing_structures"); //$NON-NLS-1$
+
+    private static final Set<String> CODE_REVIEW_V4_ADDITIONS = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
+        "stop_profiling"); //$NON-NLS-1$
+
+    private static final Set<String> DEVELOPMENT_V4_ADDITIONS = Set.of(
+        "stop_profiling"); //$NON-NLS-1$
+
+    /*
+     * Frozen recognition shapes: what any historical stored profile of this preset must contain.
+     * Never derive them from the live preset, which has grown over time. A shape is only ever
+     * extended after checking that every supported historical store still contains the new name.
+     *
+     * These are deliberately per-preset rather than a shared union. They omit the default-disabled
+     * tools, so a user who enabled git is still recognized, and apply_quick_fix is in none of them,
+     * so version 4 still recognizes a read-only store whose user deliberately re-enabled it.
+     */
+    static final Set<String> ANALYSIS_ONLY_RECOGNITION_SHAPE = Set.of(
+        "debug_launch", //$NON-NLS-1$
+        "debug_status", //$NON-NLS-1$
+        "debug_yaxunit_tests", //$NON-NLS-1$
+        "evaluate_expression", //$NON-NLS-1$
+        "get_applications", //$NON-NLS-1$
+        "get_form_screenshot", //$NON-NLS-1$
+        "get_method_call_hierarchy", //$NON-NLS-1$
+        "get_module_structure", //$NON-NLS-1$
+        "get_profiling_results", //$NON-NLS-1$
+        "get_symbol_info", //$NON-NLS-1$
+        "get_variables", //$NON-NLS-1$
+        "go_to_definition", //$NON-NLS-1$
+        "list_breakpoints", //$NON-NLS-1$
+        "list_modules", //$NON-NLS-1$
+        "read_method_source", //$NON-NLS-1$
+        "read_module_source", //$NON-NLS-1$
+        "remove_breakpoint", //$NON-NLS-1$
+        "rename_metadata_object", //$NON-NLS-1$
+        "resume", //$NON-NLS-1$
+        "run_yaxunit_tests", //$NON-NLS-1$
+        "search_in_code", //$NON-NLS-1$
+        "set_breakpoint", //$NON-NLS-1$
+        "start_profiling", //$NON-NLS-1$
+        "step", //$NON-NLS-1$
+        "update_database", //$NON-NLS-1$
+        "validate_query", //$NON-NLS-1$
+        "wait_for_break", //$NON-NLS-1$
+        "write_module_source"); //$NON-NLS-1$
+
+    static final Set<String> CODE_REVIEW_RECOGNITION_SHAPE = Set.of(
+        "debug_launch", //$NON-NLS-1$
+        "debug_status", //$NON-NLS-1$
+        "debug_yaxunit_tests", //$NON-NLS-1$
+        "evaluate_expression", //$NON-NLS-1$
+        "get_applications", //$NON-NLS-1$
+        "get_profiling_results", //$NON-NLS-1$
+        "get_variables", //$NON-NLS-1$
+        "list_breakpoints", //$NON-NLS-1$
+        "remove_breakpoint", //$NON-NLS-1$
+        "rename_metadata_object", //$NON-NLS-1$
+        "resume", //$NON-NLS-1$
+        "run_yaxunit_tests", //$NON-NLS-1$
+        "set_breakpoint", //$NON-NLS-1$
+        "start_profiling", //$NON-NLS-1$
+        "step", //$NON-NLS-1$
+        "update_database", //$NON-NLS-1$
+        "wait_for_break", //$NON-NLS-1$
+        "write_module_source"); //$NON-NLS-1$
+
+    static final Set<String> DEVELOPMENT_RECOGNITION_SHAPE = Set.of(
+        "debug_status", //$NON-NLS-1$
+        "debug_yaxunit_tests", //$NON-NLS-1$
+        "evaluate_expression", //$NON-NLS-1$
+        "get_profiling_results", //$NON-NLS-1$
+        "get_variables", //$NON-NLS-1$
+        "list_breakpoints", //$NON-NLS-1$
+        "remove_breakpoint", //$NON-NLS-1$
+        "resume", //$NON-NLS-1$
+        "set_breakpoint", //$NON-NLS-1$
+        "start_profiling", //$NON-NLS-1$
+        "step", //$NON-NLS-1$
+        "wait_for_break"); //$NON-NLS-1$
+
     private static final ToolSettingsService INSTANCE = new ToolSettingsService();
 
     private ToolSettingsService()
@@ -81,12 +170,19 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * <p>
      * Version 2 covers a narrower case: {@code apply_quick_fix} is a normal (default-ON) tool, so it is
      * NOT added to every stored list the way {@code git} is - only to a list that already CONTAINS
-     * everything {@link ToolPreset#CODE_REVIEW} or {@link ToolPreset#ANALYSIS_ONLY} disables. That
-     * containment is the signature of a store saved by an older build under one of those two
-     * read-only presets, before this write-capable tool existed to be excluded from them - and it
-     * still holds for a user who tightened such a preset further. A selection that merely OVERLAPS
-     * one (without covering it) is left untouched. See
+     * the frozen recognition shape of Code Review or Analysis Only. That containment is the
+     * signature of a store saved by an older build under one of those two read-only presets, before
+     * this write-capable tool existed to be excluded from them - and it still holds for a user who
+     * tightened such a preset further. A selection that merely OVERLAPS one (without covering it)
+     * is left untouched. See
      * {@link #migrateApplyQuickFixIntoReadOnlyPreset} for why containment rather than equality.
+     * <p>
+     * Version 4 repairs stored preset shapes after previously ungrouped tools joined groups that
+     * those presets disable. It recognizes an older preset by containment of the frozen historical
+     * shape, which omits both names the store may predate and default-disabled names the user may
+     * intentionally have enabled. Because the recognized shapes are nested, it tests the most
+     * restrictive shape first; otherwise a broader match would add only part of the tools owed to
+     * an Analysis Only store.
      *
      * @param store the preference store to migrate (never {@code null} here)
      */
@@ -127,6 +223,12 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // own tools. That is a decision to opt into, not to inherit on upgrade.
                 changed |= disabled.add("ask_workmate"); //$NON-NLS-1$
             }
+            if (storedVersion < 4)
+            {
+                // The v4 shapes intentionally omit apply_quick_fix, so this step recognizes a store
+                // whose user deliberately re-enabled it after version 2 without adding it back.
+                changed |= migrateRegroupedToolsIntoPresets(disabled);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
@@ -138,8 +240,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
 
     /**
      * Adds {@code apply_quick_fix} to {@code disabled} when the stored list already expresses a
-     * no-write profile - i.e. it CONTAINS everything {@link ToolPreset#CODE_REVIEW} or
-     * {@link ToolPreset#ANALYSIS_ONLY} disables, whether or not it disables more on top.
+     * no-write profile - i.e. it CONTAINS the frozen recognition shape of Code Review or Analysis
+     * Only, whether or not it disables more on top.
      * <p>
      * A SUPERSET test, not an exact match, on purpose. Exact matching (via
      * {@link ToolPreset#matchPreset}) misses the ordinary case of someone who picked a read-only
@@ -157,15 +259,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * would make a hand-tuned CUSTOM selection claim to be "Code Review".
      * <p>
      * Stale/unknown names left in the stored list cannot defeat the check, which asks only whether
-     * the preset's own tools are all present.
-     * <p>
-     * The compared shape drops the tools a preset does not really assert: {@code apply_quick_fix}
-     * (today's presets exclude it, but the stored list predates it by definition) and everything in
-     * {@link PreferenceConstants#DEFAULT_DISABLED_TOOLS}, which every preset merely inherits from
-     * the shipped defaults. Both are things the user may deliberately have switched ON - notably the
-     * opt-in {@code git} tool - and demanding them here would make an ordinary "Code Review, but I
-     * do use git" store fail the containment test and miss the migration entirely, i.e. exactly the
-     * hazard this method exists to close.
+     * the frozen historical shape is present.
      *
      * @param disabled the mutable stored disabled-tools set; modified in place
      * @return {@code true} when {@code apply_quick_fix} was added
@@ -176,16 +270,37 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         {
             return false;
         }
-        Set<String> optional = parseDisabledTools(PreferenceConstants.DEFAULT_DISABLED_TOOLS);
-        for (ToolPreset readOnly : new ToolPreset[] {ToolPreset.CODE_REVIEW, ToolPreset.ANALYSIS_ONLY})
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE))
         {
-            Set<String> presetShape = new LinkedHashSet<>(readOnly.getDisabledTools());
-            presetShape.remove("apply_quick_fix"); //$NON-NLS-1$
-            presetShape.removeAll(optional);
-            if (disabled.containsAll(presetShape))
-            {
-                return disabled.add("apply_quick_fix"); //$NON-NLS-1$
-            }
+            return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+        }
+        if (disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
+        {
+            return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+        }
+        return false;
+    }
+
+    /**
+     * Adds the version 4 group-inherited disabled names to the first stored preset shape that
+     * contains all of its older asserted tools.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when at least one newly inherited name was added
+     */
+    private static boolean migrateRegroupedToolsIntoPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(ANALYSIS_ONLY_V4_ADDITIONS);
+        }
+        if (disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(CODE_REVIEW_V4_ADDITIONS);
+        }
+        if (disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(DEVELOPMENT_V4_ADDITIONS);
         }
         return false;
     }

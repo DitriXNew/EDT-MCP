@@ -145,4 +145,79 @@ public class LaunchLifecycleUtilsTest
         assertTrue(result.isOk());
         assertNull(result.getError());
     }
+    // ---------------------------------------------------------------------
+    // canonicalUpdateScope (#411)
+    //
+    // The reuse keys of run_yaxunit_tests carry the update scope. The scope has a GRAMMAR, so a
+    // raw string in a key would split requests that ask for exactly the same preparation — and
+    // splitting them is not a slow path either: it means a retry starts a second full test run
+    // instead of joining the one already in flight.
+    //
+    // These pin the equivalences against the very grammar resolveUpdateScope resolves with.
+    // ---------------------------------------------------------------------
+
+    @Test
+    public void testCanonicalUpdateScopeCollapsesEveryWayOfSayingAll()
+    {
+        assertEquals("an omitted scope IS 'all'", "all",
+            LaunchLifecycleUtils.canonicalUpdateScope(null));
+        assertEquals("an empty scope is an omitted scope", "all",
+            LaunchLifecycleUtils.canonicalUpdateScope(""));
+        assertEquals("blank is empty", "all", LaunchLifecycleUtils.canonicalUpdateScope("   "));
+        assertEquals("the keyword is case-insensitive and trimmed", "all",
+            LaunchLifecycleUtils.canonicalUpdateScope("  ALL "));
+        assertEquals("the other keyword too", "configuration",
+            LaunchLifecycleUtils.canonicalUpdateScope(" Configuration "));
+    }
+
+    @Test
+    public void testCanonicalUpdateScopeIsASetOfNamesNotASpelling()
+    {
+        // resolveUpdateScope tests MEMBERSHIP in the parsed set and takes its ordering from the
+        // project list, so order and repetition cannot make two different preparations.
+        assertEquals("order is not part of the request",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:A,extension:B"),
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:B, extension:A"));
+        assertEquals("a bare token is the same intent as extension:<name>",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:A"),
+            LaunchLifecycleUtils.canonicalUpdateScope(" A "));
+        assertEquals("a repeated name is one project",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:A"),
+            LaunchLifecycleUtils.canonicalUpdateScope("A,extension:A"));
+    }
+
+    @Test
+    public void testCanonicalUpdateScopeKeepsDifferentRequestsApart()
+    {
+        assertFalse("two different extensions are two different preparations",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:A")
+                .equals(LaunchLifecycleUtils.canonicalUpdateScope("extension:B")));
+        assertFalse("'configuration' skips the extensions, 'all' does not",
+            LaunchLifecycleUtils.canonicalUpdateScope("configuration")
+                .equals(LaunchLifecycleUtils.canonicalUpdateScope("all")));
+        // Project names are case-SENSITIVE where resolveUpdateScope compares them, so they must
+        // not be folded here either.
+        assertFalse("an extension name differing only in case is a different name",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:Ext")
+                .equals(LaunchLifecycleUtils.canonicalUpdateScope("extension:ext")));
+    }
+
+    /**
+     * A scope that parses to no usable name always FAILS validation, and the error quotes the
+     * caller's own string — so two such scopes must not collapse into one key and hand one caller
+     * the other caller's message.
+     */
+    @Test
+    public void testCanonicalUpdateScopeKeepsUnusableScopesApart()
+    {
+        assertFalse("two unusable scopes are not interchangeable",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:")
+                .equals(LaunchLifecycleUtils.canonicalUpdateScope(",")));
+        // And an unusable scope can never be mistaken for a usable one: the four output spaces
+        // ('all', 'configuration', 'extension:<names>', 'raw:<value>') are disjoint.
+        assertTrue("an unusable scope lands in its own namespace",
+            LaunchLifecycleUtils.canonicalUpdateScope("extension:").startsWith("raw:"));
+        assertFalse("a name that merely looks like the namespace is still a name",
+            LaunchLifecycleUtils.canonicalUpdateScope("raw:").startsWith("raw:"));
+    }
 }

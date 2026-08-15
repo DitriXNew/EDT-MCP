@@ -151,7 +151,13 @@ public class RenameMetadataObjectTool implements IMcpTool
             .booleanProperty("confirm", //$NON-NLS-1$
                 "true = apply the rename; default false = preview only.") //$NON-NLS-1$
             .stringProperty("disableIndices", //$NON-NLS-1$
-                "Comma-separated preview '#' indices of OPTIONAL change points to skip, e.g. '2,3,5'.") //$NON-NLS-1$
+                "Comma-separated preview '#' indices of OPTIONAL change points to skip, e.g. '2,3,5'. " //$NON-NLS-1$
+                + "Entries that cannot be an index at all - not whole numbers, or negative - are " //$NON-NLS-1$
+                + "refused before anything runs; an index the current preview simply does not have " //$NON-NLS-1$
+                + "is reported back as unknown instead.") //$NON-NLS-1$
+            .stringProperty("expectedHash", //$NON-NLS-1$
+                "Optimistic-lock token from the preview's contentHash; required when confirm=true " //$NON-NLS-1$
+                + "and disableIndices is non-empty.") //$NON-NLS-1$
             .integerProperty("maxResults", //$NON-NLS-1$
                 "Max change points shown in the preview (default 20; 0 = no limit).") //$NON-NLS-1$
             .integerProperty(KEY_TIMEOUT,
@@ -189,12 +195,12 @@ public class RenameMetadataObjectTool implements IMcpTool
         String newName = JsonUtils.extractStringArgument(params, KEY_NEW_NAME);
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         String disableIndicesStr = JsonUtils.extractStringArgument(params, "disableIndices"); //$NON-NLS-1$
+        String expectedHash = JsonUtils.extractStringArgument(params, "expectedHash"); //$NON-NLS-1$
         final int maxResults = Math.max(0, JsonUtils.extractIntArgument(params, "maxResults", 20)); //$NON-NLS-1$
 
-        // Parse disable indices. An entry that is not an index is COUNTED rather than thrown away here:
-        // the executed report has to be able to say that the caller asked for something which produced
-        // no skip, and a value discarded at the parse no longer exists to report on (#401). The count
-        // and not the text - see DisableRequest for why.
+        // Parse disable indices. An entry that is not an index is KEPT as a fact rather than thrown
+        // away at the split, because the refusal below has to be able to count it: a value discarded
+        // where it is parsed no longer exists to refuse over (#401).
         DisableRequest disableRequest = DisableRequest.parse(disableIndicesStr);
 
         String err = JsonUtils.requireArgument(params, McpKeys.PROJECT_NAME,
@@ -229,6 +235,22 @@ public class RenameMetadataObjectTool implements IMcpTool
             return ToolResult.error(badName).toJson();
         }
 
+        // Same place and the same reason as the name check above: an entry that cannot be an index
+        // under ANY tree is a defect of the REQUEST, and no amount of waiting or project state can
+        // turn it into one. Refusing here keeps a configuration-wide cascade from running on a call
+        // the caller demonstrably did not mean, and costs the caller only a corrected retry.
+        String badIndices = disableRequest.validationError();
+        if (badIndices != null)
+        {
+            return ToolResult.error(badIndices).toJson();
+        }
+
+        if (confirm && !disableRequest.isEmpty()
+            && (expectedHash == null || expectedHash.isBlank()))
+        {
+            return ToolResult.error(MetadataRenameService.missingExpectedHashError()).toJson();
+        }
+
         // A cascade rename rewrites every reference to the object across BSL, forms and
         // metadata. If the project's derived data (the reference index) is still building,
         // the refactoring resolves an INCOMPLETE set of references: it would rename the
@@ -250,6 +272,7 @@ public class RenameMetadataObjectTool implements IMcpTool
         }
 
         final DisableRequest finalDisableRequest = disableRequest;
+        final String finalExpectedHash = expectedHash;
         Display display = PlatformUI.getWorkbench().getDisplay();
 
         // The cascade runs on the UI thread, and nothing in that hand-off had an upper bound: EDT
@@ -262,7 +285,7 @@ public class RenameMetadataObjectTool implements IMcpTool
                 try
                 {
                     resultRef.set(service.rename(projectName, objectFqn, newName, confirm,
-                        finalDisableRequest, maxResults, progress));
+                        finalDisableRequest, finalExpectedHash, maxResults, progress));
                 }
                 catch (Exception e)
                 {

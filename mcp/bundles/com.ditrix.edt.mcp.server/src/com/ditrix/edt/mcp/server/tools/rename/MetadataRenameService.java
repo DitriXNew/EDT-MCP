@@ -21,6 +21,7 @@ import java.util.TreeSet;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
@@ -56,6 +57,7 @@ import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -100,6 +102,12 @@ public class MetadataRenameService
     /** Change-point type tag for BSL reference changes. */
     private static final String BSL_REF = "bslRef"; //$NON-NLS-1$
 
+    /** Separates fields in the canonical change-point signature; not legal in the rendered values. */
+    private static final char HASH_FIELD_SEPARATOR = '\u001f';
+
+    /** Separates points in the canonical change-point signature; not legal in the rendered values. */
+    private static final char HASH_POINT_SEPARATOR = '\u001e';
+
     /** Reflective method name: Guice injector instance lookup. */
     private static final String GET_INSTANCE = "getInstance"; //$NON-NLS-1$
 
@@ -121,14 +129,16 @@ public class MetadataRenameService
      * @param newName the new programmatic Name
      * @param confirm {@code false} previews, {@code true} applies
      * @param disableRequest what the caller asked to skip: the preview '#' indices of optional
-     *     change points, plus a count of the entries that were not indices at all
+     *     change points
+     * @param expectedHash the preview's optimistic-lock token; required when applying disableIndices
      * @param maxResults cap on the change points listed in the preview (0 = no limit)
      * @param progress the sink this method publishes its {@link RenameProgress.Phase} to, so a
      *     caller whose deadline elapsed can say what the model was left in (issue #365)
      * @return the Markdown report, or a {@link ToolResult#error} JSON payload
      */
     public String rename(String projectName, String objectFqn, String newName,
-        boolean confirm, DisableRequest disableRequest, int maxResults, RenameProgress progress)
+        boolean confirm, DisableRequest disableRequest, String expectedHash, int maxResults,
+        RenameProgress progress)
     {
         // Reported as the FIRST thing the UI thread does: it is what separates "the UI thread never
         // picked the work up" from "the work started" for a caller that gave up on its deadline.
@@ -164,7 +174,7 @@ public class MetadataRenameService
         if (formRef != null)
         {
             return renameFormMember(project, config, objectFqn, newName, confirm, disableRequest,
-                maxResults, progress, formRef);
+                expectedHash, maxResults, progress, formRef);
         }
 
         // Get refactoring service
@@ -196,7 +206,7 @@ public class MetadataRenameService
 
         BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
         return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,
-            disableRequest, maxResults, progress, refactoringService, modelResolution);
+            disableRequest, expectedHash, maxResults, progress, refactoringService, modelResolution);
     }
 
     /**
@@ -205,8 +215,8 @@ public class MetadataRenameService
      * without requiring a live workbench.
      */
     String prepareMdClassRename(IProject project, String objectFqn, String newName,
-        MdObject targetObject, boolean confirm, DisableRequest disableRequest, int maxResults,
-        RenameProgress progress, IMdRefactoringService refactoringService,
+        MdObject targetObject, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, IMdRefactoringService refactoringService,
         BmModelResolver.Resolution modelResolution)
     {
         if (!modelResolution.isAvailable())
@@ -242,7 +252,7 @@ public class MetadataRenameService
         else
         {
             // Execute mode - perform the rename, applying any disabled indices
-            return performRename(objectFqn, newName, refactorings, disableRequest, progress,
+            return performRename(objectFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "metadata object"); //$NON-NLS-1$
         }
     }
@@ -316,14 +326,15 @@ public class MetadataRenameService
      * @param newName the new element name
      * @param confirm {@code false} previews, {@code true} applies
      * @param disableRequest what the caller asked to skip (see {@link #rename})
+     * @param expectedHash the preview's optimistic-lock token
      * @param maxResults cap on the change points listed
      * @param progress the phase sink
      * @param ref the parsed form-member reference
      * @return the Markdown report, or a {@link ToolResult#error} JSON payload
      */
     private String renameFormMember(IProject project, Configuration config, String normFqn,
-        String newName, boolean confirm, DisableRequest disableRequest, int maxResults,
-        RenameProgress progress, FormElementWriter.FormMemberRef ref)
+        String newName, boolean confirm, DisableRequest disableRequest, String expectedHash,
+        int maxResults, RenameProgress progress, FormElementWriter.FormMemberRef ref)
     {
         String ineligible = formRenameIneligibility(ref);
         if (ineligible != null)
@@ -383,7 +394,7 @@ public class MetadataRenameService
                 return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
                     Collections.emptyMap(), Collections.emptyList());
             }
-            return performRename(normFqn, newName, refactorings, disableRequest, progress,
+            return performRename(normFqn, newName, refactorings, disableRequest, expectedHash, progress,
                 "form element"); //$NON-NLS-1$
         }
         catch (Exception e)
@@ -590,13 +601,20 @@ public class MetadataRenameService
 
         // Phase 2: build markdown with YAML frontmatter
         StringBuilder sb = new StringBuilder();
+        // A leaf without a stable identity now costs only THAT row its ability to be skipped. The
+        // signature records an explicit no-identity marker for it, so the preview can always issue
+        // the optimistic-lock token that keeps every independently verifiable index usable. Confirm
+        // refuses only requested indices whose rows cannot be proven to denote the same leaf.
+        String contentHash = changePointContentHash(refactorings);
         PreviewSummary summary = new PreviewSummary(objectFqn, newName, allChanges.size(), enabledCount,
-            allProblems.size(), exactMatches.size(), shown);
+            allProblems.size(), exactMatches.size(), shown, contentHash);
         appendFrontmatter(sb, summary);
         appendChangePointsTable(sb, allChanges, shown);
         appendCodeContext(sb, allChanges, shown);
         appendProblemsSection(sb, allProblems);
-        appendFooter(sb);
+        boolean hasUnverifiableRows = allChanges.subList(0, shown).stream()
+            .anyMatch(changePoint -> !hasStableIdentity(changePoint));
+        appendFooter(sb, hasUnverifiableRows);
 
         return sb.toString();
     }
@@ -619,6 +637,86 @@ public class MetadataRenameService
     }
 
     /**
+     * Computes the optimistic-lock token over the FULL canonical change-point list. Both preview and
+     * confirm call this method, so the second refactoring tree is compared through the same
+     * {@link #collectChangesAndProblems} / {@link #collectRefactoringItems} walk that assigned the
+     * preview indices. Stable identities prove individual rows; an explicit no-identity marker keeps
+     * an opaque row structurally distinct while that row remains unavailable to {@code disableIndices}.
+     * <p>
+     * The neutral inputs are deliberate. {@code exactMatches} is preview-only enrichment: it can fan
+     * one leaf out into several context rows, suppress a fallback row, and replace project/FQN/line/
+     * column. The supplemental EDT BSL list can replace those locations afterwards too. Neither is
+     * available identically on confirm, while {@code oldName} is currently carried but not read by the
+     * walk. Hashing this neutral collection on both calls therefore locks the ordered observable tree
+     * and every stable row without making metadata previews disagree with form previews or their own
+     * confirm call.
+     *
+     * @param refactorings the freshly built refactoring tree
+     * @return the opaque {@link ContentHash} token
+     */
+    String changePointContentHash(Collection<IRefactoring> refactorings)
+    {
+        return ContentHash.of(changePointSignatureFor(refactorings));
+    }
+
+    /**
+     * Serializes every field that can change what an index means, plus the signature-only leaf
+     * identity evidence. Optionality controls whether confirm may disable the current leaf. For a
+     * native point, enabled is the leaf's default apply state and nativeItemChecked is the owning
+     * item's independent execution gate; for a plain point, enabled remains the item's checked state
+     * and nativeItemChecked is absent. The explicit native/plain state kind keeps those two meanings
+     * from collapsing into one ambiguous boolean. An explicit id/noid kind likewise keeps an absent
+     * stable identity from sharing a field layout with a present one. A stable identity distinguishes
+     * leaves whose rendered fields happen to be equal; a point without one remains signed but cannot
+     * itself be named in {@code disableIndices}.
+     */
+    private static String changePointSignature(List<ChangePoint> changePoints)
+    {
+        StringBuilder signature = new StringBuilder();
+        boolean first = true;
+        for (ChangePoint changePoint : changePoints)
+        {
+            if (!first)
+            {
+                signature.append(HASH_POINT_SEPARATOR);
+            }
+            String stableIdentity = hasStableIdentity(changePoint)
+                ? changePoint.signatureIdentity.stableValue : null;
+            signature.append(changePoint.index).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.type)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.description)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.project)).append(HASH_FIELD_SEPARATOR)
+                .append(hashValue(changePoint.fqn)).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.lineNumber).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.columnNumber).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.optional).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.nativeItemChecked == null ? "plain" : "native") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.enabled).append(HASH_FIELD_SEPARATOR)
+                .append(changePoint.nativeItemChecked == null ? "" : changePoint.nativeItemChecked) //$NON-NLS-1$
+                .append(HASH_FIELD_SEPARATOR)
+                .append(stableIdentity == null ? "noid" : "id") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(HASH_FIELD_SEPARATOR)
+                .append(stableIdentity == null ? "" : stableIdentity); //$NON-NLS-1$
+            first = false;
+        }
+        return signature.toString();
+    }
+
+    /** Whether a change point carries stable identity evidence that confirm can prove again. */
+    private static boolean hasStableIdentity(ChangePoint changePoint)
+    {
+        return changePoint.signatureIdentity != null
+            && changePoint.signatureIdentity.stableValue != null;
+    }
+
+    /** Canonical representation for an absent string field in the change-point signature. */
+    private static String hashValue(String value)
+    {
+        return value == null ? "" : value; //$NON-NLS-1$
+    }
+
+    /**
      * Flattens one refactoring's items into change points: native items recurse through the LTK change
      * tree, while plain rename items each consume one global index. Preserves the original ordering.
      */
@@ -638,16 +736,27 @@ public class MetadataRenameService
                 if (nativeChange != null)
                 {
                     ScanContext ctx = new ScanContext(exactMatches, allChanges, indexCounter, title,
-                        item.isOptional(), oldName);
+                        nativeItem.isOptional(), nativeItem.isChecked(), oldName);
                     collectFlatChanges(nativeChange, null, null, ctx);
                 }
             }
             else
             {
+                // Skippable is FALSE here whatever the platform says about the item, and that is the
+                // column answering its own question: it means "can this be passed to disableIndices",
+                // and a regular item owns no leaf Change to switch off, so the answer is no (#400).
+                //
+                // Not "the platform is wrong" - the platform's own optionality cannot be honoured
+                // through it either. IRefactoringItem.setChecked(false) is only consulted for
+                // operations executed as BM operations (AbstractBmObjectRefactoring.isEnabled, read
+                // through the gated BmTopObjectRefactoringTask); the participant operations that a
+                // regular item can stand for are also queued as plain eObject operations, and those
+                // run unconditionally. Which of the two a given item stands for is not observable
+                // from here, so promising a skip would be promising something we cannot deliver.
                 allChanges.add(new ChangePoint(
                     indexCounter[0]++, "rename", //$NON-NLS-1$
-                    item.getName(), item.isOptional(), item.isChecked(),
-                    CodeLocation.of(null, null)));
+                    item.getName(), false, item.isChecked(),
+                    null, CodeLocation.of(null, null), ChangePointIdentity.forPlainItem(item)));
             }
         }
     }
@@ -715,9 +824,10 @@ public class MetadataRenameService
         final int problemCount;
         final int exactMatchCount;
         final int shown;
+        final String contentHash;
 
         PreviewSummary(String objectFqn, String newName, int totalChanges, long enabledCount,
-            int problemCount, int exactMatchCount, int shown)
+            int problemCount, int exactMatchCount, int shown, String contentHash)
         {
             this.objectFqn = objectFqn;
             this.newName = newName;
@@ -726,6 +836,7 @@ public class MetadataRenameService
             this.problemCount = problemCount;
             this.exactMatchCount = exactMatchCount;
             this.shown = shown;
+            this.contentHash = contentHash;
         }
     }
 
@@ -740,6 +851,9 @@ public class MetadataRenameService
         sb.append("enabledChanges: ").append(summary.enabledCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("problems: ").append(summary.problemCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("debugExactMatches: ").append(summary.exactMatchCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Always present: opaque rows carry a distinct no-identity signature marker and are marked
+        // non-skippable, while the token keeps stable rows safe to address across preview and confirm.
+        sb.append("contentHash: ").append(summary.contentHash).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("---\n\n"); //$NON-NLS-1$
 
         sb.append("# Refactoring Preview: Rename `").append(summary.objectFqn) //$NON-NLS-1$
@@ -778,7 +892,7 @@ public class MetadataRenameService
     private void appendChangePointRow(StringBuilder sb, ChangePoint cp)
     {
         String enabledMark = cp.enabled ? "\u2705" : "\u274c"; //$NON-NLS-1$ //$NON-NLS-2$
-        String optionalMark = cp.optional ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
+        String optionalMark = cp.optional && hasStableIdentity(cp) ? "yes" : "no"; //$NON-NLS-1$ //$NON-NLS-2$
         String fqnCell = cp.fqn != null ? escapeMarkdownCell(cp.fqn) : DASH;
         String projectCell = cp.project != null ? escapeMarkdownCell(cp.project) : DASH;
         String line = cp.lineNumber > 0 ? String.valueOf(cp.lineNumber) : DASH;
@@ -846,12 +960,18 @@ public class MetadataRenameService
         sb.append("\n"); //$NON-NLS-1$
     }
 
-    /** Appends the trailing usage hint (confirm/disableIndices) shared by every preview. */
-    private void appendFooter(StringBuilder sb)
+    /** Appends the trailing usage hint and, when needed, explains unverifiable table rows. */
+    private void appendFooter(StringBuilder sb, boolean hasUnverifiableRows)
     {
         sb.append("> To execute, call with `confirm=true`.\n"); //$NON-NLS-1$
         sb.append("> Use `disableIndices='1,2,3'` to skip change points by their `#` index " //$NON-NLS-1$
+            + "and pass this preview's `contentHash` as `expectedHash` " //$NON-NLS-1$
             + "(optional only; one index may span several context rows - skipping it skips them all).\n"); //$NON-NLS-1$
+        if (hasUnverifiableRows)
+        {
+            sb.append("> Rows whose change point cannot be proven to be the same one at confirm " //$NON-NLS-1$
+                + "time show `Skippable: no`; do not include their `#` indices in `disableIndices`.\n"); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -888,6 +1008,29 @@ public class MetadataRenameService
         }
     }
 
+    /**
+     * Signature-only identity evidence for the operation behind a row. The stable value is
+     * deliberately not rendered: when present, it stops two equal-looking leaves from exchanging
+     * preview indices. A {@code null} stable value means the native leaf exposes no stable target;
+     * the signature records that absence explicitly, the row is non-skippable, and other rows retain
+     * their usable preview token.
+     */
+    private static final class ChangePointIdentity
+    {
+        final String stableValue;
+
+        ChangePointIdentity(String stableValue)
+        {
+            this.stableValue = stableValue;
+        }
+
+        static ChangePointIdentity forPlainItem(IRefactoringItem item)
+        {
+            String itemClass = item.getClass().getName();
+            return new ChangePointIdentity(identityPart("plainItemClass", itemClass)); //$NON-NLS-1$
+        }
+    }
+
     /** Simple data holder for a single change point in preview. */
     private static class ChangePoint
     {
@@ -898,13 +1041,17 @@ public class MetadataRenameService
         final String description;
         final boolean optional;
         final boolean enabled;
+        /** Owning native item's checked state; absent for a plain item change point. */
+        final Boolean nativeItemChecked;
         final int lineNumber;
         final int columnNumber;
         final String codeContext;
         final String methodName;
+        final ChangePointIdentity signatureIdentity;
 
         ChangePoint(int index, String type, String description,
-            boolean optional, boolean enabled, CodeLocation location)
+            boolean optional, boolean enabled, Boolean nativeItemChecked, CodeLocation location,
+            ChangePointIdentity signatureIdentity)
         {
             this.index = index;
             this.type = type;
@@ -913,10 +1060,12 @@ public class MetadataRenameService
             this.description = description;
             this.optional = optional;
             this.enabled = enabled;
+            this.nativeItemChecked = nativeItemChecked;
             this.lineNumber = location.lineNumber;
             this.columnNumber = location.columnNumber;
             this.codeContext = location.codeContext;
             this.methodName = location.methodName;
+            this.signatureIdentity = signatureIdentity;
         }
     }
 
@@ -960,6 +1109,7 @@ public class MetadataRenameService
         String fqn;
         String project;
         boolean addedFallbackChange;
+        ChangePointIdentity signatureIdentity;
 
         LeafScan(String fqn, String project)
         {
@@ -971,9 +1121,10 @@ public class MetadataRenameService
     /**
      * Immutable per-scan context threaded through the change-tree walk and the per-leaf scan helpers.
      * Bundles the state that stays constant for one top-level refactoring item: the exact-match index,
-     * the change-point accumulator, the shared leaf-index counter, the refactoring title, the optional
-     * flag and the old object name. Carried so the recursive/scan helpers stay within the parameter
-     * limit while reading exactly the same values in the same order as before.
+     * the change-point accumulator, the shared leaf-index counter, the refactoring title, and the
+     * owning native item's optional and checked flags, plus the old object name. Carried so the
+     * recursive/scan helpers stay within the parameter limit while every native leaf receives the
+     * same item-level execution state.
      */
     private static final class ScanContext
     {
@@ -982,16 +1133,18 @@ public class MetadataRenameService
         final int[] indexCounter;
         final String refactoringTitle;
         final boolean optional;
+        final boolean nativeItemChecked;
         final String oldName;
 
         ScanContext(Map<String, ExactMatchInfo> exactMatches, List<ChangePoint> result, int[] indexCounter,
-            String refactoringTitle, boolean optional, String oldName)
+            String refactoringTitle, boolean optional, boolean nativeItemChecked, String oldName)
         {
             this.exactMatches = exactMatches;
             this.result = result;
             this.indexCounter = indexCounter;
             this.refactoringTitle = refactoringTitle;
             this.optional = optional;
+            this.nativeItemChecked = nativeItemChecked;
             this.oldName = oldName;
         }
     }
@@ -1052,6 +1205,7 @@ public class MetadataRenameService
         boolean isBslReferenceChange = isBslReferenceChange(change, currentFqn);
         boolean isFullTextSearchChange = isFullTextSearchSourceFileChange(change);
         LeafScan scan = new LeafScan(currentFqn, currentProject);
+        scan.signatureIdentity = changePointIdentity(change);
         List<ExactMatchInfo> exactMatchInfos = findExactMatchInfos(change, ctx.exactMatches);
         logPreviewMapping(change, scan.fqn, scan.project, exactMatchInfos.size());
         if (!exactMatchInfos.isEmpty())
@@ -1085,7 +1239,8 @@ public class MetadataRenameService
         ctx.result.add(new ChangePoint(
             leafIndex, BSL_REF,
             change.getName(), ctx.optional, change.isEnabled(),
-            CodeLocation.of(scan.fqn, scan.project)));
+            Boolean.valueOf(ctx.nativeItemChecked), CodeLocation.of(scan.fqn, scan.project),
+            scan.signatureIdentity));
     }
 
     /** Emits one change point per resolved exact-match, defaulting fqn/project to the leaf context. */
@@ -1099,8 +1254,9 @@ public class MetadataRenameService
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
+                Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(exactFqn, exactProject, exactMatch.lineNumber, exactMatch.columnNumber,
-                    exactMatch.codeContext, exactMatch.methodName)));
+                    exactMatch.codeContext, exactMatch.methodName), scan.signatureIdentity));
         }
     }
 
@@ -1193,8 +1349,9 @@ public class MetadataRenameService
             ctx.result.add(new ChangePoint(
                 leafIndex, BSL_REF,
                 change.getName(), ctx.optional, change.isEnabled(),
+                Boolean.valueOf(ctx.nativeItemChecked),
                 new CodeLocation(scan.fqn, scan.project, matchedLineNumber, matchedColumnNumber,
-                    matchedCodeContext, matchedMethodName)));
+                    matchedCodeContext, matchedMethodName), scan.signatureIdentity));
         }
     }
 
@@ -1344,7 +1501,7 @@ public class MetadataRenameService
             List<ChangePoint> edtChanges = new ArrayList<>();
             int[] indexCounter = {0};
             ScanContext ctx = new ScanContext(exactMatches, edtChanges, indexCounter, "edt-preview", false, //$NON-NLS-1$
-                targetObject.getName());
+                true, targetObject.getName());
             collectFlatChanges(edtChange, null, null, ctx);
             return edtChanges;
         }
@@ -1404,13 +1561,15 @@ public class MetadataRenameService
                 original.description,
                 original.optional,
                 original.enabled,
+                original.nativeItemChecked,
                 new CodeLocation(
                     edt.fqn != null ? edt.fqn : original.fqn,
                     edt.project != null ? edt.project : original.project,
                     edt.lineNumber,
                     edt.columnNumber,
                     edt.codeContext,
-                    edt.methodName)));
+                    edt.methodName),
+                original.signatureIdentity));
         }
     }
 
@@ -1851,6 +2010,157 @@ public class MetadataRenameService
         return array;
     }
 
+    /**
+     * Builds the signature-only identity for one native leaf. The concrete change class says which
+     * operation implementation will run; the stable target says what it will edit. Text-edit shape
+     * and the BM feature refine that target when one object owns several independent edits. No Java
+     * object identity, {@code hashCode()} or arbitrary {@code toString()} value is accepted because a
+     * confirm rebuild allocates a fresh change tree.
+     */
+    private static ChangePointIdentity changePointIdentity(Change change)
+    {
+        String changeClass = change.getClass().getName();
+        String targetIdentity = stableTargetIdentity(invokeNoArg(change, "getModifiedElement")); //$NON-NLS-1$
+        if (targetIdentity == null)
+        {
+            targetIdentity = stableAffectedObjectsIdentity(invokeNoArg(change, "getAffectedObjects")); //$NON-NLS-1$
+        }
+        if (targetIdentity == null)
+        {
+            return new ChangePointIdentity(null);
+        }
+
+        StringBuilder stableValue = new StringBuilder();
+        stableValue.append(identityPart("changeClass", changeClass)) //$NON-NLS-1$
+            .append(identityPart("target", targetIdentity)); //$NON-NLS-1$
+        if (change instanceof BmObjectTextContentChange<?> bmChange)
+        {
+            EStructuralFeature feature = getBmChangeFeature(bmChange);
+            if (feature != null)
+            {
+                String featureOwner = feature.getEContainingClass() != null
+                    ? feature.getEContainingClass().getName() : ""; //$NON-NLS-1$
+                stableValue.append(identityPart("feature", featureOwner + "." + feature.getName())); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        TextEdit edit = getChangeEdit(change);
+        if (edit != null)
+        {
+            stableValue.append(identityPart("edit", stableTextEditIdentity(edit))); //$NON-NLS-1$
+        }
+        return new ChangePointIdentity(stableValue.toString());
+    }
+
+    /** Stable descriptions for the edit-target shapes EDT and Eclipse expose to LTK changes. */
+    private static String stableTargetIdentity(Object target)
+    {
+        if (target == null)
+        {
+            return null;
+        }
+        if (target instanceof IResource resource)
+        {
+            return identityPart("resource", resource.getFullPath().toPortableString()); //$NON-NLS-1$
+        }
+        if (target instanceof IPath path)
+        {
+            return identityPart("path", path.toPortableString()); //$NON-NLS-1$
+        }
+        if (target instanceof IBmObject bmObject)
+        {
+            String fqn = bmObject.bmGetFqn();
+            if (fqn != null && !fqn.isBlank())
+            {
+                String engine = bmObject.bmGetEngine() != null ? bmObject.bmGetEngine().getId() : ""; //$NON-NLS-1$
+                return identityPart("bmEngine", engine) + identityPart("bmFqn", fqn); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (target instanceof EObject eObject)
+        {
+            org.eclipse.emf.common.util.URI uri = EcoreUtil.getURI(eObject);
+            if (uri != null && !uri.toString().isBlank())
+            {
+                return identityPart("eObjectUri", uri.toString()); //$NON-NLS-1$
+            }
+        }
+        if (target instanceof org.eclipse.emf.common.util.URI uri)
+        {
+            return identityPart("emfUri", uri.toString()); //$NON-NLS-1$
+        }
+        if (target instanceof java.net.URI uri)
+        {
+            return identityPart("uri", uri.toASCIIString()); //$NON-NLS-1$
+        }
+        if (target instanceof CharSequence || target instanceof Number || target instanceof Boolean
+            || target instanceof Character || target instanceof Enum<?>)
+        {
+            return identityPart(target.getClass().getName(), String.valueOf(target));
+        }
+
+        // Several EDT wrappers expose the actual workspace file rather than implementing IResource.
+        Object fileObject = invokeNoArg(target, GET_FILE);
+        if (fileObject != target && fileObject instanceof IFile file)
+        {
+            return identityPart("file", file.getFullPath().toPortableString()); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Uses affected objects only when every entry has a stable representation. */
+    private static String stableAffectedObjectsIdentity(Object affected)
+    {
+        if (!(affected instanceof Object[] affectedObjects) || affectedObjects.length == 0)
+        {
+            return null;
+        }
+        StringBuilder identity = new StringBuilder();
+        for (Object affectedObject : affectedObjects)
+        {
+            String part = stableTargetIdentity(affectedObject);
+            if (part == null)
+            {
+                return null;
+            }
+            identity.append(identityPart("affected", part)); //$NON-NLS-1$
+        }
+        return identity.toString();
+    }
+
+    /** Stable structural form of an LTK text edit, including replacement text when exposed. */
+    private static String stableTextEditIdentity(TextEdit edit)
+    {
+        StringBuilder identity = new StringBuilder();
+        appendStableTextEditIdentity(edit, identity);
+        return identity.toString();
+    }
+
+    private static void appendStableTextEditIdentity(TextEdit edit, StringBuilder identity)
+    {
+        identity.append(identityPart("editClass", edit.getClass().getName())) //$NON-NLS-1$
+            .append(identityPart("offset", String.valueOf(edit.getOffset()))) //$NON-NLS-1$
+            .append(identityPart("length", String.valueOf(edit.getLength()))); //$NON-NLS-1$
+        Object text = invokeNoArg(edit, "getText"); //$NON-NLS-1$
+        if (text instanceof String replacement)
+        {
+            identity.append(identityPart("text", replacement)); //$NON-NLS-1$
+        }
+        TextEdit[] children = edit.getChildren();
+        if (children != null)
+        {
+            for (TextEdit child : children)
+            {
+                identity.append(identityPart("child", stableTextEditIdentity(child))); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /** Length-prefixing keeps identity components unambiguous without trusting their character set. */
+    private static String identityPart(String kind, String value)
+    {
+        String nonNullValue = value != null ? value : ""; //$NON-NLS-1$
+        return kind.length() + ":" + kind + nonNullValue.length() + ":" + nonNullValue; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     private static boolean isInstanceOf(Object value, String className)
     {
         try
@@ -2109,9 +2419,15 @@ public class MetadataRenameService
 
 
     private String performRename(String objectFqn, String newName,
-        Collection<IRefactoring> refactorings, DisableRequest disableRequest,
+        Collection<IRefactoring> refactorings, DisableRequest disableRequest, String expectedHash,
         RenameProgress progress, String subject)
     {
+        String hashError = expectedHashError(refactorings, disableRequest, expectedHash);
+        if (hashError != null)
+        {
+            return ToolResult.error(hashError).toJson();
+        }
+
         // Destructive-operation consent gate: the LAST check before the cascade rename mutates the
         // model (rewriting every reference across BSL, forms and metadata). Built from the refactorings
         // the tool already resolved; on ALLOW the behaviour is byte-identical, on REJECT nothing is
@@ -2148,9 +2464,8 @@ public class MetadataRenameService
         // check, erring the other way costs a silent half-renamed configuration.
         progress.enter(RenameProgress.Phase.APPLYING);
 
-        // Apply disableIndices by traversing items and their native changes. The outcome is built
-        // whether or not anything is applied: a request made ENTIRELY of unparsable tokens has nothing
-        // to walk for, and still has to be reported rather than answered as if it had not been made.
+        // Apply disableIndices by traversing items and their native changes. Malformed entries cannot
+        // reach this point: the tool refuses them before the cascade starts (#401).
         DisableOutcome disableOutcome = new DisableOutcome(disableRequest);
         if (!disableRequest.indices().isEmpty())
         {
@@ -2182,6 +2497,79 @@ public class MetadataRenameService
     }
 
     /**
+     * The missing-token refusal shared by the cheap tool-adapter preflight and the service guard.
+     * Public so the adapter does not grow a second copy of this safety-critical wording.
+     */
+    public static String missingExpectedHashError()
+    {
+        return "expectedHash is required when disableIndices is non-empty. Nothing was renamed. " //$NON-NLS-1$
+            + "Run rename_metadata_object without confirm to read the current preview, then pass " //$NON-NLS-1$
+            + "its contentHash as expectedHash together with those indices."; //$NON-NLS-1$
+    }
+
+    /**
+     * Validates the preview token before consent or any mutation. A call without indices has no index
+     * handle in play, so its token is deliberately optional and is not evaluated.
+     *
+     * @return an actionable refusal, or {@code null} when confirm may continue
+     */
+    String expectedHashError(Collection<IRefactoring> refactorings, DisableRequest disableRequest,
+        String expectedHash)
+    {
+        if (disableRequest.isEmpty())
+        {
+            return null;
+        }
+        if (expectedHash == null || expectedHash.isBlank())
+        {
+            return missingExpectedHashError();
+        }
+        List<ChangePoint> changePoints = changePointsForSignature(refactorings);
+        String currentSignature = changePointSignature(changePoints);
+        if (!ContentHash.matches(currentSignature, expectedHash))
+        {
+            return "expectedHash does not match the current ordered change-point list, so the " //$NON-NLS-1$
+                + "preview is stale. Nothing was renamed. Re-read the rename_metadata_object " //$NON-NLS-1$
+                + "preview and pass its new contentHash as expectedHash, because the same indices " //$NON-NLS-1$
+                + "may now mean different change points."; //$NON-NLS-1$
+        }
+        SortedSet<Integer> unverifiableIndices = new TreeSet<>();
+        for (ChangePoint changePoint : changePoints)
+        {
+            if (disableRequest.indices().contains(changePoint.index)
+                && !hasStableIdentity(changePoint))
+            {
+                unverifiableIndices.add(changePoint.index);
+            }
+        }
+        if (!unverifiableIndices.isEmpty())
+        {
+            String indices = formatIndexList(unverifiableIndices);
+            return "disableIndices names change point indices " + indices //$NON-NLS-1$
+                + ", but the preview marked them `Skippable: no` because those change points " //$NON-NLS-1$
+                + "cannot be proven to be the same ones at confirm time. Nothing was renamed. " //$NON-NLS-1$
+                + "Retry without indices " + indices + "; the rest of disableIndices will be " //$NON-NLS-1$ //$NON-NLS-2$
+                + "skipped as asked."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** Collects and signs the current canonical list for preview-side token creation. */
+    private String changePointSignatureFor(Collection<IRefactoring> refactorings)
+    {
+        return changePointSignature(changePointsForSignature(refactorings));
+    }
+
+    /** Collects the neutral canonical list once for confirm-side hashing and index verification. */
+    private List<ChangePoint> changePointsForSignature(Collection<IRefactoring> refactorings)
+    {
+        List<ChangePoint> changePoints = new ArrayList<>();
+        collectChangesAndProblems(refactorings, Collections.emptyMap(), null, changePoints,
+            new ArrayList<>());
+        return changePoints;
+    }
+
+    /**
      * What each requested {@code disableIndices} entry actually did, so the executed report can state the
      * REAL number of skipped change points instead of echoing the size of the request (#394).
      * <p>
@@ -2191,10 +2579,8 @@ public class MetadataRenameService
      * {@code UNKNOWN} is derived, not recorded: it is whatever the caller asked for that the walk never
      * reached at all (out of range, or an index that no longer exists in the tree confirm rebuilt).
      * <p>
-     * The request's unparsable entries ride along as a COUNT. They never reach the walk - they never
-     * became indices - but they belong to the same question the report answers, "what did you ask for
-     * that produced no skip", so they are answered in the same place rather than by a second mechanism
-     * that could drift away from this one (#401).
+     * Entries that never became indices at all are NOT here: the tool refuses them before the cascade
+     * starts, so they cannot reach this walk or this report (#401).
      * <p>
      * The counts describe the LTK flags this call set before {@code perform()} ran. A refactoring that
      * then fails is reported separately, under {@code errors} - "disabled" here never means "the edit is
@@ -2222,20 +2608,21 @@ public class MetadataRenameService
              * has - unchecking the item - this branch does not pull. Kept apart from
              * {@link #NOT_SKIPPABLE} because the two are different facts and the caller acts on them
              * differently: one says the rename requires this edit, the other says we cannot honour the
-             * request. Reporting the second as the first is the report telling an untruth (#394's rule),
-             * and it is a live case - the preview marks such a row {@code Skippable: yes}.
+             * request. Reporting the second as the first is the report telling an untruth (#394's rule).
+             * <p>
+             * Since #400 the preview no longer invites the request either - it prints {@code Skippable:
+             * no} for every regular item - so reaching this status means the caller guessed an index
+             * rather than read one. It stays because the guess deserves the accurate answer.
              */
             UNSUPPORTED
         }
 
         private final SortedSet<Integer> requested;
-        private final int unparsedCount;
         private final TreeMap<Integer, Status> classified = new TreeMap<>();
 
         DisableOutcome(DisableRequest request)
         {
             this.requested = new TreeSet<>(request.indices());
-            this.unparsedCount = request.unparsedCount();
         }
 
         void recordDisabled(int index)
@@ -2274,15 +2661,6 @@ public class MetadataRenameService
             TreeSet<Integer> unknown = new TreeSet<>(requested);
             unknown.removeAll(classified.keySet());
             return unknown;
-        }
-
-        /**
-         * How many entries of the request never became indices at all. A COUNT and not the entries -
-         * see {@link DisableRequest} for the nine defects that decided that.
-         */
-        int unparsedCount()
-        {
-            return unparsedCount;
         }
 
         /** Requested indices naming a change point this tool has no way to switch off. */
@@ -2423,9 +2801,9 @@ public class MetadataRenameService
             // Regular rename item: it owns no leaf Change to switch off, so this branch cannot honour
             // a request for it either way. WHY it cannot differs, though, and the report must not blur
             // the two: a non-optional item is one the refactoring itself requires, while an OPTIONAL one
-            // is a change point the preview offered as skippable (it prints the item's own isOptional())
-            // and only this implementation cannot deliver. Calling the second "mandatory" would be the
-            // report asserting something untrue about the refactoring.
+            // is a point only this implementation cannot switch off. Since #400 the preview prints the
+            // latter as Skippable=no too, but a caller can still guess its index; calling it "mandatory"
+            // would still be the report asserting something untrue about the refactoring.
             int index = indexCounter[0]++;
             if (disableIndices.contains(index))
             {
@@ -2452,7 +2830,6 @@ public class MetadataRenameService
         SortedSet<Integer> notSkippable = disableOutcome.notSkippableIndices();
         SortedSet<Integer> unknown = disableOutcome.unknownIndices();
         SortedSet<Integer> unsupported = disableOutcome.unsupportedIndices();
-        int unparsedCount = disableOutcome.unparsedCount();
         StringBuilder sb = new StringBuilder();
         sb.append("---\n"); //$NON-NLS-1$
         sb.append("action: executed\n"); //$NON-NLS-1$
@@ -2470,10 +2847,6 @@ public class MetadataRenameService
         if (!unsupported.isEmpty())
         {
             sb.append("unsupportedIndices: ").append(formatIndexList(unsupported)).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (unparsedCount > 0)
-        {
-            sb.append("unparsedCount: ").append(unparsedCount).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         sb.append("performedCount: ").append(performed.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
         sb.append("errors: ").append(errors.size()).append("\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2530,16 +2903,9 @@ public class MetadataRenameService
               .append(" matched no change point and were ignored") //$NON-NLS-1$
               .append(" - re-run the preview to get the current indices._\n"); //$NON-NLS-1$
         }
-        if (unparsedCount > 0)
-        {
-            // The COUNT, never the entries. Echoing the caller's own text back into this sentence
-            // is what produced nine defects across seven review rounds; the signal is what the caller
-            // needed, and the signal is a number. See DisableRequest for the full list.
-            sb.append("_").append(unparsedCount) //$NON-NLS-1$
-              .append(" entr(ies) in disableIndices could not be read as change-point indices") //$NON-NLS-1$
-              .append(" and were ignored") //$NON-NLS-1$
-              .append(" - it takes the preview `#` index, e.g. '2,3,5'._\n"); //$NON-NLS-1$
-        }
+        // No "unparsed entries" note here, by construction: an entry that is not a change-point index
+        // is refused by the tool before the cascade starts (#401), so this report cannot be reached
+        // with one. A branch for it would describe a state that can no longer happen.
 
         return sb.toString();
     }
@@ -2573,12 +2939,14 @@ public class MetadataRenameService
     /**
      * Recursively walks the LTK change tree and calls setEnabled(false) on leaves whose global index is
      * in the disableIndices set - but only when the owning item is {@code skippable}; a requested index
-     * under a non-skippable item is recorded and left ENABLED (#393).
+     * under a non-skippable item is recorded and left ENABLED (#393). In production, requested leaves
+     * have already passed the per-row stable-identity guard in {@link #expectedHashError}; an opaque
+     * leaf is refused before this mutation path rather than being silently left enabled.
      * <p>
-     * Skippability is judged ONCE, by the caller, and passed in: the decision is a property of the ITEM,
-     * while the walk is over its leaves, so deciding it here (per leaf) would be re-deriving one answer in
-     * a place that cannot see it. The index is consumed by {@link #walkLeafChanges} itself, ahead of and
-     * independently of that decision, so no branch here can leave the counter behind the preview's (#388).
+     * The {@code skippable} argument carries the remaining item-level decision - whether EDT marks the
+     * owning item optional - because this leaf walk cannot see its owner. The index is consumed by
+     * {@link #walkLeafChanges} itself, ahead of and independently of that decision, so no branch here
+     * can leave the counter behind the preview's (#388).
      */
     private void applyDisableToChange(Change change, java.util.Set<Integer> disableIndices,
         int[] indexCounter, boolean skippable, DisableOutcome outcome)

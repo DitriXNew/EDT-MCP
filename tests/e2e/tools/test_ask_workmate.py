@@ -89,7 +89,7 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
     for _ in range(7):
         if status != "running":
             break
-        result = call("ask_workmate", {"jobId": job_id, "waitSeconds": 5})
+        result = call("get_job_status", {"jobId": job_id, "waitSeconds": 5})
         assert_ok(result, "poll Workmate background job")
         status, polled_id = _job_status_and_id(result.text)
         if polled_id != job_id:
@@ -168,38 +168,11 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
 def test_ask_workmate_missing_question_is_actionable_without_workmate():
     _requires_enabled_workmate()
     result = call("ask_workmate", {})
-    error = assert_error(result, "missing start/poll mode")
+    error = assert_error(result, "missing start mode")
     assert_error_quality(
         error,
-        names=["question", "jobId"],
-        suggests=["start a new job", "poll"],
-    )
-    assert_no_diff()
-
-
-@e2e_test(tool="ask_workmate", kind="read")
-def test_ask_workmate_unknown_job_id_is_actionable_without_workmate():
-    _requires_enabled_workmate()
-    unknown = "e2e-missing-workmate-job"
-    result = call("ask_workmate", {"jobId": unknown, "waitSeconds": 0})
-    error = assert_error(result, "unknown Workmate job")
-    assert_error_quality(
-        error,
-        names=["jobId", unknown],
-        suggests=["Check the value", "start a new job", "question"],
-    )
-    assert_no_diff()
-
-
-@e2e_test(tool="ask_workmate", kind="read")
-def test_ask_workmate_rejects_both_modes_without_workmate():
-    _requires_enabled_workmate()
-    result = call("ask_workmate", {"question": "q", "jobId": "job-1"})
-    error = assert_error(result, "mutually exclusive Workmate modes")
-    assert_error_quality(
-        error,
-        names=["question", "jobId"],
-        suggests=["only question", "only jobId", "poll"],
+        names=["question", "workmateTool"],
+        suggests=["get_job_status"],
     )
     assert_no_diff()
 
@@ -232,7 +205,9 @@ def test_ask_workmate_rejects_blank_workmate_tool_without_workmate():
 
 def _job_status_and_id(markdown):
     status_match = re.search(
-        r"^# Workmate job: (running|done|failed)\s*$", markdown, re.MULTILINE
+        r"^# Background job: (running|done|failed|cancelled)\s*$",
+        markdown,
+        re.MULTILINE,
     )
     id_match = re.search(r"^\| jobId \| ([^|]+) \|\s*$", markdown, re.MULTILINE)
     if not status_match or not id_match:

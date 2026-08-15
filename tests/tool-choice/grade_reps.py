@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Variance check on the deciding metric: the two-phase confirm protocol.
 
-The 15 destructive requests, 3 independent Sonnet 5 runs per arm, plus the run
-already inside the main 200-question sweep (r0).
+The destructive requests (every question flagged two_phase - the count comes from
+questions.json, never a literal), 3 independent Sonnet 5 runs per arm, plus the run
+already inside the main sweep (r0).
 """
 import json
 import os
@@ -11,7 +12,10 @@ import glob
 HERE = os.path.dirname(os.path.abspath(__file__))
 Q = {q["id"]: q for q in json.load(open(os.path.join(HERE, "questions.json"), encoding="utf-8"))}
 DESTR = [q["id"] for q in Q.values() if q.get("two_phase")]
-ARMS = {"arm_a": "V1", "arm_b": "V2", "arm_c": "V3"}
+ARMS = {"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"}
+# The denominator is derived, not written down: questions.json grew from 200 to 500
+# requests and a literal 15 silently produced percentages above 100.
+N = len(DESTR)
 
 
 def score(answers):
@@ -46,9 +50,9 @@ for arm, label in ARMS.items():
         answers = {a["id"]: a for a in json.load(open(p, encoding="utf-8"))}
         runs.append((os.path.basename(p).split("_")[-1][:-5], score(answers)))
     for name, (s, c, g) in runs:
-        print("%-6s %-6s %10d/15 %13d/15 %10d" % (label, name, s, c, g))
+        print("%-6s %-6s %10d/%-3d %11d/%-3d %8d" % (label, name, s, N, c, N, g))
     tot = sum(s for _, (s, _, _) in runs)
-    n = len(runs) * 15
+    n = len(runs) * N
     summary[label] = (tot, n, sum(c for _, (_, c, _) in runs), sum(g for _, (_, _, g) in runs))
     print("%-6s %-6s %10d/%-2d %13d/%-2d %10d   <== ИТОГО" % (label, "все", tot, n, summary[label][2], n, summary[label][3]))
     print("-" * 60)

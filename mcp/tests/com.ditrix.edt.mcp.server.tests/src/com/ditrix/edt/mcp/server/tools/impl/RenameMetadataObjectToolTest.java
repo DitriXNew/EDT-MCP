@@ -111,6 +111,8 @@ public class RenameMetadataObjectToolTest
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"objectFqn\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"newName\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"disableIndices\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"expectedHash\"")); //$NON-NLS-1$
         assertTrue("the cascade bound must be reachable from the wire", //$NON-NLS-1$
             schema.contains("\"timeout\"")); //$NON-NLS-1$
     }
@@ -132,6 +134,8 @@ public class RenameMetadataObjectToolTest
         assertNotNull(guide);
         assertTrue(guide.length() > 0);
         assertTrue(guide.contains("disableIndices")); //$NON-NLS-1$
+        assertTrue(guide.contains("contentHash")); //$NON-NLS-1$
+        assertTrue(guide.contains("expectedHash")); //$NON-NLS-1$
         assertTrue(guide.contains("Attribute")); //$NON-NLS-1$
         assertTrue(guide.contains("preview")); //$NON-NLS-1$
     }
@@ -163,6 +167,56 @@ public class RenameMetadataObjectToolTest
         params.put("objectFqn", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new RenameMetadataObjectTool().execute(params);
         assertTrue(result.contains("newName is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNonNumericDisableIndexIsRefusedBeforeAnythingRuns()
+    {
+        Map<String, String> params = validRenameParams();
+        params.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("disableIndices", "abc"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new RenameMetadataObjectTool().execute(params);
+
+        assertTrue(result.contains("could not be read as a change-point index")); //$NON-NLS-1$
+        assertTrue(result.contains("Nothing was renamed")); //$NON-NLS-1$
+        assertTrue(result.contains("preview")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNegativeDisableIndexIsRefusedBeforeAnythingRuns()
+    {
+        Map<String, String> params = validRenameParams();
+        params.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("disableIndices", "-1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new RenameMetadataObjectTool().execute(params);
+
+        assertTrue(result.contains("index -1 below the first preview index (0)")); //$NON-NLS-1$
+        assertTrue(result.contains("Nothing was renamed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfirmWithDisableIndicesRequiresExpectedHashBeforeAnythingRuns()
+    {
+        Map<String, String> params = validRenameParams();
+        params.put("confirm", "true"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("disableIndices", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String result = new RenameMetadataObjectTool().execute(params);
+
+        assertTrue(result.contains("expectedHash is required")); //$NON-NLS-1$
+        assertTrue(result.contains("contentHash")); //$NON-NLS-1$
+        assertTrue(result.contains("Nothing was renamed")); //$NON-NLS-1$
+    }
+
+    private static Map<String, String> validRenameParams()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("objectFqn", "Catalog.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("newName", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        return params;
     }
 
     // ================= Change-point numbering: the EXECUTE side of the walk only =================

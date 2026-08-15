@@ -6,8 +6,6 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -21,25 +19,25 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
-import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressEntry;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
-import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.GatewayException;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.ProgressListener;
 import com.ditrix.edt.mcp.server.utils.WorkmateGateway.WorkmateResponse;
 
-/** Starts and polls questions sent through the co-located Workmate facade. */
+/** Starts questions sent through the co-located Workmate facade as background jobs. */
 public class AskWorkmateTool implements IMcpTool
 {
     public static final String NAME = "ask_workmate"; //$NON-NLS-1$
 
     static final int DEFAULT_TIMEOUT_SECONDS = 300;
-    static final int DEFAULT_WAIT_SECONDS = 5;
-    static final int MAX_WAIT_SECONDS = 45;
+    public static final int DEFAULT_WAIT_SECONDS = 5;
+    public static final int MAX_WAIT_SECONDS = 45;
 
     /**
      * Upper bound for a job's total budget. A job holds one of the shared workers and a
@@ -57,7 +55,6 @@ public class AskWorkmateTool implements IMcpTool
     static final int MAX_CONCURRENT_JOBS = 3;
 
     private static final String KEY_QUESTION = "question"; //$NON-NLS-1$
-    private static final String KEY_JOB_ID = "jobId"; //$NON-NLS-1$
     private static final String KEY_PROJECT_NAME = "projectName"; //$NON-NLS-1$
     private static final String KEY_MAX_TOOL_ROUNDS = "maxToolRounds"; //$NON-NLS-1$
     private static final String KEY_SKILL_NAME = "skillName"; //$NON-NLS-1$
@@ -110,10 +107,10 @@ public class AskWorkmateTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Ask the 1C:Workmate plugin a question in the background, without holding an MCP request " //$NON-NLS-1$
-            + "open for the whole cloud conversation: the first call starts it, later calls poll for the " //$NON-NLS-1$
-            + "answer. Requires a compatible Workmate installation in the same EDT JVM. Parameters and " //$NON-NLS-1$
-            + "examples: get_tool_guide('ask_workmate')."; //$NON-NLS-1$
+        return "Start a background question to the 1C:Workmate plugin and return its jobId. " //$NON-NLS-1$
+            + "Poll the job with get_job_status instead of calling ask_workmate again. Requires " //$NON-NLS-1$
+            + "a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call " //$NON-NLS-1$
+            + "get_tool_guide('ask_workmate')."; //$NON-NLS-1$
     }
 
     @Override
@@ -139,24 +136,21 @@ public class AskWorkmateTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .stringProperty(KEY_QUESTION,
-                "Start mode: non-empty question or instruction to send to 1C:Workmate. " //$NON-NLS-1$
-                    + "Required when jobId is omitted; mutually exclusive with jobId.") //$NON-NLS-1$
-            .stringProperty(KEY_JOB_ID,
-                "Poll mode: id returned by an earlier ask_workmate call. Required when " //$NON-NLS-1$
-                    + "question is omitted; mutually exclusive with question.") //$NON-NLS-1$
+                "Non-empty question or instruction to send to 1C:Workmate. Required unless " //$NON-NLS-1$
+                    + "workmateTool selects direct tool mode.") //$NON-NLS-1$
             .stringProperty(KEY_PROJECT_NAME,
-                "Start mode only: optional open EDT project name used as Workmate's context. " //$NON-NLS-1$
+                "Optional open EDT project name used as Workmate's context. " //$NON-NLS-1$
                     + "Omit to use Workmate's default project context.") //$NON-NLS-1$
             .integerProperty(KEY_MAX_TOOL_ROUNDS,
-                "Start mode only: optional positive limit for Workmate's internal tool-call " //$NON-NLS-1$
+                "Optional positive limit for Workmate's internal tool-call " //$NON-NLS-1$
                     + "rounds.") //$NON-NLS-1$
             .stringProperty(KEY_SKILL_NAME,
-                "Start mode only: optional Workmate skill name. Omit to use '" //$NON-NLS-1$
+                "Optional Workmate skill name. Omit to use '" //$NON-NLS-1$
                     + WorkmateGateway.DEFAULT_SKILL + "', the skill under which Workmate runs " //$NON-NLS-1$
                     + "its own tool loop; Workmate's plain 'raw' skill answers from the model " //$NON-NLS-1$
                     + "alone and inspects nothing.") //$NON-NLS-1$
             .integerProperty(KEY_TIMEOUT_SECONDS,
-                "Start mode only: total wall-clock budget for the background job across all " //$NON-NLS-1$
+                "Total wall-clock budget for the background job across all get_job_status " //$NON-NLS-1$
                     + "polls, in seconds; defaults to " + DEFAULT_TIMEOUT_SECONDS //$NON-NLS-1$
                     + " and accepts 1 to " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
                     + ". After this budget the job is failed - unless the request has already " //$NON-NLS-1$
@@ -165,7 +159,8 @@ public class AskWorkmateTool implements IMcpTool
                     + "would run the same work twice. This is not the per-call " //$NON-NLS-1$
                     + "waitSeconds budget.") //$NON-NLS-1$
             .integerProperty(KEY_WAIT_SECONDS,
-                "Maximum time this single start or poll call may wait for completion, in " //$NON-NLS-1$
+                "Maximum time this start call may wait for completion before returning its " //$NON-NLS-1$
+                    + "job snapshot, in " //$NON-NLS-1$
                     + "seconds; defaults to " + DEFAULT_WAIT_SECONDS + ", accepts 0 to " //$NON-NLS-1$ //$NON-NLS-2$
                     + MAX_WAIT_SECONDS + ". Use 0 to return immediately. This does not extend " //$NON-NLS-1$
                     + "the job's total timeoutSeconds budget.") //$NON-NLS-1$
@@ -178,7 +173,7 @@ public class AskWorkmateTool implements IMcpTool
                 "Direct tool mode only: JSON OBJECT with that tool's arguments, e.g. {} or " //$NON-NLS-1$
                     + "{\"scope\":\"eclipse\",\"code\":\"...\"}. Defaults to an empty object.") //$NON-NLS-1$
             .booleanProperty(KEY_SHARE_MCP_TOOLS,
-                "Start mode only: when true, the question is prefixed with instructions that " //$NON-NLS-1$
+                "When true, the question is prefixed with instructions that " //$NON-NLS-1$
                     + "let Workmate call EDT-MCP's own tools through this plugin's in-process " //$NON-NLS-1$
                     + "bridge, so it can inspect the real project instead of answering from " //$NON-NLS-1$
                     + "general 1C knowledge. Defaults to true for mode '" + MODE_ANSWER //$NON-NLS-1$
@@ -186,7 +181,7 @@ public class AskWorkmateTool implements IMcpTool
                     + "', where the project's own .workmate rules already carry the same " //$NON-NLS-1$
                     + "instructions; pass true there for a project that has no such rules.") //$NON-NLS-1$
             .stringProperty(KEY_MODE,
-                "Start mode only: '" + MODE_ANSWER + "' (default) runs Workmate's tool loop " //$NON-NLS-1$ //$NON-NLS-2$
+                "'" + MODE_ANSWER + "' (default) runs Workmate's tool loop " //$NON-NLS-1$ //$NON-NLS-2$
                     + "and RETURNS its answer as text: it inspects the project with its own " //$NON-NLS-1$
                     + "tools and, through this plugin's bridge, with EDT-MCP's, so it can " //$NON-NLS-1$
                     + "also change code and metadata. '" + MODE_CHAT //$NON-NLS-1$
@@ -200,25 +195,13 @@ public class AskWorkmateTool implements IMcpTool
     @Override
     public String execute(Map<String, String> params)
     {
-        boolean hasQuestion = params != null && params.containsKey(KEY_QUESTION);
-        boolean hasJobId = params != null && params.containsKey(KEY_JOB_ID);
-        if (hasQuestion && hasJobId)
-        {
-            return ToolResult.error(
-                "question and jobId are mutually exclusive ask_workmate modes. Provide only " //$NON-NLS-1$
-                    + "question to start a new job, or only jobId to poll an existing job.") //$NON-NLS-1$
-                .toJson();
-        }
-
-        Integer waitSeconds = readWaitSeconds(params);
+        Integer waitSeconds = BackgroundJobPolling.readWaitSeconds(params, KEY_WAIT_SECONDS,
+            DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
         if (waitSeconds == null)
         {
-            return waitSecondsError(params != null ? params.get(KEY_WAIT_SECONDS) : null);
-        }
-
-        if (hasJobId)
-        {
-            return poll(params, waitSeconds.intValue());
+            return BackgroundJobPolling.waitSecondsError(KEY_WAIT_SECONDS,
+                params != null ? params.get(KEY_WAIT_SECONDS) : null,
+                DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
         }
 
         if (params != null && params.containsKey(KEY_WORKMATE_TOOL))
@@ -226,11 +209,12 @@ public class AskWorkmateTool implements IMcpTool
             return startWorkmateTool(params, waitSeconds.intValue());
         }
 
-        if (!hasQuestion)
+        if (params == null || !params.containsKey(KEY_QUESTION))
         {
             return ToolResult.error(
-                "ask_workmate requires one mode: provide a non-empty question to start a new " //$NON-NLS-1$
-                    + "job, or provide a jobId returned by an earlier call to poll it.") //$NON-NLS-1$
+                "ask_workmate requires a non-empty question, unless workmateTool selects direct " //$NON-NLS-1$
+                    + "tool mode. Provide one of those inputs, then poll the returned jobId with " //$NON-NLS-1$
+                    + "get_job_status.") //$NON-NLS-1$
                 .toJson();
         }
 
@@ -270,7 +254,7 @@ public class AskWorkmateTool implements IMcpTool
         final int jobTimeoutSeconds = timeoutSeconds;
         try
         {
-            JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
+            JobSnapshot started = jobs.start(NAME, TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
                 MAX_CONCURRENT_JOBS,
                 "Accepted the direct Workmate tool call.", progress -> { //$NON-NLS-1$
                     try
@@ -291,27 +275,19 @@ public class AskWorkmateTool implements IMcpTool
             {
                 return tooManyJobsError();
             }
-            return render(await(started.getId(), waitSeconds));
+            return BackgroundJobRenderer.render(BackgroundJobPolling.await(jobs,
+                started.getId(), waitSeconds));
         }
         catch (RejectedExecutionException e)
         {
             return ToolResult.error(
                 "Could not start ask_workmate because the background-job registry is full or " //$NON-NLS-1$
-                    + "stopping: " + e.getMessage() + ". Poll existing jobs and retry, or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "stopping: " + e.getMessage() + ". Poll existing jobs with " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "get_job_status and retry, or " //$NON-NLS-1$
                     + "restart EDT if the bundle is stopping.").toJson(); //$NON-NLS-1$
         }
     }
 
-    /**
-     * Text prepended to the question so Workmate can reach EDT-MCP's own tools.
-     * <p>
-     * Everything it names is JDK or standard OSGi API and the snippet is complete, which
-     * matters: Workmate's JShell tool forbids improvised Java API, and a caller that has
-     * to prove the bridge in prose on every call would not get an answer at all.
-     *
-     * @param projectName optional project the caller asked about, used in the example
-     * @return the preamble, ending with a blank line before the question
-     */
     /**
      * Adapts a job's reporter to the gateway's listener, carrying BOTH directions: progress out,
      * and the commit handshake back - which is what keeps a job whose request is already on its
@@ -338,6 +314,16 @@ public class AskWorkmateTool implements IMcpTool
         };
     }
 
+    /**
+     * Text prepended to the question so Workmate can reach EDT-MCP's own tools.
+     * <p>
+     * Everything it names is JDK or standard OSGi API and the snippet is complete, which
+     * matters: Workmate's JShell tool forbids improvised Java API, and a caller that has
+     * to prove the bridge in prose on every call would not get an answer at all.
+     *
+     * @param projectName optional project the caller asked about, used in the example
+     * @return the preamble, ending with a blank line before the question
+     */
     static String mcpBridgePreamble(String projectName)
     {
         // The example has to RUN as written - the whole point of the preamble is that Workmate
@@ -377,7 +363,7 @@ public class AskWorkmateTool implements IMcpTool
             + "returned and never invent a result.\n\n" //$NON-NLS-1$
             + "ask_workmate is in that list on purpose: you may delegate a self-contained " //$NON-NLS-1$
             + "sub-question to it as a sub-agent. It answers asynchronously - take the " //$NON-NLS-1$
-            + "jobId from its reply and poll with {\"jobId\":\"...\"} instead of waiting - " //$NON-NLS-1$
+            + "jobId from its reply and poll it with get_job_status instead of waiting - " //$NON-NLS-1$
             + "and only a few such jobs may run at once, so delegate one level deep, not a " //$NON-NLS-1$
             + "chain.\n\n" //$NON-NLS-1$
             + toolCatalogue() + "Question:\n"; //$NON-NLS-1$
@@ -491,7 +477,7 @@ public class AskWorkmateTool implements IMcpTool
         final int jobTimeoutSeconds = timeoutSeconds;
         try
         {
-            JobSnapshot started = jobs.start(TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
+            JobSnapshot started = jobs.start(NAME, TimeUnit.SECONDS.toMillis(jobTimeoutSeconds),
                 MAX_CONCURRENT_JOBS,
                 "Accepted the question.", progress -> { //$NON-NLS-1$
                     // Not progress::add: every path below reaches a point after which its
@@ -525,105 +511,17 @@ public class AskWorkmateTool implements IMcpTool
             {
                 return tooManyJobsError();
             }
-            return render(await(started.getId(), waitSeconds));
+            return BackgroundJobRenderer.render(BackgroundJobPolling.await(jobs,
+                started.getId(), waitSeconds));
         }
         catch (RejectedExecutionException e)
         {
             return ToolResult.error(
                 "Could not start ask_workmate because the background-job registry is full or " //$NON-NLS-1$
-                    + "stopping: " + e.getMessage() + ". Poll existing jobs and retry, or " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "stopping: " + e.getMessage() + ". Poll existing jobs with " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "get_job_status and retry, or " //$NON-NLS-1$
                     + "restart EDT if the bundle is stopping.").toJson(); //$NON-NLS-1$
         }
-    }
-
-    private String poll(Map<String, String> params, int waitSeconds)
-    {
-        String jobId = trimToNull(JsonUtils.extractStringArgument(params, KEY_JOB_ID));
-        if (jobId == null)
-        {
-            return ToolResult.error(
-                "jobId must contain a non-empty id returned by ask_workmate. Provide that id " //$NON-NLS-1$
-                    + "without question and retry the poll.").toJson(); //$NON-NLS-1$
-        }
-
-        JobSnapshot snapshot = await(jobId, waitSeconds);
-        if (snapshot == null)
-        {
-            return ToolResult.error("Unknown ask_workmate jobId '" + jobId //$NON-NLS-1$
-                + "'. Check the value, or start a new job by calling ask_workmate with " //$NON-NLS-1$
-                + "question instead of jobId.").toJson(); //$NON-NLS-1$
-        }
-        return render(snapshot);
-    }
-
-    private JobSnapshot await(String jobId, int waitSeconds)
-    {
-        if (waitSeconds == 0)
-        {
-            return jobs.get(jobId);
-        }
-        return jobs.await(jobId, TimeUnit.SECONDS.toMillis(waitSeconds));
-    }
-
-    private static String render(JobSnapshot job)
-    {
-        WorkmateResponse response = job.getResult() instanceof WorkmateResponse
-            ? (WorkmateResponse)job.getResult() : null;
-        StringBuilder result = new StringBuilder("# Workmate job: ") //$NON-NLS-1$
-            .append(job.getStatus().value()).append("\n\n"); //$NON-NLS-1$
-
-        Map<String, String> summary = new LinkedHashMap<>();
-        summary.put("jobId", job.getId()); //$NON-NLS-1$
-        summary.put("status", job.getStatus().value()); //$NON-NLS-1$
-        summary.put("elapsed", formatElapsed(job.getElapsedMs())); //$NON-NLS-1$
-        summary.put("startedAt", Instant.ofEpochMilli(job.getStartedAtMs()).toString()); //$NON-NLS-1$
-        if (job.getCompletedAtMs() > 0)
-        {
-            summary.put("completedAt", //$NON-NLS-1$
-                Instant.ofEpochMilli(job.getCompletedAtMs()).toString());
-        }
-        if (response != null && response.getAssistantMessageCount() != null)
-        {
-            summary.put("assistantMessages", //$NON-NLS-1$
-                response.getAssistantMessageCount().toString());
-        }
-        result.append(MarkdownUtils.keyValueTable("Field", "Value", summary)); //$NON-NLS-1$ //$NON-NLS-2$
-
-        result.append("\n## Progress\n\n"); //$NON-NLS-1$
-        for (ProgressEntry entry : job.getProgress())
-        {
-            result.append("- `") //$NON-NLS-1$
-                .append(Instant.ofEpochMilli(entry.getTimestampMs()).toString())
-                .append("` — ") //$NON-NLS-1$
-                .append(MarkdownUtils.escapeMarkdown(entry.getMessage()))
-                .append('\n');
-        }
-
-        if (job.getStatus() == BackgroundJobs.Status.DONE && response != null)
-        {
-            result.append("\n## Answer\n\n").append(trimToNull(response.getText())); //$NON-NLS-1$
-            String reasoning = trimToNull(response.getReasoning());
-            if (reasoning != null)
-            {
-                result.append("\n\n## Reasoning\n\n").append(reasoning); //$NON-NLS-1$
-            }
-        }
-        else if (job.getStatus() == BackgroundJobs.Status.FAILED)
-        {
-            result.append("\n## Error\n\n") //$NON-NLS-1$
-                .append(job.getErrorMessage());
-        }
-        return result.toString();
-    }
-
-    private static Integer readWaitSeconds(Map<String, String> params)
-    {
-        if (params == null || !params.containsKey(KEY_WAIT_SECONDS))
-        {
-            return Integer.valueOf(DEFAULT_WAIT_SECONDS);
-        }
-        int value = JsonUtils.extractIntArgument(params, KEY_WAIT_SECONDS, Integer.MIN_VALUE);
-        return value >= 0 && value <= MAX_WAIT_SECONDS ? Integer.valueOf(value) : null;
     }
 
     private static Integer optionalPositiveInt(Map<String, String> params, String key)
@@ -660,7 +558,8 @@ public class AskWorkmateTool implements IMcpTool
     private static String tooManyJobsError()
     {
         return ToolResult.error(NAME + " already has " + MAX_CONCURRENT_JOBS //$NON-NLS-1$
-            + " jobs running, which is the limit. Poll the jobId of a running job and act " //$NON-NLS-1$
+            + " jobs running, which is the limit. Poll the jobId of a running job with " //$NON-NLS-1$
+            + "get_job_status and act " //$NON-NLS-1$
             + "on its answer before starting another; if this happened while delegating a " //$NON-NLS-1$
             + "sub-question, ask it directly instead of nesting deeper.").toJson(); //$NON-NLS-1$
     }
@@ -671,14 +570,6 @@ public class AskWorkmateTool implements IMcpTool
             + MAX_TIMEOUT_SECONDS + ", but was '" + value + "'. A job holds a worker for its " //$NON-NLS-1$ //$NON-NLS-2$
             + "whole budget, so pass a realistic bound or omit it to use the default of " //$NON-NLS-1$
             + DEFAULT_TIMEOUT_SECONDS + " seconds.").toJson(); //$NON-NLS-1$
-    }
-
-    private static String waitSecondsError(String value)
-    {
-        return ToolResult.error("waitSeconds must be an integer from 0 to " //$NON-NLS-1$
-            + MAX_WAIT_SECONDS + ", but was '" + value + "'. Pass 0 to return immediately, " //$NON-NLS-1$ //$NON-NLS-2$
-            + "or omit it to wait up to " + DEFAULT_WAIT_SECONDS + " seconds in this call.") //$NON-NLS-1$ //$NON-NLS-2$
-            .toJson();
     }
 
     /**
@@ -747,17 +638,6 @@ public class AskWorkmateTool implements IMcpTool
     {
         return "1C:Workmate returned an empty answer. Open Workmate in EDT, verify that it is " //$NON-NLS-1$
             + "signed in and configured, then start a new ask_workmate job."; //$NON-NLS-1$
-    }
-
-    private static String formatElapsed(long elapsedMs)
-    {
-        if (elapsedMs < 1000L)
-        {
-            return elapsedMs + " ms"; //$NON-NLS-1$
-        }
-        long seconds = elapsedMs / 1000L;
-        long millis = elapsedMs % 1000L;
-        return seconds + "." + String.format("%03d", Long.valueOf(millis)) + " s"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String trimToNull(String value)

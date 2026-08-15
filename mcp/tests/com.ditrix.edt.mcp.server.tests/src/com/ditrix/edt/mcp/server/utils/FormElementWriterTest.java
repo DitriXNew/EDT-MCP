@@ -2089,6 +2089,361 @@ public class FormElementWriterTest
         assertEquals(Integer.valueOf(9), group.eGet(feature(group, "id"))); //$NON-NLS-1$
     }
 
+    // ==== the id space: WIDE ceiling, NARROW renumbering targets (issue #373) ====
+    //
+    // The platform splits these two jobs and so do we. FormIdentifierService.getMaxId scans
+    // EcoreUtil.getAllContents(form, true) - the whole live model - to decide which ids are taken,
+    // while its validation and repair paths (the form-invalid-item-id diagnostic and the merge-time
+    // checkUniqueItemIds) judge and rewrite only what FormItemIterator yields, and that follows
+    // persisted children only.
+
+    /**
+     * The ceiling must keep counting the layouter's items. They are {@code FormItem}s carrying real
+     * ids that are reachable ONLY through a transient containment, and the platform holds those ids
+     * reserved - so an id handed out here has to clear them. This is the NEGATIVE control for the
+     * narrowing: point {@code maxItemId} at {@link PersistedContents} and the ceiling falls to the
+     * table's 3, so the authored group below is handed 4 - an id the layouter's bar range already
+     * covers. It deliberately passes on the pre-change code too; its job is to fail if the WIDE half
+     * of the split is ever narrowed along with the target pass.
+     */
+    @Test
+    public void testItemIdCeilingCountsLayouterItemsBehindTransientContainments()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        // The layouter's own command bar for that table - transient, so it never reaches Form.form,
+        // yet it holds an allocated id.
+        EObject layouterBar = newObject(MODEL.autoCommandBar);
+        layouterBar.eSet(feature(layouterBar, "name"), "TableTopCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        layouterBar.eSet(feature(layouterBar, "id"), Integer.valueOf(50)); //$NON-NLS-1$
+        table.eSet(feature(table, "topCommandBar"), layouterBar); //$NON-NLS-1$
+
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("the ceiling must clear the id the layouter item already holds", //$NON-NLS-1$
+            Integer.valueOf(51), group.eGet(feature(group, "id"))); //$NON-NLS-1$
+        assertEquals("an authored item with a good id keeps it", Integer.valueOf(3), //$NON-NLS-1$
+            table.eGet(feature(table, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * On a form with NO computed content the split must be bit-for-bit what it always was, so the
+     * exact numbers are pinned rather than "unique and non-zero". The existing invariant assertions
+     * would survive a target pass that visited the same objects in a different ORDER, which would
+     * silently move ids between authored elements; these equalities would not.
+     *
+     * <p>Ceiling = 3 (the highest authored id, the root command bar excluded), then in document
+     * order: a zero takes 4, a good unique id is kept, the duplicate 3 takes 5, the last zero
+     * takes 6.</p>
+     */
+    @Test
+    public void testAuthoredOnlyFormIsNumberedExactlyAsBefore()
+    {
+        EObject form = newForm();
+        EObject zeroFirst = newObject(MODEL.formGroup);
+        zeroFirst.eSet(feature(zeroFirst, "name"), "ZeroFirst"); //$NON-NLS-1$ //$NON-NLS-2$
+        zeroFirst.eSet(feature(zeroFirst, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", zeroFirst); //$NON-NLS-1$
+        EObject good = newObject(MODEL.formGroup);
+        good.eSet(feature(good, "name"), "Good"); //$NON-NLS-1$ //$NON-NLS-2$
+        good.eSet(feature(good, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", good); //$NON-NLS-1$
+        EObject duplicate = newObject(MODEL.formGroup);
+        duplicate.eSet(feature(duplicate, "name"), "Duplicate"); //$NON-NLS-1$ //$NON-NLS-2$
+        duplicate.eSet(feature(duplicate, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", duplicate); //$NON-NLS-1$
+        EObject zeroLast = newObject(MODEL.decoration);
+        zeroLast.eSet(feature(zeroLast, "name"), "ZeroLast"); //$NON-NLS-1$ //$NON-NLS-2$
+        zeroLast.eSet(feature(zeroLast, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", zeroLast); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals(Integer.valueOf(4), zeroFirst.eGet(feature(zeroFirst, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(3), good.eGet(feature(good, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(5), duplicate.eGet(feature(duplicate, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(6), zeroLast.eGet(feature(zeroLast, "id"))); //$NON-NLS-1$
+        EObject rootBar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(-1), rootBar.eGet(feature(rootBar, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The same exact-value parity pin for the attribute and command id spaces. Their existing tests
+     * assert only "positive and unique", which a reversed target order would satisfy while quietly
+     * swapping ids between authored objects; these equalities would not.
+     */
+    @Test
+    public void testAuthoredAttributesAndCommandsAreNumberedExactlyAsBefore()
+    {
+        EObject form = newForm();
+        EObject attrZero = newObject(MODEL.formAttribute);
+        attrZero.eSet(feature(attrZero, "name"), "AttrZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        attrZero.eSet(feature(attrZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "attributes", attrZero); //$NON-NLS-1$
+        EObject attrGood = newObject(MODEL.formAttribute);
+        attrGood.eSet(feature(attrGood, "name"), "AttrGood"); //$NON-NLS-1$ //$NON-NLS-2$
+        attrGood.eSet(feature(attrGood, "id"), Integer.valueOf(2)); //$NON-NLS-1$
+        addTo(form, "attributes", attrGood); //$NON-NLS-1$
+        EObject attrDup = newObject(MODEL.formAttribute);
+        attrDup.eSet(feature(attrDup, "name"), "AttrDup"); //$NON-NLS-1$ //$NON-NLS-2$
+        attrDup.eSet(feature(attrDup, "id"), Integer.valueOf(2)); //$NON-NLS-1$
+        addTo(form, "attributes", attrDup); //$NON-NLS-1$
+
+        EObject cmdZero = newObject(MODEL.formCommand);
+        cmdZero.eSet(feature(cmdZero, "name"), "CmdZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        cmdZero.eSet(feature(cmdZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "formCommands", cmdZero); //$NON-NLS-1$
+        EObject cmdGood = newObject(MODEL.formCommand);
+        cmdGood.eSet(feature(cmdGood, "name"), "CmdGood"); //$NON-NLS-1$ //$NON-NLS-2$
+        cmdGood.eSet(feature(cmdGood, "id"), Integer.valueOf(5)); //$NON-NLS-1$
+        addTo(form, "formCommands", cmdGood); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+        FormElementWriter.normalizeFormCommandIds(form);
+
+        // Ceiling 2, then in document order: the zero takes 3, the good id is kept, the duplicate 4.
+        assertEquals(Integer.valueOf(3), attrZero.eGet(feature(attrZero, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(2), attrGood.eGet(feature(attrGood, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(4), attrDup.eGet(feature(attrDup, "id"))); //$NON-NLS-1$
+        // Ceiling 5, so the zero takes 6 and the good id is kept.
+        assertEquals(Integer.valueOf(6), cmdZero.eGet(feature(cmdZero, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(5), cmdGood.eGet(feature(cmdGood, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A layouter item is never a renumbering target. Writing into it would mutate an object that is
+     * never serialized, and the platform's own repair iterator does not admit it either.
+     */
+    @Test
+    public void testLayouterItemsAreNeverRenumbered()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(5)); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        // id 0 is exactly what the layouter leaves behind (ModelAccessHelper attaches these panels
+        // without ever allocating one), so this is the value the old walk would have "repaired".
+        EObject panel = newObject(modelClass("SelectedItemsActionsPanel")); //$NON-NLS-1$
+        panel.eSet(feature(panel, "name"), "SelectedItemsActionsPanel"); //$NON-NLS-1$ //$NON-NLS-2$
+        panel.eSet(feature(panel, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        table.eSet(feature(table, "selectedItemsActionsPanel"), panel); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("a computed item must keep the id the layouter gave it", Integer.valueOf(0), //$NON-NLS-1$
+            panel.eGet(feature(panel, "id"))); //$NON-NLS-1$
+        assertEquals("an authored item with a good id keeps it", Integer.valueOf(5), //$NON-NLS-1$
+            table.eGet(feature(table, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The hazard the narrowing removes: when a layouter item and an AUTHORED item hold the same id,
+     * the wide walk let visit order pick the loser. Here the layouter bar sits under an earlier
+     * sibling, so depth-first reaches it first, claims id 7 for a throw-away object and renumbers the
+     * authored group - a change that lands in {@code Form.form} and outlives the layouter entirely.
+     */
+    @Test
+    public void testAuthoredItemKeepsItsIdWhenALayouterItemSharesIt()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        EObject layouterBar = newObject(MODEL.autoCommandBar);
+        layouterBar.eSet(feature(layouterBar, "name"), "TableTopCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        layouterBar.eSet(feature(layouterBar, "id"), Integer.valueOf(7)); //$NON-NLS-1$
+        table.eSet(feature(table, "topCommandBar"), layouterBar); //$NON-NLS-1$
+
+        // Visited AFTER the table's computed subtree, so this is the one the old walk renumbered.
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(7)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("an ephemeral item must not renumber authored content", Integer.valueOf(7), //$NON-NLS-1$
+            group.eGet(feature(group, "id"))); //$NON-NLS-1$
+        assertEquals("and the computed item is left exactly as it was", Integer.valueOf(7), //$NON-NLS-1$
+            layouterBar.eGet(feature(layouterBar, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The form root's own {@code autoCommandBar} is a PERSISTED containment, so narrowing the target
+     * pass must not lose it - it still gets the platform sentinel {@code -1}.
+     */
+    @Test
+    public void testRootAutoCommandBarKeepsItsSentinelUnderTheNarrowedPass()
+    {
+        EObject form = newForm();
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        bar.eSet(feature(bar, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        group.eSet(feature(group, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "items", group); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals("the root command bar keeps the platform sentinel", Integer.valueOf(-1), //$NON-NLS-1$
+            bar.eGet(feature(bar, "id"))); //$NON-NLS-1$
+        assertEquals("and an authored item is still numbered from 1", Integer.valueOf(1), //$NON-NLS-1$
+            group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * PARITY, not a numeric difference - and the distinction is deliberate. The shipped metamodel has
+     * NO transient containment that reaches an {@code AbstractFormAttribute}, so on a real form this
+     * narrowing changes nothing at all; claiming otherwise would be inventing evidence. What this
+     * pins is the RULE - which traversal decides the targets - so that a metamodel that later grows
+     * such a path does not silently start renumbering computed attributes.
+     */
+    @Test
+    public void testComputedAttributeIsNotARenumberingTarget()
+    {
+        EObject form = newForm();
+        EObject authored = newObject(MODEL.formAttribute);
+        authored.eSet(feature(authored, "name"), "Customer"); //$NON-NLS-1$ //$NON-NLS-2$
+        authored.eSet(feature(authored, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "attributes", authored); //$NON-NLS-1$
+        // TWO computed attributes, because one cannot pin both halves of the split - measured, not
+        // assumed. A ghost with a good unique id pins the CEILING (drop it from the maximum and the
+        // authored attribute below falls to 1) but says nothing about the target pass, since the
+        // repair keeps any id that is positive and unique. A ghost with id 0 pins the TARGET PASS
+        // (the wide loop would allocate one for it) but says nothing about the ceiling, since 0
+        // raises no maximum.
+        EObject computedHigh = newObject(MODEL.formAttribute);
+        computedHigh.eSet(feature(computedHigh, "name"), "ComputedHigh"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedHigh.eSet(feature(computedHigh, "id"), Integer.valueOf(40)); //$NON-NLS-1$
+        addTo(form, "ghostAttributes", computedHigh); //$NON-NLS-1$
+        EObject computedZero = newObject(MODEL.formAttribute);
+        computedZero.eSet(feature(computedZero, "name"), "ComputedZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedZero.eSet(feature(computedZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "ghostAttributes", computedZero); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        assertEquals("the ceiling must still count the computed attribute", Integer.valueOf(41), //$NON-NLS-1$
+            authored.eGet(feature(authored, "id"))); //$NON-NLS-1$
+        assertEquals("a computed attribute is never written to", Integer.valueOf(40), //$NON-NLS-1$
+            computedHigh.eGet(feature(computedHigh, "id"))); //$NON-NLS-1$
+        assertEquals("not even one the repair would consider unnumbered", Integer.valueOf(0), //$NON-NLS-1$
+            computedZero.eGet(feature(computedZero, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * PARITY for the command id space, on the same terms as
+     * {@link #testComputedAttributeIsNotARenumberingTarget}. On a real form the inferred
+     * {@code FormStandardCommand} behind {@code FormStandardCommandSource.commands} is not even a
+     * {@code FormCommand} - it extends {@code Command} directly and declares no {@code id} - so it
+     * never entered this loop. The fixture supplies a computed command anyway, to pin which
+     * traversal chooses the targets.
+     */
+    @Test
+    public void testComputedCommandIsNotARenumberingTarget()
+    {
+        EObject form = newForm();
+        EObject authored = newObject(MODEL.formCommand);
+        authored.eSet(feature(authored, "name"), "Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        authored.eSet(feature(authored, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "formCommands", authored); //$NON-NLS-1$
+        // Two of them, for the reason spelled out in the attribute test: a good unique id pins the
+        // ceiling, a zero pins the target pass, and neither pins both.
+        EObject computedHigh = newObject(MODEL.formCommand);
+        computedHigh.eSet(feature(computedHigh, "name"), "ComputedHigh"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedHigh.eSet(feature(computedHigh, "id"), Integer.valueOf(60)); //$NON-NLS-1$
+        addTo(form, "ghostCommands", computedHigh); //$NON-NLS-1$
+        EObject computedZero = newObject(MODEL.formCommand);
+        computedZero.eSet(feature(computedZero, "name"), "ComputedZero"); //$NON-NLS-1$ //$NON-NLS-2$
+        computedZero.eSet(feature(computedZero, "id"), Integer.valueOf(0)); //$NON-NLS-1$
+        addTo(form, "ghostCommands", computedZero); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormCommandIds(form);
+
+        assertEquals("the ceiling must still count the computed command", Integer.valueOf(61), //$NON-NLS-1$
+            authored.eGet(feature(authored, "id"))); //$NON-NLS-1$
+        assertEquals("a computed command is never written to", Integer.valueOf(60), //$NON-NLS-1$
+            computedHigh.eGet(feature(computedHigh, "id"))); //$NON-NLS-1$
+        assertEquals("not even one the repair would consider unnumbered", Integer.valueOf(0), //$NON-NLS-1$
+            computedZero.eGet(feature(computedZero, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The before/after measurement on a form of known composition. Six authored objects hang off
+     * persisted containments (the root command bar, a table, a group and its field, one attribute,
+     * one command) and six more are reachable only through transient ones (the table's layouter
+     * command bar and the button under it, its two actions panels, a computed attribute and a
+     * computed command). The wide walk enumerates all twelve; the target pass enumerates the six
+     * that can actually be written back to disk.
+     */
+    @Test
+    public void testPersistedWalkEnumeratesOnlyTheAuthoredHalfOfTheForm()
+    {
+        EObject form = newForm();
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "Items"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", table); //$NON-NLS-1$
+        EObject layouterBar = newObject(MODEL.autoCommandBar);
+        layouterBar.eSet(feature(layouterBar, "name"), "TableTopCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "topCommandBar"), layouterBar); //$NON-NLS-1$
+        EObject layouterButton = newObject(MODEL.decoration);
+        layouterButton.eSet(feature(layouterButton, "name"), "LayouterButton"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(layouterBar, "items", layouterButton); //$NON-NLS-1$
+        EObject selected = newObject(modelClass("SelectedItemsActionsPanel")); //$NON-NLS-1$
+        selected.eSet(feature(selected, "name"), "Selected"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "selectedItemsActionsPanel"), selected); //$NON-NLS-1$
+        EObject rows = newObject(modelClass("RowActionsPanel")); //$NON-NLS-1$
+        rows.eSet(feature(rows, "name"), "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "rowActionsPanel"), rows); //$NON-NLS-1$
+
+        EObject group = newObject(MODEL.formGroup);
+        group.eSet(feature(group, "name"), "Main"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", group); //$NON-NLS-1$
+        EObject field = newObject(MODEL.decoration);
+        field.eSet(feature(field, "name"), "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(group, "items", field); //$NON-NLS-1$
+
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "Customer"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        EObject command = newObject(MODEL.formCommand);
+        command.eSet(feature(command, "name"), "Run"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "formCommands", command); //$NON-NLS-1$
+        EObject ghostAttribute = newObject(MODEL.formAttribute);
+        ghostAttribute.eSet(feature(ghostAttribute, "name"), "GhostAttribute"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "ghostAttributes", ghostAttribute); //$NON-NLS-1$
+        EObject ghostCommand = newObject(MODEL.formCommand);
+        ghostCommand.eSet(feature(ghostCommand, "name"), "GhostCommand"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "ghostCommands", ghostCommand); //$NON-NLS-1$
+
+        int wide = 0;
+        for (TreeIterator<EObject> it = form.eAllContents(); it.hasNext(); it.next())
+        {
+            wide++;
+        }
+        int narrow = 0;
+        for (EObject each : PersistedContents.descendants(form))
+        {
+            if (each != null)
+            {
+                narrow++;
+            }
+        }
+
+        assertEquals("the wide walk still sees the whole live form", 12, wide); //$NON-NLS-1$
+        assertEquals("the target pass sees only what can be written back", 6, narrow); //$NON-NLS-1$
+    }
+
     @Test
     public void testAutoChildrenRussianSuffixes()
     {
@@ -3344,6 +3699,19 @@ public class FormElementWriterTest
                 containment(f, "searchControlAddition", addition, false)); //$NON-NLS-1$
             pkg.getEClassifiers().add(addition);
 
+            // The LAYOUTER-ONLY children (issue #373). In the shipped Form.xcore these sit on
+            // CommandBarHolder / SelectedItemsActionsPanelHolder / RowActionsPanelHolder and are
+            // declared "contains transient" - transient with derived=false,
+            // which is the shape that makes an isDerived()-only check useless. They are ordinary
+            // stored slots that simply never reach Form.form, so a test populates them with eSet,
+            // exactly as the layouter does at runtime.
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "topCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "selectedItemsActionsPanel", selectedItemsActionsPanel, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "rowActionsPanel", rowActionsPanel, false)); //$NON-NLS-1$
+
             form = f.createEClass();
             form.setName("Form"); //$NON-NLS-1$
             form.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
@@ -3352,6 +3720,16 @@ public class FormElementWriterTest
                 containment(f, "attributes", formAttribute, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "topCommandBar", autoCommandBar, false)); //$NON-NLS-1$
+            // NOT in the shipped metamodel: no transient containment reaches an AbstractFormAttribute
+            // or a FormCommand today. These two exist so the RULE ("a computed object is never a
+            // renumbering target") can be pinned for those id spaces as well - see the tests that
+            // use them, which say so explicitly rather than claiming an observable difference.
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "ghostAttributes", formAttribute, true)); //$NON-NLS-1$
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "ghostCommands", formCommand, true)); //$NON-NLS-1$
 
             pkg.getEClassifiers().add(form);
             // The owner that holds several forms: the level the orphan-item scan must NOT climb to,
@@ -3468,6 +3846,20 @@ public class FormElementWriterTest
             reference.setEType(type);
             reference.setContainment(true);
             reference.setUpperBound(many ? -1 : 1);
+            return reference;
+        }
+
+        /**
+         * A containment the model keeps in memory but never writes - the layouter-only shape of
+         * the real metamodel. TRANSIENT with {@code derived} left FALSE on purpose: that is how EDT
+         * declares every computed form containment, so a check that asked only about
+         * {@code isDerived()} would let all of these through.
+         */
+        private static EReference layouterContainment(EcoreFactory f, String name, EClass type,
+            boolean many)
+        {
+            EReference reference = containment(f, name, type, many);
+            reference.setTransient(true);
             return reference;
         }
     }

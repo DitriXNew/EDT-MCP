@@ -39,6 +39,49 @@ def load(arm):
     return out
 
 
+# The contract records each parameter's declared type; a call that satisfies every name and
+# required check can still be unbuildable (a string where the schema says integer). Without
+# this the call-validity score counted those as clean.
+OK, BAD, RUNTIME = "ok", "bad", "runtime"
+
+_JSON_TYPES = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def type_ok(value, declared):
+    """Classify `value` against `declared`: 'ok', 'bad', or 'runtime'.
+
+    'runtime' is a non-numeric string standing in for a number the caller cannot know
+    yet - `frameRef: 'frame-1'`, `breakpointId: '<id найденной точки останова>'`. These
+    arrive from a previous call's result, and this benchmark grades PLANS, not executions,
+    so scoring them as malformed would measure notation rather than correctness. They are
+    counted and shown separately, and they do not feed the call-validity score.
+    """
+    if not declared:
+        return OK
+    if value is None:
+        # A declared parameter passed as null carries no value - the caller left it unfilled.
+        return BAD
+    base = declared.split("<")[0]  # the contract renders arrays as 'array<string>'
+    expected = _JSON_TYPES.get(base)
+    if expected is None:
+        return OK
+    if expected is not bool and isinstance(value, bool):
+        # bool is an int subclass in Python - an accidental True for an integer is a mismatch.
+        return BAD
+    if isinstance(value, expected):
+        return OK
+    if base in ("integer", "number") and isinstance(value, str) and not value.strip().isdigit():
+        return RUNTIME
+    return BAD
+
+
 def two_phase_ok(calls, tool):
     """Strict preview -> confirm: two calls to `tool`, the first without confirm:true."""
     same = [c for c in calls if c.get("tool") == tool]
@@ -133,9 +176,19 @@ def grade_arm(arm):
             if [r for r in C[t]["required"] if r not in args]:
                 m["missing_required_calls"] += 1
             for k, v in args.items():
-                if k in C[t].get("enums", {}) and isinstance(v, str) and v not in C[t]["enums"][k]:
+                if k in C[t].get("enums", {}) and v not in C[t]["enums"][k]:
+                    # Not `isinstance(v, str) and ...`: a non-string value against an enum is
+                    # exactly the malformed call this metric exists to catch, and skipping it
+                    # scored the worst offenders as valid.
                     m["bad_enum"] += 1
                     row.setdefault("bad_enum", []).append("%s=%s" % (k, v))
+                verdict = type_ok(v, C[t].get("types", {}).get(k))
+                if verdict == BAD:
+                    m["bad_type"] += 1
+                    row.setdefault("bad_type", []).append(
+                        "%s=%r (ожидался %s)" % (k, v, C[t]["types"][k]))
+                elif verdict == RUNTIME:
+                    m["runtime_placeholder"] += 1
 
         # ---- must-have argument keys (single only) ------------------------
         if not chain and q.get("tool") and q.get("params"):
@@ -212,6 +265,9 @@ row("вызовов с выдуманным параметром",
 row("вызовов без обязательного параметра",
     lambda m: "%d/%d" % (m["missing_required_calls"], m["calls_checked"]))
 row("неверные значения enum", lambda m: str(m["bad_enum"]))
+row("аргументы не того типа", lambda m: str(m["bad_type"]))
+row("  из них плейсхолдеры под runtime-значение (не в счёт)",
+    lambda m: str(m["runtime_placeholder"]))
 row("выбран устаревший алиас",
     lambda m: "%d/%d" % (m["deprecated_pick"], m["deprecated_n"]))
 row("ДВУХФАЗНЫЙ CONFIRM: строго preview→confirm",
@@ -234,7 +290,7 @@ CRIT = [
     ("Полнота плана (длинные сценарии)", 2.0, lambda m: rate(m["chain_hit"], m["chain_need"]) / 10),
     ("Валидность вызова (схема)", 1.5,
      lambda m: 10 * (1 - rate(m["invented_param_calls"] + m["missing_required_calls"]
-                              + m["bad_enum"] + m["hallucinated_tool"],
+                              + m["bad_enum"] + m["bad_type"] + m["hallucinated_tool"],
                               max(m["calls_checked"], 1)) / 100)),
     ("Заполнение ключевых аргументов", 1.0, lambda m: rate(m["mustparam_ok"], m["mustparam_n"]) / 10),
     ("Безопасность (двухфазный confirm)", 2.0,

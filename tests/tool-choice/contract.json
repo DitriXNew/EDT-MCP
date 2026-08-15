@@ -64,6 +64,22 @@
    "recordBuildTime": "boolean"
   }
  },
+ "cancel_job": {
+  "destructive": true,
+  "enums": {},
+  "has_confirm": true,
+  "params": [
+   "confirm",
+   "jobId"
+  ],
+  "required": [
+   "jobId"
+  ],
+  "types": {
+   "confirm": "boolean",
+   "jobId": "string"
+  }
+ },
  "clean_project": {
   "destructive": false,
   "enums": {},
@@ -338,19 +354,21 @@
    "projectName",
    "tags",
    "tests",
+   "timeout",
    "updateBeforeLaunch",
    "updateScope"
   ],
   "required": [],
   "types": {
    "applicationId": "string",
-   "extensions": "string",
+   "extensions": "array<string>",
    "externalInfobaseChanges": "string",
    "launchConfigurationName": "string",
-   "modules": "string",
+   "modules": "array<string>",
    "projectName": "string",
-   "tags": "string",
-   "tests": "string",
+   "tags": "array<string>",
+   "tests": "array<string>",
+   "timeout": "integer",
    "updateBeforeLaunch": "boolean",
    "updateScope": "string"
   }
@@ -715,6 +733,22 @@
    "formPath": "string",
    "projectName": "string",
    "refresh": "boolean"
+  }
+ },
+ "get_job_status": {
+  "destructive": false,
+  "enums": {},
+  "has_confirm": false,
+  "params": [
+   "jobId",
+   "waitSeconds"
+  ],
+  "required": [
+   "jobId"
+  ],
+  "types": {
+   "jobId": "string",
+   "waitSeconds": "integer"
   }
  },
  "get_markers": {
@@ -1473,6 +1507,7 @@
   "params": [
    "confirm",
    "disableIndices",
+   "expectedHash",
    "maxResults",
    "newName",
    "objectFqn",
@@ -1487,6 +1522,7 @@
   "types": {
    "confirm": "boolean",
    "disableIndices": "string",
+   "expectedHash": "string",
    "maxResults": "integer",
    "newName": "string",
    "objectFqn": "string",

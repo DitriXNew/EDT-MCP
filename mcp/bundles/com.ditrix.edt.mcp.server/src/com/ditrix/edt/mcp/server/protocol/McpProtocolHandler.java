@@ -160,21 +160,6 @@ public class McpProtocolHandler
     }
 
     /**
-     * Appends one recorded exchange to the shared in-memory {@link McpCallHistory}
-     * at the choke point. Delegates to the history singleton, tolerating a
-     * {@code null} singleton (e.g. the plugin is not active). Package-private and
-     * overridable so the guard around it in {@link #processRequest} is unit-testable
-     * without a live history buffer. The argument order mirrors
-     * {@link com.ditrix.edt.mcp.server.history.McpCallRecord} (minus its
-     * recorder-stamped timestamp).
-     *
-     * @param method the JSON-RPC method (may be {@code null} for an unparseable request)
-     * @param toolName the tool name for a {@code tools/call}, else {@code null}
-     * @param requestJson the raw request body (may be {@code null})
-     * @param responseJson the response body, or {@code null} for a notification
-     * @param durationMs the wall-clock exchange duration in milliseconds
-     */
-    /**
      * Counts one processed request for the status bar, at the same choke point as the
      * history.
      * <p>
@@ -197,6 +182,21 @@ public class McpProtocolHandler
         }
     }
 
+    /**
+     * Appends one recorded exchange to the shared in-memory {@link McpCallHistory}
+     * at the choke point. Delegates to the history singleton, tolerating a
+     * {@code null} singleton (e.g. the plugin is not active). Package-private and
+     * overridable so the guard around it in {@link #processRequest} is unit-testable
+     * without a live history buffer. The argument order mirrors
+     * {@link com.ditrix.edt.mcp.server.history.McpCallRecord} (minus its
+     * recorder-stamped timestamp).
+     *
+     * @param method the JSON-RPC method (may be {@code null} for an unparseable request)
+     * @param toolName the tool name for a {@code tools/call}, else {@code null}
+     * @param requestJson the raw request body (may be {@code null})
+     * @param responseJson the response body, or {@code null} for a notification
+     * @param durationMs the wall-clock exchange duration in milliseconds
+     */
     void recordToHistory(String method, String toolName, String requestJson, String responseJson,
         long durationMs)
     {

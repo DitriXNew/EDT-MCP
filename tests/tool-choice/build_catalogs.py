@@ -16,7 +16,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))  # <repo>/tests/tool-choice -> <repo>
-GOLDEN = os.path.join(ROOT, "tests/e2e/tools_list.golden.json")
+# The arms are rendered from a PINNED pre-compaction snapshot, never from the production
+# golden: since InputSchemaCompactor landed, the golden carries the COMPACTED wire form,
+# so rendering V1/V2 from it would silently ship arms whose parameter prose is already
+# stripped - and V2->V3 would then isolate nothing.
+GOLDEN = os.path.join(HERE, "tools_list.v1_baseline.json")
 SHORT = os.path.join(HERE, "short_descriptions.json")
 
 tools = json.load(open(GOLDEN, encoding="utf-8"))
@@ -82,7 +86,7 @@ def annotations(tool):
     return ("[" + ", ".join(flags) + "]") if flags else ""
 
 
-HEADER = """# EDT-MCP tool catalog - arm %s
+HEADER = """# EDT-MCP tool catalog
 
 This is the complete set of tools available to you. Nothing else exists.
 %s
@@ -97,8 +101,10 @@ GUIDE_NOTE = (
 V4 = json.load(open(os.path.join(HERE, "v4_overrides.json"), encoding="utf-8"))
 
 
-def build(arm, use_short, keep_prose, pointer, v4=False):
-    parts = [HEADER % (arm, GUIDE_NOTE)]
+def build(use_short, keep_prose, pointer, v4=False):
+    # No arm label is rendered: the catalog the runner reads must not name its variant,
+    # or the blinding is decorative. The mapping lives in MAPPING.json, outside the arms.
+    parts = [HEADER % GUIDE_NOTE]
     facts = V4["params"] if v4 else None
     for t in tools:
         name = t["name"]
@@ -115,11 +121,11 @@ def build(arm, use_short, keep_prose, pointer, v4=False):
 
 
 arms = {
-    "V1": build("V1 (current, as shipped)", use_short=False, keep_prose=True, pointer=False),
-    "V2": build("V2 (short descriptions)", use_short=True, keep_prose=True, pointer=True),
-    "V3": build("V3 (short descriptions + bare parameter schema)", use_short=True,
+    "V1": build(use_short=False, keep_prose=True, pointer=False),
+    "V2": build(use_short=True, keep_prose=True, pointer=True),
+    "V3": build(use_short=True,
                 keep_prose=False, pointer=True),
-    "V4": build("V4 (V3 + load-bearing clauses kept in the description)", use_short=True,
+    "V4": build(use_short=True,
                 keep_prose=False, pointer=True, v4=True),
 }
 
@@ -152,8 +158,12 @@ for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c"), ("V4", "ar
     d = os.path.join(HERE, "arms", blind)
     os.makedirs(d, exist_ok=True)
     open(os.path.join(d, "catalog.md"), "w", encoding="utf-8").write(arms[arm])
-    if os.path.isdir(plugin_guides) and not os.path.isdir(os.path.join(d, "guides")):
-        shutil.copytree(plugin_guides, os.path.join(d, "guides"))
+    if os.path.isdir(plugin_guides):
+        # Re-stage on every build: a guide edited since the last run must reach the arms,
+        # otherwise agents benchmark yesterday's text against today's catalog.
+        staged = os.path.join(d, "guides")
+        shutil.rmtree(staged, ignore_errors=True)
+        shutil.copytree(plugin_guides, staged)
 json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"},
           open(os.path.join(HERE, "arms", "MAPPING.json"), "w", encoding="utf-8"), indent=1)
 

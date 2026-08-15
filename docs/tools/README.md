@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**87 tools.**
+**89 tools.**
 
 ## Core
 
@@ -81,13 +81,15 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Testing
 
-> YAXUnit unit testing and 1C:Workmate assistance.
+> YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling.
 
 | Tool | Description |
 |------|-------------|
-| [`ask_workmate`](ask_workmate.md) | Start or poll a background question to the 1C:Workmate plugin without holding an MCP request open for the full cloud conversation. Requires a compatible Work… *(not enabled by default)* |
+| [`ask_workmate`](ask_workmate.md) | Start a background question to the 1C:Workmate plugin and return its jobId. Poll the job with get_job_status instead of calling ask_workmate again. Requires… *(not enabled by default)* |
+| [`cancel_job`](cancel_job.md) | Preview or cancel a background job by jobId. Destructive: omitting confirm or passing confirm=false only describes the owning tool, state, and progress; conf… |
 | [`debug_yaxunit_tests`](debug_yaxunit_tests.md) | Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests in DEBUG mode so breakpoints fire, then call wait_for_break to inspect. Prefer… |
-| [`run_yaxunit_tests`](run_yaxunit_tests.md) | Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. The whole call is bounded by `timeout` (default and maximum 45s, larger val… |
+| [`get_job_status`](get_job_status.md) | Poll any background job by the jobId returned from its owning tool. Returns the current state, progress journal, and terminal result; optionally waits for a… |
+| [`run_yaxunit_tests`](run_yaxunit_tests.md) | Run YAXUnit tests as a named background job and return a JUnit Markdown report. The start call waits up to `timeout` (default and maximum 45s, larger values… |
 
 ## Profiling
 

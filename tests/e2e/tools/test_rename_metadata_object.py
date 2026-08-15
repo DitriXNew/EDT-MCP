@@ -6,7 +6,7 @@ it updates references in BSL code, forms and other metadata. ResponseType is
 MARKDOWN, so the tool body is in r.text (NOT r.structured).
 
 TWO-PHASE CONTRACT (RenameMetadataObjectTool + MetadataRenameService):
-  * confirm absent/false  -> PREVIEW only. Emits YAML "action: preview", a
+  * confirm absent/false  -> PREVIEW only. Emits YAML "action: preview", a contentHash, a
     "## Change Points" table and "> To execute, call with `confirm=true`."
     The model is NOT mutated.
   * confirm=true          -> EXECUTE. Performs every enabled change point. Emits
@@ -366,8 +366,17 @@ def _change_points(preview_text):
     return rows
 
 
+def _frontmatter_value(markdown, key):
+    """Return one scalar from the preview YAML front matter."""
+    prefix = key + ": "
+    for line in markdown.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    raise AssertionError("preview front matter has no %s:\n%s" % (key, markdown))
+
+
 def _cascade_preview_and_reference_index():
-    """Preview CommonModule.CascadeEn -> Reckoner; return (rows, index of the BSL ref row).
+    """Return preview rows, the BSL-ref index, and their optimistic-lock token.
 
     The fixture gives this rename exactly one SKIPPABLE change point — the reference
     CascadeUser makes to CascadeEn — plus the (non-skippable) object rename itself.
@@ -385,7 +394,8 @@ def _cascade_preview_and_reference_index():
         raise AssertionError(
             "fixture precondition: the CascadeEn rename must preview exactly one skippable "
             "bslRef change point, got %d (rows=%r)" % (len(skippable), rows))
-    return rows, skippable[0]["index"]
+    content_hash = _frontmatter_value(r.text, "contentHash")
+    return rows, skippable[0]["index"], content_hash
 
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
@@ -397,7 +407,7 @@ def test_disableindices_skips_the_change_point_shown_under_that_index():
     assert_contains(base.text, "CommonModules/CascadeUser/Module.bsl",
                     "fixture precondition: CascadeUser references CascadeEn.Marker before the rename")
 
-    _rows, reference_index = _cascade_preview_and_reference_index()
+    _rows, reference_index, content_hash = _cascade_preview_and_reference_index()
 
     r = call("rename_metadata_object", {
         "projectName": PROJECT,
@@ -405,6 +415,7 @@ def test_disableindices_skips_the_change_point_shown_under_that_index():
         "newName": "Reckoner",
         "confirm": True,
         "disableIndices": str(reference_index),
+        "expectedHash": content_hash,
     })
     assert_ok(r, "execute rename with disableIndices=%d" % reference_index)
     assert_contains(r.text, "action: executed", "the rename must still execute")
@@ -437,7 +448,7 @@ def test_disableindices_for_another_index_leaves_the_bsl_reference_applied():
     # renamed) is what makes this a control: a weaker "the new reference exists" check would
     # also pass on a run that duplicated the edit or skipped the object rename.
     _settle_before_rename()  # executes a real rename - see the helper
-    rows, reference_index = _cascade_preview_and_reference_index()
+    rows, reference_index, content_hash = _cascade_preview_and_reference_index()
     required = [row["index"] for row in rows
                 if row["type"] == "rename" and row["skippable"] == "no"]
     if len(required) != 1 or required[0] == reference_index:
@@ -451,6 +462,7 @@ def test_disableindices_for_another_index_leaves_the_bsl_reference_applied():
         "newName": "Reckoner",
         "confirm": True,
         "disableIndices": str(required[0]),
+        "expectedHash": content_hash,
     })
     assert_ok(r, "execute rename with disableIndices=%d" % required[0])
     assert_contains(r.text, "action: executed", "the rename must still execute")
@@ -467,6 +479,34 @@ def test_disableindices_for_another_index_leaves_the_bsl_reference_applied():
     # The object rename is NOT skippable, so it must have applied regardless of the request.
     assert_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
                     "the object must still be renamed")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write-metadata")
+def test_stale_expected_hash_refuses_before_anything_is_renamed():
+    _settle_before_rename()
+    _rows, reference_index, content_hash = _cascade_preview_and_reference_index()
+
+    r = call("rename_metadata_object", {
+        "projectName": PROJECT,
+        "objectFqn": "CommonModule.CascadeEn",
+        "newName": "Reckoner",
+        "confirm": True,
+        "disableIndices": str(reference_index),
+        "expectedHash": "stale-" + content_hash,
+    })
+
+    err = assert_error(r, "execute rename with a stale expectedHash")
+    assert_contains(err, "preview is stale",
+                    "a mismatching token must name the stale preview")
+    assert_contains(err, "Nothing was renamed",
+                    "the refusal must state that the cascade did not start")
+    assert_contains(err, "indices may now mean different change points",
+                    "the refusal must explain why re-previewing is required")
+    assert_contains(_commonmodule_names(name_filter="CascadeEn"), "| CascadeEn ",
+                    "the old object must remain after the stale-token refusal")
+    assert_not_contains(_commonmodule_names(name_filter="Reckoner"), "| Reckoner ",
+                        "the new object must not appear after the stale-token refusal")
+    assert_no_diff("a stale expectedHash must refuse before changing the project on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -487,6 +527,7 @@ def test_preview_lists_change_points_and_does_not_mutate_module():
     })
     assert_ok(r, "preview rename CommonModule.Calc")
     assert_contains(r.text, "action: preview", "preview must emit YAML action: preview")
+    assert_contains(r.text, "contentHash:", "preview must emit the index-lock token")
     assert_contains(r.text, "Refactoring Preview", "preview must emit the preview header")
     assert_contains(r.text, "Change Points", "preview must render the change-points table")
     assert_contains(r.text, "confirm=true", "preview must instruct how to execute (confirm=true)")
@@ -526,10 +567,10 @@ def test_preview_for_catalog_does_not_mutate_catalog():
 # it just as loudly when nothing had been skipped at all. It matters because the caller
 # is an agent deciding whether a change was left behind on purpose.
 #
-# The report now states the REAL number, and every requested ENTRY that produced no skip comes
-# back: an index that matched nothing under `unknownIndices`, one naming a point the refactoring
-# requires under `notSkippableIndices`, one naming a point this tool cannot switch off under
-# `unsupportedIndices`, and entries that never parsed as indices COUNTED under `unparsedCount`.
+# The report now states the REAL number, and every accepted index that produced no skip comes
+# back: one that matched nothing under `unknownIndices`, one naming a point the refactoring
+# requires under `notSkippableIndices`, or one this tool cannot switch off under
+# `unsupportedIndices`. Entries that can never be indices are refused before execution.
 #
 # CommonModule.CascadeEn is the target because its change set is tiny and fully known:
 # exactly two points, `#0` the bslRef in CascadeUser (Skippable: yes) and `#1` the
@@ -542,12 +583,14 @@ def test_unknown_disable_index_is_not_counted_as_a_skip():
     # #99 does not exist (the target has 2 change points). Before #394 this printed
     # "disabledCount: 1" and "1 change point(s) were skipped as requested" while the
     # cascade applied in full — the report contradicted the disk.
+    _rows, _reference_index, content_hash = _cascade_preview_and_reference_index()
     r = call("rename_metadata_object", {
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
         "confirm": True,
         "disableIndices": "99",
+        "expectedHash": content_hash,
     })
     assert_ok(r, "execute rename with an out-of-range disableIndices")
     assert_contains(r.text, "action: executed", "the rename must still execute")
@@ -602,12 +645,14 @@ def test_required_disable_index_is_reported_as_applied_not_skipped():
             "`Skippable: no` change point (the rename leaf itself); got:\n" + preview.text)
 
     index = required[0]
+    content_hash = _frontmatter_value(preview.text, "contentHash")
     r = call("rename_metadata_object", {
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
         "newName": "Reckoner",
         "confirm": True,
         "disableIndices": index,
+        "expectedHash": content_hash,
     })
     assert_ok(r, "execute rename asking to skip a REQUIRED change point")
     assert_contains(r.text, "action: executed", "the rename must still execute")
@@ -629,17 +674,10 @@ def test_required_disable_index_is_reported_as_applied_not_skipped():
 
 
 @e2e_test(tool="rename_metadata_object", kind="write-metadata")
-def test_unparsable_disable_index_token_is_reported_not_swallowed():
-    _settle_before_rename()  # executes a real rename - see the helper
-    # The third way a requested entry produces no skip: it never became an index at all. The parse
-    # used to drop non-numeric tokens on the spot, so this exact call — disableIndices made ONLY of
-    # junk — answered byte for byte as if the argument had not been passed: the caller asked for a
-    # skip, got none, and nothing anywhere said so.
-    #
-    # Junk-ONLY on purpose, not "0,abc": with a valid index alongside it, the execute walk runs and
-    # the outcome gets built along the way, so a regression that carried tokens only when some index
-    # parsed would still pass. Here there is no index at all, which is what pins the report being
-    # assembled for a request the walk never had anything to do.
+def test_unparsable_disable_index_token_is_refused_before_rename():
+    # A non-numeric entry can never address a preview row, so #401 refuses it before the settle,
+    # refactoring build, consent gate, or cascade. expectedHash is deliberately absent: malformed
+    # disableIndices is the first bad value and must be the refusal the caller sees.
     r = call("rename_metadata_object", {
         "projectName": PROJECT,
         "objectFqn": "CommonModule.CascadeEn",
@@ -647,26 +685,17 @@ def test_unparsable_disable_index_token_is_reported_not_swallowed():
         "confirm": True,
         "disableIndices": "abc",
     })
-    assert_ok(r, "execute rename with a disableIndices made only of a non-numeric token")
-    assert_contains(r.text, "action: executed", "the rename must still execute")
-    assert_contains(r.text, "disabledCount: 0", "nothing was skipped, and nothing could have been")
-    assert_contains(r.text, "unparsedCount: 1",
-                    "an entry that is not a number must be reported, not dropped at the parse")
-    # The CONTENT is deliberately not echoed - see DisableRequest for the nine defects that decided
-    # it. The signal is what the caller needed; the signal is a number.
-    assert_not_contains(r.text, "abc",
-                        "the caller's own text must not come back in the report")
-    assert_contains(r.text, "entr(ies) in disableIndices could not be read as change-point indices",
-                    "the report must explain what happened to it")
-    # It never became an index, so it must not be filed as one.
-    assert_not_contains(r.text, "unknownIndices",
-                        "a non-numeric token is not an unknown INDEX - it never became one")
-    # The rename itself is untouched by the junk: the cascade applied in full.
-    src = call("read_module_source", {"projectName": PROJECT,
-                                      "modulePath": "CommonModules/CascadeUser/Module.bsl"})
-    assert_ok(src, "read CascadeUser after a rename with an unparsable disableIndices")
-    assert_contains(src.text, "Reckoner.Marker()",
-                    "an unparsable disableIndices must not silently suppress the cascade")
+    err = assert_error(r, "execute rename with a non-numeric disableIndices")
+    assert_contains(err, "could not be read as a change-point index",
+                    "the refusal must explain why the value can never address a preview row")
+    assert_contains(err, "Nothing was renamed",
+                    "the malformed request must not start a configuration-wide cascade")
+    assert_contains(err, "current indices",
+                    "the refusal must tell the caller to read a fresh preview")
+    assert_not_contains(err, "abc", "the caller's own text must not come back")
+    assert_contains(_commonmodule_names(name_filter="CascadeEn"), "| CascadeEn ",
+                    "the original object must remain after the refusal")
+    assert_no_diff("an unparsable disableIndices must refuse without touching disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

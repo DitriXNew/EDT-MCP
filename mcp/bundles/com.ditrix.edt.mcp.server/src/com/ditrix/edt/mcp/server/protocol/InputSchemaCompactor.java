@@ -63,8 +63,8 @@ public final class InputSchemaCompactor
      * Keywords whose value is a MAP of name -> subschema. The map's KEYS are names
      * (never keywords) and only its VALUES are recursed into.
      */
-    private static final List<String> SCHEMA_MAP_KEYWORDS =
-        Arrays.asList(KEY_PROPERTIES, "patternProperties", "$defs", "definitions"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    private static final List<String> SCHEMA_MAP_KEYWORDS = Arrays.asList(KEY_PROPERTIES,
+        "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
     /**
      * Keywords whose value is a single subschema, or (for the applicator keywords) an
@@ -80,6 +80,20 @@ public final class InputSchemaCompactor
      * request of every session.
      */
     private static final Map<String, Set<String>> KEEP = buildKeepList();
+
+    /**
+     * Parameter names whose description survives in EVERY tool that declares them, because
+     * the description carries the VALUE SHAPE and the schema has no way to express it.
+     * <p>
+     * {@code modulePath} is the measured case: a plain {@code string} whose only statement
+     * of the expected form is the example {@code 'CommonModules/MyModule/Module.bsl'} in its
+     * description, repeated across the 12 tools that take it. The 500-request sweep did not
+     * catch its removal — there the model planned a {@code list_modules} lookup first, which
+     * grades as correct planning — but a live run against a real server did: the agent
+     * reported it could not tell whether the value was a file path or a {@code Type.Name}
+     * token, and had to spend a discovery call to find out.
+     */
+    private static final Set<String> KEEP_IN_EVERY_TOOL = asSet("modulePath"); //$NON-NLS-1$
 
     private InputSchemaCompactor()
     {
@@ -125,7 +139,8 @@ public final class InputSchemaCompactor
         {
             return null;
         }
-        Set<String> keep = KEEP.getOrDefault(toolName, Collections.emptySet());
+        Set<String> keep = new HashSet<>(KEEP.getOrDefault(toolName, Collections.emptySet()));
+        keep.addAll(KEEP_IN_EVERY_TOOL);
         JsonElement copy = inputSchema.deepCopy();
         stripSchema(copy, keep);
         return copy;

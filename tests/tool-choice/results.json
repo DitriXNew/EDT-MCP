@@ -12,7 +12,8 @@
   "twophase_strict": 33,
   "twophase_confirm": 57,
   "missing_required_calls": 22,
-  "guide_chars": 1326411,
+  "guide_chars": 1336384,
+  "runtime_placeholder": 16,
   "deprecated_n": 6,
   "notool_n": 12,
   "notool_ok": 12,
@@ -21,7 +22,7 @@
   "chain_hit": 401,
   "chain_complete": 136,
   "guide_uniq": 12,
-  "guide_uniq_chars": 143094
+  "guide_uniq_chars": 144749
  },
  "arm_b": {
   "n": 500,
@@ -32,7 +33,7 @@
   "calls_checked": 853,
   "mustparam_n": 304,
   "mustparam_ok": 288,
-  "guide_chars": 2239787,
+  "guide_chars": 2264330,
   "twophase_n": 61,
   "twophase_strict": 18,
   "twophase_confirm": 58,
@@ -42,12 +43,13 @@
   "notool_n": 12,
   "notool_ok": 12,
   "false_refusal": 2,
+  "runtime_placeholder": 12,
   "n_chain": 145,
   "chain_need": 410,
   "chain_hit": 399,
   "chain_complete": 134,
   "guide_uniq": 49,
-  "guide_uniq_chars": 334049
+  "guide_uniq_chars": 340509
  },
  "arm_c": {
   "n": 500,
@@ -58,11 +60,12 @@
   "calls_checked": 845,
   "mustparam_n": 304,
   "mustparam_ok": 288,
-  "guide_chars": 3574861,
+  "guide_chars": 3637555,
   "twophase_n": 61,
   "twophase_strict": 14,
   "twophase_confirm": 57,
   "missing_required_calls": 30,
+  "runtime_placeholder": 15,
   "deprecated_n": 6,
   "deprecated_pick": 4,
   "notool_n": 12,
@@ -74,7 +77,7 @@
   "chain_complete": 134,
   "invented_param_calls": 1,
   "guide_uniq": 74,
-  "guide_uniq_chars": 395318
+  "guide_uniq_chars": 400898
  },
  "arm_d": {
   "n": 500,
@@ -85,11 +88,12 @@
   "calls_checked": 905,
   "mustparam_n": 304,
   "mustparam_ok": 293,
-  "guide_chars": 4362264,
+  "guide_chars": 4421685,
   "twophase_n": 61,
   "twophase_strict": 60,
   "twophase_confirm": 60,
   "missing_required_calls": 7,
+  "runtime_placeholder": 33,
   "deprecated_n": 6,
   "notool_n": 12,
   "notool_ok": 12,
@@ -98,6 +102,6 @@
   "chain_hit": 399,
   "chain_complete": 134,
   "guide_uniq": 74,
-  "guide_uniq_chars": 403955
+  "guide_uniq_chars": 409535
  }
 }

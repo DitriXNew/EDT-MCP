@@ -106,7 +106,7 @@ public final class Toolsets
         define(DEBUG, "Debug",
             "Runtime debugging: launch/attach, breakpoints, step/resume, variables, expression evaluation."); //$NON-NLS-1$
         define(TESTING, "Testing",
-            "YAXUnit unit testing and 1C:Workmate assistance."); //$NON-NLS-1$
+            "YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling."); //$NON-NLS-1$
         define(PROFILING, "Profiling",
             "Performance profiling: start/stop a measurement and read the results."); //$NON-NLS-1$
         define(FORMS, "Forms",
@@ -148,7 +148,8 @@ public final class Toolsets
             "step", "resume", "evaluate_expression", "get_applications", "terminate_launch"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
         assign(TESTING,
-            "run_yaxunit_tests", "debug_yaxunit_tests", "ask_workmate"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "run_yaxunit_tests", "debug_yaxunit_tests", "ask_workmate", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "get_job_status", "cancel_job"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assign(PROFILING,
             "start_profiling", "stop_profiling", "get_profiling_results"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

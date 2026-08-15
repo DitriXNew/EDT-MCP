@@ -71,6 +71,7 @@
           "type": "integer"
         },
         "modulePath": {
+          "description": "Narrow to a BSL module: the 'Module path' from get_project_errors (e.g. 'CommonModules/MyModule/Module.bsl'). Optional but recommended when the same check fires in several modules.",
           "type": "string"
         },
         "projectName": {
@@ -178,6 +179,30 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Cancel a background job by jobId. DESTRUCTIVE. Two-phase: call once WITHOUT confirm to see the owning tool, state and progress, then again with confirm=true to cancel. Cancellation is not guaranteed - a committed job whose owner declares no destructive stop stays in flight. Parameters and examples: get_tool_guide('cancel_job').",
+    "inputSchema": {
+      "properties": {
+        "confirm": {
+          "type": "boolean"
+        },
+        "jobId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobId"
+      ],
+      "type": "object"
+    },
+    "name": "cancel_job",
+    "outputSchema": null
   },
   {
     "annotations": {
@@ -877,14 +902,17 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; behaviour is identical. Kept for compatibility. Parameters and examples: get_tool_guide('debug_yaxunit_tests').",
+    "description": "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; the implementation is shared. DEBUG mode, so breakpoints fire: a short start returns the launch handle and you call wait_for_break next, while Pending returns a jobId to poll with get_job_status. Parameters and examples: get_tool_guide('debug_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
           "type": "string"
         },
         "extensions": {
-          "type": "string"
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "externalInfobaseChanges": {
           "type": "string"
@@ -893,16 +921,28 @@
           "type": "string"
         },
         "modules": {
-          "type": "string"
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "projectName": {
           "type": "string"
         },
         "tags": {
-          "type": "string"
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "tests": {
-          "type": "string"
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeout": {
+          "type": "integer"
         },
         "updateBeforeLaunch": {
           "type": "boolean"
@@ -1566,6 +1606,7 @@
           "type": "integer"
         },
         "modulePath": {
+          "description": "BSL module path under src (e.g. 'CommonModules/MyModule/Module.bsl'); alias: filePath",
           "type": "string"
         },
         "offset": {
@@ -1814,6 +1855,30 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Poll any background job by the jobId its owning tool returned: state, progress journal and terminal result. Parameters and examples: get_tool_guide('get_job_status').",
+    "inputSchema": {
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "waitSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "jobId"
+      ],
+      "type": "object"
+    },
+    "name": "get_job_status",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Find bookmarks and TODO-style task markers in the workspace. Parameters and examples: get_tool_guide('get_markers').",
     "inputSchema": {
       "properties": {
@@ -2032,6 +2097,7 @@
           "type": "string"
         },
         "modulePath": {
+          "description": "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)",
           "type": "string"
         },
         "projectName": {
@@ -2063,6 +2129,7 @@
           "type": "boolean"
         },
         "modulePath": {
+          "description": "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)",
           "type": "string"
         },
         "projectName": {
@@ -2132,6 +2199,7 @@
           "type": "string"
         },
         "modulePath": {
+          "description": "Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required)",
           "type": "string"
         },
         "projectName": {
@@ -2475,6 +2543,7 @@
           "type": "integer"
         },
         "modulePath": {
+          "description": "BSL module path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (canonical; alias: filePath)",
           "type": "string"
         },
         "projectName": {
@@ -2639,6 +2708,7 @@
           "type": "boolean"
         },
         "modulePath": {
+          "description": "Module path from src/, e.g. 'CommonModules/My/Module.bsl'; required for a bare method name",
           "type": "string"
         },
         "projectName": {
@@ -3105,6 +3175,7 @@
           "type": "string"
         },
         "modulePath": {
+          "description": "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl'",
           "type": "string"
         },
         "projectName": {
@@ -3134,6 +3205,7 @@
           "type": "integer"
         },
         "modulePath": {
+          "description": "Path from src/, e.g. 'CommonModules/MyModule/Module.bsl' (required)",
           "type": "string"
         },
         "projectName": {
@@ -3171,6 +3243,7 @@
           "type": "string"
         },
         "modulePath": {
+          "description": "EDT module path or absolute path (when looking up by coordinates)",
           "type": "string"
         },
         "projectName": {
@@ -3209,6 +3282,9 @@
           "type": "boolean"
         },
         "disableIndices": {
+          "type": "string"
+        },
+        "expectedHash": {
           "type": "string"
         },
         "maxResults": {
@@ -3423,14 +3499,14 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run YAXUnit tests for a 1C configuration. Parameters and examples: get_tool_guide('run_yaxunit_tests').",
+    "description": "Run YAXUnit tests as a named background job and return a JUnit Markdown report. The start call waits up to `timeout` (default and maximum 45s): a short run returns the report in that call, otherwise Pending returns a jobId to poll with get_job_status. Address a known run by jobId, NOT by repeating the arguments - a repeated start attaches only while that job is still running, and otherwise launches a second run. Parameters and examples: get_tool_guide('run_yaxunit_tests').",
     "inputSchema": {
       "properties": {
         "applicationId": {
           "type": "string"
         },
         "debug": {
-          "description": "true launches in DEBUG mode so breakpoints fire and returns a launch handle immediately - call wait_for_break next. Default false polls and returns the report.",
+          "description": "true launches in DEBUG mode so breakpoints fire: a short start returns the launch handle and you call wait_for_break next, while Pending returns a jobId for get_job_status. Default false polls and returns the report.",
           "type": "boolean"
         },
         "extensions": {
@@ -3613,6 +3689,7 @@
           "type": "string"
         },
         "modulePath": {
+          "description": "Module identifier — EDT module path (CommonModules/Foo/Module.bsl) or absolute file path (required)",
           "type": "string"
         },
         "projectName": {
@@ -4317,6 +4394,7 @@
           "type": "string"
         },
         "modulePath": {
+          "description": "src/-relative module path, e.g. 'CommonModules/MyModule/Module.bsl'. Alternative to objectName (pass exactly one).",
           "type": "string"
         },
         "moduleType": {
