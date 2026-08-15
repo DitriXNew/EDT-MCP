@@ -136,6 +136,13 @@ public class CancelJobTool implements IMcpTool
                 + "capability declared by `" + snapshot.getOwningTool() //$NON-NLS-1$
                 + "`. Read the cancellation section below for the effects and any partial " //$NON-NLS-1$
                 + "result. Never treat a terminated run as a clean outcome."; //$NON-NLS-1$
+            if (snapshot.getResult() == null && cancellation.getDetail() != null)
+            {
+                // The launch may be proven stopped before the worker exits. Its result cannot be
+                // published on the non-terminal job yet, but the cancellation caller must still
+                // receive the owner's partial-report/no-rollback explanation immediately.
+                message += "\n\n" + cancellation.getDetail(); //$NON-NLS-1$
+            }
         }
         else if (outcome == CancellationOutcome.ALREADY_COMMITTED)
         {

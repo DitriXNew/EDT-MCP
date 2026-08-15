@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -22,6 +23,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,6 +41,14 @@ public final class BackgroundJobs implements AutoCloseable
     private static final int DEFAULT_MAX_STORED_JOBS = 100;
     private static final int DEFAULT_WORKER_THREADS = 4;
     private static final long SHUTDOWN_WAIT_SECONDS = 2;
+    /**
+     * Outer guard for an owner's whole committed-cancellation handler.
+     * <p>
+     * YAXUnit's normal termination verification is bounded at 10 seconds by default. Thirty
+     * seconds leaves twice that budget for a slow {@code ILaunch.terminate()} call and partial
+     * report parsing, while still preventing one platform call from wedging the registry forever.
+     */
+    private static final long COMMITTED_CANCELLATION_HANDLER_TIMEOUT_SECONDS = 30L;
 
     private static final Object SHARED_LOCK = new Object();
     private static BackgroundJobs shared;
@@ -391,6 +401,8 @@ public final class BackgroundJobs implements AutoCloseable
     private final int maxStoredJobs;
     private final ExecutorService workers;
     private final ScheduledExecutorService deadlines;
+    private final ExecutorService cancellationHandlers;
+    private final long committedCancellationHandlerTimeoutMs;
 
     private volatile boolean closed;
 
@@ -403,15 +415,28 @@ public final class BackgroundJobs implements AutoCloseable
      */
     public BackgroundJobs(int maxStoredJobs, int workerThreads)
     {
-        if (maxStoredJobs < 1 || workerThreads < 1)
+        this(maxStoredJobs, workerThreads, TimeUnit.SECONDS.toMillis(
+            COMMITTED_CANCELLATION_HANDLER_TIMEOUT_SECONDS));
+    }
+
+    /** Package-local constructor with a shorter handler guard for deterministic lifecycle tests. */
+    BackgroundJobs(int maxStoredJobs, int workerThreads,
+        long committedCancellationHandlerTimeoutMs)
+    {
+        if (maxStoredJobs < 1 || workerThreads < 1 || committedCancellationHandlerTimeoutMs < 1L)
         {
             throw new IllegalArgumentException("BackgroundJobs limits must be positive"); //$NON-NLS-1$
         }
         this.maxStoredJobs = maxStoredJobs;
+        this.committedCancellationHandlerTimeoutMs = committedCancellationHandlerTimeoutMs;
         workers = Executors.newFixedThreadPool(workerThreads,
             new NamedDaemonThreadFactory("EDT-MCP background-job-worker-")); //$NON-NLS-1$
         deadlines = Executors.newSingleThreadScheduledExecutor(
             new NamedDaemonThreadFactory("EDT-MCP background-job-deadline-")); //$NON-NLS-1$
+        // A cached daemon pool is deliberate: a handler that ignores interruption after its guard
+        // expires must not occupy the only cancellation thread and wedge every unrelated job.
+        cancellationHandlers = Executors.newCachedThreadPool(
+            new NamedDaemonThreadFactory("EDT-MCP background-job-cancellation-")); //$NON-NLS-1$
     }
 
     /** @return bundle-wide registry, recreated lazily after bundle restart */
@@ -654,32 +679,7 @@ public final class BackgroundJobs implements AutoCloseable
         CancellationAttempt attempt = record.cancel();
         if (attempt.handler != null)
         {
-            // Throwable, not Exception. Claiming the cancellation deferred the worker's terminal
-            // outcome, so this side now OWES a publish: without one the flag stays raised, the
-            // deferred outcome is never released, the job is stuck at RUNNING for good and its
-            // completion latch never opens - every later await burns its whole budget. That is
-            // strictly worse than the failure it would be reporting. An Error is reachable here
-            // and not theoretical: this is OSGi with lazy classloading and the owner's handler
-            // reads a report off disk, which is why runJob already catches LinkageError on the
-            // neighbouring path. Rethrowing after publishing keeps a real VM error visible
-            // instead of dressing it up as an ordinary handler failure.
-            try
-            {
-                attempt = record.publishCommittedCancellation(attempt.handler.cancel(), null);
-            }
-            catch (Exception e) // NOSONAR owner cancellation failure must remain an honest outcome
-            {
-                String detail = "The owning tool's cancellation handler failed, so the committed " //$NON-NLS-1$
-                    + "work was NOT reported as stopped: " + failureMessage(e); //$NON-NLS-1$
-                attempt = record.publishCommittedCancellation(null, detail);
-            }
-            catch (Throwable t) // NOSONAR the claim must be released even for an Error
-            {
-                record.publishCommittedCancellation(null,
-                    "The owning tool's cancellation handler failed, so the committed " //$NON-NLS-1$
-                        + "work was NOT reported as stopped: " + failureMessage(t)); //$NON-NLS-1$
-                throw t;
-            }
+            attempt = runCommittedCancellationHandler(record, attempt.handler);
         }
         if (attempt.outcome == CancellationOutcome.CANCELLED
             || attempt.outcome == CancellationOutcome.TERMINATED)
@@ -687,6 +687,59 @@ public final class BackgroundJobs implements AutoCloseable
             record.cancelWork();
         }
         return new CancellationResult(attempt.outcome, record.snapshot(), attempt.detail);
+    }
+
+    private CancellationAttempt runCommittedCancellationHandler(JobRecord record,
+        CommittedCancellationHandler handler)
+    {
+        Future<CommittedCancellation> handlerFuture;
+        try
+        {
+            handlerFuture = cancellationHandlers.submit(handler::cancel);
+        }
+        catch (RejectedExecutionException e)
+        {
+            String detail = "The owning tool's cancellation handler could not start because the " //$NON-NLS-1$
+                + "registry is stopping, so the committed work was NOT reported as stopped."; //$NON-NLS-1$
+            return record.publishCommittedCancellation(null, detail);
+        }
+
+        try
+        {
+            return record.publishCommittedCancellation(handlerFuture.get(
+                committedCancellationHandlerTimeoutMs, TimeUnit.MILLISECONDS), null);
+        }
+        catch (TimeoutException e)
+        {
+            handlerFuture.cancel(true);
+            String detail = "The owning tool's cancellation handler did not complete within " //$NON-NLS-1$
+                + formatSeconds(committedCancellationHandlerTimeoutMs)
+                + ", so the committed work was NOT reported as stopped and may still be running."; //$NON-NLS-1$
+            return record.publishCommittedCancellation(null, detail);
+        }
+        catch (InterruptedException e)
+        {
+            handlerFuture.cancel(true);
+            Thread.currentThread().interrupt();
+            String detail = "The cancellation request was interrupted before the owning tool's " //$NON-NLS-1$
+                + "handler completed, so the committed work was NOT reported as stopped and may " //$NON-NLS-1$
+                + "still be running."; //$NON-NLS-1$
+            return record.publishCommittedCancellation(null, detail);
+        }
+        catch (ExecutionException e)
+        {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            String detail = "The owning tool's cancellation handler failed, so the committed " //$NON-NLS-1$
+                + "work was NOT reported as stopped: " + failureMessage(cause); //$NON-NLS-1$
+            CancellationAttempt attempt = record.publishCommittedCancellation(null, detail);
+            if (cause instanceof Error)
+            {
+                // Publishing first releases the claim and any deferred worker outcome. The Error
+                // then remains visible instead of being dressed up as an ordinary handler failure.
+                throw (Error)cause;
+            }
+            return attempt;
+        }
     }
 
     @Override
@@ -722,6 +775,7 @@ public final class BackgroundJobs implements AutoCloseable
         }
 
         deadlines.shutdownNow();
+        cancellationHandlers.shutdownNow();
         // shutdown(), not shutdownNow(): a committed job was deliberately NOT cancelled above,
         // and interrupting its worker here would undo that - the gateway turns the interrupt
         // into a failure and the caller is told to retry work that is already under way. Every
@@ -730,6 +784,7 @@ public final class BackgroundJobs implements AutoCloseable
         // request that outlives the bundle cannot be saved, only reported honestly.
         workers.shutdown();
         awaitTermination(deadlines);
+        awaitTermination(cancellationHandlers);
         awaitTermination(workers);
 
         synchronized (jobsLock)
@@ -873,6 +928,10 @@ public final class BackgroundJobs implements AutoCloseable
         private boolean committed;
         /** Owner cancellation is claimed; its handler is running without this record's monitor. */
         private boolean cancellationInProgress;
+        /** A cancellation won; its terminal state waits for the admission-slot release. */
+        private boolean cancellationRequested;
+        private Object cancellationResult;
+        private String cancellationDetail;
         /** Terminal worker outcome held until an owner cancellation attempt is published. */
         private PendingTerminalOutcome pendingTerminalOutcome;
         private Object pendingResult;
@@ -910,10 +969,12 @@ public final class BackgroundJobs implements AutoCloseable
 
         synchronized boolean tryCommit()
         {
-            if (status != Status.RUNNING)
+            if (status != Status.RUNNING || cancellationRequested)
             {
                 // The deadline (or anything else) already published a terminal outcome, so the
-                // caller must not go through with the irreversible step it was about to take.
+                // caller must not go through with the irreversible step it was about to take. A
+                // cancellation whose worker is still unwinding is non-terminal but has won the
+                // same handshake, so it must refuse the commit as well.
                 return false;
             }
             committed = true;
@@ -934,7 +995,14 @@ public final class BackgroundJobs implements AutoCloseable
             }
         }
 
-        /** Gives the admission slot back, at most once however many sides call it. */
+        /**
+         * Gives the admission slot back, at most once however many sides call it.
+         * <p>
+         * This is also the single worker-exit handshake for cancellation publication. A started
+         * callable reaches it only from its {@code finally}; a queued task reaches it only after
+         * the cancelling side won {@link WorkState#NOT_STARTED}. No separate "worker finished"
+         * flag is needed or allowed to disagree with admission.
+         */
         void releaseSlot()
         {
             Runnable release;
@@ -945,6 +1013,10 @@ public final class BackgroundJobs implements AutoCloseable
                     return;
                 }
                 slotReleased = true;
+                if (status == Status.RUNNING && cancellationRequested)
+                {
+                    markCancelled(cancellationResult);
+                }
                 release = slotRelease;
             }
             release.run();
@@ -994,6 +1066,12 @@ public final class BackgroundJobs implements AutoCloseable
                     pendingResult = completedResult;
                     return true;
                 }
+                if (cancellationRequested)
+                {
+                    // A proven stop wins, but cannot become terminal until releaseSlot() proves
+                    // that this callable has actually unwound.
+                    return true;
+                }
                 status = Status.DONE;
                 result = completedResult;
                 completedAtMs = System.currentTimeMillis();
@@ -1039,6 +1117,14 @@ public final class BackgroundJobs implements AutoCloseable
             {
                 return new CancellationAttempt(CancellationOutcome.ALREADY_TERMINAL, null);
             }
+            if (cancellationRequested)
+            {
+                // The launch/request was already stopped, but the worker still owns its slot. Do
+                // not invoke a destructive owner handler twice while that worker unwinds.
+                return new CancellationAttempt(committed
+                    ? CancellationOutcome.TERMINATED : CancellationOutcome.CANCELLED,
+                    cancellationDetail);
+            }
             if (committed)
             {
                 if (cancellation != null)
@@ -1064,11 +1150,11 @@ public final class BackgroundJobs implements AutoCloseable
 
             progress.add(new ProgressEntry(System.currentTimeMillis(),
                 "Cancelled before the owning tool handed the work over.")); //$NON-NLS-1$
-            markCancelled(null);
+            cancellationRequested = true;
             return new CancellationAttempt(CancellationOutcome.CANCELLED, null);
         }
 
-        /** Publishes a claimed owner cancellation after its handler ran without this monitor. */
+        /** Settles a claimed owner cancellation after its bounded handler ran off-monitor. */
         synchronized CancellationAttempt publishCommittedCancellation(
             CommittedCancellation stopped, String failureDetail)
         {
@@ -1099,7 +1185,16 @@ public final class BackgroundJobs implements AutoCloseable
             progress.add(new ProgressEntry(System.currentTimeMillis(),
                 "The owning tool stopped the committed work through its declared cancellation " //$NON-NLS-1$
                     + "capability.")); //$NON-NLS-1$
-            markCancelled(stopped.result);
+            cancellationRequested = true;
+            cancellationResult = stopped.result;
+            cancellationDetail = stopped.message;
+            clearPendingTerminalOutcome();
+            if (slotReleased)
+            {
+                // The slot handshake already proved that the callable is gone while the handler
+                // was running, so cancellation can be published now without overstating its life.
+                markCancelled(cancellationResult);
+            }
             return new CancellationAttempt(CancellationOutcome.TERMINATED, stopped.message);
         }
 
@@ -1137,6 +1232,12 @@ public final class BackgroundJobs implements AutoCloseable
                 {
                     pendingTerminalOutcome = PendingTerminalOutcome.FAILED;
                     pendingErrorMessage = message;
+                    return true;
+                }
+                if (cancellationRequested)
+                {
+                    // Interruption is expected after a successful cancellation. The job remains
+                    // non-terminal until releaseSlot() proves the callable has exited.
                     return true;
                 }
                 progress.add(new ProgressEntry(System.currentTimeMillis(),

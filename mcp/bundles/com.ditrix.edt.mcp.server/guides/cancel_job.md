@@ -21,7 +21,10 @@ After reviewing the owning tool, current state, and progress, confirm:
 ## Commit handshake and honest outcomes
 
 If cancellation wins before the owning tool crosses the `BackgroundJobs` commit
-handshake, the job moves to `cancelled` and its worker is interrupted.
+handshake, its worker is interrupted. The job stays `running` while that callable
+is still unwinding and moves to `cancelled` only when the worker releases its
+admission slot. Code that ignores interruption therefore honestly remains
+non-terminal and continues to block duplicate admission until it exits.
 
 Most work cannot be recalled after commit. A cloud request already dispatched by
 `ask_workmate`, for example, keeps running: `cancel_job` reports
@@ -37,8 +40,16 @@ For a live YAXUnit run, the preview states that termination kills the client
 process, does not roll back the infobase, and may leave a partial or absent JUnit
 report. A successful confirmed stop reports `terminated`, states that the
 infobase was **NOT** rolled back, and renders usable partial JUnit XML. It never
-claims a clean test outcome. If no live launch can be stopped, the committed job
-keeps the honest `alreadyCommitted` outcome.
+claims a clean test outcome. The job itself becomes `cancelled` only after its
+worker exits; `terminated` reports what happened to the launch, not an early
+claim that the registry worker is already gone. If no live launch can be stopped,
+the committed job keeps the honest `alreadyCommitted` outcome.
+
+The registry gives an owner cancellation handler at most 30 seconds as an outer
+guard. This is longer than YAXUnit's default 10-second termination check so the
+handler can verify the stop and read a partial report. If the whole handler still
+does not return, `cancel_job` reports that the stop was not established, releases
+the cancellation claim, and leaves the job to publish its worker's real outcome.
 
 A job that was already done, failed, or cancelled is left unchanged and reported
 as already terminal.

@@ -14,12 +14,15 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.debug.core.ILaunch;
 import org.junit.After;
@@ -120,16 +123,27 @@ public class CancelJobToolTest
         CountDownLatch release = new CountDownLatch(1);
         JobSnapshot started = jobs.start("cancellable_owner", 5_000L, "Accepted", progress -> { //$NON-NLS-1$ //$NON-NLS-2$
             entered.countDown();
-            release.await();
+            while (release.getCount() > 0)
+            {
+                try
+                {
+                    release.await();
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.interrupted();
+                }
+            }
             return "must not publish"; //$NON-NLS-1$
         });
         assertTrue(entered.await(2, TimeUnit.SECONDS));
 
         String result = tool.execute(Map.of("jobId", started.getId(), "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertContains(result, "cancellation: cancelled", "was cancelled before", //$NON-NLS-1$ //$NON-NLS-2$
-            "| status | cancelled |", "Cancelled before the owning tool"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals(Status.CANCELLED, jobs.get(started.getId()).getStatus());
+            "| status | running |", "Cancelled before the owning tool"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Status.RUNNING, jobs.get(started.getId()).getStatus());
         release.countDown();
+        assertEquals(Status.CANCELLED, jobs.await(started.getId(), 2_000L).getStatus());
     }
 
     @Test
@@ -185,7 +199,17 @@ public class CancelJobToolTest
             cancellation.capability(), progress -> {
                 assertTrue(progress.tryCommit());
                 committed.countDown();
-                release.await();
+                while (release.getCount() > 0)
+                {
+                    try
+                    {
+                        release.await();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.interrupted();
+                    }
+                }
                 return "must not publish as a clean result"; //$NON-NLS-1$
             });
         assertTrue(committed.await(2, TimeUnit.SECONDS));
@@ -195,14 +219,47 @@ public class CancelJobToolTest
             "run was stopped", "infobase was NOT rolled back", //$NON-NLS-1$ //$NON-NLS-2$
             "JUnit XML report was readable", "it is partial", "YAXUnit Test Results", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "Never treat a terminated run as a clean outcome", //$NON-NLS-1$
-            "| status | cancelled |"); //$NON-NLS-1$
+            "| status | running |"); //$NON-NLS-1$
         verify(launch).terminate();
         assertTrue("the owning tool must clear its launch tracking after termination", //$NON-NLS-1$
             trackingCleared.get());
-        assertEquals(Status.CANCELLED, jobs.get(started.getId()).getStatus());
+        assertEquals(Status.RUNNING, jobs.get(started.getId()).getStatus());
         release.countDown();
+        assertEquals(Status.CANCELLED, jobs.await(started.getId(), 2_000L).getStatus());
         Files.deleteIfExists(reportDir.resolve("junit.xml")); //$NON-NLS-1$
         Files.deleteIfExists(reportDir);
+    }
+
+    @Test
+    public void testYaxunitLaunchAndReportDirectoryHaveOneAtomicPublicationPoint()
+    {
+        int atomicReferences = 0;
+        Field publication = null;
+        for (Field field : YaxunitJobCancellation.class.getDeclaredFields())
+        {
+            if (field.getType() == AtomicReference.class)
+            {
+                atomicReferences++;
+                publication = field;
+            }
+        }
+
+        // This is the deterministic torn-state ratchet: a launch-only intermediate state must be
+        // unrepresentable, rather than relying on a probabilistic race between two Atomic#set calls.
+        assertEquals("launch and report directory must be published through one atomic holder", //$NON-NLS-1$
+            1, atomicReferences);
+        assertTrue(publication.getGenericType().getTypeName().contains("TrackedRun")); //$NON-NLS-1$
+
+        Class<?> holder = publication.getGenericType() instanceof java.lang.reflect.ParameterizedType
+            ? (Class<?>)((java.lang.reflect.ParameterizedType)publication.getGenericType())
+                .getActualTypeArguments()[0] : null;
+        assertTrue("the atomic publication value must be an immutable holder", //$NON-NLS-1$
+            holder != null && Modifier.isFinal(holder.getModifiers()));
+        for (Field field : holder.getDeclaredFields())
+        {
+            assertTrue("every tracked-run component must be final", //$NON-NLS-1$
+                Modifier.isFinal(field.getModifiers()));
+        }
     }
 
     @Test

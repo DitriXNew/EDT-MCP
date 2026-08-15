@@ -372,6 +372,128 @@ public class BackgroundJobsTest
     }
 
     @Test
+    public void testCommittedCancellationWaitsForWorkerExitBeforePublishingAndReusingSlot()
+        throws Exception
+    {
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1))
+        {
+            CountDownLatch committed = new CountDownLatch(1);
+            CountDownLatch releaseWork = new CountDownLatch(1);
+            CancellationCapability capability = CancellationCapability.of("stop parked work", //$NON-NLS-1$
+                () -> BackgroundJobs.CommittedCancellation.stopped("launch stopped", "partial")); //$NON-NLS-1$ //$NON-NLS-2$
+            JobSnapshot started = jobs.start("parked_owner", 60_000L, "start", capability, //$NON-NLS-1$ //$NON-NLS-2$
+                progress -> {
+                    assertTrue(progress.tryCommit());
+                    committed.countDown();
+                    while (releaseWork.getCount() > 0)
+                    {
+                        try
+                        {
+                            releaseWork.await();
+                        }
+                        catch (InterruptedException e)
+                        {
+                            // The cancelled external launch does not prove this callable exited.
+                            Thread.interrupted();
+                        }
+                    }
+                    return "worker returned"; //$NON-NLS-1$
+                });
+            assertTrue(committed.await(2, TimeUnit.SECONDS));
+
+            try
+            {
+                CancellationResult cancellation = jobs.cancel(started.getId());
+                assertEquals(CancellationOutcome.TERMINATED, cancellation.getOutcome());
+                assertEquals("the launch stop must not overstate the parked worker's lifecycle", //$NON-NLS-1$
+                    Status.RUNNING, cancellation.getSnapshot().getStatus());
+                assertEquals(Status.RUNNING, jobs.await(started.getId(), 100L).getStatus());
+                assertNull("a replacement was admitted while the cancelled worker still ran", //$NON-NLS-1$
+                    jobs.start(60_000L, 1, "replacement", progress -> "overlap")); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            finally
+            {
+                releaseWork.countDown();
+            }
+
+            JobSnapshot cancelled = jobs.await(started.getId(), 2_000L);
+            assertEquals(Status.CANCELLED, cancelled.getStatus());
+            assertEquals("partial", cancelled.getResult()); //$NON-NLS-1$
+            assertNotNull("the slot must return when the parked callable actually exits", //$NON-NLS-1$
+                startWhenAdmitted(jobs, 60_000L, 1, "replacement", //$NON-NLS-1$
+                    progress -> "after exit")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testHungCommittedCancellationHandlerIsBoundedAndReleasesDeferredOutcome()
+        throws Exception
+    {
+        // Production deliberately allows 30 seconds; this isolated registry uses the same path
+        // with a short guard so the regression remains deterministic and fast.
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 1, 100L))
+        {
+            CountDownLatch committed = new CountDownLatch(1);
+            CountDownLatch handlerEntered = new CountDownLatch(1);
+            CountDownLatch releaseHandler = new CountDownLatch(1);
+            CountDownLatch releaseWork = new CountDownLatch(1);
+            CancellationCapability capability = CancellationCapability.of("hung cancellation", () -> { //$NON-NLS-1$
+                handlerEntered.countDown();
+                while (releaseHandler.getCount() > 0)
+                {
+                    try
+                    {
+                        releaseHandler.await();
+                    }
+                    catch (InterruptedException e)
+                    {
+                        // Models a platform call such as ILaunch.terminate() ignoring interruption.
+                        Thread.interrupted();
+                    }
+                }
+                return BackgroundJobs.CommittedCancellation.stopped("too late", "wrong"); //$NON-NLS-1$ //$NON-NLS-2$
+            });
+            JobSnapshot started = jobs.start("hung_owner", 60_000L, "start", capability, //$NON-NLS-1$ //$NON-NLS-2$
+                progress -> {
+                    assertTrue(progress.tryCommit());
+                    committed.countDown();
+                    releaseWork.await();
+                    return "real worker outcome"; //$NON-NLS-1$
+                });
+            assertTrue(committed.await(2, TimeUnit.SECONDS));
+
+            AtomicReference<CancellationResult> result = new AtomicReference<>();
+            Thread canceller = new Thread(() -> result.set(jobs.cancel(started.getId())));
+            canceller.setDaemon(true);
+            try
+            {
+                canceller.start();
+                assertTrue(handlerEntered.await(2, TimeUnit.SECONDS));
+                releaseWork.countDown();
+                canceller.join(2_000L);
+
+                assertNotNull("the outer handler guard must return the cancellation reply", //$NON-NLS-1$
+                    result.get());
+                assertEquals(CancellationOutcome.ALREADY_COMMITTED, result.get().getOutcome());
+                assertTrue(result.get().getDetail().contains("did not complete within 100 ms")); //$NON-NLS-1$
+                assertTrue(result.get().getDetail().contains("may still be running")); //$NON-NLS-1$
+                assertEquals("the worker outcome deferred behind the claim must be published", //$NON-NLS-1$
+                    Status.DONE, result.get().getSnapshot().getStatus());
+                assertEquals("real worker outcome", result.get().getSnapshot().getResult()); //$NON-NLS-1$
+                assertEquals("the released claim must expose the terminal worker outcome", //$NON-NLS-1$
+                    CancellationOutcome.ALREADY_TERMINAL,
+                    jobs.cancel(started.getId()).getOutcome());
+            }
+            finally
+            {
+                releaseWork.countDown();
+                releaseHandler.countDown();
+                canceller.join(2_000L);
+            }
+        }
+    }
+
+    @Test
     public void testThrowingCommittedCancellationHandlerLeavesJobRunning() throws Exception
     {
         String detail = "The owning tool's cancellation handler failed, so the committed " //$NON-NLS-1$

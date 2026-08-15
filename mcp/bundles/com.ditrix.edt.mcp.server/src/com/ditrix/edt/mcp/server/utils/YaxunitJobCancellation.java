@@ -26,8 +26,8 @@ public final class YaxunitJobCancellation
             + "the tests already did and is not rolled back; the JUnit report will be partial " //$NON-NLS-1$
             + "or absent."; //$NON-NLS-1$
 
-    private final AtomicReference<ILaunch> launch = new AtomicReference<>();
-    private final AtomicReference<Path> reportDir = new AtomicReference<>();
+    /** Launch and report path have one publication point; neither may be observed without the other. */
+    private final AtomicReference<TrackedRun> trackedRun = new AtomicReference<>();
     private final Consumer<ILaunch> afterTermination;
     private final int terminateTimeoutSeconds;
 
@@ -55,20 +55,19 @@ public final class YaxunitJobCancellation
     /** Publishes the actual client launch and its report directory once spawn succeeds. */
     public void track(ILaunch trackedLaunch, Path trackedReportDir)
     {
-        launch.set(trackedLaunch);
-        reportDir.set(trackedReportDir);
+        trackedRun.set(new TrackedRun(trackedLaunch, trackedReportDir));
     }
 
     private CommittedCancellation cancelCommittedRun()
     {
-        ILaunch tracked = launch.get();
-        if (tracked == null)
+        TrackedRun tracked = trackedRun.get();
+        if (tracked == null || tracked.launch == null)
         {
             return CommittedCancellation.notStopped(
                 "The YAXUnit job was NOT cancelled: its pre-launch work was already handed to " //$NON-NLS-1$
                     + "EDT, but no live test client is available to terminate yet."); //$NON-NLS-1$
         }
-        if (tracked.isTerminated())
+        if (tracked.launch.isTerminated())
         {
             return CommittedCancellation.notStopped(
                 "The YAXUnit job was NOT newly cancelled: its client had already terminated and " //$NON-NLS-1$
@@ -76,11 +75,11 @@ public final class YaxunitJobCancellation
         }
         try
         {
-            tracked.terminate();
+            tracked.launch.terminate();
         }
         catch (DebugException e)
         {
-            if (tracked.isTerminated())
+            if (tracked.launch.isTerminated())
             {
                 return CommittedCancellation.notStopped(
                     "The YAXUnit job was NOT newly cancelled: its client terminated before " //$NON-NLS-1$
@@ -92,7 +91,7 @@ public final class YaxunitJobCancellation
                 "The YAXUnit job was NOT cancelled because its client process could not be " //$NON-NLS-1$
                     + "terminated: " + failureMessage(e)); //$NON-NLS-1$
         }
-        if (!LaunchLifecycleUtils.waitForTerminated(tracked,
+        if (!LaunchLifecycleUtils.waitForTerminated(tracked.launch,
             terminateTimeoutSeconds * 1000L))
         {
             return CommittedCancellation.notStopped(
@@ -102,13 +101,13 @@ public final class YaxunitJobCancellation
 
         try
         {
-            afterTermination.accept(tracked);
+            afterTermination.accept(tracked.launch);
         }
         catch (RuntimeException e) // NOSONAR cleanup failure does not undo the proven stop
         {
             Activator.logError("YAXUnit launch stopped but its owner tracking cleanup failed", e); //$NON-NLS-1$
         }
-        String partial = YaxunitReportUtils.renderIfUsable(reportDir.get());
+        String partial = YaxunitReportUtils.renderIfUsable(tracked.reportDir);
         String report = partial == null
             ? "No usable partial JUnit report was found; it is absent or incomplete." //$NON-NLS-1$
             : "A JUnit XML report was readable, but it is partial and must not be treated as a " //$NON-NLS-1$
@@ -117,6 +116,19 @@ public final class YaxunitJobCancellation
             + "infobase was NOT rolled back; it keeps whatever changes the tests had already " //$NON-NLS-1$
             + "made.\n\n" + report; //$NON-NLS-1$
         return CommittedCancellation.stopped(result, result);
+    }
+
+    /** Immutable state published through {@link #trackedRun} in one atomic write. */
+    private static final class TrackedRun
+    {
+        final ILaunch launch;
+        final Path reportDir;
+
+        TrackedRun(ILaunch launch, Path reportDir)
+        {
+            this.launch = launch;
+            this.reportDir = reportDir;
+        }
     }
 
     private static String failureMessage(Throwable failure)

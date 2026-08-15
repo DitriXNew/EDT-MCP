@@ -604,8 +604,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     {
         if (job.getStatus() == BackgroundJobs.Status.DONE)
         {
-            Object result = job.getResult();
-            return result instanceof String ? (String)result : GsonProvider.toJson(result);
+            return renderStoredResult(job.getResult());
         }
         if (job.getStatus() == BackgroundJobs.Status.FAILED)
         {
@@ -630,7 +629,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         RUN_JOBS.entrySet().removeIf(entry -> findRunningJob(entry.getValue()) == null);
     }
 
-    private JobSnapshot findRunningJob(String jobId)
+    JobSnapshot findRunningJob(String jobId)
     {
         if (jobId == null)
         {
@@ -660,7 +659,7 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /** Mirrors an equivalent live job instead of launching the same run a second time. */
-    private String awaitExistingRun(String existingJobId, ProgressReporter progress)
+    String awaitExistingRun(String existingJobId, ProgressReporter progress)
     {
         progress.add("Attached to existing YAXUnit job " + existingJobId + "."); //$NON-NLS-1$ //$NON-NLS-2$
         while (true) // NOSONAR the referenced registry job supplies the terminal condition
@@ -674,8 +673,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
             if (existing.getStatus() == BackgroundJobs.Status.DONE)
             {
-                Object result = existing.getResult();
-                return result instanceof String ? (String)result : GsonProvider.toJson(result);
+                return renderStoredResult(existing.getResult());
             }
             if (existing.getStatus() == BackgroundJobs.Status.FAILED)
             {
@@ -686,11 +684,23 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
             if (existing.getStatus() == BackgroundJobs.Status.CANCELLED)
             {
+                if (existing.getResult() != null)
+                {
+                    // A committed destructive stop stores the owner's honest partial outcome on
+                    // the cancelled job. An attached caller must receive that same result instead
+                    // of being told the launch never happened.
+                    return renderStoredResult(existing.getResult());
+                }
                 return ToolResult.error("Equivalent YAXUnit job '" + existingJobId //$NON-NLS-1$
                     + "' was cancelled before launch. Start run_yaxunit_tests again if the tests " //$NON-NLS-1$
                     + "still need to run.").toJson(); //$NON-NLS-1$
             }
         }
+    }
+
+    private static String renderStoredResult(Object result)
+    {
+        return result instanceof String ? (String)result : GsonProvider.toJson(result);
     }
 
     private static boolean isPendingResult(String result)

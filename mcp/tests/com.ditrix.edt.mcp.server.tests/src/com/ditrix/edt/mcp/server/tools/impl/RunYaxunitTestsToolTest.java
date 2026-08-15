@@ -33,6 +33,10 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationCapability;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -739,6 +743,72 @@ public class RunYaxunitTestsToolTest
         finally
         {
             release.countDown();
+        }
+    }
+
+    @Test
+    public void testAttachedCallerReceivesCommittedCancellationPartialResult() throws Exception
+    {
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        String cancellationResult = "The YAXUnit client process was killed and the run was " //$NON-NLS-1$
+            + "stopped. The infobase was NOT rolled back; it keeps test changes.\n\n" //$NON-NLS-1$
+            + "A JUnit XML report was readable, but it is partial.\n\n# Partial report"; //$NON-NLS-1$
+        CancellationCapability capability = CancellationCapability.of("stop live YAXUnit", //$NON-NLS-1$
+            () -> BackgroundJobs.CommittedCancellation.stopped(cancellationResult,
+                cancellationResult));
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            JobSnapshot started = jobs.start(RunYaxunitTestsTool.NAME, 60_000L, "start", capability, //$NON-NLS-1$
+                progress -> {
+                    assertTrue(progress.tryCommit());
+                    committed.countDown();
+                    while (releaseWorker.getCount() > 0)
+                    {
+                        try
+                        {
+                            releaseWorker.await();
+                        }
+                        catch (InterruptedException e)
+                        {
+                            // The duplicate guard must retain this live worker despite interruption.
+                            Thread.interrupted();
+                        }
+                    }
+                    return "must not replace the cancellation result"; //$NON-NLS-1$
+                });
+            assertTrue(committed.await(2, TimeUnit.SECONDS));
+
+            try
+            {
+                CancellationResult stopped = jobs.cancel(started.getId());
+                assertEquals(CancellationOutcome.TERMINATED, stopped.getOutcome());
+                assertEquals(BackgroundJobs.Status.RUNNING, stopped.getSnapshot().getStatus());
+                assertNotNull("findRunningJob must retain the duplicate guard while the old " //$NON-NLS-1$
+                    + "worker can still write its stable report directory", //$NON-NLS-1$
+                    tool.findRunningJob(started.getId()));
+            }
+            finally
+            {
+                releaseWorker.countDown();
+            }
+
+            assertEquals(BackgroundJobs.Status.CANCELLED,
+                jobs.await(started.getId(), 2_000L).getStatus());
+            assertTrue(tool.findRunningJob(started.getId()) == null);
+            String attached = tool.awaitExistingRun(started.getId(), ignored -> {
+                // Direct seam for the attached job's progress reporter.
+            });
+            assertEquals("an attached caller must receive the owner's stored cancellation result", //$NON-NLS-1$
+                cancellationResult, attached);
+            assertTrue(attached.contains("Partial report")); //$NON-NLS-1$
+            assertTrue(attached.contains("infobase was NOT rolled back")); //$NON-NLS-1$
+            assertFalse(attached.contains("cancelled before launch")); //$NON-NLS-1$
+        }
+        finally
+        {
+            releaseWorker.countDown();
         }
     }
 

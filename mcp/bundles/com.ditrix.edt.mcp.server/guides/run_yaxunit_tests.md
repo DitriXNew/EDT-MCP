@@ -99,6 +99,8 @@ Before the commit handshake, `confirm=true` cancels the job normally. With `upda
 
 After the client launch exists, this owning tool's declared cancellation capability can terminate it even though the job is committed. A confirmed stop reports `terminated`, never a clean pass/fail outcome. It says explicitly that the infobase was **NOT** rolled back and includes a rendered partial JUnit report only when the XML is usable; otherwise it says the report is absent or incomplete.
 
+`terminated` describes the client launch. The background job remains `running` until its worker callable actually exits, so an identical request keeps attaching to that live job and cannot start a second run against the same stable report directory. Once the worker exits, the job becomes `cancelled` and retains the same partial-report/no-rollback result for every attached caller.
+
 A committed job with no live YAXUnit client yet cannot undo already-dispatched preparation and still reports `alreadyCommitted`. Jobs owned by tools without this explicit capability also keep `alreadyCommitted`; `cancel_job` does not infer cancellability from a tool name.
 
 ## Auto-chain (updateBeforeLaunch)
