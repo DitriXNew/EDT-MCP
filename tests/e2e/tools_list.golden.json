@@ -2266,7 +2266,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Find the exact API of a built-in 1C type or global function. Parameters and examples: get_tool_guide('get_platform_documentation').",
+    "description": "Look up a built-in 1C type or global function in the platform documentation. Returns headers and member names by default - pass responseFormat='detailed' for signatures, parameters and return types. Parameters and examples: get_tool_guide('get_platform_documentation').",
     "inputSchema": {
       "properties": {
         "category": {

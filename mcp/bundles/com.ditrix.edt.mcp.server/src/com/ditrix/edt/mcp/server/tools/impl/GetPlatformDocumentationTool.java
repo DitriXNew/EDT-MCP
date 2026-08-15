@@ -51,7 +51,9 @@ public class GetPlatformDocumentationTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Find the exact API of a built-in 1C type or global function. Parameters and examples: " //$NON-NLS-1$
+        return "Look up a built-in 1C type or global function in the platform documentation. Returns " //$NON-NLS-1$
+            + "headers and member names by default - pass responseFormat='detailed' for signatures, " //$NON-NLS-1$
+            + "parameters and return types. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('get_platform_documentation')."; //$NON-NLS-1$
     }
 
