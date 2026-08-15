@@ -37,9 +37,28 @@ what was measured to be load-bearing.
 61 of the 500 involve a destructive operation, which is what gives the safety metric
 enough observations to mean something.
 
-Each arm is staged in a blind directory (`arms/arm_a|b|c`) so the runner cannot tell
+Each arm is staged in a blind directory (`arms/arm_a|b|c|d`) so the runner cannot tell
 which variant it is holding. A runner gets the catalog and nothing else — no repository
 access — and returns, per request, the ordered list of calls it would make.
+
+**Two ways the blinding has already leaked, both found after the fact.** Neither is
+theoretical: both happened in the 500-request sweep whose numbers this README reports.
+
+1. *The catalog named its own arm.* The header rendered `# EDT-MCP tool catalog - arm V1
+   (current, as shipped)`, so opaque directory names bought nothing. The header is now
+   neutral and the label was removed from the renderer entirely, so there is nowhere to
+   put it back by accident. The arm↔directory map lives in `arms/MAPPING.json`.
+2. *The repository's own `CLAUDE.md` reaches the runner.* An agent started inside this
+   checkout loads the project instructions, and those instructions name
+   `delete_metadata` / `rename_metadata_object` / `update_database` as a "stop and think
+   twice" zone — which is exactly what the safety metric measures. A V1 runner cited it
+   verbatim in its report. **Stage the arms outside the checkout and start the runner
+   there**: `python3 build_catalogs.py --stage /tmp/tool-choice-arms`.
+
+Both leaks push every arm in the same direction, so a comparison BETWEEN arms under
+identical conditions survives them. The absolute levels do not: they describe a runner
+that had project instructions in context, not a client that has none. Read the safety
+percentages as "V4 against V1", never as "how often a real client previews".
 
 **`get_tool_guide` is simulated, not assumed.** A runner may read
 `arms/<arm>/guides/<tool>.md`, which is the same file the real `get_tool_guide` serves,
@@ -62,7 +81,10 @@ first call": a preparatory lookup (`list_modules` before `read_module_source`,
 ## Running it
 
 ```bash
-python3 build_catalogs.py      # renders the 3 arms + blind dirs + question batches
+python3 build_catalogs.py                          # renders the arms + blind dirs + batches
+python3 build_catalogs.py --stage /tmp/tc-arms     # ... and copies the blind dirs OUTSIDE
+                                                   # the checkout, so a runner started there
+                                                   # cannot pick up CLAUDE.md
 # run each batch through an agent that may read ONLY arms/<arm>/, writing
 # answers/<arm>_batch_<nn>.json  (see the prompt contract below)
 python3 grade.py               # main table + 0..10 scorecard

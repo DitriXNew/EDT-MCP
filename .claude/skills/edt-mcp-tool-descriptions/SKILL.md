@@ -97,7 +97,8 @@ produced at least one result opposite to what was expected.
 
 ```bash
 cd tests/tool-choice
-python3 build_catalogs.py   # renders each arm + blind dirs + question batches
+python3 build_catalogs.py --stage /tmp/tc-arms   # renders each arm into blind dirs,
+                                                # copied OUTSIDE the checkout (see below)
 # run every batch through an agent that may read ONLY arms/<arm>/,
 # writing answers/<arm>_batch_<nn>.json and answers/<arm>_chain_<nn>.json
 python3 grade.py            # metric table + 0..10 scorecard
@@ -106,6 +107,21 @@ python3 grade.py            # metric table + 0..10 scorecard
 To test a new variant, add it to `v4_overrides.json` (or a sibling file) and register an
 arm in `build_catalogs.py`. Arms are staged under blind names (`arm_a`…`arm_d`) so the
 runner cannot tell which variant it holds.
+
+**Blinding leaks in two places, and both have already happened here.** Opaque directory
+names are the easy half; check the other two before trusting a number:
+
+1. *Does the catalog name its own arm?* Ours rendered `# EDT-MCP tool catalog - arm V1
+   (current, as shipped)` for a whole 500-request sweep. `head -1 arms/*/catalog.md` —
+   all four lines must be identical.
+2. *Does the runner see this repository?* An agent started inside the checkout loads
+   `CLAUDE.md`, which names the destructive tools as a "stop and think twice" zone — the
+   exact behaviour the safety metric measures, handed to the runner for free. Stage the
+   arms outside with `--stage` and start the runner there.
+
+Both leaks move every arm the same way, so an A/B comparison survives them, but the
+absolute levels do not transfer to a real client. Report a safety number as "V4 against
+V1", never as "how often a client previews".
 
 **The bar to clear.** A text change is accepted when, against the arm it replaces:
 
@@ -121,6 +137,14 @@ runner cannot tell which variant it holds.
 
 Nothing else counts as "no regression". In particular, a smaller payload is not a result
 on its own: V2 shrank the payload 19,6% and took safety from 54% to 30%.
+
+**A plan benchmark cannot see a missing value SHAPE — run the tool live too.** The sweep
+grades plans, so a model that does not know what a parameter's value looks like scores
+*well* by planning a discovery call first, and the gap never shows up. `modulePath` was
+cut from 12 tools this way: 500 requests said nothing, and the first live run against a
+real server reported it could not tell a file path from a `Type.Name` token and spent a
+call finding out. Before shipping a cut, drive a dozen real requests through the live
+server and read what the agent says it hesitated over.
 
 **Read the misses, do not just read the totals.** Every question where an arm disagreed
 with the expected label gets opened by hand. Three of the labels in `questions.json` were
