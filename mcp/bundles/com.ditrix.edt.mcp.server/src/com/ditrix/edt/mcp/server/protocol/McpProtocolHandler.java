@@ -952,8 +952,12 @@ public class McpProtocolHandler
 
         for (IMcpTool tool : toolRegistry.getVisibleTools())
         {
-            // Parse inputSchema from JSON string to JsonElement
-            JsonElement schema = JsonParser.parseString(tool.getInputSchema());
+            // Parse inputSchema from JSON string to JsonElement. The SHAPE a call is
+            // built from goes over the wire; the prose around it stops here, except the
+            // few parameters allowlisted in InputSchemaCompactor — see it for why this
+            // reverses what OutputSchemaCompactor's javadoc used to say.
+            JsonElement schema =
+                InputSchemaCompactor.compact(tool.getName(), JsonParser.parseString(tool.getInputSchema()));
             // A tool may supply explicit annotations; otherwise the central
             // classifier derives the MCP behavioral hints from the tool name.
             Object annotations = tool.getAnnotations() != null

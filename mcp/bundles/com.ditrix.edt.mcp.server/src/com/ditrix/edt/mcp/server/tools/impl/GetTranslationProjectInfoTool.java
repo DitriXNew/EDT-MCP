@@ -49,12 +49,8 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Return LanguageTool metadata for a project: the translation storages " //$NON-NLS-1$
-             + "declared on it and the available translation provider IDs. Use it to " //$NON-NLS-1$
-             + "check whether a dictionary storage is attached before translating; an " //$NON-NLS-1$
-             + "empty storages list means none is attached yet (set up manually in EDT). " //$NON-NLS-1$
-             + "Requires EDT with LanguageTool installed. " //$NON-NLS-1$
-             + "Full parameters and examples: call get_tool_guide('get_translation_project_info')."; //$NON-NLS-1$
+        return "Inspect the translation setup of an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_translation_project_info')."; //$NON-NLS-1$
     }
 
     @Override

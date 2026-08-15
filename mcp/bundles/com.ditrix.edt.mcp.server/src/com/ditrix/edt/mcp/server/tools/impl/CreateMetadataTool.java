@@ -160,19 +160,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Create a metadata node addressed by a 1C full-name FQN: a top-level object " //$NON-NLS-1$
-            + "(Catalog.Products) or a subordinate member (Catalog.Products.Attribute.Weight, " //$NON-NLS-1$
-            + "InformationRegister.Prices.Dimension.Product, Enum.Colors.EnumValue.Red). The kind " //$NON-NLS-1$
-            + "is inferred from the FQN; type and kind tokens may be English or Russian. Also creates " //$NON-NLS-1$
-            + "an XDTO package MEMBER: 'XDTOPackage.<Package>.ObjectType.<Name>' (an ObjectType), " //$NON-NLS-1$
-            + "'XDTOPackage.<Package>.Property.<Name>' (a package-global property) or " //$NON-NLS-1$
-            + "'XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>' (a property nested in an " //$NON-NLS-1$
-            + "ObjectType) - see 'properties' for the XDTO-specific attribute vocabulary. Also creates " //$NON-NLS-1$
-            + "a PREDEFINED item ('<Owner>.X.Predefined.ItemName' on a Catalog, " //$NON-NLS-1$
-            + "ChartOfCharacteristicTypes, ChartOfAccounts or ChartOfCalculationTypes, each with " //$NON-NLS-1$
-            + "owner-specific 'properties'). Also creates a NESTED SUBSYSTEM at any depth " //$NON-NLS-1$
-            + "('Subsystem.Sales.Subsystem.Orders'); the parent subsystem must already exist. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_metadata')."; //$NON-NLS-1$
+        return "Add a new metadata object or member to a configuration. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 
     @Override

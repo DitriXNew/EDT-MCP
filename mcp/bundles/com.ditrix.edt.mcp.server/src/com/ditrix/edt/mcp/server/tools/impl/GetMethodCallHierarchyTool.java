@@ -164,14 +164,10 @@ public class GetMethodCallHierarchyTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Find a BSL method's call hierarchy: who calls it (callers, default) " + //$NON-NLS-1$
-               "or what it calls (callees), via semantic AST analysis that resolves " + //$NON-NLS-1$
-               "ru/en spellings (unlike literal search_in_code). " + //$NON-NLS-1$
-               "Optional depth (callers only, max " + MAX_DEPTH + ") walks the chain transitively " + //$NON-NLS-1$
-               "for impact analysis. Finds STATIC invocations only: a call made dynamically " + //$NON-NLS-1$
-               "(Execute/Eval, a handler named by string, platform dispatch) is never visible, " + //$NON-NLS-1$
-               "so a complete result does not prove nothing else calls the method. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('get_method_call_hierarchy')."; //$NON-NLS-1$
+        return "Trace which BSL methods call a method or are called by it; optional depth walks " //$NON-NLS-1$
+            + "the chain transitively for impact analysis (callers only, max " + MAX_DEPTH //$NON-NLS-1$
+            + "). Finds STATIC invocations only, so a complete result does not prove nothing else " //$NON-NLS-1$
+            + "calls the method. Parameters and examples: get_tool_guide('get_method_call_hierarchy')."; //$NON-NLS-1$
     }
 
     @Override
@@ -187,8 +183,8 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 + "Required for direction 'callers'/'callees'; optional for 'outgoing' " //$NON-NLS-1$
                 + "(omit to aggregate the whole module).", false) //$NON-NLS-1$
             .enumProperty(KEY_DIRECTION,
-                "'callers' (default) = who calls this method; 'callees' = what this method calls; " //$NON-NLS-1$
-                + "'outgoing' = aggregated distinct call targets (module-wide when methodName omitted)", //$NON-NLS-1$
+                "'callers' = who calls this method, 'callees' = what it calls, 'outgoing' = " //$NON-NLS-1$
+                    + "aggregated distinct call targets (module-wide when methodName is omitted).", //$NON-NLS-1$
                 KEY_CALLERS, "callees", KEY_OUTGOING) //$NON-NLS-1$
             .stringProperty(KEY_EXT_API_PREFIX,
                 "For direction 'outgoing': literal call-qualifier prefix (case-insensitive) that " //$NON-NLS-1$

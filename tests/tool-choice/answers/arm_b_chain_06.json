@@ -1,0 +1,225 @@
+[
+ {
+  "id": "c126",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "DataProcessor.ЗагрузкаПрайса"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "DataProcessor.ЗагрузкаПрайса.Form.ФормаОбработки", "generateContent": true}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "DataProcessor.ЗагрузкаПрайса", "moduleType": "ObjectModule", "source": "Процедура ЗагрузитьПрайс() Экспорт\n\t\nКонецПроцедуры"}},
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "DataProcessor.ЗагрузкаПрайса.Form.ФормаОбработки"}}
+  ],
+  "expected_result": "Создан объект-обработка с формой, в модуль объекта добавлен код, и показан скриншот отрисованной формы.",
+  "confidence": 4
+ },
+ {
+  "id": "c127",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Constant.СрокХраненияЛогов"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Constant.СрокХраненияЛогов", "properties": [{"name": "type", "value": {"types": [{"kind": "Number", "precision": 10}]}}]}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Subsystem.Администрирование", "content": [{"metadata": "Constant.СрокХраненияЛогов"}]}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Constant.СрокХраненияЛогов"]}}
+  ],
+  "expected_result": "Константа числового типа создана, включена в подсистему Администрирование, и показаны её свойства.",
+  "confidence": 4
+ },
+ {
+  "id": "c128",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.РегламентныеЗаданияСервер", "commonModuleKind": "Server"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.РегламентныеЗаданияСервер", "moduleType": "Module", "source": "Процедура ВыполнитьРегламентноеЗадание() Экспорт\n\t\nКонецПроцедуры"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "ScheduledJob.ОбработкаЛогов"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "ScheduledJob.ОбработкаЛогов", "properties": [{"name": "methodName", "value": "РегламентныеЗаданияСервер.ВыполнитьРегламентноеЗадание"}]}}
+  ],
+  "expected_result": "Создан общий серверный модуль с экспортной процедурой, затем регламентное задание, привязанное к этому методу.",
+  "confidence": 4
+ },
+ {
+  "id": "c129",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "create_infobase", "args": {"projectName": "TestConfiguration", "infobaseFile": "D:\\bases\\ci"}},
+   {"tool": "create_launch_config", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Показан список текущих баз, создана новая файловая база, для неё заведена конфигурация запуска и применено обновление.",
+  "confidence": 4
+ },
+ {
+  "id": "c130",
+  "calls": [
+   {"tool": "list_git_branches", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_applications", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "set_branch_infobase", "args": {"projectName": "УправлениеТорговлей", "applicationId": "app-3", "branch": "develop"}}
+  ],
+  "expected_result": "Показаны ветки с их привязками и все подключённые базы, после чего база app-3 привязана к ветке develop.",
+  "confidence": 5
+ },
+ {
+  "id": "c131",
+  "calls": [
+   {"tool": "get_edt_version", "args": {}},
+   {"tool": "get_server_status", "args": {}},
+   {"tool": "list_toolsets", "args": {}},
+   {"tool": "enable_toolset", "args": {"toolsets": ["metadata"]}}
+  ],
+  "expected_result": "Показаны версия EDT, статус сервера и список тулсетов, и при необходимости тулсет метаданных включён.",
+  "confidence": 4
+ },
+ {
+  "id": "c132",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "applicationId": "app-1", "confirm": true, "deleteDatabaseFiles": true}},
+   {"tool": "create_infobase", "args": {"projectName": "TestConfiguration", "infobaseFile": "D:\\bases\\fresh"}},
+   {"tool": "set_infobase_credentials", "args": {"projectName": "TestConfiguration", "applicationId": "app-2", "user": "Admin", "password": ""}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "app-2", "confirm": true}}
+  ],
+  "expected_result": "Старая база с файлами удалена, создана новая файловая база, для неё прописана учётная запись и применено обновление конфигурацией.",
+  "confidence": 4
+ },
+ {
+  "id": "c133",
+  "calls": [
+   {"tool": "get_form_layout_snapshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Products.Form.ItemForm"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ItemForm.Attribute.NewField"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ItemForm.Field.NewField", "properties": [{"name": "dataPath", "value": "NewField"}]}},
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Products.Form.ItemForm", "refresh": true}}
+  ],
+  "expected_result": "Показан текущий состав элементов формы, добавлен новый реквизит формы с полем, и показан обновлённый вид формы.",
+  "confidence": 3
+ },
+ {
+  "id": "c134",
+  "calls": [
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Номенклатура.Form.ItemForm"}},
+   {"tool": "get_form_layout_snapshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Номенклатура.Form.ItemForm"}},
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Номенклатура.Form.ListForm"}},
+   {"tool": "get_form_layout_snapshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Номенклатура.Form.ListForm"}}
+  ],
+  "expected_result": "Отрисованы и показаны раскладки формы элемента и формы списка справочника Номенклатура для сравнения.",
+  "confidence": 5
+ },
+ {
+  "id": "c135",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"], "full": true}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.Печать"}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.Счет"}}
+  ],
+  "expected_result": "Найден список макетов документа, каждый отрисован скриншотом, и указано какой из них похож на счёт.",
+  "confidence": 3
+ },
+ {
+  "id": "c136",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ТестыМодуль/Module.bsl", "methodName": "УпавшийТест"}}
+  ],
+  "expected_result": "База обновлена, тесты YAXUnit прогнаны целиком, и по каждому упавшему тесту показан его исходный код.",
+  "confidence": 4
+ },
+ {
+  "id": "c137",
+  "calls": [
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ТестыМодуль/Module.bsl", "lineNumber": 1}},
+   {"tool": "get_tool_guide", "args": {"toolName": "debug_yaxunit_tests"}},
+   {"tool": "debug_yaxunit_tests", "args": {"projectName": "TestConfiguration", "extensions": "ТестовоеРасширение"}},
+   {"tool": "wait_for_break", "args": {}}
+  ],
+  "expected_result": "Поставлен брейкпоинт, тесты расширения запущены под отладчиком, и выполнено ожидание остановки на первом падении.",
+  "confidence": 3
+ },
+ {
+  "id": "c138",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "modules": ["ТестыМодуль"]}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ТестыМодуль/Module.bsl"}}
+  ],
+  "expected_result": "Показан список модулей, тесты прогнаны только по выбранному модулю, и показана его структура.",
+  "confidence": 4
+ },
+ {
+  "id": "c139",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Себестоимост"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РасчетСебестоимости/Module.bsl"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РасчетСебестоимости/Module.bsl"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РасчетСебестоимости/Module.bsl", "methodName": "РассчитатьСебестоимость"}}
+  ],
+  "expected_result": "Код с расчётом себестоимости найден поиском, найденный модуль открыт, показана его структура и код главного метода.",
+  "confidence": 4
+ },
+ {
+  "id": "c140",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "AccumulationRegister.ТоварыНаСкладах"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["AccumulationRegister.ТоварыНаСкладах"]}}
+  ],
+  "expected_result": "Найдены все места использования регистра накопления в конфигурации и показана его структура.",
+  "confidence": 4
+ },
+ {
+  "id": "c141",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"typeName": "Соответствие"}},
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Новый Соответствие"}}
+  ],
+  "expected_result": "Показана документация платформы по типу Соответствие и найдены примеры его использования в коде проекта.",
+  "confidence": 4
+ },
+ {
+  "id": "c142",
+  "calls": [
+   {"tool": "get_markers", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/МодульСМаркерами/Module.bsl"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/МодульСМаркерами/Module.bsl"}}
+  ],
+  "expected_result": "Показаны все закладки и TODO проекта, открыт модуль с наибольшим их числом, и показана его структура.",
+  "confidence": 4
+ },
+ {
+  "id": "c143",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Скидка"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Form.DocumentForm.Field.Скидка", "properties": [{"name": "dataPath", "value": "Object.Скидка"}]}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Document.SalesOrder", "moduleType": "ObjectModule", "mode": "append", "source": "Процедура ПересчитатьСумму() Экспорт\n\t\nКонецПроцедуры"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.SalesOrder"]}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Реквизит Скидка создан, добавлен на форму документа, в модуль объекта дописан пересчёт суммы, объект перевалидирован и показаны его ошибки.",
+  "confidence": 3
+ },
+ {
+  "id": "c144",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/МодульСОшибкой/Module.bsl"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/МодульСОшибкой/Module.bsl", "mode": "searchReplace", "oldSource": "// проблемный код", "source": "// исправленный код"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["CommonModule.МодульСОшибкой"]}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tags": ["smoke"]}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Ошибка валидации найдена и её модуль исправлен, объект перевалидирован, smoke-тесты прогнаны и база обновлена.",
+  "confidence": 3
+ },
+ {
+  "id": "c145",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "feature/скидки"}},
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl"}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "D:\\accept"}}
+  ],
+  "expected_result": "Проект переключён на ветку feature/скидки и пересобран с диска, показана сводка проблем, прогнаны тесты, изучены изменения в модуле Расчеты, и при благополучном исходе конфигурация выгружена в XML.",
+  "confidence": 4
+ }
+]

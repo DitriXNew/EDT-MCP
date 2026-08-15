@@ -112,12 +112,8 @@ public class GetProjectErrorsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. " + //$NON-NLS-1$
-               "Each row carries the check code, message, object location and severity; BSL-module problems also expose a structural locator (Module path + Line) you can feed straight into read_module_source or set_breakpoint. " + //$NON-NLS-1$
-               "Two MUTUALLY EXCLUSIVE object filters: 'objects' is a loose case-insensitive SUBSTRING match against the reported location (fragments welcome, nothing is reported back); 'objectFqns' takes EXACT model addresses, resolves each one and returns objectsNotFound / objectsUnsupported in structuredContent. Both accept English or Russian tokens for the TYPE and for every nested KIND segment of an mdclass / form / Subsystem / Predefined address; the XDTO grammar is the documented exception - English-only, and an XDTO MEMBER is not a filter address at all (objectFqns answers objectsUnsupported). " + //$NON-NLS-1$
-               "A 'Fix registered' column flags rows whose CHECK TYPE has an official EDT auto-fix registered (not a promise this exact marker will produce an applicable fix) - pass that row's Check code (+ Module path + Line) to apply_quick_fix to try applying it. " + //$NON-NLS-1$
-               "Use this for the detailed marker list; for severity totals only call get_problem_summary. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('get_project_errors')."; //$NON-NLS-1$
+        return "Find detailed validation errors and warnings in an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_project_errors')."; //$NON-NLS-1$
     }
 
     @Override
@@ -128,8 +124,13 @@ public class GetProjectErrorsTool implements IMcpTool
             .enumProperty("severity", "Filter by severity (optional)", //$NON-NLS-1$ //$NON-NLS-2$
                 "ERRORS", "BLOCKER", "CRITICAL", "MAJOR", "MINOR", "TRIVIAL", "NONE") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringArrayProperty(PARAM_OBJECTS, "LOOSE filter: case-insensitive SUBSTRING match of each entry against the reported object location, e.g. ['Catalog.Products'] or ['Document.SalesOrder.Form.DocumentForm']; English or Russian type/kind tokens accepted throughout an mdclass, form, Subsystem or Predefined address (the XDTO grammar is English-only). Deliberate fragments are supported, so an entry that matches nothing is NOT reported back - use objectFqns when you need that. Mutually exclusive with objectFqns (optional)") //$NON-NLS-1$
-            .stringArrayProperty(PARAM_OBJECT_FQNS, "EXACT filter: each entry must be the full address of one model node (top object, member, Subsystem chain, Predefined item, form, form member) and is resolved against the model; problems INSIDE the resolved node are reported. An address that resolves AS TYPED scopes exactly that node; only when it resolves to nothing is the yo (e/yo) reading tried, and if several such readings are real the scan covers all of them rather than guessing one. A MEMBER address reports its owner's problems (EDT indexes a marker on the owning object - an attribute's problem on 'Catalog.Products', a form item's on 'Catalog.Products.Form.ItemForm.Form' - never on the member), so the answer is wider than the address, never silently empty. Entries that resolve to nothing come back in objectsNotFound and entries this filter cannot scope (XDTO members) in objectsUnsupported, both in structuredContent. Mutually exclusive with objects (optional)") //$NON-NLS-1$
+            .stringArrayProperty(PARAM_OBJECTS, "Loose case-insensitive SUBSTRING match against the reported location; mutually exclusive " //$NON-NLS-1$
+                + "with objectFqns." ) //$NON-NLS-1$
+            .stringArrayProperty(PARAM_OBJECT_FQNS,
+                "EXACT model addresses; mutually exclusive with objects. A MEMBER address " //$NON-NLS-1$
+                    + "(Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - " //$NON-NLS-1$
+                    + "EDT indexes the marker there - so the result can carry problems from " //$NON-NLS-1$
+                    + "elsewhere in that object. Returns objectsNotFound / objectsUnsupported." ) //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$

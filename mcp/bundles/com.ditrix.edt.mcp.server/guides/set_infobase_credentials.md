@@ -87,3 +87,7 @@ While an MCP tool is in flight (plus a short grace window for the asynchronous r
 - **`success: true` does NOT mean the launch will stop asking** — check `clientConfigured`. Storing the agent's credentials and then hitting the client's "Infobase access" dialog on the next `run_yaxunit_tests` is issue #359; the fix is to target by `launchConfigurationName`, not to retry.
 - **The client half is per launch configuration.** Several configurations against the same infobase each need their own call (or their own edit in the launch dialog) — the agent-side settings are shared, the client-side attributes are not.
 - These are connection credentials, not a permission grant: the user's rights inside the infobase are unchanged.
+
+## Which side gets configured
+
+With launchConfigurationName the launched 1C CLIENT is configured too, so it stops asking for a password (issue #359); with `projectName` + `applicationId` only the agent is - check `clientConfigured` in the result.

@@ -68,15 +68,10 @@ public class CleanProjectTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Clean EDT project and trigger full revalidation. " + //$NON-NLS-1$
-               "Direction: DISK -> MODEL - re-imports the on-disk src/ .mdo files into the in-memory model. " + //$NON-NLS-1$
-               "Refreshes files from disk, clears all validation markers, " + //$NON-NLS-1$
-               "and waits for EDT to complete revalidation. " + //$NON-NLS-1$
-               "Full rebuild of the ENTIRE configuration — slow on large projects. " + //$NON-NLS-1$
-               "Discards UNSAVED in-memory model edits (they are recomputed from disk); save pending changes first. " + //$NON-NLS-1$
-               "For a single externally-edited object prefer revalidate_objects([FQN]). " + //$NON-NLS-1$
-               "Reverse direction (MODEL -> DISK, write the model out to .mdo) is resync_to_disk. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('clean_project')."; //$NON-NLS-1$
+        return "Rebuild an EDT project from the on-disk src/ files and revalidate everything. Direction DISK " //$NON-NLS-1$
+            + "-> MODEL; slow, and it DISCARDS unsaved in-memory model edits - save first. For one " //$NON-NLS-1$
+            + "externally-edited object prefer revalidate_objects; for the opposite direction see " //$NON-NLS-1$
+            + "resync_to_disk. Parameters and examples: get_tool_guide('clean_project')."; //$NON-NLS-1$
     }
     
     @Override

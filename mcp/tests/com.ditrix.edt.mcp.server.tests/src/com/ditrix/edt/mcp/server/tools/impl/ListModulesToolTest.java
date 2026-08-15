@@ -63,7 +63,7 @@ public class ListModulesToolTest
         assertTrue("description must steer to the on-demand guide", //$NON-NLS-1$
             desc.contains("get_tool_guide('list_modules')")); //$NON-NLS-1$
         assertTrue("description must point at get_module_structure for in-module detail", //$NON-NLS-1$
-            desc.contains("get_module_structure")); //$NON-NLS-1$
+            new ListModulesTool().getGuide().contains("get_module_structure")); //$NON-NLS-1$
     }
 
     @Test

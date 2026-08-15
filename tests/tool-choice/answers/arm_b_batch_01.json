@@ -1,0 +1,439 @@
+[
+ {
+  "id": "q001",
+  "calls": [
+   {"tool": "list_projects", "args": {}}
+  ],
+  "expected_result": "Показывает список всех проектов, открытых в рабочей области EDT.",
+  "confidence": 5
+ },
+ {
+  "id": "q002",
+  "calls": [
+   {"tool": "list_projects", "args": {"format": "json"}}
+  ],
+  "expected_result": "Возвращает список проектов рабочей области в формате JSON для дальнейшего разбора.",
+  "confidence": 5
+ },
+ {
+  "id": "q003",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_project"}},
+   {"tool": "create_project", "args": {"projectKind": "configuration", "name": "ДемоУчет", "version": "8.3.24", "scriptVariant": "Russian"}}
+  ],
+  "expected_result": "Создаёт проект конфигурации ДемоУчет с русским языком; отдельного параметра 'режим совместимости' у create_project для configuration нет, ближайший аналог — версия платформы 8.3.24.",
+  "confidence": 3
+ },
+ {
+  "id": "q004",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_project"}},
+   {"tool": "create_project", "args": {"projectKind": "extension", "name": "РасширениеОтчетов", "baseProjectName": "УправлениеТорговлей", "prefix": "рсш"}}
+  ],
+  "expected_result": "Создаёт проект расширения РасширениеОтчетов поверх конфигурации УправлениеТорговлей с префиксом объектов 'рсш'.",
+  "confidence": 5
+ },
+ {
+  "id": "q005",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_project"}},
+   {"tool": "create_project", "args": {"projectKind": "externalObjects", "name": "ВнешниеОбработки"}}
+  ],
+  "expected_result": "Создаёт проект внешних обработок/отчётов с именем ВнешниеОбработки.",
+  "confidence": 5
+ },
+ {
+  "id": "q006",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_project"}},
+   {"tool": "delete_project", "args": {"projectName": "СтарыйПрототип", "deleteContent": true, "confirm": false}},
+   {"tool": "delete_project", "args": {"projectName": "СтарыйПрототип", "deleteContent": true, "confirm": true}}
+  ],
+  "expected_result": "Удаляет проект СтарыйПрототип из рабочей области вместе с файлами на диске (сначала превью, затем подтверждённое удаление).",
+  "confidence": 5
+ },
+ {
+  "id": "q007",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_project"}},
+   {"tool": "delete_project", "args": {"projectName": "TestSandbox", "deleteContent": false, "confirm": false}},
+   {"tool": "delete_project", "args": {"projectName": "TestSandbox", "deleteContent": false, "confirm": true}}
+  ],
+  "expected_result": "Убирает проект TestSandbox из рабочей области, оставляя исходники на диске нетронутыми.",
+  "confidence": 5
+ },
+ {
+  "id": "q008",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "import_configuration_from_xml"}},
+   {"tool": "import_configuration_from_xml", "args": {"importPath": "D:\\unload"}}
+  ],
+  "expected_result": "Создаёт новый проект EDT из XML-выгрузки в D:\\unload; имя нового проекта в запросе не названо, потребуется уточнение.",
+  "confidence": 3
+ },
+ {
+  "id": "q009",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "import_configuration_from_xml"}},
+   {"tool": "import_configuration_from_xml", "args": {"importPath": "C:\\src\\cfg", "projectName": "ERP_Copy"}}
+  ],
+  "expected_result": "Создаёт новый проект ERP_Copy из XML-выгрузки конфигурации, лежащей в C:\\src\\cfg.",
+  "confidence": 5
+ },
+ {
+  "id": "q010",
+  "calls": [
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "УправлениеТорговлей", "outputPath": "D:\\export"}}
+  ],
+  "expected_result": "Выгружает конфигурацию проекта УправлениеТорговлей в XML-файлы в папку D:\\export.",
+  "confidence": 5
+ },
+ {
+  "id": "q011",
+  "calls": [
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "C:\\out"}}
+  ],
+  "expected_result": "Выгружает конфигурацию проекта TestConfiguration в формат файлов 1С XML в папку C:\\out.",
+  "confidence": 5
+ },
+ {
+  "id": "q012",
+  "calls": [
+   {"tool": "get_edt_version", "args": {}}
+  ],
+  "expected_result": "Сообщает установленную версию 1C:EDT.",
+  "confidence": 5
+ },
+ {
+  "id": "q013",
+  "calls": [
+   {"tool": "get_server_status", "args": {}}
+  ],
+  "expected_result": "Показывает состояние MCP-сервера и то, какие фичи у него включены.",
+  "confidence": 5
+ },
+ {
+  "id": "q014",
+  "calls": [
+   {"tool": "get_configuration_properties", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показывает режим совместимости и версию платформы конфигурации проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q015",
+  "calls": [
+   {"tool": "get_configuration_properties", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Показывает основной язык и вариант встроенного языка (scriptVariant) конфигурации проекта УправлениеТорговлей.",
+  "confidence": 5
+ },
+ {
+  "id": "q016",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "catalogs"}}
+  ],
+  "expected_result": "Выводит список всех справочников проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q017",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "УправлениеТорговлей", "metadataType": "documents", "nameFilter": "Реализация"}}
+  ],
+  "expected_result": "Выводит документы проекта УправлениеТорговлей, чьё имя содержит 'Реализация'.",
+  "confidence": 5
+ },
+ {
+  "id": "q018",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "informationRegisters", "language": "en"}}
+  ],
+  "expected_result": "Выводит список регистров сведений проекта TestConfiguration с синонимами на английском языке.",
+  "confidence": 5
+ },
+ {
+  "id": "q019",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "commonModules"}}
+  ],
+  "expected_result": "Выводит перечень всех общих модулей проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q020",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_details"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Номенклатура"], "full": true}}
+  ],
+  "expected_result": "Показывает полную структуру справочника Номенклатура (реквизиты, табличные части, формы) в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q021",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Показывает реквизиты документа Document.SalesOrder в проекте TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q022",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Роль.ПолныеПрава"]}}
+  ],
+  "expected_result": "Показывает матрицу прав роли Роль.ПолныеПрава в проекте TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q023",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Products", "Catalog.Partners", "Document.SalesOrder"]}}
+  ],
+  "expected_result": "Сравнивает свойства объектов Catalog.Products, Catalog.Partners и Document.SalesOrder за один вызов в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q024",
+  "calls": [
+   {"tool": "list_subsystems", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показывает дерево подсистем конфигурации TestConfiguration, включая вложенные (по умолчанию).",
+  "confidence": 5
+ },
+ {
+  "id": "q025",
+  "calls": [
+   {"tool": "list_subsystems", "args": {"projectName": "УправлениеТорговлей", "recursive": false}}
+  ],
+  "expected_result": "Показывает только подсистемы верхнего уровня проекта УправлениеТорговлей, без вложенных.",
+  "confidence": 5
+ },
+ {
+  "id": "q026",
+  "calls": [
+   {"tool": "get_subsystem_content", "args": {"projectName": "TestConfiguration", "subsystemFqn": "Subsystem.Продажи"}}
+  ],
+  "expected_result": "Показывает объекты и подсистемы, входящие в подсистему Subsystem.Продажи проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q027",
+  "calls": [
+   {"tool": "get_subsystem_content", "args": {"projectName": "TestConfiguration", "subsystemFqn": "Подсистема.Закупки", "recursive": true}}
+  ],
+  "expected_result": "Перечисляет объекты подсистемы Подсистема.Закупки вместе с объектами вложенных подсистем в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q028",
+  "calls": [
+   {"tool": "list_common_pictures", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Выводит список общих картинок конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q029",
+  "calls": [
+   {"tool": "list_common_pictures", "args": {"projectName": "УправлениеТорговлей", "limit": 50}}
+  ],
+  "expected_result": "Инвентаризирует общие картинки проекта УправлениеТорговлей, показывая первые 50.",
+  "confidence": 5
+ },
+ {
+  "id": "q030",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "export_common_picture"}},
+   {"tool": "export_common_picture", "args": {"projectName": "TestConfiguration", "fqn": "CommonPicture.ЛоготипКомпании", "variant": "best"}}
+  ],
+  "expected_result": "Извлекает изображение общей картинки CommonPicture.ЛоготипКомпании из TestConfiguration в виде PNG для просмотра.",
+  "confidence": 5
+ },
+ {
+  "id": "q031",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "export_common_picture"}},
+   {"tool": "export_common_picture", "args": {"projectName": "TestConfiguration", "fqn": "ОбщаяКартинка.Печать", "variant": "best"}}
+  ],
+  "expected_result": "Достаёт PNG-изображение общей картинки ОбщаяКартинка.Печать из проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q032",
+  "calls": [
+   {"tool": "get_tags", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показывает пользовательские теги, заведённые на объекты в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q033",
+  "calls": [
+   {"tool": "get_objects_by_tags", "args": {"projectName": "TestConfiguration", "tags": ["refactor"]}}
+  ],
+  "expected_result": "Находит все объекты проекта TestConfiguration, помеченные тегом refactor.",
+  "confidence": 5
+ },
+ {
+  "id": "q034",
+  "calls": [
+   {"tool": "get_objects_by_tags", "args": {"projectName": "TestConfiguration", "tags": ["legacy", "todo"], "limit": 20}}
+  ],
+  "expected_result": "Показывает до 20 объектов проекта TestConfiguration, помеченных тегами legacy или todo.",
+  "confidence": 5
+ },
+ {
+  "id": "q035",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Контрагенты", "properties": [{"name": "synonym", "value": "Контрагенты"}]}}
+  ],
+  "expected_result": "Создаёт справочник Контрагенты в TestConfiguration с синонимом 'Контрагенты'.",
+  "confidence": 5
+ },
+ {
+  "id": "q036",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.ДатаОтгрузки"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.ДатаОтгрузки", "properties": [{"name": "type", "value": {"types": [{"kind": "Date", "fractions": "Date"}]}}]}}
+  ],
+  "expected_result": "Добавляет документу Document.SalesOrder реквизит ДатаОтгрузки типа Дата (создание, затем установка типа через modify_metadata, так как create_metadata создаёт член с типом по умолчанию).",
+  "confidence": 5
+ },
+ {
+  "id": "q037",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ОбщегоНазначенияСервер", "commonModuleKind": "Server", "serverCall": true, "privileged": false}}
+  ],
+  "expected_result": "Создаёт серверный общий модуль ОбщегоНазначенияСервер с включённым вызовом сервера и без привилегированного режима в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q038",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.ВидыОплаты"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.ВидыОплаты.EnumValue.Наличные"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Enum.ВидыОплаты.EnumValue.Безналичные"}}
+  ],
+  "expected_result": "Создаёт перечисление ВидыОплаты со значениями Наличные и Безналичные в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q039",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Документ.ЗаказКлиента.TabularSection.Товары"}}
+  ],
+  "expected_result": "Добавляет документу Документ.ЗаказКлиента табличную часть Товары в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q040",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products", "properties": [{"name": "synonym", "value": "Товары и услуги"}]}}
+  ],
+  "expected_result": "Меняет синоним справочника Catalog.Products на 'Товары и услуги' в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q041",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Role.Менеджер", "rights": [{"object": "Catalog.Products", "right": "Read", "value": "set"}, {"object": "Catalog.Products", "right": "Insert", "value": "set"}]}}
+  ],
+  "expected_result": "Выдаёт роли Role.Менеджер права 'Чтение' и 'Добавление' на справочник Catalog.Products в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q042",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Report.ПродажиЗаПериод"]}}
+  ],
+  "expected_result": "Замена СКД отчёта Report.ПродажиЗаПериод выполняется через modify_metadata (payload dcs), но новое содержимое схемы в запросе не указано — сперва нужно посмотреть текущую схему и уточнить детали.",
+  "confidence": 2
+ },
+ {
+  "id": "q043",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder.Template.ПечатнаяФорма"]}}
+  ],
+  "expected_result": "Обновление макета Template.ПечатнаяФорма выполняется через modify_metadata (payload template), но конкретное новое содержимое ячеек в запросе не указано — сперва нужно посмотреть текущий макет и уточнить детали.",
+  "confidence": 2
+ },
+ {
+  "id": "q044",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Subsystem.Продажи", "content": [{"metadata": "Catalog.Products"}]}}
+  ],
+  "expected_result": "Включает справочник Catalog.Products в состав подсистемы Subsystem.Продажи в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q045",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ItemForm.Attribute.ЦенаСоСкидкой", "properties": [{"name": "edit", "value": false}]}}
+  ],
+  "expected_result": "Делает реквизит формы ЦенаСоСкидкой на форме Catalog.Products.Form.ItemForm недоступным для редактирования в проекте TestConfiguration.",
+  "confidence": 3
+ },
+ {
+  "id": "q046",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.ВременныйСправочник", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.ВременныйСправочник", "confirm": true}}
+  ],
+  "expected_result": "Удаляет справочник Catalog.ВременныйСправочник из проекта TestConfiguration (превью, затем подтверждённое каскадное удаление).",
+  "confidence": 5
+ },
+ {
+  "id": "q047",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Устаревший", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Attribute.Устаревший", "confirm": true}}
+  ],
+  "expected_result": "Удаляет реквизит Document.SalesOrder.Attribute.Устаревший в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q048",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Report.НеИспользуемый", "confirm": false}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Report.НеИспользуемый", "confirm": true}}
+  ],
+  "expected_result": "Удаляет неиспользуемый отчёт Report.НеИспользуемый из конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q049",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Products", "newName": "Nomenclature", "confirm": false}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Products", "newName": "Nomenclature", "confirm": true}}
+  ],
+  "expected_result": "Переименовывает справочник Catalog.Products в Catalog.Nomenclature с каскадным обновлением всех ссылок в конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q050",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.SalesOrder.Attribute.Сумма", "newName": "СуммаДокумента", "confirm": false}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Document.SalesOrder.Attribute.Сумма", "newName": "СуммаДокумента", "confirm": true}}
+  ],
+  "expected_result": "Переименовывает реквизит Document.SalesOrder.Attribute.Сумма в СуммаДокумента с обновлением всех использований в проекте TestConfiguration.",
+  "confidence": 5
+ }
+]

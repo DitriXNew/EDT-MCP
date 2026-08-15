@@ -250,24 +250,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Delete a metadata node addressed by a 1C full-name FQN - a top object, an mdclass " //$NON-NLS-1$
-            + "MEMBER (attribute / tabular section / dimension / resource / enum value), a FORM " //$NON-NLS-1$
-            + "object 'Type.Object.Form.Name', a FORM member (item / attribute / command / handler), " //$NON-NLS-1$
-            + "an XDTO package member ('XDTOPackage.<Package>.ObjectType.<Name>' / " //$NON-NLS-1$
-            + "'...Property.<Name>'), or a PREDEFINED item '<Owner>.X.Predefined.ItemName'. " //$NON-NLS-1$
-            + "TWO-PHASE: call WITHOUT confirm to preview what would be removed, then confirm=true to " //$NON-NLS-1$
-            + "apply (deletion is hard to reverse). A top object - and equally an mdclass MEMBER of " //$NON-NLS-1$
-            + "one - goes through EDT's md-refactoring, which CASCADES the cleanup of references in " //$NON-NLS-1$
-            + "BSL code, forms and other metadata; when a reference cannot be auto-cleaned, a " //$NON-NLS-1$
-            + "confirm=true delete is BLOCKED and the referencing objects are listed - pass force=true " //$NON-NLS-1$
-            + "to delete anyway and leave those references dangling. A PREDEFINED item is checked for " //$NON-NLS-1$
-            + "incoming references the same way. An owned FORM object, a FORM member and an XDTO " //$NON-NLS-1$
-            + "package member are removed from their own container instead: nothing blocks them " //$NON-NLS-1$
-            + "(force is ignored), and no CROSS-object cascade runs - a reference from elsewhere (a " //$NON-NLS-1$
-            + "field's dataPath, a Property whose type points at the deleted ObjectType) is NOT " //$NON-NLS-1$
-            + "rewritten, so re-check with get_metadata_details. Only the owner's own pointers are " //$NON-NLS-1$
-            + "cleaned: deleting an owned form clears the default-form settings that named it. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('delete_metadata')."; //$NON-NLS-1$
+        return "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the " //$NON-NLS-1$
+            + "md-refactoring path EDT cleans the REFERENCES to the deleted object across BSL, forms " //$NON-NLS-1$
+            + "and metadata - the referring objects themselves are NOT deleted. Two-phase: call once " //$NON-NLS-1$
+            + "WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A " //$NON-NLS-1$
+            + "reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring " //$NON-NLS-1$
+            + "objects; force=true overrides that block and leaves those references dangling. " //$NON-NLS-1$
+            + "EXCEPTION - an owned FORM object, a FORM " //$NON-NLS-1$
+            + "member or an XDTO package member is removed straight from its container: NOTHING blocks " //$NON-NLS-1$
+            + "it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a " //$NON-NLS-1$
+            + "field's dataPath, a command, an XDTO type) are left broken - re-check with " //$NON-NLS-1$
+            + "get_metadata_details (find_references takes TOP-level FQNs only, not these members). " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
     @Override

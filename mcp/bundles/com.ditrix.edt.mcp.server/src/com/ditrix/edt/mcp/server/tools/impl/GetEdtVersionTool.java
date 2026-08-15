@@ -31,8 +31,8 @@ public class GetEdtVersionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Returns the running 1C:EDT version as a plain version string." //$NON-NLS-1$
-            + " Returns \"Unknown\" when the version cannot be determined."; //$NON-NLS-1$
+        return "Identify the installed 1C:EDT version. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_edt_version')."; //$NON-NLS-1$
     }
 
     @Override

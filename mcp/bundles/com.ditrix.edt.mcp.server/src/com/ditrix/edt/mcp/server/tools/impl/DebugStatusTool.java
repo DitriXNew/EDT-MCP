@@ -51,12 +51,8 @@ public class DebugStatusTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / " //$NON-NLS-1$
-            + "'launch:<name>'), launch configuration name/type, mode (debug/run), whether the " //$NON-NLS-1$
-            + "target is currently suspended, thread count, and the line of the top suspended frame. " //$NON-NLS-1$
-            + "Also reports debugServerTargets: 1C debug-server sessions (server-side suspends, " //$NON-NLS-1$
-            + "EDT-UI-started 'Debug As') addressable as 'ServerApplication.<app>'. " //$NON-NLS-1$
-            + "Optionally filter by applicationId."; //$NON-NLS-1$
+        return "Check which EDT debug sessions are running or paused. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('debug_status')."; //$NON-NLS-1$
     }
 
     @Override

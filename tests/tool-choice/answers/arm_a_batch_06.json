@@ -1,0 +1,406 @@
+[
+ {
+  "id": "q251",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "nameFilter": "Session"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Ext/SessionModule.bsl"}}
+  ],
+  "expected_result": "Инструмент находит путь модуля сеанса и выводит его исходный код целиком.",
+  "confidence": 3
+ },
+ {
+  "id": "q252",
+  "calls": [
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "methodName": "ПолучитьКурс"}}
+  ],
+  "expected_result": "Возвращается только текст функции ПолучитьКурс из указанного общего модуля.",
+  "confidence": 5
+ },
+ {
+  "id": "q253",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "catalogs", "objectName": "Products"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Catalogs/Products/Forms/ItemForm/Module.bsl", "methodName": "ОбработчикОжидания"}}
+  ],
+  "expected_result": "Выводится текст процедуры ОбработчикОжидания из модуля формы ItemForm справочника Products.",
+  "confidence": 3
+ },
+ {
+  "id": "q254",
+  "calls": [
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "responseFormat": "concise"}}
+  ],
+  "expected_result": "Показывается список экспортных функций модуля без тел процедур.",
+  "confidence": 5
+ },
+ {
+  "id": "q255",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "documents", "objectName": "РеализацияТоваров"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/РеализацияТоваров/Module.bsl", "includeComments": false}}
+  ],
+  "expected_result": "Выводится структура модуля объекта документа с разбивкой методов по областям.",
+  "confidence": 3
+ },
+ {
+  "id": "q256",
+  "calls": [
+   {"tool": "get_outgoing_structures", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl"}}
+  ],
+  "expected_result": "Показываются ключи структур, собираемых перед исходящими вызовами в модуле Печать.",
+  "confidence": 5
+ },
+ {
+  "id": "q257",
+  "calls": [
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl", "methodName": "ЗаписатьДвижения", "direction": "callers"}}
+  ],
+  "expected_result": "Выводится список вызывающих (callers) для процедуры ЗаписатьДвижения.",
+  "confidence": 5
+ },
+ {
+  "id": "q258",
+  "calls": [
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Отчеты/Module.bsl", "methodName": "СформироватьОтчет", "direction": "callees"}}
+  ],
+  "expected_result": "Показываются методы, которые вызывает изнутри функция СформироватьОтчет.",
+  "confidence": 5
+ },
+ {
+  "id": "q259",
+  "calls": [
+   {"tool": "get_symbol_info", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Отчеты/Module.bsl", "line": 88, "column": 12}}
+  ],
+  "expected_result": "Возвращается выведенный тип выражения в указанной позиции модуля.",
+  "confidence": 5
+ },
+ {
+  "id": "q260",
+  "calls": [
+   {"tool": "get_content_assist", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl", "line": 55, "column": 30}}
+  ],
+  "expected_result": "Выводится список подсказок автодополнения в указанной позиции модуля.",
+  "confidence": 5
+ },
+ {
+  "id": "q261",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.Проверки", "moduleType": "Module", "mode": "append", "source": "<текст новой функции ПроверитьЗаполнение>"}}
+  ],
+  "expected_result": "В общий модуль Проверки дописывается новая функция ПроверитьЗаполнение.",
+  "confidence": 4
+ },
+ {
+  "id": "q262",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Catalog.Контрагенты", "moduleType": "ManagerModule", "mode": "replace", "overwrite": true, "source": "<новый текст модуля менеджера>"}}
+  ],
+  "expected_result": "Модуль менеджера справочника Контрагенты полностью заменяется новым текстом.",
+  "confidence": 4
+ },
+ {
+  "id": "q263",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Document.РеализацияТоваров", "moduleType": "ObjectModule", "mode": "append", "source": "<текст обработчика ПередЗаписью>"}}
+  ],
+  "expected_result": "В модуль объекта документа дописывается обработчик ПередЗаписью.",
+  "confidence": 4
+ },
+ {
+  "id": "q264",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Document.SalesOrder", "moduleType": "FormModule", "formName": "DocumentForm", "mode": "searchReplace", "oldSource": "<фрагмент для замены>", "source": "<новый фрагмент>", "expectedHash": "<contentHash из последнего чтения>"}}
+  ],
+  "expected_result": "Модуль формы правится с проверкой, что он не менялся с момента последнего чтения (expectedHash).",
+  "confidence": 4
+ },
+ {
+  "id": "q265",
+  "calls": [
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "Document.SalesOrder", "moduleType": "CommandModule", "commandName": "ЗаполнитьПоОстаткам", "mode": "replace", "source": "<код команды ЗаполнитьПоОстаткам>"}}
+  ],
+  "expected_result": "Код записывается в модуль команды ЗаполнитьПоОстаткам документа SalesOrder.",
+  "confidence": 4
+ },
+ {
+  "id": "q266",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "ВРЕМЕННО"}}
+  ],
+  "expected_result": "Выполняется полнотекстовый поиск строки ВРЕМЕННО по коду проекта.",
+  "confidence": 5
+ },
+ {
+  "id": "q267",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "УправлениеТорговлей", "query": "Попытка(?!.*Исключение)", "isRegex": true}}
+  ],
+  "expected_result": "Регулярное выражение находит строки с Попытка без Исключение в той же строке.",
+  "confidence": 3
+ },
+ {
+  "id": "q268",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "ПривилегированныйРежим", "contextLines": 3}}
+  ],
+  "expected_result": "Поиск текста ПривилегированныйРежим с 3 строками контекста вокруг совпадений.",
+  "confidence": 5
+ },
+ {
+  "id": "q269",
+  "calls": [
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "ОтменаПроведения", "metadataType": "documents"}}
+  ],
+  "expected_result": "Поиск строки ОтменаПроведения ограничивается модулями документов.",
+  "confidence": 5
+ },
+ {
+  "id": "q270",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Перечисление.ВидыОплаты"}}
+  ],
+  "expected_result": "Выводится список мест, ссылающихся на перечисление ВидыОплаты.",
+  "confidence": 5
+ },
+ {
+  "id": "q271",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.ОбщегоНазначения", "limit": 100}}
+  ],
+  "expected_result": "Показываются первые 100 использований общего модуля ОбщегоНазначения.",
+  "confidence": 5
+ },
+ {
+  "id": "q272",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Обработка.СтарыйЗагрузчик"}}
+  ],
+  "expected_result": "Выводится список использований обработки СтарыйЗагрузчик для оценки возможности её удаления.",
+  "confidence": 5
+ },
+ {
+  "id": "q273",
+  "calls": [
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "ЗаписатьДвижения"}}
+  ],
+  "expected_result": "Показывается место объявления процедуры ЗаписатьДвижения.",
+  "confidence": 3
+ },
+ {
+  "id": "q274",
+  "calls": [
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "РаботаСВалютами.ПолучитьКурс", "includeSource": true}}
+  ],
+  "expected_result": "Открывается определение функции ПолучитьКурс вместе с её исходным кодом.",
+  "confidence": 5
+ },
+ {
+  "id": "q275",
+  "calls": [
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "РегистрНакопления.ТоварыНаСкладах"}}
+  ],
+  "expected_result": "Находится определение регистра накопления ТоварыНаСкладах.",
+  "confidence": 5
+ },
+ {
+  "id": "q276",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "УправлениеТорговлей", "severity": "ERRORS"}}
+  ],
+  "expected_result": "Выводится подробный список ошибок (severity ERRORS) проекта УправлениеТорговлей.",
+  "confidence": 4
+ },
+ {
+  "id": "q277",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "severity": "MINOR", "limit": 30}}
+  ],
+  "expected_result": "Показываются проблемы уровня MINOR проекта TestConfiguration, не более 30 строк.",
+  "confidence": 5
+ },
+ {
+  "id": "q278",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objects": ["Номенклатура"]}}
+  ],
+  "expected_result": "Выводятся замечания по объектам, в пути которых встречается подстрока Номенклатура.",
+  "confidence": 5
+ },
+ {
+  "id": "q279",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder", "Catalog.Products"]}}
+  ],
+  "expected_result": "Выводятся ошибки строго по точным адресам Document.SalesOrder и Catalog.Products.",
+  "confidence": 5
+ },
+ {
+  "id": "q280",
+  "calls": [
+   {"tool": "get_problem_summary", "args": {}}
+  ],
+  "expected_result": "Возвращаются суммарные счётчики проблем по всем проектам и уровням серьёзности без списка.",
+  "confidence": 5
+ },
+ {
+  "id": "q281",
+  "calls": [
+   {"tool": "get_check_description", "args": {"checkId": "bsl-variable-name-invalid"}}
+  ],
+  "expected_result": "Выводится подробное описание проверки bsl-variable-name-invalid и способ её устранения.",
+  "confidence": 5
+ },
+ {
+  "id": "q282",
+  "calls": [
+   {"tool": "get_check_description", "args": {"checkId": "mdo-ref-integrity"}}
+  ],
+  "expected_result": "Выводится описание диагностики mdo-ref-integrity и причина блокировки обновления.",
+  "confidence": 5
+ },
+ {
+  "id": "q283",
+  "calls": [
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": "bsl-region-empty", "modulePath": "CommonModules/Проверки/Module.bsl", "line": 40}}
+  ],
+  "expected_result": "Применяется официальный автофикс EDT к маркеру bsl-region-empty на указанной строке.",
+  "confidence": 5
+ },
+ {
+  "id": "q284",
+  "calls": [
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Документ SalesOrder перечитывается с диска и точечно перевалидируется.",
+  "confidence": 5
+ },
+ {
+  "id": "q285",
+  "calls": [
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Выполняется лёгкая полная перевалидация проекта без полной пересборки модели.",
+  "confidence": 4
+ },
+ {
+  "id": "q286",
+  "calls": [
+   {"tool": "clean_project", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Модель проекта полностью пересобирается с диска и запускается полная ревалидация.",
+  "confidence": 5
+ },
+ {
+  "id": "q287",
+  "calls": [
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration", "cleanDanglingReferences": true}}
+  ],
+  "expected_result": "Из Configuration.mdo удаляются висячие ссылки на несуществующие объекты, блокирующие выгрузку XML.",
+  "confidence": 3
+ },
+ {
+  "id": "q288",
+  "calls": [
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Проверяется, какие объекты модели отсутствуют на диске, и недостающие .mdo экспортируются.",
+  "confidence": 5
+ },
+ {
+  "id": "q289",
+  "calls": [
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "ВЫБРАТЬ Т.Номенклатура, СУММА(Т.Количество) ИЗ РегистрНакопления.ТоварыНаСкладах КАК Т СГРУППИРОВАТЬ ПО Т.Номенклатура"}}
+  ],
+  "expected_result": "Текст запроса проверяется на синтаксические и семантические ошибки.",
+  "confidence": 5
+ },
+ {
+  "id": "q290",
+  "calls": [
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "ВЫБРАТЬ Т.Номенклатура, СУММА(Т.Количество) ИЗ РегистрНакопления.ТоварыНаСкладах КАК Т СГРУППИРОВАТЬ ПО Т.Номенклатура", "dcsMode": true}}
+  ],
+  "expected_result": "Тот же текст запроса проверяется в режиме СКД (dcsMode=true).",
+  "confidence": 3
+ },
+ {
+  "id": "q291",
+  "calls": [
+   {"tool": "validate_xdto_package", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком", "limit": 20}}
+  ],
+  "expected_result": "Проверяется XDTO-пакет ОбменСБанком, выводится не более 20 найденных проблем.",
+  "confidence": 5
+ },
+ {
+  "id": "q292",
+  "calls": [
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl", "lineNumber": 120}}
+  ],
+  "expected_result": "Устанавливается точка останова на 120 строке модуля Проведение.",
+  "confidence": 5
+ },
+ {
+  "id": "q293",
+  "calls": [
+   {"tool": "list_breakpoints", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "remove_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl"}}
+  ],
+  "expected_result": "Все точки останова в модуле Проведение находятся и снимаются по одной.",
+  "confidence": 3
+ },
+ {
+  "id": "q294",
+  "calls": [
+   {"tool": "list_breakpoints", "args": {}}
+  ],
+  "expected_result": "Выводится список всех активных точек останова в воркспейсе.",
+  "confidence": 5
+ },
+ {
+  "id": "q295",
+  "calls": [
+   {"tool": "debug_launch", "args": {"projectName": "УправлениеТорговлей", "restartIfRunning": true}}
+  ],
+  "expected_result": "Конфигурация запускается под отладкой, при уже запущенном сеансе он перезапускается.",
+  "confidence": 5
+ },
+ {
+  "id": "q296",
+  "calls": [
+   {"tool": "debug_status", "args": {}}
+  ],
+  "expected_result": "Выводится состояние всех активных отладочных сеансов.",
+  "confidence": 5
+ },
+ {
+  "id": "q297",
+  "calls": [
+   {"tool": "wait_for_break", "args": {"timeout": 120}}
+  ],
+  "expected_result": "Ожидание остановки отладки ограничивается 120 секундами.",
+  "confidence": 5
+ },
+ {
+  "id": "q298",
+  "calls": [
+   {"tool": "step", "args": {"kind": "out", "threadId": "thread-2"}}
+  ],
+  "expected_result": "Выполняется шаг 'выйти из процедуры' для указанного потока.",
+  "confidence": 3
+ },
+ {
+  "id": "q299",
+  "calls": [
+   {"tool": "resume", "args": {"threadId": "thread-2"}}
+  ],
+  "expected_result": "Выполнение потока thread-2 возобновляется.",
+  "confidence": 3
+ },
+ {
+  "id": "q300",
+  "calls": [
+   {"tool": "get_variables", "args": {"frameRef": "frame-1", "expandPath": "ЭтотОбъект.Товары"}}
+  ],
+  "expected_result": "Разворачивается путь ЭтотОбъект.Товары в переменных указанного кадра.",
+  "confidence": 3
+ }
+]

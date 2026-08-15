@@ -42,9 +42,8 @@ public class GetTagsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get list of all tags defined in the project. " + //$NON-NLS-1$
-               "Tags are user-defined labels for organizing metadata objects. " + //$NON-NLS-1$
-               "Returns tag name, color, description, and number of assigned objects."; //$NON-NLS-1$
+        return "Discover user-defined tags used to organize project metadata. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_tags')."; //$NON-NLS-1$
     }
     
     @Override

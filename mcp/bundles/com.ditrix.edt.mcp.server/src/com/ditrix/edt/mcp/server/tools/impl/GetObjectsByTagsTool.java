@@ -45,9 +45,8 @@ public class GetObjectsByTagsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get metadata objects filtered by tags. " + //$NON-NLS-1$
-               "Returns objects that have any of the specified tags, " + //$NON-NLS-1$
-               "including tag descriptions and object FQNs."; //$NON-NLS-1$
+        return "Find metadata objects organized under selected tags. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_objects_by_tags')."; //$NON-NLS-1$
     }
     
     @Override

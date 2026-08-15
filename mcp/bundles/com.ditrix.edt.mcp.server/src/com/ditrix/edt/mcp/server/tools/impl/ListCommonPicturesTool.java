@@ -71,12 +71,8 @@ public class ListCommonPicturesTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List a 1C configuration's CommonPicture objects and the variants each carries in its " //$NON-NLS-1$
-            + "Picture.zip (DPI, theme, interface variant, template flag, glyph size, picture direction, " //$NON-NLS-1$
-            + "byte size) as a Markdown overview. Use it to see which pictures exist and to spot " //$NON-NLS-1$
-            + "mixed-icon mistakes; no image bytes are returned - for the PNG of one picture use " //$NON-NLS-1$
-            + "export_common_picture. Full parameters and examples: " //$NON-NLS-1$
-            + "call get_tool_guide('list_common_pictures')."; //$NON-NLS-1$
+        return "Inventory common pictures available in a 1C configuration. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_common_pictures')."; //$NON-NLS-1$
     }
 
     @Override

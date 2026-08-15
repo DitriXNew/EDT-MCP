@@ -47,11 +47,10 @@ public class CancelJobTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Preview or cancel a background job by jobId. Destructive: omitting confirm or " //$NON-NLS-1$
-            + "passing confirm=false only describes the owning tool, state, and progress; " //$NON-NLS-1$
-            + "confirm=true cancels uncommitted work, or invokes an owning tool's declared " //$NON-NLS-1$
-            + "destructive cancellation capability. Committed jobs without that capability " //$NON-NLS-1$
-            + "remain in flight. Full parameters and examples: call " //$NON-NLS-1$
+        return "Cancel a background job by jobId. DESTRUCTIVE. Two-phase: call once WITHOUT " //$NON-NLS-1$
+            + "confirm to see the owning tool, state and progress, then again with confirm=true " //$NON-NLS-1$
+            + "to cancel. Cancellation is not guaranteed - a committed job whose owner declares " //$NON-NLS-1$
+            + "no destructive stop stays in flight. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('cancel_job')."; //$NON-NLS-1$
     }
 

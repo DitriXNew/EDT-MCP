@@ -51,9 +51,8 @@ public class ListProjectsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List all workspace projects with properties (name, path, type, natures). " //$NON-NLS-1$
-            + "format='md' (default) returns the human Markdown table; format='json' returns the " //$NON-NLS-1$
-            + "machine-readable project list in structuredContent."; //$NON-NLS-1$
+        return "Discover projects available in the EDT workspace. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_projects')."; //$NON-NLS-1$
     }
 
     @Override

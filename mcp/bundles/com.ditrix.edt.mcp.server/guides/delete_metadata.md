@@ -42,3 +42,13 @@ Resolves by the programmatic Name; only the leading TYPE token and the child KIN
 ## Gotchas
 - A malformed nested FQN with an odd trailing token (e.g. 'Catalog.Products.Attribute') is rejected as not found, so a nested delete never silently falls back to the parent.
 - Deletion targets the programmatic Name; passing a synonym will not resolve.
+
+## Predefined items
+
+A PREDEFINED item is checked for incoming references exactly like an ordinary object, and the same two-phase preview/confirm applies.
+
+## Members removed from their own container
+
+An owned FORM object, a FORM member and an XDTO package member are removed from their own container instead: nothing blocks them (force is ignored), and no CROSS-object cascade runs - a reference from elsewhere (a field's dataPath, a Property whose type points at the deleted ObjectType) is NOT rewritten, so re-check with get_metadata_details.
+
+Only the owner's own pointers are cleaned: deleting an owned form clears the default-form settings that named it.

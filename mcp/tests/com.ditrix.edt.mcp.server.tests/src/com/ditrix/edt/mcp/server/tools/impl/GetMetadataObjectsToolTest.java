@@ -71,7 +71,7 @@ public class GetMetadataObjectsToolTest
         assertTrue("description must steer to the on-demand guide", //$NON-NLS-1$
             desc.contains("get_tool_guide('get_metadata_objects')")); //$NON-NLS-1$
         assertTrue("description must point at get_metadata_details for one object", //$NON-NLS-1$
-            desc.contains("get_metadata_details")); //$NON-NLS-1$
+            new GetMetadataObjectsTool().getGuide().contains("get_metadata_details")); //$NON-NLS-1$
     }
 
     // ==================== Metadata: input schema ====================

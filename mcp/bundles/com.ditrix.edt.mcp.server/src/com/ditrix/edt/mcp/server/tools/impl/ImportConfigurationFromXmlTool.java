@@ -56,10 +56,8 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Import a configuration from a directory of XML files into a NEW EDT " //$NON-NLS-1$
-             + "project (EDT menu: Import); the reverse of export_configuration_to_xml. " //$NON-NLS-1$
-             + "The projectName must not already exist in the workspace. " //$NON-NLS-1$
-             + "Full parameters and examples: call get_tool_guide('import_configuration_from_xml')."; //$NON-NLS-1$
+        return "Create an EDT project from exported 1C configuration XML files. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('import_configuration_from_xml')."; //$NON-NLS-1$
     }
 
     @Override

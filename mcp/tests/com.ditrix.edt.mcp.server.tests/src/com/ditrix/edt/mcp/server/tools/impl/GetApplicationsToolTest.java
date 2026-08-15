@@ -81,8 +81,8 @@ public class GetApplicationsToolTest
     {
         // The description must steer callers to the tools that consume the application id.
         String desc = new GetApplicationsTool().getDescription();
-        assertTrue("description must point at update_database", desc.contains("update_database")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("description must point at debug_launch", desc.contains("debug_launch")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must point at update_database", new GetApplicationsTool().getGuide().contains("update_database")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must point at debug_launch", new GetApplicationsTool().getGuide().contains("debug_launch")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

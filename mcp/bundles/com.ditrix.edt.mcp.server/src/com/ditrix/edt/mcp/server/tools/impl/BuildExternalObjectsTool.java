@@ -144,12 +144,11 @@ public class BuildExternalObjectsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Build (compile to disk) the external data processors/reports of an EDT external-object " //$NON-NLS-1$
-            + "project to .epf/.erf files. Build ONE object with objectName, or ALL of them when " //$NON-NLS-1$
-            + "objectName is omitted. Requires an associated infobase + a resolvable 1C runtime " //$NON-NLS-1$
-            + "(like update_database): if missing, set it up with create_infobase / " //$NON-NLS-1$
-            + "set_infobase_credentials. Full parameters and examples: " //$NON-NLS-1$
-            + "call get_tool_guide('build_external_objects')."; //$NON-NLS-1$
+        return "Compile external 1C data processors and reports into deployable files. NOT self-contained: " //$NON-NLS-1$
+            + "the project needs an associated infobase AND a resolvable 1C runtime - without either the " //$NON-NLS-1$
+            + "call fails with a setup error, not a compile error (see create_infobase / " //$NON-NLS-1$
+            + "set_infobase_credentials). Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('build_external_objects')."; //$NON-NLS-1$
     }
 
     @Override

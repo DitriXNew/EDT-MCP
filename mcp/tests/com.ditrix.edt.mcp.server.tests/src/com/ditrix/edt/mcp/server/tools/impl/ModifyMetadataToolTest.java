@@ -95,7 +95,7 @@ public class ModifyMetadataToolTest
         // surface, so the description must advertise the 'procedure' and 'command' rebind properties.
         String desc = new ModifyMetadataTool().getDescription();
         assertTrue("description should advertise the handler 'procedure' rebind", //$NON-NLS-1$
-            desc.contains("procedure")); //$NON-NLS-1$
+            new ModifyMetadataTool().getGuide().contains("procedure")); //$NON-NLS-1$
         assertTrue("description should advertise the button 'command' rebind", //$NON-NLS-1$
             desc.contains("command")); //$NON-NLS-1$
     }
@@ -119,9 +119,9 @@ public class ModifyMetadataToolTest
         // and the guide must advertise the 'value' property with its color / font shape.
         String desc = new ModifyMetadataTool().getDescription();
         assertTrue("description should advertise the StyleItem value", //$NON-NLS-1$
-            desc.contains("StyleItem")); //$NON-NLS-1$
-        assertTrue("description should mention the color shape", desc.contains("color")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("description should mention the font shape", desc.contains("font")); //$NON-NLS-1$ //$NON-NLS-2$
+            new ModifyMetadataTool().getGuide().contains("StyleItem")); //$NON-NLS-1$
+        assertTrue("description should mention the color shape", new ModifyMetadataTool().getGuide().contains("color")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should mention the font shape", new ModifyMetadataTool().getGuide().contains("font")); //$NON-NLS-1$ //$NON-NLS-2$
 
         String guide = new ModifyMetadataTool().getGuide();
         assertNotNull(guide);
@@ -137,9 +137,9 @@ public class ModifyMetadataToolTest
         // Setting a dynamic-list custom query is part of the tool surface, so the description and the
         // guide must advertise the queryText / customQuery properties on a list-form attribute.
         String desc = new ModifyMetadataTool().getDescription();
-        assertTrue("description should advertise queryText", desc.contains("queryText")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should advertise queryText", new ModifyMetadataTool().getGuide().contains("queryText")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("description should mention the dynamic list", //$NON-NLS-1$
-            desc.contains("DynamicList") || desc.contains("dynamic list")); //$NON-NLS-1$ //$NON-NLS-2$
+            new ModifyMetadataTool().getGuide().contains("DynamicList") || new ModifyMetadataTool().getGuide().contains("dynamic list")); //$NON-NLS-1$ //$NON-NLS-2$
 
         String guide = new ModifyMetadataTool().getGuide();
         assertNotNull(guide);
@@ -330,7 +330,7 @@ public class ModifyMetadataToolTest
         // add/remove op and the 'use' values.
         String desc = new ModifyMetadataTool().getDescription();
         assertTrue("description should advertise the CommonAttribute content payload", //$NON-NLS-1$
-            desc.contains("CommonAttribute") && desc.contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
+            new ModifyMetadataTool().getGuide().contains("CommonAttribute") && new ModifyMetadataTool().getGuide().contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
 
         String guide = new ModifyMetadataTool().getGuide();
         assertNotNull(guide);
@@ -418,15 +418,15 @@ public class ModifyMetadataToolTest
         // description so a schema-driven client sees which FQNs accept a 'content' payload.
         String desc = new ModifyMetadataTool().getDescription();
         assertTrue("description should still advertise CommonAttribute content", //$NON-NLS-1$
-            desc.contains("CommonAttribute") && desc.contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
+            new ModifyMetadataTool().getGuide().contains("CommonAttribute") && new ModifyMetadataTool().getGuide().contains("content")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("description should advertise ExchangePlan content", //$NON-NLS-1$
-            desc.contains("ExchangePlan")); //$NON-NLS-1$
-        assertTrue("description should advertise Catalog owners", desc.contains("Catalog")); //$NON-NLS-1$ //$NON-NLS-2$
+            new ModifyMetadataTool().getGuide().contains("ExchangePlan")); //$NON-NLS-1$
+        assertTrue("description should advertise Catalog owners", new ModifyMetadataTool().getGuide().contains("Catalog")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("description should advertise Document register records", //$NON-NLS-1$
-            desc.contains("Document")); //$NON-NLS-1$
+            new ModifyMetadataTool().getGuide().contains("Document")); //$NON-NLS-1$
         // The ExchangePlan per-entry flag is autoRecord (mapped Allow / Deny).
         assertTrue("description should advertise the ExchangePlan autoRecord flag", //$NON-NLS-1$
-            desc.contains("autoRecord")); //$NON-NLS-1$
+            new ModifyMetadataTool().getGuide().contains("autoRecord")); //$NON-NLS-1$
     }
 
     @Test
@@ -532,8 +532,8 @@ public class ModifyMetadataToolTest
         // to the right FQN kind.
         String desc = new ModifyMetadataTool().getDescription();
         assertTrue("all four content kinds must be named on the surface", //$NON-NLS-1$
-            desc.contains("CommonAttribute") && desc.contains("ExchangePlan") //$NON-NLS-1$ //$NON-NLS-2$
-                && desc.contains("Catalog") && desc.contains("Document")); //$NON-NLS-1$ //$NON-NLS-2$
+            new ModifyMetadataTool().getGuide().contains("CommonAttribute") && new ModifyMetadataTool().getGuide().contains("ExchangePlan") //$NON-NLS-1$ //$NON-NLS-2$
+                && new ModifyMetadataTool().getGuide().contains("Catalog") && new ModifyMetadataTool().getGuide().contains("Document")); //$NON-NLS-1$ //$NON-NLS-2$
         // The no-mixing policy (a content payload CANNOT be combined with a generic properties change)
         // is documented in the guide's shared membership section for every kind.
         String guide = new ModifyMetadataTool().getGuide();
@@ -1452,7 +1452,7 @@ public class ModifyMetadataToolTest
     public void testDescriptionMentionsPredefinedItems()
     {
         String desc = new ModifyMetadataTool().getDescription();
-        assertTrue("description should mention predefined items", desc.contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should mention predefined items", new ModifyMetadataTool().getGuide().contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** 'name' is always refused (identity is the FQN leaf); 'parent' (a move) is refused on modify only. */

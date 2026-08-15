@@ -90,11 +90,8 @@ public class SetBranchInfobaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Attach or detach an EXISTING infobase (application) to/from a specific git branch " //$NON-NLS-1$
-            + "context, so switch_git_branch's automatic binding follows that branch. Target the " //$NON-NLS-1$
-            + "application via applicationId (from get_applications) - this tool never creates an " //$NON-NLS-1$
-            + "infobase, only records the binding. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('set_branch_infobase')."; //$NON-NLS-1$
+        return "Associate an existing infobase with a Git branch of an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('set_branch_infobase')."; //$NON-NLS-1$
     }
 
     @Override

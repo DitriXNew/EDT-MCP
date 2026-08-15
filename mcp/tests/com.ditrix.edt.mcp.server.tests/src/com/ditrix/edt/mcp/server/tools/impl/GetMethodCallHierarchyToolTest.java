@@ -441,14 +441,44 @@ public class GetMethodCallHierarchyToolTest
     }
 
     @Test
+    public void testDescriptionAdvertisesTransitiveDepth()
+    {
+        // InputSchemaCompactor strips this tool's `depth` prose at the tools/list boundary - only
+        // `direction` and `methodName` are on its KEEP list - so the SCHEMA assertions above hold
+        // for the source but not for the wire. That leaves the description as the single
+        // always-loaded statement that this tool can answer transitively at all. Without it an
+        // agent asking "what breaks 3 levels up" sees a bare {"type":"integer"} named depth and
+        // falls back to the sequential single-hop calls that #422 exists to remove.
+        String desc = new GetMethodCallHierarchyTool().getDescription();
+        assertTrue("the description must advertise transitive walking", //$NON-NLS-1$
+            desc.contains("transitively")); //$NON-NLS-1$
+        assertTrue("the ceiling is silent (a larger value is clamped), so it must be stated", //$NON-NLS-1$
+            desc.contains("max " + GetMethodCallHierarchyTool.MAX_DEPTH)); //$NON-NLS-1$
+        // depth>1 on 'callees'/'outgoing' is REJECTED outright by validate(), before any lookup -
+        // the same "schema-valid call the tool refuses" shape that put `methodName` on this tool's
+        // InputSchemaCompactor.KEEP list. Since `depth` itself is NOT on that list, the wire shows
+        // a bare {"type":"integer"} and this clause is the only surviving statement of the rule.
+        assertTrue("the description must scope depth to callers, since the wire schema cannot", //$NON-NLS-1$
+            desc.contains("callers only")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDescriptionWarnsThatDynamicCallsAreInvisible()
     {
         // A caller reading "complete" must not read it as "nothing else calls this method": a
         // static scan cannot see Execute/Eval or a handler named by string. This belongs in the
-        // contract the agent reads, not only in the response body.
+        // contract the agent reads, not only in the response body - the depth=1 path renders no
+        // "Not covered" footer at all, so the description is its only carrier.
+        //
+        // The EXAMPLES of dynamic dispatch (Execute/Eval, a handler named by string, platform
+        // dispatch) are deliberately NOT asserted here: they are capability index, which #430
+        // moved out of always-loaded text on measurement. They live in getGuide() and in the
+        // transitive output's "Not covered" footer. Kept here is only the load-bearing half -
+        // the boundary on how far a "complete" answer may be trusted.
         String desc = new GetMethodCallHierarchyTool().getDescription();
         assertTrue(desc.contains("STATIC invocations only")); //$NON-NLS-1$
-        assertTrue(desc.contains("Execute/Eval")); //$NON-NLS-1$
+        assertTrue("the description must bound what 'complete' proves", //$NON-NLS-1$
+            desc.contains("does not prove nothing else calls")); //$NON-NLS-1$
     }
 
     @Test

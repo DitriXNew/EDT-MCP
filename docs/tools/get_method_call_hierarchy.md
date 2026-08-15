@@ -1,6 +1,6 @@
 # get_method_call_hierarchy
 
-Find a BSL method's call hierarchy: who calls it (callers, default) or what it calls (callees), via semantic AST analysis that resolves ru/en spellings (unlike literal search_in_code). Optional depth (callers only, max 5) walks the chain transitively for impact analysis. Finds STATIC invocations only: a call made dynamically (Execute/Eval, a handler named by string, platform dispatch) is never visible, so a complete result does not prove nothing else calls the method. Full parameters and examples: call get_tool_guide('get_method_call_hierarchy').
+Trace which BSL methods call a method or are called by it; optional depth walks the chain transitively for impact analysis (callers only, max 5). Finds STATIC invocations only, so a complete result does not prove nothing else calls the method. Parameters and examples: get_tool_guide('get_method_call_hierarchy').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -8,7 +8,7 @@ Find a BSL method's call hierarchy: who calls it (callers, default) or what it c
 | projectName | yes | string | EDT project name (required) |
 | modulePath | yes | string | Path from src/ folder, e.g. 'CommonModules/MyModule/Module.bsl' (required) |
 | methodName | — | string | Name of the procedure/function (case-insensitive). Required for direction 'callers'/'callees'; optional for 'outgoing' (omit to aggregate the whole module). |
-| direction | — | string (one of: callers, callees, outgoing) | 'callers' (default) = who calls this method; 'callees' = what this method calls; 'outgoing' = aggregated distinct call targets (module-wide when methodName omitted) |
+| direction | — | string (one of: callers, callees, outgoing) | 'callers' = who calls this method, 'callees' = what it calls, 'outgoing' = aggregated distinct call targets (module-wide when methodName is omitted). |
 | extApiPrefix | — | string | For direction 'outgoing': literal call-qualifier prefix (case-insensitive) that flags a target as an external service API. Default: the 1C region name 'ПрограммныйИнтерфейсСервиса'. |
 | depth | — | integer | Call-chain levels to walk, for direction 'callers' ONLY. Default 1 (single hop, unchanged output); max 5 (a larger value is clamped, a smaller than 1 becomes 1). Above 1 the result changes shape: one row per UNIQUE caller with its Level and the row it was reached Via, and 'limit' then caps the callers accepted and stops the walk there, so it cannot report a true total. |
 | limit | — | integer | Max results. Default: 100, max: 500. With depth>1 this is the cap on unique callers accepted, i.e. an execution budget, not just an output limit. |

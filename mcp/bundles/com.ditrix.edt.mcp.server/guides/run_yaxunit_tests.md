@@ -198,3 +198,7 @@ The modal's own default button is **Import**, which would rewrite the project so
 plugin never presses it blind: if the labelled button for the selected policy cannot be found (an
 unshipped locale, a reworded button) the dialog is cancelled and the update reports the failure
 instead of writing anything.
+
+## Pre-launch recomputation
+
+The pre-launch auto-chain (`updateBeforeLaunch=true`, the default) recomputes only projects whose sources changed since their last prepared run; that mark survives an EDT restart, so an unchanged project is not recomputed at all.

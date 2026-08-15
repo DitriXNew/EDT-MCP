@@ -75,12 +75,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Adopt a base-configuration metadata object or member " //$NON-NLS-1$
-            + "(object / form / attribute / tabular section / ...) into a configuration EXTENSION so the " //$NON-NLS-1$
-            + "extension can override or intercept it - the MCP equivalent of EDT's 'Add To Extension'. " //$NON-NLS-1$
-            + "Addressed by the base object FQN; pass extensionProjectName when more than one extension " //$NON-NLS-1$
-            + "extends the configuration. Adopting BSL code/methods is NOT covered. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('adopt_metadata_object')."; //$NON-NLS-1$
+        return "Add a base-configuration object or member to an extension for customization. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('adopt_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override

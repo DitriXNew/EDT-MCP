@@ -101,14 +101,8 @@ public class SwitchGitBranchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Switch a project's git repository to another branch (headless EGit checkout). " //$NON-NLS-1$
-            + "branch may be a short local name (e.g. 'feature/x') or a full ref " //$NON-NLS-1$
-            + "('refs/heads/feature/x'); a remote-only branch is rejected (create a local branch " //$NON-NLS-1$
-            + "first). Refuses to switch when the working tree has uncommitted changes (untracked " //$NON-NLS-1$
-            + "files alone do not block) or when already on the target branch. The 1C " //$NON-NLS-1$
-            + "application/infobase binding follows the checkout automatically; the result reports it. " //$NON-NLS-1$
-            + "Runs in a background Job (up to 120 s). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('switch_git_branch')."; //$NON-NLS-1$
+        return "Change the active version of an EDT project through Git branch checkout. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('switch_git_branch')."; //$NON-NLS-1$
     }
 
     @Override

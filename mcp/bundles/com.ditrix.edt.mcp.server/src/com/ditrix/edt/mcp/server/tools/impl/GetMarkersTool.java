@@ -72,10 +72,8 @@ public class GetMarkersTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List workspace markers: bookmarks and/or task markers (TODO, FIXME, XXX, HACK). " //$NON-NLS-1$
-            + "Filter by markerKind (bookmark | task; omit to list both), projectName, filePath " //$NON-NLS-1$
-            + "substring, and - for task markers only - priority. Returns a markdown table of " //$NON-NLS-1$
-            + "Kind, Type, Priority, Message, Path and Line."; //$NON-NLS-1$
+        return "Find bookmarks and TODO-style task markers in the workspace. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_markers')."; //$NON-NLS-1$
     }
 
     @Override
@@ -85,8 +83,8 @@ public class GetMarkersTool implements IMcpTool
             .stringProperty("projectName", "Filter by project name (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("filePath", "Filter by file path substring (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .enumProperty("markerKind", //$NON-NLS-1$
-                "Which markers to list: 'bookmark' (manual navigation bookmarks) or 'task' " //$NON-NLS-1$
-                + "(TODO/FIXME/XXX/HACK code markers). Omit to list both.", //$NON-NLS-1$
+                "'bookmark' = manual navigation bookmarks; 'task' = TODO/FIXME/XXX/HACK code markers. " //$NON-NLS-1$
+                + "Omit for both.", //$NON-NLS-1$
                 KEY_BOOKMARK, "task") //$NON-NLS-1$
             .enumProperty("priority", //$NON-NLS-1$
                 "Filter task markers by priority (optional). Applies to task markers only; " //$NON-NLS-1$

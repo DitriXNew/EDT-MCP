@@ -79,13 +79,9 @@ public class UpdateDatabaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Apply configuration changes to an application's database (infobase), full or " //$NON-NLS-1$
-            + "incremental. Target by launchConfigurationName (preferred) or projectName + " //$NON-NLS-1$
-            + "applicationId. Destructive/irreversible: guarded by a confirm-preview - call without " //$NON-NLS-1$
-            + "confirm to preview the exact update (no infobase change), then confirm=true to apply. " //$NON-NLS-1$
-            + "Auto-terminates any 1C client THIS EDT launched on the target infobase first to free the " //$NON-NLS-1$
-            + "exclusive lock (opt out with terminateRunningClients=false). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('update_database')."; //$NON-NLS-1$
+        return "Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can " //$NON-NLS-1$
+            + "evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with " //$NON-NLS-1$
+            + "confirm=true to apply. Parameters and examples: get_tool_guide('update_database')."; //$NON-NLS-1$
     }
 
     @Override

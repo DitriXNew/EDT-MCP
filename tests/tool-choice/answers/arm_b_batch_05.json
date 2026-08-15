@@ -1,0 +1,417 @@
+[
+ {
+  "id": "q201",
+  "calls": [
+   {"tool": "list_projects", "args": {}}
+  ],
+  "expected_result": "Будет вызван list_projects и получен список всех проектов, подключённых к воркспейсу EDT.",
+  "confidence": 5
+ },
+ {
+  "id": "q202",
+  "calls": [
+   {"tool": "create_project", "args": {"projectKind": "extension", "name": "ДоработкиУТ", "baseProjectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Будет создано новое расширение ДоработкиУТ на базе конфигурации УправлениеТорговлей через create_project.",
+  "confidence": 5
+ },
+ {
+  "id": "q203",
+  "calls": [
+   {"tool": "import_configuration_from_xml", "args": {"importPath": "/home/user/cfg-xml", "projectName": "ERP2"}}
+  ],
+  "expected_result": "Будет создан новый EDT-проект ERP2 из XML-выгрузки в /home/user/cfg-xml через import_configuration_from_xml.",
+  "confidence": 5
+ },
+ {
+  "id": "q204",
+  "calls": [
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "TestConfiguration", "outputPath": "D:\\to-partner"}}
+  ],
+  "expected_result": "Конфигурация TestConfiguration будет выгружена в XML-файлы в папку D:\\to-partner через export_configuration_to_xml.",
+  "confidence": 5
+ },
+ {
+  "id": "q205",
+  "calls": [
+   {"tool": "get_configuration_properties", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Будут показаны версия платформы и вариант встроенного языка проекта TestConfiguration через get_configuration_properties.",
+  "confidence": 5
+ },
+ {
+  "id": "q206",
+  "calls": [
+   {"tool": "delete_project", "args": {"projectName": "ЧерновикСтарый", "deleteContent": true}},
+   {"tool": "delete_project", "args": {"projectName": "ЧерновикСтарый", "deleteContent": true, "confirm": true}}
+  ],
+  "expected_result": "Проект ЧерновикСтарый будет удалён из воркспейса вместе с файлами на диске через delete_project (сначала предпросмотр, затем подтверждённое удаление).",
+  "confidence": 5
+ },
+ {
+  "id": "q207",
+  "calls": [
+   {"tool": "get_edt_version", "args": {}}
+  ],
+  "expected_result": "Будет возвращена установленная версия 1C:EDT через get_edt_version.",
+  "confidence": 5
+ },
+ {
+  "id": "q208",
+  "calls": [
+   {"tool": "get_server_status", "args": {}}
+  ],
+  "expected_result": "Будет проверена конфигурация и состояние MCP-сервера через get_server_status, включая включённые фичи.",
+  "confidence": 5
+ },
+ {
+  "id": "q209",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "exchangePlans"}}
+  ],
+  "expected_result": "Будет возвращён список всех планов обмена проекта TestConfiguration через get_metadata_objects.",
+  "confidence": 5
+ },
+ {
+  "id": "q210",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "УправлениеТорговлей", "metadataType": "accumulationRegisters"}}
+  ],
+  "expected_result": "Будет возвращён список регистров накопления проекта УправлениеТорговлей через get_metadata_objects.",
+  "confidence": 5
+ },
+ {
+  "id": "q211",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "enums", "nameFilter": "Вид"}}
+  ],
+  "expected_result": "Будут показаны перечисления TestConfiguration, чьи имена содержат подстроку Вид, через get_metadata_objects.",
+  "confidence": 5
+ },
+ {
+  "id": "q212",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "reports", "language": "ru"}}
+  ],
+  "expected_result": "Будет выведен список отчётов TestConfiguration с русскими синонимами через get_metadata_objects.",
+  "confidence": 5
+ },
+ {
+  "id": "q213",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["РегистрСведений.ЦеныНоменклатуры"]}}
+  ],
+  "expected_result": "Будет показана структура регистра сведений ЦеныНоменклатуры (измерения, ресурсы, реквизиты) через get_metadata_details.",
+  "confidence": 4
+ },
+ {
+  "id": "q214",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Обработка.ЗагрузкаДанных"], "full": true}}
+  ],
+  "expected_result": "Будет показана полная карточка обработки ЗагрузкаДанных через get_metadata_details с full=true.",
+  "confidence": 5
+ },
+ {
+  "id": "q215",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Справочник.Контрагенты"]}}
+  ],
+  "expected_result": "Будут показаны формы справочника Контрагенты и его основная форма через get_metadata_details.",
+  "confidence": 4
+ },
+ {
+  "id": "q216",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Role.ТолькоЧтение"], "roleObjectOffset": 100}}
+  ],
+  "expected_result": "Будет развёрнута матрица прав роли ТолькоЧтение начиная со следующей страницы объектов (offset 100) через get_metadata_details.",
+  "confidence": 3
+ },
+ {
+  "id": "q217",
+  "calls": [
+   {"tool": "list_subsystems", "args": {"projectName": "TestConfiguration", "recursive": true}}
+  ],
+  "expected_result": "Будет показано полное дерево подсистем TestConfiguration через list_subsystems с recursive=true.",
+  "confidence": 5
+ },
+ {
+  "id": "q218",
+  "calls": [
+   {"tool": "get_subsystem_content", "args": {"projectName": "УправлениеТорговлей", "subsystemFqn": "Subsystem.Администрирование"}}
+  ],
+  "expected_result": "Будет показан состав объектов подсистемы Администрирование проекта УправлениеТорговлей через get_subsystem_content.",
+  "confidence": 5
+ },
+ {
+  "id": "q219",
+  "calls": [
+   {"tool": "list_common_pictures", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Будет показан список и количество общих картинок TestConfiguration через list_common_pictures.",
+  "confidence": 5
+ },
+ {
+  "id": "q220",
+  "calls": [
+   {"tool": "export_common_picture", "args": {"projectName": "TestConfiguration", "fqn": "CommonPicture.Иконка16", "variant": "best"}}
+  ],
+  "expected_result": "Будут получены бинарные данные картинки CommonPicture.Иконка16 через export_common_picture с variant=best.",
+  "confidence": 4
+ },
+ {
+  "id": "q221",
+  "calls": [
+   {"tool": "get_tags", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Будет показан список тегов, которыми размечены объекты проекта УправлениеТорговлей, через get_tags.",
+  "confidence": 5
+ },
+ {
+  "id": "q222",
+  "calls": [
+   {"tool": "get_objects_by_tags", "args": {"projectName": "TestConfiguration", "tags": ["deprecated"]}}
+  ],
+  "expected_result": "Будут показаны объекты TestConfiguration с тегом deprecated через get_objects_by_tags.",
+  "confidence": 5
+ },
+ {
+  "id": "q223",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.ПеремещениеТоваров"}}
+  ],
+  "expected_result": "Будет создан новый документ ПеремещениеТоваров в TestConfiguration через create_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q224",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "InformationRegister.ОстаткиНаСкладах"}}
+  ],
+  "expected_result": "Будет создан новый регистр сведений ОстаткиНаСкладах в TestConfiguration через create_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q225",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Роль.Кладовщик"}}
+  ],
+  "expected_result": "Будет создана новая роль Кладовщик в TestConfiguration через create_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q226",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Справочник.Номенклатура.Attribute.Артикул"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Справочник.Номенклатура.Attribute.Артикул", "properties": [{"name": "type", "value": {"types": [{"kind": "String"}]}}]}}
+  ],
+  "expected_result": "Справочнику Номенклатура будет добавлен реквизит Артикул строкового типа через create_metadata и последующий modify_metadata для установки типа.",
+  "confidence": 4
+ },
+ {
+  "id": "q227",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ListForm"}}
+  ],
+  "expected_result": "У справочника Catalog.Products будет создана новая форма списка через create_metadata.",
+  "confidence": 4
+ },
+ {
+  "id": "q228",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonTemplate.ШапкаДокумента"}}
+  ],
+  "expected_result": "Будет создан общий макет ШапкаДокумента в TestConfiguration через create_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q229",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком", "targetNamespace": "http://example.org/bank"}}
+  ],
+  "expected_result": "Будет создан XDTO-пакет ОбменСБанком с указанным пространством имён через create_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q230",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"], "assignable": true}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder", "properties": [{"name": "realTimePosting", "value": true}]}}
+  ],
+  "expected_result": "Документу Document.SalesOrder будет установлен признак оперативного проведения через modify_metadata (имя свойства предварительно сверяется через get_metadata_details assignable).",
+  "confidence": 3
+ },
+ {
+  "id": "q231",
+  "calls": [
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Роль.Кладовщик", "rights": [
+     {"object": "РегистрНакопления.ТоварыНаСкладах", "right": "Read", "value": "set"},
+     {"object": "РегистрНакопления.ТоварыНаСкладах", "right": "Insert", "value": "set"},
+     {"object": "РегистрНакопления.ТоварыНаСкладах", "right": "Update", "value": "set"},
+     {"object": "РегистрНакопления.ТоварыНаСкладах", "right": "Delete", "value": "set"}
+   ]}}
+  ],
+  "expected_result": "Роли Кладовщик будут выставлены права Read/Insert/Update/Delete на регистр ТоварыНаСкладах через modify_metadata.",
+  "confidence": 3
+ },
+ {
+  "id": "q232",
+  "calls": [],
+  "expected_result": "Запрос не содержит конкретного содержимого новой схемы компоновки данных, поэтому вызов modify_metadata с dcs невозможен без уточнения.",
+  "confidence": 2
+ },
+ {
+  "id": "q233",
+  "calls": [
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Partners", "properties": [{"name": "descriptionLength", "value": 150}]}}
+  ],
+  "expected_result": "У справочника Catalog.Partners будет изменена длина наименования на 150 символов через modify_metadata.",
+  "confidence": 4
+ },
+ {
+  "id": "q234",
+  "calls": [
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Subsystem.Закупки", "content": [{"op": "remove", "metadata": "Catalog.Products"}]}}
+  ],
+  "expected_result": "Справочник Catalog.Products будет исключён из состава подсистемы Закупки через modify_metadata (content).",
+  "confidence": 5
+ },
+ {
+  "id": "q235",
+  "calls": [
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Справочник.Номенклатура", "properties": [{"name": "synonym", "value": "Products", "language": "en"}]}}
+  ],
+  "expected_result": "Справочнику Номенклатура будет задан английский синоним Products через modify_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q236",
+  "calls": [],
+  "expected_result": "Запрос не содержит нового текста заголовка для элемента НадписьИтого, поэтому вызов modify_metadata невозможен без уточнения значения.",
+  "confidence": 2
+ },
+ {
+  "id": "q237",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Перечисление.УстаревшиеВиды"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Перечисление.УстаревшиеВиды", "confirm": true}}
+  ],
+  "expected_result": "Перечисление УстаревшиеВиды будет удалено из TestConfiguration через delete_metadata (сначала предпросмотр, затем подтверждённое удаление).",
+  "confidence": 4
+ },
+ {
+  "id": "q238",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.TabularSection.Услуги"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.TabularSection.Услуги", "confirm": true}}
+  ],
+  "expected_result": "Табличная часть Услуги документа Document.SalesOrder будет удалена через delete_metadata (предпросмотр и подтверждённое удаление).",
+  "confidence": 4
+ },
+ {
+  "id": "q239",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.СтарыйОбмен"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.СтарыйОбмен", "confirm": true}}
+  ],
+  "expected_result": "Общий модуль СтарыйОбмен будет удалён из TestConfiguration через delete_metadata (предпросмотр покажет оставшиеся ссылки, затем подтверждённое удаление).",
+  "confidence": 4
+ },
+ {
+  "id": "q240",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ФормаВыбораСтарая"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Form.ФормаВыбораСтарая", "confirm": true}}
+  ],
+  "expected_result": "Форма ФормаВыбораСтарая справочника Catalog.Products будет удалена через delete_metadata (предпросмотр и подтверждённое удаление).",
+  "confidence": 4
+ },
+ {
+  "id": "q241",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Роль.ВременнаяРоль"}},
+   {"tool": "delete_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Роль.ВременнаяРоль", "confirm": true}}
+  ],
+  "expected_result": "Роль ВременнаяРоль будет удалена из TestConfiguration через delete_metadata (предпросмотр и подтверждённое удаление).",
+  "confidence": 4
+ },
+ {
+  "id": "q242",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Расчеты", "newName": "РасчетыСервер"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Расчеты", "newName": "РасчетыСервер", "confirm": true}}
+  ],
+  "expected_result": "Общий модуль Расчеты будет переименован в РасчетыСервер по всей конфигурации через rename_metadata_object (предпросмотр и подтверждённое выполнение).",
+  "confidence": 4
+ },
+ {
+  "id": "q243",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "РегистрСведений.Курсы", "newName": "КурсыВалют"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "РегистрСведений.Курсы", "newName": "КурсыВалют", "confirm": true}}
+  ],
+  "expected_result": "Регистр сведений Курсы будет переименован в КурсыВалют со всеми ссылками через rename_metadata_object (предпросмотр и подтверждённое выполнение).",
+  "confidence": 4
+ },
+ {
+  "id": "q244",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Документ.Заказ", "newName": "ЗаказКлиента"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "Документ.Заказ", "newName": "ЗаказКлиента", "confirm": true}}
+  ],
+  "expected_result": "Документ Заказ будет переименован в ЗаказКлиента с исправлением использований через rename_metadata_object (предпросмотр и подтверждённое выполнение).",
+  "confidence": 4
+ },
+ {
+  "id": "q245",
+  "calls": [
+   {"tool": "adopt_metadata_object", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Products.Attribute.Цена"}}
+  ],
+  "expected_result": "Реквизит Catalog.Products.Attribute.Цена будет добавлен в расширение из базовой конфигурации через adopt_metadata_object.",
+  "confidence": 5
+ },
+ {
+  "id": "q246",
+  "calls": [
+   {"tool": "adopt_metadata_object", "args": {"projectName": "TestConfiguration", "fqn": "Документ.РеализацияТоваров", "extensionProjectName": "ДоработкиУТ"}}
+  ],
+  "expected_result": "Документ РеализацияТоваров будет добавлен (адаптирован) в расширение ДоработкиУТ через adopt_metadata_object как первый шаг перед перехватом его событий.",
+  "confidence": 3
+ },
+ {
+  "id": "q247",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "objectName": "Номенклатура"}}
+  ],
+  "expected_result": "Будет показан список модулей справочника Номенклатура в TestConfiguration через list_modules.",
+  "confidence": 5
+ },
+ {
+  "id": "q248",
+  "calls": [
+   {"tool": "get_metadata_objects", "args": {"projectName": "УправлениеТорговлей", "metadataType": "commonModules", "nameFilter": "Обмен"}}
+  ],
+  "expected_result": "Будут показаны общие модули УправлениеТорговлей, чьи имена содержат Обмен, через get_metadata_objects.",
+  "confidence": 5
+ },
+ {
+  "id": "q249",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "metadataType": "documents", "objectName": "SalesOrder"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/SalesOrder/ManagerModule.bsl"}}
+  ],
+  "expected_result": "Будет прочитан модуль менеджера документа Document.SalesOrder целиком через list_modules (уточнение пути) и read_module_source.",
+  "confidence": 4
+ },
+ {
+  "id": "q250",
+  "calls": [
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/ОбщегоНазначения/Module.bsl", "startLine": 1, "endLine": 50}}
+  ],
+  "expected_result": "Будут показаны первые 50 строк модуля CommonModule.ОбщегоНазначения через read_module_source.",
+  "confidence": 5
+ }
+]

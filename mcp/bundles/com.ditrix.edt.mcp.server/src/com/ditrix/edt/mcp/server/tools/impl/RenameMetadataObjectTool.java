@@ -126,13 +126,12 @@ public class RenameMetadataObjectTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Rename a metadata object, one of its members, or a managed-form element " + //$NON-NLS-1$
-               "(attribute / command / field / button / group / decoration / table / attribute " + //$NON-NLS-1$
-               "column), cascading the change across the references EDT resolves for it in BSL " + //$NON-NLS-1$
-               "code, forms, and other metadata. Use the two-phase workflow: call without confirm " + //$NON-NLS-1$
-               "for an indexed preview of every change point, review it, then call again with " + //$NON-NLS-1$
-               "confirm=true to apply. Full parameters and examples: call " + //$NON-NLS-1$
-               "get_tool_guide('rename_metadata_object')."; //$NON-NLS-1$
+        return "Rename a metadata object or member and rewrite the references EDT RESOLVES for it. " //$NON-NLS-1$
+            + "CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems - but a reference " //$NON-NLS-1$
+            + "the refactoring cannot resolve (a dynamically built name) is left pointing at the old " //$NON-NLS-1$
+            + "name. Two-phase: call once WITHOUT confirm to " //$NON-NLS-1$
+            + "see the edit scope, then again with confirm=true to apply. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('rename_metadata_object')."; //$NON-NLS-1$
     }
 
     @Override

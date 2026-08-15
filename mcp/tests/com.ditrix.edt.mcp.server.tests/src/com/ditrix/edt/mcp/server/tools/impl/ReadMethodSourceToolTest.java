@@ -264,7 +264,7 @@ public class ReadMethodSourceToolTest
         // The single-method tool advertises its whole-module sibling.
         String desc = new ReadMethodSourceTool().getDescription();
         assertTrue("description must point to read_module_source", //$NON-NLS-1$
-            desc.contains("read_module_source")); //$NON-NLS-1$
+            new ReadMethodSourceTool().getGuide().contains("read_module_source")); //$NON-NLS-1$
     }
 
     @Test

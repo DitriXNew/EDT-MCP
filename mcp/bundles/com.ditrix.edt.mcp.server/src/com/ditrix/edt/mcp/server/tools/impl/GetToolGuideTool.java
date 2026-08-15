@@ -46,10 +46,8 @@ public class GetToolGuideTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get the full on-demand how-to for a tool: its description, every parameter " //$NON-NLS-1$
-            + "(type, required, allowed values) and extended examples/preconditions kept OUT of " //$NON-NLS-1$
-            + "the always-loaded tool list to save context. Pass the exact tool name from " //$NON-NLS-1$
-            + "tools/list. Also available as the resource guide://<toolName>."; //$NON-NLS-1$
+        return "Retrieve detailed instructions for an MCP tool. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_tool_guide')."; //$NON-NLS-1$
     }
 
     @Override

@@ -1,0 +1,44 @@
+{
+  "_doc": "V4 = V3 (one-line description + bare parameter schema) for all 85 tools, PLUS a short clause kept IN THE DESCRIPTION for the tools where the 500-question run showed the text is load-bearing. Measured on the 61 destructive requests: reading the guide does NOT restore the two-phase protocol (V3 fetched the right guide in 46/61 cases and still previewed only 22% of the time, against 27% when it had not fetched it). Always-in-context text works; fetched text does not. So the protocol, cascade and deprecation clauses stay in the description and everything else goes.",
+  "descriptions": {
+    "delete_metadata": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force=true overrides that block and can leave dangling references behind.",
+    "delete_project": "Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
+    "rename_metadata_object": "Rename a metadata object or member and rewrite every reference to it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply.",
+    "update_database": "Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
+    "delete_infobase": "Remove a project's infobase or its standalone-server registration, optionally deleting the database files. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
+    "delete_launch_config": "Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
+    "terminate_launch": "Stop 1C sessions started by EDT. NOT two-phase for a single launch: selecting one (launchConfigurationName, or projectName + applicationId) stops it IMMEDIATELY, with no preview call. Only mass termination is gated - all=true is rejected without confirm=true. Either way, list_configurations first to see what is running.",
+    "resync_to_disk": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo.",
+    "clean_project": "Rebuild an EDT project from the on-disk src/ files and revalidate everything. Direction DISK -> MODEL; slow, and it DISCARDS unsaved in-memory model edits - save first. For one externally-edited object prefer revalidate_objects; for the opposite direction see resync_to_disk.",
+    "revalidate_objects": "Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. Targeted, lightweight alternative to clean_project - no full rebuild, nothing discarded.",
+    "debug_yaxunit_tests": "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; behaviour is identical. Kept for compatibility.",
+    "search_in_code": "Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en dialect-aware, so a query in one BSL language will not find the other spelling - for a symbol's usages use find_references, for where it is defined use go_to_definition.",
+    "evaluate_expression": "Evaluate a BSL expression in a paused debug frame and return the value. WARNING: this executes arbitrary code in the running application - it can change state, not just read it.",
+    "get_event_log": "Investigate infobase activity and errors through its event log. Returns PII and live infobase data - user names, session data and business-record references.",
+    "git": "Run a git command in a project's repository through the real git CLI, sent as a shell-style string. Only a whitelisted set of subcommands runs, and the write-capable ones (commit, push, checkout, stash) change the repository. DISABLED by default: enable it in Preferences -> MCP Server -> Tools; enable_toolset does not turn it on. Parameters, the whitelist and examples: get_tool_guide('git').",
+    "ask_workmate": "Ask the 1C:Workmate plugin a question in the background, without holding an MCP request open for the whole cloud conversation: the first call starts it, later calls poll for the answer. Requires a compatible Workmate installation in the same EDT JVM. Parameters and examples: get_tool_guide('ask_workmate')."
+  },
+  "params": {
+    "get_markers": {
+      "markerKind": "'bookmark' = manual navigation bookmarks; 'task' = TODO/FIXME/XXX/HACK code markers. Omit for both."
+    },
+    "get_project_errors": {
+      "objects": "Loose case-insensitive SUBSTRING match against the reported location; mutually exclusive with objectFqns.",
+      "objectFqns": "EXACT model addresses; mutually exclusive with objects. Returns objectsNotFound / objectsUnsupported."
+    },
+    "get_method_call_hierarchy": {
+      "direction": "'callers' = who calls this method, 'callees' = what it calls."
+    },
+    "create_infobase": {
+      "infobaseFile": "Absolute path to the infobase directory. FILE infobases only - server/web are rejected."
+    },
+    "run_yaxunit_tests": {
+      "debug": "true launches in DEBUG mode so breakpoints fire and returns a launch handle immediately - call wait_for_break next. Default false polls and returns the report."
+    },
+    "write_module_source": {
+      "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since."
+    }
+  },
+  "_not_measured": "git and ask_workmate postdate the golden snapshot, so they were not in the 500-question run. Their texts follow the same rule by review, not by measurement: purpose line + the clauses that are load-bearing (git: real CLI, whitelist, write-capable subcommands, disabled by default and NOT reachable through enable_toolset; ask_workmate: the start-then-poll protocol and the Workmate precondition).",
+  "_correction": "terminate_launch carried a FALSE two-phase clause here and in the shipped description: confirm gates only all=true, so a 'preview' call on a single launch terminates it. The text is corrected; the committed arm-D answers still follow the old instruction (q303, c104 preview-then-confirm a single session), so that arm must be re-run before its safety numbers are quoted again."
+}

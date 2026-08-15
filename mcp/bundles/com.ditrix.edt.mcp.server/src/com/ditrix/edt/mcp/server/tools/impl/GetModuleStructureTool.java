@@ -63,14 +63,8 @@ public class GetModuleStructureTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get structure of a BSL module: all procedures/functions with signatures, " + //$NON-NLS-1$
-               "line numbers, regions, execution context (&AtServer, &AtClient), " + //$NON-NLS-1$
-               "export flag, and parameters. " + //$NON-NLS-1$
-               "responseFormat=concise (default) returns a leaner methods table (drops the " + //$NON-NLS-1$
-               "verbose Parameters and Description columns; keeps type, name, export, context, " + //$NON-NLS-1$
-               "lines, region); responseFormat=detailed returns the full table with signatures " + //$NON-NLS-1$
-               "and doc-comments. Use detailed when you need parameter lists or descriptions. " + //$NON-NLS-1$
-               "Use this for the structure of ONE module; to discover module paths across a project use list_modules."; //$NON-NLS-1$
+        return "Discover procedures, functions, regions, and execution contexts in a BSL module. Parameters " //$NON-NLS-1$
+            + "and examples: get_tool_guide('get_module_structure')."; //$NON-NLS-1$
     }
 
     @Override
