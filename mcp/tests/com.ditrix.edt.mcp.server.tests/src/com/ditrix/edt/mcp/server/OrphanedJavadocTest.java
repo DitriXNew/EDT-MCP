@@ -172,7 +172,11 @@ public class OrphanedJavadocTest
             + "    whose name does not directly follow the keyword (generic, or with a comment between),\n" //$NON-NLS-1$
             + "    a second declarator, an enum constant after the first, and a block left after the\n" //$NON-NLS-1$
             + "    last declaration in a file.\n" //$NON-NLS-1$
-            + "The allow-list keys on the block's text plus the head of the declaration below it. That\n" //$NON-NLS-1$
+            + "  - a comment inside an annotation's qualified name ('@Outer /* gap */ .Ann'): the\n" //$NON-NLS-1$
+            + "    name is not followed through it, so the member position ends there.\n" //$NON-NLS-1$
+            + "The allow-list keys on the block's text plus the head of the declaration below it, and\n" //$NON-NLS-1$
+            + "that head is read without understanding literals - a '{' or a ';' inside a string\n" //$NON-NLS-1$
+            + "('@Tag(\"{x\")') cuts it short. That\n" //$NON-NLS-1$
             + "separates two sites in one file unless their following declarations are worded the same\n" //$NON-NLS-1$
             + "as well - two 'int f' in two types would still share one entry.\n" //$NON-NLS-1$
             + "Making this a gate needs a real Java lexer first; see FAIL_THE_BUILD.\n" //$NON-NLS-1$
