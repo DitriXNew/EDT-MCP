@@ -1839,10 +1839,16 @@ public class GitToolStoredRemoteTest
     @Test
     public void testAnUnresolvableCommonDirIsRefusedAndNamesItsOwnRepair() throws Exception
     {
-        // Fail closed: that one file says where the whole shared repository is, so without it
-        // nothing about the stored remotes can be inspected. This is not a refusal invented for
-        // safety's sake - git dies on the same file ('fatal: not a git repository', measured) - so
-        // it cannot take a working repository off the air.
+        // Fail closed: that one file says where the whole shared repository is, so without it the
+        // effective set of remotes cannot be established. For THIS fault - a pointer naming a
+        // directory that does not exist - git dies too ('fatal: not a git repository', measured),
+        // so the refusal cannot take a working repository off the air.
+        //
+        // What the refusal must NOT say is 'git worktree repair'. Measured on git 2.35.1: pointed
+        // at exactly this worktree it left the file byte for byte unchanged and reported
+        // 'repair: .git file broken' about an intact .git file. An assertion that merely looked for
+        // that phrase would pass on the old, wrong advice AND on the warning that replaced it -
+        // which is what the previous version of this test did.
         Repository shared = newRepository("git-stored-linked-broken-commondir"); //$NON-NLS-1$
         Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
         Files.write(new File(linked.getDirectory(), "commondir").toPath(), //$NON-NLS-1$
@@ -1854,8 +1860,11 @@ public class GitToolStoredRemoteTest
             refusal);
         assertTrue("the refusal must name the file at fault: " + refusal, //$NON-NLS-1$
             refusal.contains("commondir")); //$NON-NLS-1$
-        assertTrue("...and the repair, which is not the config repair: " + refusal, //$NON-NLS-1$
-            refusal.contains("git worktree repair")); //$NON-NLS-1$
+        assertTrue("...and the repair, which is the FILE and not the config repair: " + refusal, //$NON-NLS-1$
+            refusal.contains("Repair the 'commondir' file itself")); //$NON-NLS-1$
+        assertTrue("...and it must warn AGAINST the command that does not fix this, or an " //$NON-NLS-1$
+            + "operator follows the obvious one and gets the same refusal back: " + refusal, //$NON-NLS-1$
+            refusal.contains("Do NOT reach for 'git worktree repair'"));
         assertFalse("...and it must not quote what the file said: " + refusal, //$NON-NLS-1$
             refusal.contains("nowhere-at-all")); //$NON-NLS-1$
         assertRefusalLeaksNothing(refusal);

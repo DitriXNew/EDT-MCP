@@ -444,9 +444,9 @@ public class GitTool implements IMcpTool
     private static final String COMMON_DIR_UNREADABLE_REFUSAL =
         "This is a linked git worktree, and the 'commondir' file in its git directory - the pointer " //$NON-NLS-1$
         + "to the shared repository holding the configuration and the remotes - could not be " //$NON-NLS-1$
-        + "resolved to a directory. The remotes this repository actually declares all live behind " //$NON-NLS-1$
-        + "that pointer, so none of them can be inspected without it (what is still readable is the " //$NON-NLS-1$
-        + "user and system configuration, which is not where the fault is), " //$NON-NLS-1$
+        + "resolved to a directory. Without it this tool cannot read the shared configuration, and " //$NON-NLS-1$
+        + "cannot even tell whether the per-worktree one is switched on, so the effective set of " //$NON-NLS-1$
+        + "remotes cannot be established at all, " //$NON-NLS-1$
         + "so the operation is refused instead of run blind. Check the worktree in a terminal " //$NON-NLS-1$
         + "first: most faults of this file stop git as well ('fatal: not a git repository'), but " //$NON-NLS-1$
         + "not all of them - a pointer that is not valid UTF-8, is implausibly large, or is not a " //$NON-NLS-1$
