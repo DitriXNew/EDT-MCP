@@ -215,6 +215,7 @@
     "inputSchema": {
       "properties": {
         "projectName": {
+          "description": "Name of the project to clean (optional, cleans all EDT projects if not specified)",
           "type": "string"
         },
         "timeout": {
@@ -778,7 +779,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Run a 1C application under EDT debugging. Parameters and examples: get_tool_guide('debug_launch').",
+    "description": "Run a 1C application under EDT debugging. An already-running session is NOT relaunched - the call short-circuits with alreadyRunning:true; restartIfRunning=true instead TERMINATES that live session first. Parameters and examples: get_tool_guide('debug_launch').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -795,6 +796,7 @@
           "type": "string"
         },
         "restartIfRunning": {
+          "description": "Default false: if a matching session is already running, short-circuit with alreadyRunning:true and do NOT relaunch (call terminate_launch to restart). true: non-interactively terminate the existing session, then relaunch — no 'Debug session already exists' modal blocks the call.",
           "type": "boolean"
         },
         "updateBeforeLaunch": {
@@ -3835,7 +3837,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Change a variable while execution is paused in the debugger. Parameters and examples: get_tool_guide('set_variable').",
+    "description": "Change a variable while execution is paused in the debugger. WARNING: the value is EVALUATED as a BSL expression in the running application, so it can invoke code and change state beyond the named variable. Parameters and examples: get_tool_guide('set_variable').",
     "inputSchema": {
       "properties": {
         "frameIndex": {
@@ -3848,6 +3850,7 @@
           "type": "integer"
         },
         "value": {
+          "description": "New value as a BSL literal/expression (e.g. 42, \"text\", True, Дата(2025,1,1))",
           "type": "string"
         },
         "variableName": {

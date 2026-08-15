@@ -150,7 +150,10 @@ public final class InputSchemaCompactor
         // bare string - no enum - so the legal values ('override' / 'import' / 'cancel')
         // live only here, and so does the fact that the DEFAULT, 'override', DISCARDS the
         // external work. A launch that looks routine silently overwrites someone's changes.
-        keep.put("debug_launch", asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$ //$NON-NLS-2$
+        // restartIfRunning=true TERMINATES the live session before relaunching, on a tool
+        // whose destructiveHint is false - nothing else in the always-loaded contract says so.
+        keep.put("debug_launch", //$NON-NLS-1$
+            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, "restartIfRunning")); //$NON-NLS-1$ //$NON-NLS-2$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
         keep.put("update_database", //$NON-NLS-1$
@@ -173,6 +176,14 @@ public final class InputSchemaCompactor
         // preview's contentHash and becomes REQUIRED once confirm=true is paired with a
         // non-empty disableIndices. Without it the selective confirm is simply rejected.
         keep.put("rename_metadata_object", asSet("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
+        // An OPTIONAL parameter whose omission widens the blast radius to the whole
+        // workspace: without projectName, clean_project rebuilds EVERY EDT project and
+        // discards unsaved in-memory edits in all of them. "Optional" reads as "safe to
+        // leave out", and here it is the opposite.
+        keep.put("clean_project", asSet("projectName")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The value is EVALUATED on the suspended target as a BSL expression, so it can
+        // call application code - it is not an inert literal being stored.
+        keep.put("set_variable", asSet("value")); //$NON-NLS-1$ //$NON-NLS-2$
         return Collections.unmodifiableMap(keep);
     }
 

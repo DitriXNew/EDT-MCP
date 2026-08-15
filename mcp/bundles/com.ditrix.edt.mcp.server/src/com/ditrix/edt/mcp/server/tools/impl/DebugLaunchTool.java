@@ -86,7 +86,9 @@ public class DebugLaunchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run a 1C application under EDT debugging. Parameters and examples: " //$NON-NLS-1$
+        return "Run a 1C application under EDT debugging. An already-running session is NOT " //$NON-NLS-1$
+            + "relaunched - the call short-circuits with alreadyRunning:true; restartIfRunning=true " //$NON-NLS-1$
+            + "instead TERMINATES that live session first. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('debug_launch')."; //$NON-NLS-1$
     }
 

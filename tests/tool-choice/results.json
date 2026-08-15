@@ -94,7 +94,7 @@
   "calls_checked": 905,
   "mustparam_n": 304,
   "mustparam_ok": 293,
-  "guide_chars": 5178794,
+  "guide_chars": 5179709,
   "twophase_n": 57,
   "twophase_strict": 53,
   "twophase_confirm": 56,
@@ -109,6 +109,6 @@
   "chain_complete": 134,
   "missing": 3,
   "guide_uniq": 74,
-  "guide_uniq_chars": 492896
+  "guide_uniq_chars": 493079
  }
 }

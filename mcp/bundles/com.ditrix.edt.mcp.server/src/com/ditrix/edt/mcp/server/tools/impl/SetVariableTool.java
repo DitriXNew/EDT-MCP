@@ -80,7 +80,9 @@ public class SetVariableTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Change a variable while execution is paused in the debugger. Parameters and examples: " //$NON-NLS-1$
+        return "Change a variable while execution is paused in the debugger. WARNING: the value is " //$NON-NLS-1$
+            + "EVALUATED as a BSL expression in the running application, so it can invoke code and " //$NON-NLS-1$
+            + "change state beyond the named variable. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('set_variable')."; //$NON-NLS-1$
     }
 

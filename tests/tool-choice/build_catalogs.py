@@ -276,7 +276,7 @@ print("батчей: %d одношаговых по 50, %d цепочек по 2
 wire = len(json.dumps(tools, ensure_ascii=False))
 print("tools: %d" % len(tools))
 print("%-4s %9s %9s  %s" % ("arm", "chars", "~tokens", "vs V1"))
-print("%-4s %9d %9d  %s" % ("wire", wire, wire // 4, "(real tools/list JSON today)"))
+print("%-4s %9d %9d  %s" % ("wire", wire, wire // 4, "(V1 baseline JSON, pre-compaction - NOT the current wire)"))
 base = None
 for arm in ("V1", "V2", "V3", "V4"):
     n = len(arms[arm])
