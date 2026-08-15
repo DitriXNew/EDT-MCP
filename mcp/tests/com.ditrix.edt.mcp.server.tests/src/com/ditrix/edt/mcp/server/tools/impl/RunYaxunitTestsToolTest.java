@@ -24,7 +24,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
@@ -809,6 +811,72 @@ public class RunYaxunitTestsToolTest
         finally
         {
             releaseWorker.countDown();
+        }
+    }
+
+    @Test
+    public void testCancellingAttachmentStopsWaitWithoutStoppingMirroredRun() throws Exception
+    {
+        CountDownLatch mirroredStarted = new CountDownLatch(1);
+        CountDownLatch releaseMirrored = new CountDownLatch(1);
+        CountDownLatch attachmentStarted = new CountDownLatch(1);
+        AtomicReference<String> returnedMessage = new AtomicReference<>();
+        AtomicBoolean interruptedAtReturn = new AtomicBoolean();
+        AtomicInteger returns = new AtomicInteger();
+        BackgroundJobs jobs = new BackgroundJobs(20, 2);
+        try
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            JobSnapshot mirrored = jobs.start(RunYaxunitTestsTool.NAME, Long.MAX_VALUE,
+                "start mirrored run", progress -> { //$NON-NLS-1$
+                    assertTrue(progress.tryCommit());
+                    mirroredStarted.countDown();
+                    releaseMirrored.await();
+                    return "mirrored report"; //$NON-NLS-1$
+                });
+            assertNotNull(mirrored);
+            assertTrue(mirroredStarted.await(1, TimeUnit.SECONDS));
+
+            JobSnapshot attachment = jobs.start(RunYaxunitTestsTool.NAME, 60_000L,
+                "start attachment", progress -> { //$NON-NLS-1$
+                    attachmentStarted.countDown();
+                    String message = tool.awaitExistingRun(mirrored.getId(), progress);
+                    returnedMessage.set(message);
+                    interruptedAtReturn.set(Thread.currentThread().isInterrupted());
+                    returns.incrementAndGet();
+                    return message;
+                });
+            assertNotNull(attachment);
+            assertTrue(attachmentStarted.await(1, TimeUnit.SECONDS));
+
+            CancellationResult cancellation = jobs.cancel(attachment.getId());
+            assertNotNull(cancellation);
+            assertEquals(CancellationOutcome.CANCELLED, cancellation.getOutcome());
+            JobSnapshot cancelled = jobs.await(attachment.getId(), 2_000L);
+            assertEquals("the attachment worker must exit so cancellation can publish", //$NON-NLS-1$
+                BackgroundJobs.Status.CANCELLED, cancelled.getStatus());
+
+            String message = returnedMessage.get();
+            assertNotNull("the interrupted attachment wait must return a result", message); //$NON-NLS-1$
+            assertTrue("the result must name the separate mirrored job", //$NON-NLS-1$
+                message.contains(mirrored.getId()));
+            assertTrue("the result must say that the mirrored job keeps running", //$NON-NLS-1$
+                message.contains("keeps running")); //$NON-NLS-1$
+            assertTrue("the result must provide the polling action", //$NON-NLS-1$
+                message.contains("get_job_status")); //$NON-NLS-1$
+            assertFalse("the result must not claim that the mirrored job was stopped", //$NON-NLS-1$
+                message.toLowerCase().contains("stopped")); //$NON-NLS-1$
+            assertTrue("the attachment must preserve the interrupt instead of swallowing it", //$NON-NLS-1$
+                interruptedAtReturn.get());
+            assertEquals("the interrupted wait must return instead of continuing its loop", //$NON-NLS-1$
+                1, returns.get());
+            assertEquals("cancelling the attachment must not cancel the mirrored job", //$NON-NLS-1$
+                BackgroundJobs.Status.RUNNING, jobs.get(mirrored.getId()).getStatus());
+        }
+        finally
+        {
+            releaseMirrored.countDown();
+            jobs.close();
         }
     }
 

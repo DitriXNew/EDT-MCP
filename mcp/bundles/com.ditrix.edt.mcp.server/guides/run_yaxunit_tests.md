@@ -103,6 +103,8 @@ After the client launch exists, this owning tool's declared cancellation capabil
 
 A committed job with no live YAXUnit client yet cannot undo already-dispatched preparation and still reports `alreadyCommitted`. Jobs owned by tools without this explicit capability also keep `alreadyCommitted`; `cancel_job` does not infer cancellability from a tool name.
 
+Cancelling an ATTACHMENT is a different thing from cancelling the run. When an equivalent request attaches to a live job rather than launching beside it, cancelling that attachment stops only the waiting: the mirrored run is a separate job that keeps going, and the reply names its `jobId` so it can still be polled with `get_job_status`. Nothing about the tests, the client or the infobase is affected — to stop the run itself, cancel the job the attachment names.
+
 ## Auto-chain (updateBeforeLaunch)
 
 Default `true`: before spawning a new test launch, the tool runs the **pre-launch preparation chain** (selectively force-recompute changed projects, wait for the workspace build to settle, politely terminate any live 1C client running this configuration, then run a silent database update) in an Eclipse background job. The owning registry job observes it in **25-second wait slices**:

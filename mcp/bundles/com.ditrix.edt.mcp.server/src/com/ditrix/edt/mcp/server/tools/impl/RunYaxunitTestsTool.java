@@ -591,6 +591,13 @@ public class RunYaxunitTestsTool implements IMcpTool
                 {
                     return result;
                 }
+                if (Thread.currentThread().isInterrupted())
+                {
+                    return ToolResult.error("The YAXUnit background job was interrupted while " //$NON-NLS-1$
+                        + "waiting for pre-launch preparation. That preparation may already be " //$NON-NLS-1$
+                        + "running separately in EDT; inspect EDT before starting " //$NON-NLS-1$
+                        + "run_yaxunit_tests again.").toJson(); //$NON-NLS-1$
+                }
                 progress.add("Still working (phase: " + state.label() + ")."); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
@@ -665,6 +672,13 @@ public class RunYaxunitTestsTool implements IMcpTool
         while (true) // NOSONAR the referenced registry job supplies the terminal condition
         {
             JobSnapshot existing = jobs.await(existingJobId, 1_000L);
+            if (Thread.currentThread().isInterrupted())
+            {
+                return ToolResult.error("This attachment was cancelled. The YAXUnit run it was " //$NON-NLS-1$
+                    + "mirroring is a separate background job '" + existingJobId //$NON-NLS-1$
+                    + "' that keeps running. Poll it with get_job_status using jobId '" //$NON-NLS-1$
+                    + existingJobId + "'.").toJson(); //$NON-NLS-1$
+            }
             if (existing == null)
             {
                 return ToolResult.error("The equivalent YAXUnit job '" + existingJobId //$NON-NLS-1$
