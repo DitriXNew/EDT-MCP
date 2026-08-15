@@ -1879,8 +1879,8 @@ public class GitToolStoredRemoteTest
         GitCommonDirectory.Fault expected = GitCommonDirectory.Fault.NOT_A_DIRECTORY;
         assertTrue("the refusal must name the fault this pointer actually hit: " + refusal, //$NON-NLS-1$
             refusal.contains(expected.reason()));
-        assertTrue("...and say whose limit it is - this one git was measured to share: " + refusal, //$NON-NLS-1$
-            refusal.contains("git was measured to fail on the same file")); //$NON-NLS-1$
+        assertTrue("...and say that THIS TOOL refused, without claiming what git would do: " //$NON-NLS-1$
+            + refusal, refusal.contains("This tool refused rather than run blind")); //$NON-NLS-1$
         for (GitCommonDirectory.Fault other : GitCommonDirectory.Fault.values())
         {
             if (other != expected && !other.reason().equals(expected.reason()))
@@ -1941,8 +1941,8 @@ public class GitToolStoredRemoteTest
             refusal.contains("This is a linked git worktree")); //$NON-NLS-1$
         assertTrue("it must still name the fault it did reach: " + refusal, //$NON-NLS-1$
             refusal.contains(GitCommonDirectory.Fault.LAYOUT_UNREADABLE.reason()));
-        assertTrue("...and say the ownership is not established, since it is not: " + refusal, //$NON-NLS-1$
-            refusal.contains("has not been established either way")); //$NON-NLS-1$
+        assertTrue("...and claim nothing about git, as no refusal does any more: " + refusal, //$NON-NLS-1$
+            refusal.contains("is not something it determines")); //$NON-NLS-1$
 
         // The contrast that makes it a real assertion: a CONFIRMED fault does get the head.
         String confirmed = GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY);
@@ -1996,6 +1996,47 @@ public class GitToolStoredRemoteTest
         String confirmed = GitTool.commonDirFailureLog(GitCommonDirectory.Fault.EMPTY, null);
         assertTrue("a CONFIRMED fault still says what it really was, or the head would be dead " //$NON-NLS-1$
             + "code: " + confirmed, confirmed.contains("commondir")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoRefusalNamesASideForANYFault()
+    {
+        // What the collapse GUARANTEES, pinned over every member rather than sampled.
+        //
+        // The refusal used to say whose limit the fault was. Measured against git 2.35.1, FIVE of
+        // eleven were wrong - and the decisive one shows the claim could not be fixed, only
+        // dropped: a commondir of '\shared' makes git answer 'fatal: not a git repository' on
+        // Windows and is an ordinary relative path git resolves happily on POSIX. The same bytes,
+        // opposite answers, so no constant could have been right on both.
+        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
+        {
+            String refusal = GitTool.commonDirRefusal(fault);
+            assertTrue(fault + ": every refusal must still name the fault it hit: " + refusal, //$NON-NLS-1$
+                refusal.contains(fault.reason()));
+            for (String side : new String[]{"THIS TOOL's limit", "git was measured to fail", //$NON-NLS-1$ //$NON-NLS-2$
+                "git may well carry on", "would have hit anyway", //$NON-NLS-1$ //$NON-NLS-2$
+                "has not been established either way"}) //$NON-NLS-1$
+            {
+                assertFalse(fault + ": no refusal may claim whose limit it is - that depends on " //$NON-NLS-1$
+                    + "the platform and the git version, not on the fault: " + refusal, //$NON-NLS-1$
+                    refusal.contains(side));
+            }
+        }
+        assertFalse("nor may the unclassified one", //$NON-NLS-1$
+            GitTool.commonDirRefusal(null).contains("git was measured to fail")); //$NON-NLS-1$
+
+        // The blacklist above is a FLOOR - it only knows the phrases the old renderer used, so a
+        // NEW sentence naming a side would walk straight past it. What follows is the property
+        // itself, and it needs no list: two faults that share a repair tail must produce messages
+        // that differ ONLY in the fault's own words. Any sentence added per-fault - about git or
+        // anything else - breaks that equality, whatever it happens to say.
+        GitCommonDirectory.Fault a = GitCommonDirectory.Fault.EMPTY;
+        GitCommonDirectory.Fault b = GitCommonDirectory.Fault.NOT_A_DIRECTORY;
+        assertEquals("two faults with the same repair must differ only in their reason - a " //$NON-NLS-1$
+            + "message that says anything else ABOUT the fault is saying something this code " //$NON-NLS-1$
+            + "does not know", //$NON-NLS-1$
+            GitTool.commonDirRefusal(a).replace(a.reason(), "<R>"), //$NON-NLS-1$
+            GitTool.commonDirRefusal(b).replace(b.reason(), "<R>")); //$NON-NLS-1$
     }
 
     // ==================== the pre-flight execute() actually runs ====================

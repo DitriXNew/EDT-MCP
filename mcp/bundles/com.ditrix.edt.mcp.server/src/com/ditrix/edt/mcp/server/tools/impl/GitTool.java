@@ -426,14 +426,12 @@ public class GitTool implements IMcpTool
      * guarantee the {@code .git/worktrees/<name>} layout that {@code git worktree add} happens to
      * produce - and quotes no content.
      * <p>
-     * MOST conditions behind this refusal are ones where native git was measured to die as well
-     * ({@code fatal: failed to read .../commondir}, {@code fatal: not a git repository}). Some are
-     * not, and the text therefore does NOT tell the caller that git would fail too - claiming that
-     * would be wrong in exactly the cases where the operator most needs to be told it is our limit
-     * they have hit. WHICH one is not decided here at all: the exception carries the fault, and
-     * {@link #commonDirRefusal} renders that ONE fault and its
-     * {@link GitCommonDirectory.Fault#ownership()}. This sentence used to carry a list, and it was
-     * stale within one round of adding a refusal - which is why nothing enumerates any more.
+     * It names no side, and that is the correction this text exists to record. Which of these
+     * conditions kills native git was measured to depend on the PLATFORM - the same
+     * {@code commondir} that stops git on Windows is an ordinary relative path on POSIX - so a
+     * refusal naming a side was wrong on half the machines whatever it said. It names the fault and
+     * leaves git to the terminal. It used to carry a list of the conditions as well, and that list
+     * was stale within one round of adding a refusal, which is why nothing enumerates any more.
      * <p>
      * The repair it names is the FILE, not a command, and that too is measured rather than assumed:
      * {@code git worktree repair} does NOT rewrite {@code commondir}. Run against a worktree whose
@@ -2227,8 +2225,7 @@ public class GitTool implements IMcpTool
      * limit it is.
      * <p>
      * It names one fault rather than listing every fault that exists, and that is the whole point.
-     * The earlier version pasted in every {@link GitCommonDirectory.Ownership#OURS} reason and
-     * left the operator to work out
+     * The earlier version pasted in every reason and left the operator to work out
      * which line was about their repository - which is also how the list ended up duplicated in two
      * guides, a constant's javadoc and a test, and drifted out of step three review rounds running.
      * The exception carries the fault; there was never a reason to enumerate.
@@ -2255,20 +2252,14 @@ public class GitTool implements IMcpTool
                 + "The failure is of a kind this tool does not classify. " //$NON-NLS-1$
                 + COMMON_DIR_UNREADABLE_REFUSAL_TAIL;
         }
-        // Exhaustive over Ownership with NO default, deliberately: a fourth state added later
-        // must fail to COMPILE here rather than be quietly rendered as one of these three. A
-        // default arm is exactly how the old boolean hid "not established" inside "git fails too".
-        String whose = switch (fault.ownership())
-        {
-            case OURS -> "That is THIS TOOL's limit, not git's - git may well carry on past it, " //$NON-NLS-1$
-                + "and following it here would mean inspecting some other directory, reading " //$NON-NLS-1$
-                + "unbounded untrusted content, or blocking with no deadline. "; //$NON-NLS-1$
-            case GIT_TOO -> "git was measured to fail on the same file, so this refusal names a " //$NON-NLS-1$
-                + "fault the command would have hit anyway. "; //$NON-NLS-1$
-            case UNKNOWN -> "Whether git can use this repository has not been established either " //$NON-NLS-1$
-                + "way, so check it in a terminal before assuming the fault is only this tool's. "; //$NON-NLS-1$
-        };
-        String what = "The fault: " + fault.reason() + ". " + whose; //$NON-NLS-1$ //$NON-NLS-2$
+        // No claim about git, on purpose and after measuring. This sentence used to name a side -
+        // "this tool's limit" or "git fails too" - and five of the eleven were wrong against a real
+        // git. The decisive one shows the claim was unfixable rather than merely wrong: '\shared'
+        // in a commondir kills git on Windows and is an ordinary relative path on POSIX, so no
+        // constant could be right on both. What this refusal reports is what this code did.
+        String what = "The fault: " + fault.reason() + ". This tool refused rather than run " //$NON-NLS-1$ //$NON-NLS-2$
+            + "blind; whether native git can use this repository is not something it determines - " //$NON-NLS-1$
+            + "check that in a terminal. "; //$NON-NLS-1$
         if (!fault.confirmed())
         {
             // Nothing established: not that this is a linked worktree, not that it has a commondir.

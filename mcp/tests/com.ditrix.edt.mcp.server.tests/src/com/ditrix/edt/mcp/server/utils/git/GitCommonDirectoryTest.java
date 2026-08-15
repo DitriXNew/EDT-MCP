@@ -42,8 +42,8 @@ import org.junit.Test;
  * the repository is already unusable.
  *
  * <p>The rest are DELIBERATE over-refusals - the {@link GitCommonDirectory.Fault} members whose
- * {@code ownership()} is {@code OURS} - and they are kept in their own section below rather than
- * mixed in
+ * this code refuses on whatever git would do - and they are kept in their own section below
+ * rather than mixed in
  * with the first kind. They are NOT listed again in this sentence, and that is deliberate: this
  * paragraph used to carry a copy of the list, and copies of it drifted three review rounds running.
  * Calling them "what git does" would be the comfortable lie that hides the trade.
@@ -142,7 +142,7 @@ public class GitCommonDirectoryTest
             linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
     }
 
-    // ==================== fails CLOSED where git dies too ====================
+    // ==================== fails CLOSED: the pointer is unusable ====================
 
     @Test
     public void testTrailingWhitespaceIsNotStrippedTheWayTrimWouldStripIt() throws Exception
@@ -179,9 +179,9 @@ public class GitCommonDirectoryTest
             {
                 assertEquals("a trailing tab is the non-NUL half of the split", //$NON-NLS-1$
                     GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
-                assertEquals("...and git was MEASURED to fail on it, so it is git's limit " //$NON-NLS-1$
-                    + "and not ours", GitCommonDirectory.Ownership.GIT_TOO, //$NON-NLS-1$
-                    e.fault().ownership());
+                // What git does with the same file is measured in the PR body and deliberately
+                // NOT asserted here: it differs by platform, which is why this code stopped
+                // claiming a side at all.
             }
         }
     }
@@ -330,7 +330,7 @@ public class GitCommonDirectoryTest
             linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
     }
 
-    // ==================== fails CLOSED where git might not: our trades, on purpose ====================
+    // ==================== fails CLOSED: our own bounds, on purpose ====================
 
     @Test
     public void testAPointerRootedWithoutADriveIsRefusedRatherThanResolvedUnderTheGitDir()
@@ -381,8 +381,9 @@ public class GitCommonDirectoryTest
                     + "falling through to whatever the platform happens to throw reports the wrong " //$NON-NLS-1$
                     + "thing to the operator", //$NON-NLS-1$
                     GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT, e.fault());
-                assertEquals("...and it is OURS: git can use every one of these", //$NON-NLS-1$
-                    GitCommonDirectory.Ownership.OURS, e.fault().ownership());
+                // Measured on Windows: git answers 'fatal: not a git repository' for all
+                // three. On POSIX the backslash form is an ordinary path git uses. The fault is
+                // what this pins; whose limit it is is not a property of the fault.
             }
         }
     }
@@ -390,7 +391,7 @@ public class GitCommonDirectoryTest
     @Test
     public void testARootedButUNSPELLABLEPointerIsGitsFaultNotOurs() throws Exception
     {
-        // Ownership must not turn on an irrelevant prefix. A trailing tab makes a pointer unusable
+        // Which fault fires must not turn on an irrelevant prefix. A trailing tab makes a pointer
         // to git (measured: fatal: not a git repository) whether or not it happens to start with a
         // separator - so '\shared<TAB>' is the same fault as '../..<TAB>', and calling it a
         // rooting ambiguity would hand the operator OUR ownership for git's failure.
@@ -413,8 +414,8 @@ public class GitCommonDirectoryTest
         {
             assertEquals("the tab makes it unspellable, and that outranks the rooted prefix", //$NON-NLS-1$
                 GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
-            assertEquals("...so the ownership is git's, not ours", //$NON-NLS-1$
-                GitCommonDirectory.Ownership.GIT_TOO, e.fault().ownership());
+            // The FAULT is what matters; ownership turned out to be a property of the
+            // platform rather than of the pointer, and is no longer claimed.
         }
     }
 
@@ -440,8 +441,8 @@ public class GitCommonDirectoryTest
             // ambiguity would accept any other wrong fault.
             assertEquals("the platform cannot spell this, and git cannot use it either", //$NON-NLS-1$
                 GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
-            assertEquals("...so it is git's limit too, NOT a rooting ambiguity this tool owns", //$NON-NLS-1$
-                GitCommonDirectory.Ownership.GIT_TOO, e.fault().ownership());
+            // Ownership deliberately not asserted - see the class javadoc. What must hold is
+            // that the tab outranks the rooted prefix, and that is asserted above.
         }
     }
 
@@ -521,9 +522,8 @@ public class GitCommonDirectoryTest
                 + "ownership - git survives this one and was measured to die on that one, " //$NON-NLS-1$
                 + "and one boolean cannot describe both", //$NON-NLS-1$
                 GitCommonDirectory.Fault.PATH_HOLDS_NUL, e.fault());
-            assertEquals("...and it is OURS: git reads a NUL as the end of the path and " //$NON-NLS-1$
-                + "carries on, so calling this git's failure would be a claim no probe backs", //$NON-NLS-1$
-                GitCommonDirectory.Ownership.OURS, e.fault().ownership());
+            // Measured: git reads a NUL as the end of the path and carries on. Recorded in the
+            // PR body rather than asserted here, because the refusal no longer says so.
         }
     }
 
@@ -573,57 +573,6 @@ public class GitCommonDirectoryTest
     }
 
     // ==================== the ratchet: the enumeration cannot drift from the code ====================
-
-    @Test
-    public void testEveryFaultCarriesTheOwnershipThatWasMEASURED()
-    {
-        // A record of probes, not a restatement of the enum: every value below was established by
-        // running native git against that exact pointer, and each is written as a LITERAL - using
-        // fault.ownership() on both sides would move with the code and assert nothing.
-        //
-        // It was tempting to leave this out on the grounds that a unit test cannot re-measure git.
-        // It cannot - but that is an argument for FREEZING the measurement, not for leaving it
-        // unfrozen: ownership decides what the operator is told about whose limit they hit, and a
-        // silent flip of it is a silent lie.
-        //
-        // The map is compared by KEY SET, so a Fault added without a recorded measurement fails
-        // here. Listing the members one assertion at a time was the earlier shape and it was not a
-        // ratchet at all - an eleventh member simply went unmentioned.
-        Map<GitCommonDirectory.Fault, GitCommonDirectory.Ownership> measured =
-            new EnumMap<>(GitCommonDirectory.Fault.class);
-        // git dies on these - probed, one pointer at a time:
-        //   empty and terminator-only -> fatal: not a git repository
-        //   a pointer to nothing      -> fatal: not a git repository
-        //   an unreadable pointer     -> fatal: failed to read .../commondir
-        //   a trailing tab            -> fatal: not a git repository
-        measured.put(GitCommonDirectory.Fault.EMPTY, GitCommonDirectory.Ownership.GIT_TOO);
-        measured.put(GitCommonDirectory.Fault.NOT_A_DIRECTORY, GitCommonDirectory.Ownership.GIT_TOO);
-        measured.put(GitCommonDirectory.Fault.UNREADABLE, GitCommonDirectory.Ownership.GIT_TOO);
-        measured.put(GitCommonDirectory.Fault.LAYOUT_UNREADABLE, GitCommonDirectory.Ownership.UNKNOWN);
-        measured.put(GitCommonDirectory.Fault.UNSPELLABLE_PATH, GitCommonDirectory.Ownership.GIT_TOO);
-        // git carries on past these, so refusing is OUR trade:
-        //   a NUL          -> git reads it as the end of the path
-        //   oversize       -> git strips the padding
-        //   rooted spellings -> git roots them on the current drive
-        //   a byte we cannot decode -> git takes path bytes literally
-        //   a FIFO         -> git blocks too, but nothing here may wait without a bound
-        measured.put(GitCommonDirectory.Fault.PATH_HOLDS_NUL, GitCommonDirectory.Ownership.OURS);
-        measured.put(GitCommonDirectory.Fault.TOO_LARGE, GitCommonDirectory.Ownership.OURS);
-        measured.put(GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT, GitCommonDirectory.Ownership.OURS);
-        measured.put(GitCommonDirectory.Fault.NOT_UTF_8, GitCommonDirectory.Ownership.OURS);
-        measured.put(GitCommonDirectory.Fault.NOT_A_REGULAR_FILE, GitCommonDirectory.Ownership.OURS);
-        // and the one nobody has probed, which is why UNKNOWN exists at all.
-        measured.put(GitCommonDirectory.Fault.TARGET_UNREADABLE, GitCommonDirectory.Ownership.UNKNOWN);
-
-        assertEquals("every Fault must have a RECORDED ownership - a member with none is a claim " //$NON-NLS-1$
-            + "about git that nobody made, and it would reach an operator as one", //$NON-NLS-1$
-            EnumSet.allOf(GitCommonDirectory.Fault.class), measured.keySet());
-        for (Map.Entry<GitCommonDirectory.Fault, GitCommonDirectory.Ownership> e : measured.entrySet())
-        {
-            assertEquals(e.getKey() + ": ownership is a measurement, and this is the record of it", //$NON-NLS-1$
-                e.getValue(), e.getKey().ownership());
-        }
-    }
 
     @Test
     public void testEveryFaultIsReachableAndEveryReachableFaultIsEnumerated() throws Exception
