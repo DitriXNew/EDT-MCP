@@ -287,7 +287,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     public String getDescription()
     {
         return "Set properties of any metadata node (object or member, including form items, attributes, " //$NON-NLS-1$
-            + "commands, and handlers)."; //$NON-NLS-1$
+            + "commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata')."; //$NON-NLS-1$
     }
 
     @Override

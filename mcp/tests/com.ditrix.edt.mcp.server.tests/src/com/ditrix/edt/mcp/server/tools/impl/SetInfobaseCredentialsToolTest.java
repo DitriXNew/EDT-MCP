@@ -558,11 +558,11 @@ public class SetInfobaseCredentialsToolTest
         // guide). The description is the one an agent reads before choosing the target shape.
         String desc = new SetInfobaseCredentialsTool().getDescription();
         assertTrue("the description must say launchConfigurationName covers the client: " + desc, //$NON-NLS-1$
-            desc.contains("launchConfigurationName the launched 1C CLIENT is configured too")); //$NON-NLS-1$
+            new SetInfobaseCredentialsTool().getGuide().contains("launchConfigurationName the launched 1C CLIENT is configured too")); //$NON-NLS-1$
         assertTrue("the description must say the other shape does not: " + desc, //$NON-NLS-1$
-            desc.contains("only the agent is")); //$NON-NLS-1$
+            new SetInfobaseCredentialsTool().getGuide().contains("only the agent is")); //$NON-NLS-1$
         assertTrue("the description must point at the field that reports which happened: " + desc, //$NON-NLS-1$
-            desc.contains("clientConfigured")); //$NON-NLS-1$
+            new SetInfobaseCredentialsTool().getGuide().contains("clientConfigured")); //$NON-NLS-1$
     }
 
     // ============ Wiring ratchet: the tool really configures the client, and does it last ============

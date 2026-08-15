@@ -240,3 +240,7 @@ JSON with `action='modified'`, the normalized `fqn`, the `applied` property name
 
 ## Reverting (no undo)
 There is no automatic undo: to revert a change, call modify_metadata again with the previous value (read the current value first with get_metadata_details). modify_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.
+
+## Predefined items
+
+A PREDEFINED item is addressed through its owner's member FQN and is edited like any other member.

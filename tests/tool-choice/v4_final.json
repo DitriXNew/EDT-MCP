@@ -158,7 +158,7 @@
   }
  },
  "delete_metadata": {
-  "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING - removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force overrides that block and can leave dangling references behind. Parameters and examples: get_tool_guide('delete_metadata').",
+  "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force=true overrides that block and can leave dangling references behind. Parameters and examples: get_tool_guide('delete_metadata').",
   "params": {
    "confirm": null,
    "force": null,
@@ -554,7 +554,7 @@
   "params": {}
  },
  "modify_metadata": {
-  "description": "Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers).",
+  "description": "Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata').",
   "params": {
    "content": null,
    "dcs": null,
@@ -615,7 +615,7 @@
   }
  },
  "resync_to_disk": {
-  "description": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Read-safe by default: dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk').",
+  "description": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk').",
   "params": {
    "cleanDanglingReferences": null,
    "fullExport": null,

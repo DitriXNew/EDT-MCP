@@ -103,3 +103,7 @@ Extension method interception (append an annotated procedure to an adopted exten
 - `searchReplace`/`append` need an EXISTING file; only `replace` creates one.
 - New BSL files are written with a UTF-8 BOM; existing files keep their BOM state.
 - `source` is `\r\n`->`\n` normalized and the file always ends with a newline.
+
+## Addressing the module
+
+`modulePath` and the `objectName` + `moduleType` pair are mutually exclusive - give one shape or the other, never both.

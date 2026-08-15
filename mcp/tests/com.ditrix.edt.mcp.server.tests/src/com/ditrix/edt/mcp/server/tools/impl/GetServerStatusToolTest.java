@@ -102,9 +102,9 @@ public class GetServerStatusToolTest
         // The description is the tool's self-advertised diagnostic vocabulary; pin the
         // form-render flags and the never-leaks contract it promises.
         String desc = new GetServerStatusTool().getDescription();
-        assertTrue(desc.contains("nativeFormBufferedLayoutRender")); //$NON-NLS-1$
-        assertTrue(desc.contains("nativeFormLayoutRender")); //$NON-NLS-1$
-        assertTrue(desc.toLowerCase().contains("plaintextmode")); //$NON-NLS-1$
+        assertTrue(new GetServerStatusTool().getGuide().contains("nativeFormBufferedLayoutRender")); //$NON-NLS-1$
+        assertTrue(new GetServerStatusTool().getGuide().contains("nativeFormLayoutRender")); //$NON-NLS-1$
+        assertTrue(new GetServerStatusTool().getGuide().toLowerCase().contains("plaintextmode")); //$NON-NLS-1$
     }
 
     @Test

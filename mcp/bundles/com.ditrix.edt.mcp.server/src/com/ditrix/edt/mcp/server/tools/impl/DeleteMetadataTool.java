@@ -221,11 +221,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING - removing an " //$NON-NLS-1$
-            + "object also removes what references it. Two-phase: call once WITHOUT confirm to preview what " //$NON-NLS-1$
-            + "will be removed, then again with confirm=true to apply. A delete that would break references " //$NON-NLS-1$
-            + "is blocked; force overrides that block and can leave dangling references behind. Parameters " //$NON-NLS-1$
-            + "and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
+        return "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the " //$NON-NLS-1$
+            + "md-refactoring path removing an object also removes what references it. Two-phase: call once " //$NON-NLS-1$
+            + "WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A " //$NON-NLS-1$
+            + "delete that would break references is blocked; force=true overrides that block and can leave " //$NON-NLS-1$
+            + "dangling references behind. Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
 
     @Override

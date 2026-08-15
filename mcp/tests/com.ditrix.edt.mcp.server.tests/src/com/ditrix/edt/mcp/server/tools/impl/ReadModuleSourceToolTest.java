@@ -62,7 +62,7 @@ public class ReadModuleSourceToolTest
         assertFalse("description should not say 'with line numbers'", //$NON-NLS-1$
             desc.toLowerCase().contains("with line numbers")); //$NON-NLS-1$
         assertTrue("description should mention frontmatter", //$NON-NLS-1$
-            desc.toLowerCase().contains("frontmatter")); //$NON-NLS-1$
+            new ReadModuleSourceTool().getGuide().toLowerCase().contains("frontmatter")); //$NON-NLS-1$
     }
 
     @Test

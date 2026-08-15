@@ -356,9 +356,9 @@ public class RunYaxunitTestsToolTest
         // mark outlives an EDT restart — restarting EDT is not a source change.
         String desc = new RunYaxunitTestsTool().getDescription();
         assertTrue("description must mention that only changed projects are recomputed",
-            desc.contains("recomputes only projects")); //$NON-NLS-1$
+            new RunYaxunitTestsTool().getGuide().contains("recomputes only projects")); //$NON-NLS-1$
         assertTrue("description must say the prepared mark survives an EDT restart",
-            desc.contains("survives an EDT restart")); //$NON-NLS-1$
+            new RunYaxunitTestsTool().getGuide().contains("survives an EDT restart")); //$NON-NLS-1$
     }
 
     @Test
@@ -369,11 +369,11 @@ public class RunYaxunitTestsToolTest
         // a Pending can report, since that label is the caller's only signal.
         String desc = new RunYaxunitTestsTool().getDescription();
         assertTrue("description must state the maximum window",
-            desc.contains(String.valueOf(RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS)));
+            new RunYaxunitTestsTool().getGuide().contains(String.valueOf(RunYaxunitTestsTool.MAX_TIMEOUT_SECONDS)));
         assertTrue("description must say a larger timeout is clamped",
-            desc.contains("clamped")); //$NON-NLS-1$
+            new RunYaxunitTestsTool().getGuide().contains("clamped")); //$NON-NLS-1$
         assertTrue("description must say Pending names the phase",
-            desc.contains("Pending") && desc.contains("phase")); //$NON-NLS-1$ //$NON-NLS-2$
+            new RunYaxunitTestsTool().getGuide().contains("Pending") && new RunYaxunitTestsTool().getGuide().contains("phase")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

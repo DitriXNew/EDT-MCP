@@ -117,3 +117,12 @@ JSON with `action='created'`, the normalized `fqn`, `kind` (the EClass - `EventH
 - `persisted=false` means the in-memory change committed but the `.mdo` export did not confirm - re-check before relying on it on disk.
 - No automatic undo: to revert a create, delete the node with delete_metadata (same FQN). create_metadata is intentionally NOT confirm-gated because it is reversible that way; only the destructive / high-blast-radius writes (delete_metadata, rename_metadata_object, update_database, delete_project) are gated with a confirm-preview.
 - A NESTED SUBSYSTEM is the one exception to that undo route: delete_metadata does not address a nested-subsystem chain yet, so it cannot remove one. Remove it in the EDT UI (or drop the parent) until delete_metadata learns the chain.
+
+## ObjectType members
+
+A characteristics/objects-kind member is addressed with the `ObjectType` segment in the member FQN, e.g. `ChartOfCharacteristicTypes.Properties.ObjectType.Products`.
+
+## Nested XDTO member addresses
+
+A nested XDTO property is addressed through the full member chain:
+`XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>`.

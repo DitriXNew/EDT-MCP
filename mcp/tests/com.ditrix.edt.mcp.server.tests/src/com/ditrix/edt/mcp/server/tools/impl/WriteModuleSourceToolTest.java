@@ -66,9 +66,9 @@ public class WriteModuleSourceToolTest
         WriteModuleSourceTool tool = new WriteModuleSourceTool();
         String desc = tool.getDescription();
         // XOR pair is named (the central rule that drives selection).
-        assertTrue(desc.contains("modulePath")); //$NON-NLS-1$
-        assertTrue(desc.contains("objectName")); //$NON-NLS-1$
-        assertTrue(desc.contains("mutually exclusive")); //$NON-NLS-1$
+        assertTrue(new WriteModuleSourceTool().getGuide().contains("modulePath")); //$NON-NLS-1$
+        assertTrue(new WriteModuleSourceTool().getGuide().contains("objectName")); //$NON-NLS-1$
+        assertTrue(new WriteModuleSourceTool().getGuide().contains("mutually exclusive")); //$NON-NLS-1$
         // The closing pointer steers to the on-demand guide for the full detail.
         assertTrue(desc.contains("get_tool_guide")); //$NON-NLS-1$
     }

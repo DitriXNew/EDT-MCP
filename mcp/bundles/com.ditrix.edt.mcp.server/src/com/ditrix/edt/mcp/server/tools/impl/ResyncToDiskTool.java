@@ -162,10 +162,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     {
         return "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk " //$NON-NLS-1$
             + "desync; fixes 'object file does not exist' failures and dangling Configuration.mdo " //$NON-NLS-1$
-            + "references. Direction MODEL -> DISK, the opposite of clean_project. Read-safe by default: " //$NON-NLS-1$
-            + "dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: " //$NON-NLS-1$
-            + "re-exporting every object overwrites on-disk edits, and removing dangling references " //$NON-NLS-1$
-            + "rewrites Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
+            + "references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are " //$NON-NLS-1$
+            + "REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every " //$NON-NLS-1$
+            + "object overwrites on-disk edits, and removing dangling references rewrites " //$NON-NLS-1$
+            + "Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
 
     @Override

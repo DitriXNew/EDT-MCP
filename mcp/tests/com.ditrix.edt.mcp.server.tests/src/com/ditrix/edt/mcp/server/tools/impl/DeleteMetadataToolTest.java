@@ -474,7 +474,15 @@ public class DeleteMetadataToolTest
     @Test
     public void testDescriptionSeparatesTheBranchesWithoutAReferenceCascade()
     {
-        String desc = new DeleteMetadataTool().getDescription().toLowerCase();
+        // The clause moved to the guide with the description cut (issue #363); the bounded
+        // single-sentence check follows it there unchanged.
+        // The clause moved to the guide with the description cut (issue #363). The guide names
+        // these kinds in several per-kind sections too, so the bounded single-sentence check is
+        // anchored to the section that states the shared rule, not to the whole document.
+        String guideText = new DeleteMetadataTool().getGuide().toLowerCase();
+        int section = guideText.indexOf("## members removed from their own container"); //$NON-NLS-1$
+        assertTrue("the guide must carry the shared no-cascade section", section >= 0); //$NON-NLS-1$
+        String desc = guideText.substring(section);
         // All three of them, named in the SAME sentence as the no-block statement: an old universal
         // description with a disclaimer appended somewhere else must not pass this.
         int start = desc.indexOf("an owned form object"); //$NON-NLS-1$
@@ -497,7 +505,7 @@ public class DeleteMetadataToolTest
         // ... and must NOT overstate it: an owned form delete does clear the owner's default-form
         // settings, so "no cleanup at all" would be its own inaccuracy.
         assertTrue("the description must still credit the owner-local cleanup", //$NON-NLS-1$
-            desc.contains("owner's own pointers")); //$NON-NLS-1$
+            new DeleteMetadataTool().getGuide().contains("owner's own pointers")); //$NON-NLS-1$
     }
 
     /**
@@ -678,8 +686,8 @@ public class DeleteMetadataToolTest
     {
         String desc = new DeleteMetadataTool().getDescription();
         assertTrue("description should mention the XDTO package member FQN shape", //$NON-NLS-1$
-            desc.contains("XDTOPackage")); //$NON-NLS-1$
-        assertTrue("description should mention the ObjectType member kind", desc.contains("ObjectType")); //$NON-NLS-1$ //$NON-NLS-2$
+            new DeleteMetadataTool().getGuide().contains("XDTOPackage")); //$NON-NLS-1$
+        assertTrue("description should mention the ObjectType member kind", new DeleteMetadataTool().getGuide().contains("ObjectType")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ---- the predefined-item FQN is recognized by the delete dispatch (issue #293) -----------------
@@ -707,7 +715,7 @@ public class DeleteMetadataToolTest
     public void testDescriptionMentionsPredefinedItems()
     {
         String desc = new DeleteMetadataTool().getDescription();
-        assertTrue("description should mention predefined items", desc.contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should mention predefined items", new DeleteMetadataTool().getGuide().contains("PREDEFINED")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ===== predefined-item incoming-reference check helpers (issue #293 rework + fix-round) ===========
