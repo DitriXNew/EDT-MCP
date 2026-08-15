@@ -54,11 +54,8 @@ public class GetProfilingResultsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get profiling (performance measurement) results after a debug session: " //$NON-NLS-1$
-            + "per-module, per-line call count, timing and percentage. Returns only the MOST " //$NON-NLS-1$
-            + "RECENT measurement session (historical sessions are not returned). Also reports " //$NON-NLS-1$
-            + "whether profiling is currently active. Run start_profiling + the test (then stop_profiling) first. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('get_profiling_results')."; //$NON-NLS-1$
+        return "Identify performance hotspots in executed BSL code. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_profiling_results')."; //$NON-NLS-1$
     }
 
     @Override

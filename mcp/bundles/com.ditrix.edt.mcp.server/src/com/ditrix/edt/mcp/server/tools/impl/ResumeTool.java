@@ -49,13 +49,7 @@ public class ResumeTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Resume a suspended debug thread or all threads of a debug target. " //$NON-NLS-1$
-            + "Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id " //$NON-NLS-1$
-            + "form for the session: the real id, 'attach:<name>', 'launch:<name>', or " //$NON-NLS-1$
-            + "'ServerApplication.<app>'. For a server-side suspend, resume targets the suspended " //$NON-NLS-1$
-            + "thread directly. With no arguments, resumes the single active debug session (launch " //$NON-NLS-1$
-            + "or server target) if exactly one exists. NOTE: if resume of a server-side suspend " //$NON-NLS-1$
-            + "does not take effect, the breakpoint can also be released from the EDT UI."; //$NON-NLS-1$
+        return "Continue a paused 1C debug session. Parameters and examples: get_tool_guide('resume')."; //$NON-NLS-1$
     }
 
     @Override

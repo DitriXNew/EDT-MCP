@@ -47,11 +47,9 @@ public class DeleteLaunchConfigTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Delete a 1C:EDT launch configuration by name (runtime client or Attach). " //$NON-NLS-1$
-            + "Destructive: guarded by a confirm-preview - call without confirm to preview " //$NON-NLS-1$
-            + "(no change), then confirm=true to delete. Refuses to delete a running config " //$NON-NLS-1$
-            + "(terminate_launch first). The inverse of create_launch_config. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('delete_launch_config')."; //$NON-NLS-1$
+        return "Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT " //$NON-NLS-1$
+            + "confirm to preview, then again with confirm=true to apply. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('delete_launch_config')."; //$NON-NLS-1$
     }
 
     @Override

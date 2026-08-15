@@ -286,33 +286,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Set properties of a metadata node - an object, a member, or a FORM member (item / " //$NON-NLS-1$
-            + "attribute / command / handler) - addressed by a 1C full-name FQN, as " //$NON-NLS-1$
-            + "properties=[{name, value, language?}]. Each property is validated against what the " //$NON-NLS-1$
-            + "node actually accepts (it must be assignable, and an enum value must be one of the " //$NON-NLS-1$
-            + "allowed literals) with an actionable error; discover the assignable properties and " //$NON-NLS-1$
-            + "their allowed values with get_metadata_details(assignable:true). " //$NON-NLS-1$
-            + "This is ALSO the only tool for several node-specific payloads, each REPLACING " //$NON-NLS-1$
-            + "'properties' and selected by the FQN's kind: 'rights' / 'templates' / 'roleProperties' " //$NON-NLS-1$
-            + "on a ROLE FQN ('Role.Name') - access rights, RLS restrictions and RLS templates " //$NON-NLS-1$
-            + "(read the current matrix with get_metadata_details on the Role FQN); 'dcs' on a " //$NON-NLS-1$
-            + "REPORT FQN ('Report.<Name>') - the Data Composition Schema (СКД / .dcs): query data " //$NON-NLS-1$
-            + "sets, fields and schema parameters; 'template' on a SpreadsheetDocument TEMPLATE FQN " //$NON-NLS-1$
-            + "('CommonTemplate.<Name>' or '<Type>.<Owner>.Template.<Name>') - a print form / макет's " //$NON-NLS-1$
-            + "cells, merged ranges, named areas and column / row sizes (render it with " //$NON-NLS-1$
-            + "get_template_screenshot); 'content' on a COMMON ATTRIBUTE ('CommonAttribute.Name', " //$NON-NLS-1$
-            + "per-owner 'use'), an EXCHANGE PLAN ('ExchangePlan.Name', per-entry 'autoRecord'), a " //$NON-NLS-1$
-            + "CATALOG ('Catalog.Name', owners), a DOCUMENT ('Document.Name', register records / " //$NON-NLS-1$
-            + "движения) or a SUBSYSTEM ('Subsystem.Name', content objects) FQN - the structured " //$NON-NLS-1$
-            + "membership list, added or removed one member at a time. " //$NON-NLS-1$
-            + "Through 'properties' it also moves / reorders a FORM ITEM ('parent' / 'position'), " //$NON-NLS-1$
-            + "REBINDS a form event handler's procedure ('procedure' on a Handler FQN), re-points a " //$NON-NLS-1$
-            + "Button at another form command ('command'), sets a StyleItem's 'value' (a color " //$NON-NLS-1$
-            + "{color:{red,green,blue}} or a font {font:{faceName,height,bold}}), turns a form list " //$NON-NLS-1$
-            + "FORM ATTRIBUTE into a dynamic list with a custom query ('queryText'), and edits XDTO " //$NON-NLS-1$
-            + "package MEMBERS and PREDEFINED items on their own FQNs. " //$NON-NLS-1$
-            + "To rename, use rename_metadata_object. The payload SHAPES are deliberately not in this " //$NON-NLS-1$
-            + "description: call get_tool_guide('modify_metadata') before your first call."; //$NON-NLS-1$
+        return "Set properties of any metadata node (object or member, including form items, attributes, " //$NON-NLS-1$
+            + "commands, and handlers)."; //$NON-NLS-1$
     }
 
     @Override

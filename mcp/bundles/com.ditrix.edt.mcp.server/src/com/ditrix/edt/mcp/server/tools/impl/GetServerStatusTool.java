@@ -64,12 +64,8 @@ public class GetServerStatusTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Self-diagnosis snapshot of the running MCP server: listening port, MCP protocol version, " //$NON-NLS-1$
-            + "plugin version, EDT version, enabled/total tool counts, the plainTextMode and " //$NON-NLS-1$
-            + "checksFolderConfigured preference flags, the two form-render JVM flags " //$NON-NLS-1$
-            + "(nativeFormBufferedLayoutRender / nativeFormLayoutRender), and whether authentication is " //$NON-NLS-1$
-            + "enabled. Use it to explain a blank form screenshot or a plain-text JSON response. " //$NON-NLS-1$
-            + "Never returns the auth token value or the checks folder path, only booleans."; //$NON-NLS-1$
+        return "Diagnose the EDT MCP server and its feature configuration. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_server_status')."; //$NON-NLS-1$
     }
 
     @Override

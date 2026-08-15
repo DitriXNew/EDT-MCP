@@ -118,11 +118,8 @@ public class CreateLaunchConfigTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Create a 1C:EDT runtime-client launch configuration (thin/thick/web). " //$NON-NLS-1$
-            + "The SAME config works for both run and debug (mode is chosen at launch time " //$NON-NLS-1$
-            + "by debug_launch/run_yaxunit_tests — there is no separate debug-config type). " //$NON-NLS-1$
-            + "Use delete_launch_config to remove it. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_launch_config')."; //$NON-NLS-1$
+        return "Configure an EDT runtime client for launching a 1C application. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('create_launch_config')."; //$NON-NLS-1$
     }
 
     @Override

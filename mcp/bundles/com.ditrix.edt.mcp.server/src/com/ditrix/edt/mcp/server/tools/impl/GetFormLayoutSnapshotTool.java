@@ -31,11 +31,8 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element types, " + //$NON-NLS-1$
-            "display properties) as text; use it to inspect or compare what a form actually renders. " + //$NON-NLS-1$
-            "Requires EDT launched with -DnativeFormBufferedLayoutRender=true, else the result is blank " + //$NON-NLS-1$
-            "(missing flag, not a bad call). " + //$NON-NLS-1$
-            "Full parameters and examples: call get_tool_guide('get_form_layout_snapshot')."; //$NON-NLS-1$
+        return "Inspect the calculated visual layout of an EDT form. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_form_layout_snapshot')."; //$NON-NLS-1$
     }
 
     @Override

@@ -109,10 +109,8 @@ public class CreateGitBranchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Create a new local git branch, optionally check it out, and optionally attach an " //$NON-NLS-1$
-            + "EXISTING infobase (application, from get_applications) to the new branch's context. " //$NON-NLS-1$
-            + "Rejects a name that already exists (use switch_git_branch instead). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_git_branch')."; //$NON-NLS-1$
+        return "Start isolated work on a new Git branch for an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('create_git_branch')."; //$NON-NLS-1$
     }
 
     @Override

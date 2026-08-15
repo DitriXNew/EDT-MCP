@@ -64,13 +64,8 @@ public class TranslateConfigurationTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run EDT 'Translate configuration' on a configuration project - " //$NON-NLS-1$
-             + "reads the dictionaries from the storages bound to it (external " //$NON-NLS-1$
-             + "dictionary storage projects with the dependentProjectNature, or " //$NON-NLS-1$
-             + "in-configuration storages) and regenerates the translated " //$NON-NLS-1$
-             + "artifacts. Equivalent of the context-menu action " //$NON-NLS-1$
-             + "Translation -> Translate configuration. " //$NON-NLS-1$
-             + "Requires LanguageTool installed in EDT."; //$NON-NLS-1$
+        return "Translate a 1C configuration into target languages. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('translate_configuration')."; //$NON-NLS-1$
     }
 
     @Override

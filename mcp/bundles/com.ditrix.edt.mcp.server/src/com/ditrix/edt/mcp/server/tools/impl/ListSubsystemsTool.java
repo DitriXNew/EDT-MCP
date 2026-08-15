@@ -47,10 +47,8 @@ public class ListSubsystemsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, " //$NON-NLS-1$
-            + "InCommandInterface, content count, children count). " //$NON-NLS-1$
-            + "Walks the whole tree by default (recursive=true); use get_subsystem_content for one subsystem's objects. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('list_subsystems')."; //$NON-NLS-1$
+        return "Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_subsystems')."; //$NON-NLS-1$
     }
 
     @Override

@@ -199,23 +199,8 @@ public class RunYaxunitTestsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run YAXUnit tests for a 1C:Enterprise project and return a JUnit Markdown report. " //$NON-NLS-1$
-               + "The whole call is bounded by `timeout` (default and maximum " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
-               + "s, larger values are clamped) so it always answers before an MCP transport " //$NON-NLS-1$
-               + "cuts it: it returns the report, an error, or **Pending** naming the current " //$NON-NLS-1$
-               + "phase (resolve / prep:terminate / prep:recompute / prep:db-update / spawn / run) — " //$NON-NLS-1$
-               + "call again with identical arguments to keep waiting; nothing is terminated. " //$NON-NLS-1$
-               + "A phase that stops changing is the server's only signal — it means either a " //$NON-NLS-1$
-               + "legitimately long stage or one blocked on a modal dialog in EDT, and the tool " //$NON-NLS-1$
-               + "cannot tell them apart: look at EDT before waiting indefinitely. " //$NON-NLS-1$
-               + "Pass `debug=true` to instead launch in DEBUG mode (breakpoints fire) and return at once " //$NON-NLS-1$
-               + "so you can call wait_for_break. " //$NON-NLS-1$
-               + "The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects " //$NON-NLS-1$
-               + "whose sources changed since their last prepared run; that mark survives an EDT " //$NON-NLS-1$
-               + "restart, so an unchanged project is not recomputed at all. " //$NON-NLS-1$
-               + "Requires an existing runtime-client launch configuration " //$NON-NLS-1$
-               + "and the YAXUnit extension installed in the infobase. " //$NON-NLS-1$
-               + "Full parameters and examples: call get_tool_guide('run_yaxunit_tests')."; //$NON-NLS-1$
+        return "Run YAXUnit tests for a 1C configuration. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('run_yaxunit_tests')."; //$NON-NLS-1$
     }
 
     @Override
@@ -252,12 +237,8 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
                 EXTERNAL_INFOBASE_CHANGES_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("debug", //$NON-NLS-1$
-                "Default false: poll and return the report. true: launch in DEBUG mode so breakpoints " //$NON-NLS-1$
-                    + "fire, return a launch handle as soon as it is spawned and call wait_for_break " //$NON-NLS-1$
-                    + "next. It does not POLL, so `timeout` is not a waiting window here — but the " //$NON-NLS-1$
-                    + "call is still bounded by it: a pre-launch preparation longer than the window " //$NON-NLS-1$
-                    + "returns Pending instead of the handle, and the next identical call picks up " //$NON-NLS-1$
-                    + "where it left off.") //$NON-NLS-1$
+                "true launches in DEBUG mode so breakpoints fire and returns a launch handle " //$NON-NLS-1$
+                + "immediately - call wait_for_break next. Default false polls and returns the report." ) //$NON-NLS-1$
             .build();
     }
 

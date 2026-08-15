@@ -39,7 +39,8 @@ public class ListBreakpointsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List active line breakpoints. Optionally filter by projectName."; //$NON-NLS-1$
+        return "Review breakpoints currently set in BSL source code. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_breakpoints')."; //$NON-NLS-1$
     }
 
     @Override

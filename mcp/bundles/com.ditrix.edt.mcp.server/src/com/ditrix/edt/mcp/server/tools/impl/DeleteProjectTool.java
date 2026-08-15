@@ -49,10 +49,9 @@ public class DeleteProjectTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Remove an EDT project from the workspace, optionally deleting its files from disk " //$NON-NLS-1$
-            + "(deleteContent). Destructive: guarded by a confirm-preview - call without confirm to " //$NON-NLS-1$
-            + "preview what would be removed (no change), then confirm=true to delete. The inverse of " //$NON-NLS-1$
-            + "import_configuration_from_xml. Full parameters: call get_tool_guide('delete_project')."; //$NON-NLS-1$
+        return "Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE " //$NON-NLS-1$
+            + "and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with " //$NON-NLS-1$
+            + "confirm=true to apply. Parameters and examples: get_tool_guide('delete_project')."; //$NON-NLS-1$
     }
 
     @Override

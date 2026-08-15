@@ -59,8 +59,7 @@ public class StepTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Step a suspended debug thread. kind ∈ {over, into, out}. " //$NON-NLS-1$
-            + "Blocks until the next SUSPEND event (or timeout) and returns the new frame snapshot."; //$NON-NLS-1$
+        return "Advance paused debug execution one step. Parameters and examples: get_tool_guide('step')."; //$NON-NLS-1$
     }
 
     @Override

@@ -54,10 +54,8 @@ public class StopProfilingTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Stop performance measurement on the active debug target. " //$NON-NLS-1$
-            + "Counterpart to start_profiling: deterministically switches profiling off. " //$NON-NLS-1$
-            + "Idempotent: if profiling is not active for this applicationId it returns a benign result, not an error. " //$NON-NLS-1$
-            + "Call get_profiling_results afterwards to retrieve the collected coverage."; //$NON-NLS-1$
+        return "Finish measuring BSL performance in a debug session. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('stop_profiling')."; //$NON-NLS-1$
     }
 
     @Override

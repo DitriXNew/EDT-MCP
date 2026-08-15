@@ -1,21 +1,21 @@
 {
   "_doc": "V4 = V3 (one-line description + bare parameter schema) for all 85 tools, PLUS a short clause kept IN THE DESCRIPTION for the tools where the 500-question run showed the text is load-bearing. Measured on the 61 destructive requests: reading the guide does NOT restore the two-phase protocol (V3 fetched the right guide in 46/61 cases and still previewed only 22% of the time, against 27% when it had not fetched it). Always-in-context text works; fetched text does not. So the protocol, cascade and deprecation clauses stay in the description and everything else goes.",
-
   "descriptions": {
-    "delete_metadata": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING - removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply.",
+    "delete_metadata": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING - removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force overrides that block and can leave dangling references behind.",
     "delete_project": "Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
     "rename_metadata_object": "Rename a metadata object or member and rewrite every reference to it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply.",
     "update_database": "Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
     "delete_infobase": "Remove a project's infobase or its standalone-server registration, optionally deleting the database files. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
     "delete_launch_config": "Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply.",
     "terminate_launch": "Stop 1C sessions started by EDT. Two-phase: call once WITHOUT confirm to see what would be stopped, then again with confirm=true to apply.",
-    "resync_to_disk": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo.",
+    "resync_to_disk": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Read-safe by default: dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo.",
     "clean_project": "Rebuild an EDT project from the on-disk src/ files and revalidate everything. Direction DISK -> MODEL; slow, and it DISCARDS unsaved in-memory model edits - save first. For one externally-edited object prefer revalidate_objects; for the opposite direction see resync_to_disk.",
     "revalidate_objects": "Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. Targeted, lightweight alternative to clean_project - no full rebuild, nothing discarded.",
     "debug_yaxunit_tests": "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; behaviour is identical. Kept for compatibility.",
-    "search_in_code": "Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en dialect-aware, so a query in one BSL language will not find the other spelling - for a symbol's usages use find_references, for where it is defined use go_to_definition."
+    "search_in_code": "Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en dialect-aware, so a query in one BSL language will not find the other spelling - for a symbol's usages use find_references, for where it is defined use go_to_definition.",
+    "evaluate_expression": "Evaluate a BSL expression in a paused debug frame and return the value. WARNING: this executes arbitrary code in the running application - it can change state, not just read it.",
+    "get_event_log": "Investigate infobase activity and errors through its event log. Returns PII and live infobase data - user names, session data and business-record references."
   },
-
   "params": {
     "get_markers": {
       "markerKind": "'bookmark' = manual navigation bookmarks; 'task' = TODO/FIXME/XXX/HACK code markers. Omit for both."

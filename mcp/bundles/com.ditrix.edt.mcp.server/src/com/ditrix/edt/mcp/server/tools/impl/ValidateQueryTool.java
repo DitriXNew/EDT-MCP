@@ -65,10 +65,8 @@ public class ValidateQueryTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Validate 1C:Enterprise query language (QL) text against a project, returning " + //$NON-NLS-1$
-               "syntax and semantic errors with line numbers. Use to check a query before " + //$NON-NLS-1$
-               "embedding it in BSL; resolves table/field names against the project's metadata. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('validate_query')."; //$NON-NLS-1$
+        return "Check a 1C query for syntax and metadata-reference errors. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('validate_query')."; //$NON-NLS-1$
     }
 
     @Override

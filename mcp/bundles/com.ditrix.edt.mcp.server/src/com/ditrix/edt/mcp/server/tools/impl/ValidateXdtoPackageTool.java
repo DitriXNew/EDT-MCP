@@ -62,17 +62,8 @@ public class ValidateXdtoPackageTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Validate a single XDTO package by running EDT's OWN configuration validation " //$NON-NLS-1$
-            + "(the same check engine behind get_project_errors) scoped to that package, and " //$NON-NLS-1$
-            + "return a one-line verdict plus any problems found (e.g. a dangling reference to a " //$NON-NLS-1$
-            + "deleted ObjectType). The verdict has THREE outcomes: valid, problems found, or - when " //$NON-NLS-1$
-            + "NOTHING matched but a marker's location could not be resolved - undecided, which asks for " //$NON-NLS-1$
-            + "revalidate_objects and another run rather than asserting validity. " //$NON-NLS-1$
-            + "It reflects the LATEST validation state already computed by " //$NON-NLS-1$
-            + "EDT (reads existing markers) rather than forcing a fresh compile; run " //$NON-NLS-1$
-            + "revalidate_objects first if you need up-to-the-second results. Does not implement " //$NON-NLS-1$
-            + "any XDTO-specific rule itself - it is a scoped view over get_project_errors. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('validate_xdto_package')."; //$NON-NLS-1$
+        return "Check an XDTO package for configuration validation problems. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('validate_xdto_package')."; //$NON-NLS-1$
     }
 
     @Override

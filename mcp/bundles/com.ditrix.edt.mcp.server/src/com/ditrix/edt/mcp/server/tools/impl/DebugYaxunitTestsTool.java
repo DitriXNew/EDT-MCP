@@ -76,10 +76,9 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
     @Override
     public String getDescription()
     {
-        return "Deprecated alias for run_yaxunit_tests with debug=true. Launches YAXUnit tests in DEBUG " //$NON-NLS-1$
-            + "mode so breakpoints fire, then call wait_for_break to inspect. Prefer " //$NON-NLS-1$
-            + "run_yaxunit_tests(debug=true) — identical behaviour. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('debug_yaxunit_tests')."; //$NON-NLS-1$
+        return "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; behaviour is " //$NON-NLS-1$
+            + "identical. Kept for compatibility. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('debug_yaxunit_tests')."; //$NON-NLS-1$
     }
 
     @Override

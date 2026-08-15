@@ -84,24 +84,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get detailed properties of one or more 1C metadata objects (basic info by default, " + //$NON-NLS-1$
-               "or every reflected section with 'full: true'). Use it after get_metadata_objects to " + //$NON-NLS-1$
-               "inspect a known object's attributes/forms/commands; to LIST objects by type use " + //$NON-NLS-1$
-               "get_metadata_objects instead. The rendering is dispatched by the FQN's kind: a FORM " + //$NON-NLS-1$
-               "FQN ('Catalog.X.Form.ItemForm' or 'CommonForm.Name') renders that form's STRUCTURE " + //$NON-NLS-1$
-               "(items / attributes / commands); a ROLE FQN ('Role.FullAccess') renders that role's " + //$NON-NLS-1$
-               "ACCESS RIGHTS - the object->right matrix, RLS restrictions, RLS templates and the " + //$NON-NLS-1$
-               "role properties; a Catalog / ChartOfCharacteristicTypes / ChartOfAccounts / " + //$NON-NLS-1$
-               "ChartOfCalculationTypes also renders its 'Predefined items' table, and a single " + //$NON-NLS-1$
-               "predefined-item FQN ('<Owner>.X.Predefined.ItemName') renders that one item; a " + //$NON-NLS-1$
-               "ScheduledJob or CommonModule adds a type-specific Properties table. Pass " + //$NON-NLS-1$
-               "'assignable: true' on an OBJECT or an mdclass / form MEMBER to discover which " + //$NON-NLS-1$
-               "properties modify_metadata will accept there, with their allowed values; that mode " + //$NON-NLS-1$
-               "does NOT resolve a predefined item (its settable surface is FIXED and owner-specific " + //$NON-NLS-1$
-               "- see the guide) and never renders a form event HANDLER (read the form's own FQN for " + //$NON-NLS-1$
-               "those). Every reflected section is capped, so request fewer FQNs to keep the response " + //$NON-NLS-1$
-               "small; only the non-full role matrix can be paged, with 'roleObjectOffset'. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
+        return "Inspect the properties and structure of a metadata object or member. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
 
     @Override

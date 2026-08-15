@@ -61,12 +61,8 @@ public class ListConfigurationsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List EDT launch configurations (runtime client + Attach + other 1C types) with " //$NON-NLS-1$
-            + "their running state. This is the discovery step before debug_launch / " //$NON-NLS-1$
-            + "run_yaxunit_tests / debug_yaxunit_tests / update_database: use the returned 'name' " //$NON-NLS-1$
-            + "as their launchConfigurationName. Use type='attach' for server-side debug setups, " //$NON-NLS-1$
-            + "type='client' for 1C:Enterprise client configs, or type='all' (default). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('list_configurations')."; //$NON-NLS-1$
+        return "Discover EDT runtime and server-side launch configurations. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_configurations')."; //$NON-NLS-1$
     }
 
     @Override

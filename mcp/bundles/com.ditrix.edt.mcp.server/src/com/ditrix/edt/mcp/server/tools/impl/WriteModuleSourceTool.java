@@ -72,12 +72,8 @@ public class WriteModuleSourceTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Write BSL source code to a 1C metadata object module. " + //$NON-NLS-1$
-            "Use to edit a module: searchReplace a fragment (default, needs oldSource), " + //$NON-NLS-1$
-            "replace the whole file, or append. " + //$NON-NLS-1$
-            "Target the module by EITHER modulePath OR objectName (mutually exclusive — pass exactly one). " + //$NON-NLS-1$
-            "Runs a BSL syntax check before writing (skipSyntaxCheck=true to force). " + //$NON-NLS-1$
-            "Full parameters and examples: call get_tool_guide('write_module_source')."; //$NON-NLS-1$
+        return "Create or edit BSL source in a metadata module. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('write_module_source')."; //$NON-NLS-1$
     }
 
     @Override
@@ -114,7 +110,8 @@ public class WriteModuleSourceTool implements IMcpTool
             .booleanProperty("overwrite", //$NON-NLS-1$
                 "Force mode=replace over an existing module without an expectedSource check (default false).") //$NON-NLS-1$
             .stringProperty("expectedHash", //$NON-NLS-1$
-                "Lost-update guard for any mode: the contentHash from your last read; mismatch rejects.") //$NON-NLS-1$
+                "Lost-update guard: the hash from the read that produced your edit. The write is " //$NON-NLS-1$
+                + "rejected if the module changed since." ) //$NON-NLS-1$
             .build();
     }
 

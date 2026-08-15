@@ -80,11 +80,8 @@ public class SetVariableTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Set a BSL variable's value in a suspended debug frame. " //$NON-NLS-1$
-            + "WRITE/side-effect: EXECUTES the entered value as a BSL literal/expression live in the running " //$NON-NLS-1$
-            + "1C application, mutating the variable. Address the frame by frameRef from wait_for_break " //$NON-NLS-1$
-            + "(preferred) or threadId+frameIndex; name the variable (dot-path for a nested member). " //$NON-NLS-1$
-            + "Read current values with get_variables first; use evaluate_expression to compute without mutating."; //$NON-NLS-1$
+        return "Change a variable while execution is paused in the debugger. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('set_variable')."; //$NON-NLS-1$
     }
 
     @Override

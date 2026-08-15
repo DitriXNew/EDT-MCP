@@ -121,16 +121,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Store infobase connection credentials (user/password) so update_database and " //$NON-NLS-1$
-            + "debug_launch can authenticate the update agent on an infobase that has a user list " //$NON-NLS-1$
-            + "(issue #194) — also for a standalone-server application wrapping an already-" //$NON-NLS-1$
-            + "registered infobase (issue #275). Selects an EXISTING infobase user (does not " //$NON-NLS-1$
-            + "create users); an empty password is valid (demo bases). Target by " //$NON-NLS-1$
-            + "launchConfigurationName (preferred) or projectName + applicationId (from " //$NON-NLS-1$
-            + "get_applications). With launchConfigurationName the launched 1C CLIENT is " //$NON-NLS-1$
-            + "configured too so it stops asking for a password (issue #359); with projectName + " //$NON-NLS-1$
-            + "applicationId only the agent is - check clientConfigured in the result. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
+        return "Enable EDT to connect to a protected infobase for updates or debugging. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
 
     @Override

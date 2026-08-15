@@ -48,10 +48,8 @@ public class SetBreakpointTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Set a line breakpoint on a 1C BSL module. " //$NON-NLS-1$
-            + "Accepts either an EDT module-relative path " //$NON-NLS-1$
-            + "(e.g. 'CommonModules/Foo/Module.bsl') or an absolute filesystem path. " //$NON-NLS-1$
-            + "Use wait_for_break afterwards to block until the breakpoint is hit."; //$NON-NLS-1$
+        return "Pause BSL execution at a selected source line during debugging. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('set_breakpoint')."; //$NON-NLS-1$
     }
 
     @Override

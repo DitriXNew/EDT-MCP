@@ -59,9 +59,9 @@ public class EvaluateExpressionTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Evaluate a BSL expression in the context of a suspended stack frame. " //$NON-NLS-1$
-            + "Pass frameRef from wait_for_break and the expression text. " //$NON-NLS-1$
-            + "WARNING: this executes arbitrary BSL code in the running 1C application."; //$NON-NLS-1$
+        return "Evaluate a BSL expression in a paused debug frame and return the value. WARNING: this " //$NON-NLS-1$
+            + "executes arbitrary code in the running application - it can change state, not just read it. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('evaluate_expression')."; //$NON-NLS-1$
     }
 
     @Override

@@ -51,9 +51,8 @@ public class ExportConfigurationToXmlTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Export an EDT configuration project to XML files (EDT menu: " //$NON-NLS-1$
-             + "Export -> Configuration to XML Files). Equivalent of 1C platform " //$NON-NLS-1$
-             + "DumpConfigToFiles."; //$NON-NLS-1$
+        return "Export an EDT configuration into 1C XML files. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('export_configuration_to_xml')."; //$NON-NLS-1$
     }
 
     @Override

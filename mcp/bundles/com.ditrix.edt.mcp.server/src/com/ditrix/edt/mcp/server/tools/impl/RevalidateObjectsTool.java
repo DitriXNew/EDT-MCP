@@ -65,12 +65,9 @@ public class RevalidateObjectsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Revalidate EDT project or specific objects. " + //$NON-NLS-1$
-               "If objects array is empty or missing, revalidates entire project. " + //$NON-NLS-1$
-               "FQN examples: 'Document.SalesOrder', 'Catalog.Products', 'CommonModule.Common'. " + //$NON-NLS-1$
-               "Russian type names are also supported (e.g. 'Документ.ПриходнаяНакладная', 'Справочник.Номенклатура'). " + //$NON-NLS-1$
-               "Refreshes the project from disk first, so it picks up .mdo/.form edits made outside EDT. " + //$NON-NLS-1$
-               "Lightweight, targeted alternative to clean_project (no full rebuild)."; //$NON-NLS-1$
+        return "Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. " //$NON-NLS-1$
+            + "Targeted, lightweight alternative to clean_project - no full rebuild, nothing discarded. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('revalidate_objects')."; //$NON-NLS-1$
     }
     
     @Override

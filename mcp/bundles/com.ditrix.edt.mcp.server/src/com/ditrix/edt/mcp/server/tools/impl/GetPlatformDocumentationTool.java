@@ -51,17 +51,8 @@ public class GetPlatformDocumentationTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Look up 1C:Enterprise platform documentation for built-in types " + //$NON-NLS-1$
-               "(ValueTable, Array, Structure) and global built-in functions, including " + //$NON-NLS-1$
-               "their methods, properties, constructors and events. A SYSTEM ENUMERATION " + //$NON-NLS-1$
-               "(e.g. DateFractions, AccessTokenSignAlgorithm) renders its VALUES. A metadata " + //$NON-NLS-1$
-               "TYPE SET (CatalogObject, CatalogRef, DocumentObject, EnumRef, ...) renders the " + //$NON-NLS-1$
-               "API every catalog / document / register object shares. For a TYPE, " + //$NON-NLS-1$
-               "detailed output also carries the descriptions from the platform's own " + //$NON-NLS-1$
-               "documentation. " + //$NON-NLS-1$
-               "Use when you need the " + //$NON-NLS-1$
-               "exact platform API signature rather than configuration metadata. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('get_platform_documentation')."; //$NON-NLS-1$
+        return "Find the exact API of a built-in 1C type or global function. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_platform_documentation')."; //$NON-NLS-1$
     }
 
     @Override
