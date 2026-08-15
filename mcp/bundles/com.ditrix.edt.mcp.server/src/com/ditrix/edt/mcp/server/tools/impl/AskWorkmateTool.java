@@ -110,10 +110,10 @@ public class AskWorkmateTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Start or poll a background question to the 1C:Workmate plugin without holding " //$NON-NLS-1$
-            + "an MCP request open for the full cloud conversation. Requires a compatible " //$NON-NLS-1$
-            + "Workmate installation in the same EDT JVM. Full parameters and examples: call " //$NON-NLS-1$
-            + "get_tool_guide('ask_workmate')."; //$NON-NLS-1$
+        return "Ask the 1C:Workmate plugin a question in the background, without holding an MCP request " //$NON-NLS-1$
+            + "open for the whole cloud conversation: the first call starts it, later calls poll for the " //$NON-NLS-1$
+            + "answer. Requires a compatible Workmate installation in the same EDT JVM. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('ask_workmate')."; //$NON-NLS-1$
     }
 
     @Override

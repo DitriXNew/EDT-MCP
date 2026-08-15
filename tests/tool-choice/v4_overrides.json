@@ -14,7 +14,9 @@
     "debug_yaxunit_tests": "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; behaviour is identical. Kept for compatibility.",
     "search_in_code": "Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en dialect-aware, so a query in one BSL language will not find the other spelling - for a symbol's usages use find_references, for where it is defined use go_to_definition.",
     "evaluate_expression": "Evaluate a BSL expression in a paused debug frame and return the value. WARNING: this executes arbitrary code in the running application - it can change state, not just read it.",
-    "get_event_log": "Investigate infobase activity and errors through its event log. Returns PII and live infobase data - user names, session data and business-record references."
+    "get_event_log": "Investigate infobase activity and errors through its event log. Returns PII and live infobase data - user names, session data and business-record references.",
+    "git": "Run a git command in a project's repository through the real git CLI, sent as a shell-style string. Only a whitelisted set of subcommands runs, and the write-capable ones (commit, push, checkout, stash) change the repository. DISABLED by default: enable it in Preferences -> MCP Server -> Tools; enable_toolset does not turn it on. Parameters, the whitelist and examples: get_tool_guide('git').",
+    "ask_workmate": "Ask the 1C:Workmate plugin a question in the background, without holding an MCP request open for the whole cloud conversation: the first call starts it, later calls poll for the answer. Requires a compatible Workmate installation in the same EDT JVM. Parameters and examples: get_tool_guide('ask_workmate')."
   },
   "params": {
     "get_markers": {
@@ -36,5 +38,6 @@
     "write_module_source": {
       "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since."
     }
-  }
+  },
+  "_not_measured": "git and ask_workmate postdate the golden snapshot, so they were not in the 500-question run. Their texts follow the same rule by review, not by measurement: purpose line + the clauses that are load-bearing (git: real CLI, whitelist, write-capable subcommands, disabled by default and NOT reachable through enable_toolset; ask_workmate: the start-then-poll protocol and the Workmate precondition)."
 }
