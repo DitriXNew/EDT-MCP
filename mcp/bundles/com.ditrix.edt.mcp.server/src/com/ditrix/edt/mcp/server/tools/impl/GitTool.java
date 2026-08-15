@@ -449,12 +449,15 @@ public class GitTool implements IMcpTool
         + "remotes cannot be established at all, " //$NON-NLS-1$
         + "so the operation is refused instead of run blind. Check the worktree in a terminal " //$NON-NLS-1$
         + "first: most faults of this file stop git as well ('fatal: not a git repository'), but " //$NON-NLS-1$
-        + "not all of them - a pointer that is not valid UTF-8, is implausibly large, or is not a " //$NON-NLS-1$
-        + "regular file is refused HERE by choice, because following it would mean inspecting some " //$NON-NLS-1$
-        + "other directory, reading unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
+        + "not all of them - a pointer that is not valid UTF-8, is implausibly large, is not a " //$NON-NLS-1$
+        + "regular file, or (on Windows) starts with a slash without naming a drive is refused HERE " //$NON-NLS-1$
+        + "by choice, because following it would mean inspecting some other directory, reading " //$NON-NLS-1$
+        + "unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
         + "Repair the 'commondir' file itself: it holds one line, the path to the shared " //$NON-NLS-1$
-        + "repository, relative to the directory the file sits in ('../..' for a worktree made by " //$NON-NLS-1$
-        + "'git worktree add'). Do NOT reach for 'git worktree repair' - measured on git 2.35.1, it " //$NON-NLS-1$
+        + "repository. That path may be absolute; when it is relative it is resolved against the " //$NON-NLS-1$
+        + "directory the file sits in, which is what 'git worktree add' writes ('../..'). A working " //$NON-NLS-1$
+        + "absolute spelling does not need to be made relative. " //$NON-NLS-1$
+        + "Do NOT reach for 'git worktree repair' - measured on git 2.35.1, it " //$NON-NLS-1$
         + "does not touch this file at all, and reports the unrelated '.git file broken' while " //$NON-NLS-1$
         + "leaving the fault exactly where it was. This tool logs only the failure's exception " //$NON-NLS-1$
         + "types."; //$NON-NLS-1$

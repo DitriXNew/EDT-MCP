@@ -37,9 +37,10 @@ import org.junit.Test;
  * the repository is already unusable.
  *
  * <p>The rest are DELIBERATE over-refusals, and they are kept in their own section below rather
- * than mixed in with the first kind: a pointer this JVM cannot decode, one over the size bound, and
- * one that is not a regular file are all cases where git might well carry on. Each is a trade made
- * on purpose, and calling them "what git does" would be the comfortable lie that hides the trade.
+ * than mixed in with the first kind: a pointer this JVM cannot decode, one over the size bound, one
+ * that is not a regular file, and one rooted without a drive on Windows are all cases where git
+ * might well carry on. Each is a trade made on purpose, and calling them "what git does" would be
+ * the comfortable lie that hides the trade.
  */
 public class GitCommonDirectoryTest
 {
@@ -356,7 +357,8 @@ public class GitCommonDirectoryTest
         Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
             huge.toString().getBytes(StandardCharsets.UTF_8));
 
-        assertRefused(linked.adminDir, "a file this size is not a path"); //$NON-NLS-1$
+        assertRefused(linked.adminDir,
+            "content this size will not be read to find out whether it is a path"); //$NON-NLS-1$
     }
 
     @Test

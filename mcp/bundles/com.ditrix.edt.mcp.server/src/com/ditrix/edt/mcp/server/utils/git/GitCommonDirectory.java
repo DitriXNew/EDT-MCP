@@ -74,7 +74,7 @@ public final class GitCommonDirectory
      * is the worse trade - but it is a trade, and it is recorded here rather than dressed up as a
      * fact about paths. No claim is made about any operating system's path limit either.
      * <p>
-     * This is one of the three refusals listed as ours-by-choice on {@link #of}; a reader who finds
+     * This is one of the four refusals listed as ours-by-choice on {@link #of}; a reader who finds
      * only this constant should not be left thinking git would have failed too.
      */
     private static final int MAX_COMMON_DIR_BYTES = 64 * 1024;
@@ -167,13 +167,16 @@ public final class GitCommonDirectory
      * one naming something that is not a directory, one that cannot be read at all. These were
      * measured, and a refusal on them cannot be a false refusal: the repository is already unusable,
      * and the command would have failed anyway;</li>
-     * <li><b>where WE choose to refuse and git might not</b> - a pointer this JVM cannot decode
-     * (git takes path bytes literally, so on a POSIX filesystem it can use a name we cannot spell),
-     * one over {@link #MAX_COMMON_DIR_BYTES}, and one that is not a regular file. These are
-     * deliberate over-refusals, and they are written down as such instead of being dressed up as
-     * git's own failure. Each buys something the alternative cannot: inspecting a DIFFERENT
-     * directory, reading unbounded untrusted content, and blocking for ever on a named pipe are all
-     * worse than declining.</li>
+     * <li><b>where WE choose to refuse and git might not</b> - FOUR cases, and the count is kept
+     * accurate because a list that quietly drops one is how a deliberate trade turns back into a
+     * claim about git: a pointer this JVM cannot decode (git takes path bytes literally, so on a
+     * POSIX filesystem it can use a name we cannot spell), one over {@link #MAX_COMMON_DIR_BYTES},
+     * one that is not a regular file, and - on Windows only - one ROOTED without a drive
+     * ({@code \shared}), which git resolves against the current drive and {@link File#isAbsolute}
+     * calls relative. These are deliberate over-refusals, written down as such instead of dressed up
+     * as git's own failure. Each buys something the alternative cannot: inspecting a DIFFERENT
+     * directory (twice over - the substituted character and the wrong root), reading unbounded
+     * untrusted content, and blocking for ever on a named pipe are all worse than declining.</li>
      * </ul>
      * What it does NOT do is
      * judge whether the target is a REPOSITORY. An existing directory that is not one is accepted
@@ -196,8 +199,8 @@ public final class GitCommonDirectory
      * @return where the shared part of the repository lives, and whether this is a linked worktree
      * @throws IOException when a {@code commondir} file is there but cannot be turned into a usable
      *             directory - unreadable, not a regular file, over {@link #MAX_COMMON_DIR_BYTES},
-     *             not valid UTF-8, empty (or nothing but a line terminator), or naming something
-     *             that is not a directory
+     *             not valid UTF-8, rooted without naming a drive, empty (or nothing but a line
+     *             terminator), or naming something that is not a directory
      */
     public static GitCommonDirectory of(File gitDir) throws IOException
     {
@@ -286,7 +289,7 @@ public final class GitCommonDirectory
         }
         if (read > MAX_COMMON_DIR_BYTES)
         {
-            throw new IOException("commondir is too large to be a path"); //$NON-NLS-1$
+            throw new IOException("commondir is past this tool's byte limit"); //$NON-NLS-1$
         }
         // STRICT, not new String(bytes, UTF_8): that one replaces a malformed byte with U+FFFD
         // silently, and the result is a DIFFERENT path. git takes these bytes literally, so a
