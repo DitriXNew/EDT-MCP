@@ -1349,7 +1349,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q160",
@@ -1357,7 +1360,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q161",
@@ -1365,7 +1371,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q162",
@@ -1373,7 +1382,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q163",
@@ -1381,7 +1393,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q164",
@@ -1389,7 +1404,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q165",
@@ -2758,7 +2776,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q326",
@@ -2766,7 +2787,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q327",
@@ -2774,7 +2798,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q328",
@@ -2782,7 +2809,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q329",
@@ -3079,7 +3109,8 @@
   "coverage": "4/4",
   "bad_selector": [
    "update_database",
-   "update_database"
+   "update_database",
+   "run_yaxunit_tests"
   ],
   "twophase": "confirm"
  },
@@ -3109,7 +3140,8 @@
   "coverage": "3/3",
   "bad_selector": [
    "update_database",
-   "update_database"
+   "update_database",
+   "run_yaxunit_tests"
   ],
   "twophase": "confirm"
  },
@@ -3292,19 +3324,28 @@
   "id": "c044",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c045",
   "kind": "chain",
   "guides": [],
-  "coverage": "2/2"
+  "coverage": "2/2",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c046",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c047",
@@ -3454,7 +3495,8 @@
   "guides": [],
   "coverage": "3/3",
   "bad_selector": [
-   "update_database"
+   "update_database",
+   "run_yaxunit_tests"
   ],
   "twophase": "confirm"
  },
@@ -3656,7 +3698,10 @@
   "id": "c099",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c100",
@@ -3754,7 +3799,10 @@
   "id": "c113",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c114",
@@ -3913,13 +3961,19 @@
   "id": "c137",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c138",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c139",
@@ -3962,6 +4016,7 @@
   "guides": [],
   "coverage": "6/6",
   "bad_selector": [
+   "run_yaxunit_tests",
    "update_database"
   ],
   "twophase": "confirm"
@@ -3970,6 +4025,9 @@
   "id": "c145",
   "kind": "chain",
   "guides": [],
-  "coverage": "6/6"
+  "coverage": "6/6",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  }
 ]

@@ -179,9 +179,26 @@ public final class InputSchemaCompactor
         // old branch. A caller who reads "start isolated work" and skips this parameter then
         // commits the isolated work to the branch it meant to leave.
         keep.put("create_git_branch", asSet("checkout")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Omitting projectName does not fail - it silently targets the FIRST configuration
+        // project in the workspace, so a multi-configuration workspace answers about a
+        // project the caller never named. Third case of clean_project.projectName's shape.
+        keep.put("get_configuration_properties", asSet(McpKeys.PROJECT_NAME)); //$NON-NLS-1$
+        // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
+        // parity; the class doc reserves it for a future release). Stripped to a bare
+        // boolean it reads as a working option, and the response says otherwise only after
+        // the project has been created.
+        keep.put("create_project", asSet("autoSortTopObjects")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Default refresh=false may reuse the pre-existing render buffer, i.e. return the
+        // form as it looked BEFORE the caller's edit. Only refresh=true guarantees a real
+        // render or an explicit failure. A stale screenshot is indistinguishable from a
+        // current one, so validating a UI change against it silently validates the old UI.
+        keep.put("get_form_screenshot", asSet("refresh")); //$NON-NLS-1$ //$NON-NLS-2$
         // force=true escalates a polite stop to an OS-level process kill and can lose
         // unsaved 1C state - a second, harsher mode the tool description does not cover.
-        keep.put("terminate_launch", asSet("force")); //$NON-NLS-1$ //$NON-NLS-2$
+        // includeAttach defaults to TRUE, and an Attach target is only DISCONNECTED - the
+        // remote 1C cluster keeps running. "Stopped" would then be believed of a server that
+        // is still up; this parameter's prose is the only place that says so.
+        keep.put("terminate_launch", asSet("force", "includeAttach")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // normalizeYo defaults to TRUE and rewrites the caller's own Russian text:
         // 'Всё' is stored as 'Все' in names, synonyms, comments and predefined-item
         // descriptions unless normalizeYo=false is passed explicitly. Silently altering
@@ -191,7 +208,11 @@ public final class InputSchemaCompactor
         // A CONDITIONAL protocol the schema cannot express: expectedHash carries the
         // preview's contentHash and becomes REQUIRED once confirm=true is paired with a
         // non-empty disableIndices. Without it the selective confirm is simply rejected.
-        keep.put("rename_metadata_object", asSet("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
+        // timeout: on expiry the tool returns a timeout error, but the UI-thread refactoring
+        // cannot be preempted and MAY STILL COMPLETE afterwards. Without this a caller reads
+        // "failed" and retries - or starts editing - while the first rename is still mutating.
+        keep.put("rename_metadata_object", //$NON-NLS-1$
+            asSet("expectedHash", "timeout")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // An OPTIONAL parameter whose omission widens the blast radius to the whole
         // workspace: without projectName, clean_project rebuilds EVERY EDT project and
         // discards unsaved in-memory edits in all of them. "Optional" reads as "safe to

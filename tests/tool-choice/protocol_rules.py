@@ -33,6 +33,13 @@ SELECTORS = {
                          {"all": True}],
     # delete_infobase rejects a call that names neither the application nor the infobase.
     "delete_infobase": [{"applicationId": PRESENT}, {"infobaseName": PRESENT}],
+    # RunYaxunitTestsTool refuses a call that names no launch target: without
+    # launchConfigurationName it demands projectName AND applicationId, with a distinct
+    # error for each. The alias routes to the same tool, so it inherits the same rule.
+    "run_yaxunit_tests": [{"launchConfigurationName": PRESENT},
+                          {"projectName": PRESENT, "applicationId": PRESENT}],
+    "debug_yaxunit_tests": [{"launchConfigurationName": PRESENT},
+                            {"projectName": PRESENT, "applicationId": PRESENT}],
 }
 
 

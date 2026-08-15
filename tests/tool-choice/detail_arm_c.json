@@ -1448,7 +1448,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q160",
@@ -1456,7 +1459,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q161",
@@ -1464,7 +1470,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q162",
@@ -1473,7 +1482,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_selector": [
+   "debug_yaxunit_tests"
+  ]
  },
  {
   "id": "q163",
@@ -1482,7 +1494,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_selector": [
+   "debug_yaxunit_tests"
+  ]
  },
  {
   "id": "q164",
@@ -1491,7 +1506,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_selector": [
+   "debug_yaxunit_tests"
+  ]
  },
  {
   "id": "q165",
@@ -2952,7 +2970,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q326",
@@ -2960,7 +2981,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q327",
@@ -2968,7 +2992,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
-  "chosen": "run_yaxunit_tests"
+  "chosen": "run_yaxunit_tests",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "q328",
@@ -2977,7 +3004,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_selector": [
+   "debug_yaxunit_tests"
+  ]
  },
  {
   "id": "q329",
@@ -3575,7 +3605,10 @@
    "read_method_source",
    "set_breakpoint"
   ],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c045",
@@ -3584,7 +3617,10 @@
    "run_yaxunit_tests",
    "wait_for_break"
   ],
-  "coverage": "2/2"
+  "coverage": "2/2",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c046",
@@ -3594,7 +3630,10 @@
    "get_project_errors",
    "run_yaxunit_tests"
   ],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c047",
@@ -3762,7 +3801,8 @@
   ],
   "coverage": "3/3",
   "bad_selector": [
-   "update_database"
+   "update_database",
+   "run_yaxunit_tests"
   ],
   "twophase": "confirm"
  },
@@ -4158,7 +4198,10 @@
    "get_project_errors",
    "run_yaxunit_tests"
   ],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c114",
@@ -4371,6 +4414,9 @@
    "wait_for_break"
   ],
   "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ],
   "invented_params": [
    "projectName"
   ]
@@ -4383,7 +4429,10 @@
    "run_yaxunit_tests",
    "get_module_structure"
   ],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  },
  {
   "id": "c139",
@@ -4446,6 +4495,9 @@
    "update_database"
   ],
   "coverage": "6/6",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ],
   "twophase": "confirm"
  },
  {
@@ -4457,6 +4509,9 @@
    "run_yaxunit_tests",
    "export_configuration_to_xml"
   ],
-  "coverage": "6/6"
+  "coverage": "6/6",
+  "bad_selector": [
+   "run_yaxunit_tests"
+  ]
  }
 ]

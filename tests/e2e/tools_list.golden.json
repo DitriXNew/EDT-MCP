@@ -323,7 +323,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Prepare an infobase for an EDT project by creating a database or registering an existing one. Parameters and examples: get_tool_guide('create_infobase').",
+    "description": "Prepare an infobase for an EDT project by creating a database or registering an existing one. Passing user/password/access STORES those credentials in EDT's infobase settings - the secret PERSISTS beyond this call and is reused by later connections. Parameters and examples: get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -658,6 +658,7 @@
     "inputSchema": {
       "properties": {
         "autoSortTopObjects": {
+          "description": "Reserved for future use: auto-sort top-level metadata objects. Accepted but not yet applied in this release (see codestyle.autoSortNote in the response).",
           "type": "boolean"
         },
         "baseProjectName": {
@@ -1583,6 +1584,7 @@
     "inputSchema": {
       "properties": {
         "projectName": {
+          "description": "Project name (optional, if not specified returns first configuration project)",
           "type": "string"
         }
       },
@@ -1854,6 +1856,7 @@
           "type": "string"
         },
         "refresh": {
+          "description": "Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false)",
           "type": "boolean"
         }
       },
@@ -3324,6 +3327,7 @@
           "type": "string"
         },
         "timeout": {
+          "description": "How long to wait for the cascade itself, in seconds (default 420, clamped to 60..3600). On expiry the call fails with a timeout error naming the stage it reached instead of waiting forever; EDT may still finish the rename afterwards, so verify the model. Does not cover the pre-flight index drain (a separate 60s bound).",
           "type": "integer"
         }
       },
@@ -4114,6 +4118,7 @@
           "type": "boolean"
         },
         "includeAttach": {
+          "description": "Whether to act on Attach configs (disconnected, server keeps running). Default true; set false to skip them.",
           "type": "boolean"
         },
         "launchConfigurationName": {

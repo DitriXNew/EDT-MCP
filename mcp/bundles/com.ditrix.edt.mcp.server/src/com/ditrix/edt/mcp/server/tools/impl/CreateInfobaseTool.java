@@ -203,7 +203,9 @@ public class CreateInfobaseTool implements IMcpTool
     public String getDescription()
     {
         return "Prepare an infobase for an EDT project by creating a database or registering an existing " //$NON-NLS-1$
-            + "one. Parameters and examples: get_tool_guide('create_infobase')."; //$NON-NLS-1$
+            + "one. Passing user/password/access STORES those credentials in EDT's infobase settings - " //$NON-NLS-1$
+            + "the secret PERSISTS beyond this call and is reused by later connections. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
 
     @Override
