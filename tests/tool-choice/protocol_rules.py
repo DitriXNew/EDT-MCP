@@ -38,6 +38,12 @@ SELECTORS = {
 
 def selector_ok(tool, args):
     """True when `args` satisfies at least one accepted selector combination."""
+    if tool == "terminate_launch":
+        # This one tool has an exact model, so use it rather than the loose key
+        # combinations: the combinations miss mutual exclusivity (name + all=true
+        # together is rejected). "gate" is NOT a selector problem - the selection is
+        # fine, the call merely lacks confirm - so it must not count as one.
+        return terminate_launch_verdict(args) != "invalid"
     combos = SELECTORS.get(tool)
     if not combos:
         return True
@@ -45,6 +51,49 @@ def selector_ok(tool, args):
         if all(k in args and (v is PRESENT or args.get(k) == v) for k, v in combo.items()):
             return True
     return False
+
+
+def _present(args, key):
+    value = args.get(key)
+    return isinstance(value, str) and value.strip() != ""
+
+
+def terminate_launch_verdict(args):
+    """Replicate TerminateLaunchTool.validateSelection for ONE call.
+
+    Returns "ok" (the call terminates something), "gate" (rejected ONLY because a mass
+    call carried no confirm), or "invalid" (rejected for a selection reason).
+
+    Why the full rule and not `selector_ok` here: the gate metric answers "did anything
+    actually get terminated, and only with confirm". `selector_ok` is deliberately loose -
+    it models the minimum key combinations, not mutual exclusivity - so it credits calls
+    the tool refuses. Two real shapes in the committed answers prove that matters:
+    a bare {"confirm": true} with no selector at all, and {} - neither reaches the
+    operation, and both used to count as the gate being satisfied.
+    """
+    has_name = _present(args, "launchConfigurationName")
+    has_project = _present(args, "projectName")
+    has_app = _present(args, "applicationId")
+    every = args.get("all") is True
+    confirm = args.get("confirm") is True
+
+    modes = int(has_name) + int(has_project and has_app) + int(every)
+    if modes > 1:
+        return "invalid"  # selection modes are mutually exclusive
+    if has_app and not has_project and not every and not has_name:
+        return "invalid"  # applicationId requires projectName
+    if has_app and every:
+        return "invalid"  # applicationId cannot be combined with all=true
+    if has_project and not has_app and not every and not has_name:
+        return "invalid"  # projectName alone is not a selection
+    if modes == 0:
+        return "invalid"
+    if every and not confirm:
+        # The ONLY unconfirmed rejection: a single-launch call executes immediately,
+        # which is why counting every confirm-less call as "refused" described
+        # successful terminations as rejected round-trips.
+        return "gate"
+    return "ok"
 
 
 def effect_args(call):
