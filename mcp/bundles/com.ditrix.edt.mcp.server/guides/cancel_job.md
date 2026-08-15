@@ -42,14 +42,32 @@ report. A successful confirmed stop reports `terminated`, states that the
 infobase was **NOT** rolled back, and renders usable partial JUnit XML. It never
 claims a clean test outcome. The job itself becomes `cancelled` only after its
 worker exits; `terminated` reports what happened to the launch, not an early
-claim that the registry worker is already gone. If no live launch can be stopped,
-the committed job keeps the honest `alreadyCommitted` outcome.
+claim that the registry worker is already gone.
+
+If the launch accepted the termination request but did not confirm completion
+within the verification wait, or that verification was interrupted after
+`terminate()` returned, the outcome is `terminationRequested`. This does not
+claim a verified stop and does not claim that nothing happened. It states that
+termination is irreversible but unconfirmed, that the infobase was **NOT**
+rolled back, and that the job is cancellation-pending. The worker's later normal
+return cannot become `done`; the job becomes `cancelled` when the run and its
+worker actually end, retaining the honest partial-or-absent report explanation.
+An identical run remains attached to that non-terminal job in the meantime.
+
+If `terminate()` fails, the launch reports that it cannot terminate, or no live
+launch is available, no stop was initiated and the committed job keeps the
+honest `alreadyCommitted` outcome.
 
 The registry gives an owner cancellation handler at most 30 seconds as an outer
 guard. This is longer than YAXUnit's default 10-second termination check so the
 handler can verify the stop and read a partial report. If the whole handler still
-does not return, `cancel_job` reports that the stop was not established, releases
-the cancellation claim, and leaves the job to publish its worker's real outcome.
+does not return, `cancel_job` reports that the stop was not established and
+releases only the worker outcome that was deferred behind the waiter. Polling can
+therefore publish that worker outcome, but the destructive-handler claim remains
+until the handler thread actually exits. A second `cancel_job` still reports that
+cancellation is already in progress, and an equivalent run is not started while
+the stale handler can still mutate owner state. A late handler result cannot
+replace the worker outcome after its waiter has abandoned the attempt.
 
 A job that was already done, failed, or cancelled is left unchanged and reported
 as already terminal.

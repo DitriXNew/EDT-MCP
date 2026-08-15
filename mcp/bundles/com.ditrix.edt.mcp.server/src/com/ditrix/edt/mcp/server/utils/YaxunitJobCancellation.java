@@ -73,6 +73,13 @@ public final class YaxunitJobCancellation
                 "The YAXUnit job was NOT newly cancelled: its client had already terminated and " //$NON-NLS-1$
                     + "the job is collecting the report."); //$NON-NLS-1$
         }
+        if (!tracked.launch.canTerminate())
+        {
+            return CommittedCancellation.notStopped(
+                "The YAXUnit job was NOT cancelled because its client launch reports that it " //$NON-NLS-1$
+                    + "cannot be terminated. Continue polling the existing job; do not start " //$NON-NLS-1$
+                    + "a duplicate run."); //$NON-NLS-1$
+        }
         try
         {
             tracked.launch.terminate();
@@ -94,9 +101,16 @@ public final class YaxunitJobCancellation
         if (!LaunchLifecycleUtils.waitForTerminated(tracked.launch,
             terminateTimeoutSeconds * 1000L))
         {
-            return CommittedCancellation.notStopped(
-                "The YAXUnit job was NOT cancelled because the client process did not terminate " //$NON-NLS-1$
-                    + "within the allowed wait. It may still be running."); //$NON-NLS-1$
+            String reason = Thread.currentThread().isInterrupted()
+                ? "termination verification was interrupted after the request was accepted" //$NON-NLS-1$
+                : "the client did not report termination within the allowed verification wait"; //$NON-NLS-1$
+            String result = "YAXUnit client termination was requested and cannot be taken back, " //$NON-NLS-1$
+                + "but it is not yet confirmed because " + reason + ". The infobase was NOT " //$NON-NLS-1$ //$NON-NLS-2$
+                + "rolled back; it keeps whatever changes the tests already made. The " //$NON-NLS-1$
+                + "background job is cancellation-pending, and its own status will settle when " //$NON-NLS-1$
+                + "the run actually ends. Never treat this run as a clean test outcome.\n\n" //$NON-NLS-1$
+                + partialReport(tracked.reportDir);
+            return CommittedCancellation.stopInitiated(result, result);
         }
 
         try
@@ -107,15 +121,19 @@ public final class YaxunitJobCancellation
         {
             Activator.logError("YAXUnit launch stopped but its owner tracking cleanup failed", e); //$NON-NLS-1$
         }
-        String partial = YaxunitReportUtils.renderIfUsable(tracked.reportDir);
-        String report = partial == null
+        String result = "The YAXUnit client process was killed and the run was stopped. The " //$NON-NLS-1$
+            + "infobase was NOT rolled back; it keeps whatever changes the tests had already " //$NON-NLS-1$
+            + "made.\n\n" + partialReport(tracked.reportDir); //$NON-NLS-1$
+        return CommittedCancellation.stopped(result, result);
+    }
+
+    private static String partialReport(Path reportDir)
+    {
+        String partial = YaxunitReportUtils.renderIfUsable(reportDir);
+        return partial == null
             ? "No usable partial JUnit report was found; it is absent or incomplete." //$NON-NLS-1$
             : "A JUnit XML report was readable, but it is partial and must not be treated as a " //$NON-NLS-1$
                 + "clean test outcome.\n\n" + partial; //$NON-NLS-1$
-        String result = "The YAXUnit client process was killed and the run was stopped. The " //$NON-NLS-1$
-            + "infobase was NOT rolled back; it keeps whatever changes the tests had already " //$NON-NLS-1$
-            + "made.\n\n" + report; //$NON-NLS-1$
-        return CommittedCancellation.stopped(result, result);
     }
 
     /** Immutable state published through {@link #trackedRun} in one atomic write. */

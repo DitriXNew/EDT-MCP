@@ -629,7 +629,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             + "address this run.\n\n" + BackgroundJobRenderer.render(job); //$NON-NLS-1$
     }
 
-    /** Drops only terminal/evicted mappings; terminal results themselves stay in the registry. */
+    /** Drops only unclaimed terminal/evicted mappings; retained results stay in the registry. */
     private void purgeTerminalJobMappings()
     {
         SUBMISSION_JOBS.entrySet().removeIf(entry -> findRunningJob(entry.getValue()) == null);
@@ -643,8 +643,7 @@ public class RunYaxunitTestsTool implements IMcpTool
             return null;
         }
         JobSnapshot snapshot = jobs.get(jobId);
-        return snapshot != null && snapshot.getStatus() == BackgroundJobs.Status.RUNNING
-            ? snapshot : null;
+        return snapshot != null && snapshot.isClaimed() ? snapshot : null;
     }
 
     /**

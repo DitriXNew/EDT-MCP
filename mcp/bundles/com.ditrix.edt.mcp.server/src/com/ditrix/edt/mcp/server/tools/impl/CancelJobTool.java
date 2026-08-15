@@ -144,6 +144,14 @@ public class CancelJobTool implements IMcpTool
                 message += "\n\n" + cancellation.getDetail(); //$NON-NLS-1$
             }
         }
+        else if (outcome == CancellationOutcome.TERMINATION_REQUESTED)
+        {
+            message = cancellation.getDetail() != null
+                ? cancellation.getDetail()
+                : "The owning tool requested termination, but completion was not confirmed. " //$NON-NLS-1$
+                    + "The job is cancellation-pending; continue polling it with " //$NON-NLS-1$
+                    + "get_job_status until its run actually ends."; //$NON-NLS-1$
+        }
         else if (outcome == CancellationOutcome.ALREADY_COMMITTED)
         {
             message = cancellation.getDetail() != null

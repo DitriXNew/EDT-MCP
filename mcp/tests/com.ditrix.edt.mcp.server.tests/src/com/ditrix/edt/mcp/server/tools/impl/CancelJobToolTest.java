@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -24,6 +25,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.ILaunch;
 import org.junit.After;
 import org.junit.Before;
@@ -180,6 +183,7 @@ public class CancelJobToolTest
         AtomicBoolean terminated = new AtomicBoolean();
         AtomicBoolean trackingCleared = new AtomicBoolean();
         ILaunch launch = mock(ILaunch.class);
+        when(launch.canTerminate()).thenReturn(true);
         when(launch.isTerminated()).thenAnswer(invocation -> terminated.get());
         doAnswer(invocation -> {
             terminated.set(true);
@@ -227,6 +231,104 @@ public class CancelJobToolTest
         release.countDown();
         assertEquals(Status.CANCELLED, jobs.await(started.getId(), 2_000L).getStatus());
         Files.deleteIfExists(reportDir.resolve("junit.xml")); //$NON-NLS-1$
+        Files.deleteIfExists(reportDir);
+    }
+
+    @Test
+    public void testUnverifiedYaxunitTerminationCancelsNormalWorkerOutcomeHonestly()
+        throws Exception
+    {
+        AtomicBoolean trackingCleared = new AtomicBoolean();
+        ILaunch launch = mock(ILaunch.class);
+        when(launch.canTerminate()).thenReturn(true);
+        when(launch.isTerminated()).thenReturn(false);
+
+        YaxunitJobCancellation cancellation =
+            new YaxunitJobCancellation(ignored -> trackingCleared.set(true), 1);
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-unverified-test-"); //$NON-NLS-1$
+        cancellation.track(launch, reportDir);
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        JobSnapshot started = jobs.start(RunYaxunitTestsTool.NAME, 5_000L, "Accepted", //$NON-NLS-1$
+            cancellation.capability(), progress -> {
+                assertTrue(progress.tryCommit());
+                committed.countDown();
+                release.await();
+                return "clean-looking worker report"; //$NON-NLS-1$
+            });
+        assertTrue(committed.await(2, TimeUnit.SECONDS));
+
+        try
+        {
+            String response = tool.execute(
+                Map.of("jobId", started.getId(), "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertContains(response, "cancellation: terminationRequested", //$NON-NLS-1$
+                "termination was requested", "not yet confirmed", //$NON-NLS-1$ //$NON-NLS-2$
+                "infobase was NOT rolled back", "cancellation-pending", //$NON-NLS-1$ //$NON-NLS-2$
+                "status will settle when the run actually ends", //$NON-NLS-1$
+                "Never treat this run as a clean test outcome", //$NON-NLS-1$
+                "absent or incomplete", "| status | running |"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("unverified termination must retain live launch tracking", //$NON-NLS-1$
+                trackingCleared.get());
+            assertEquals(Status.RUNNING, jobs.get(started.getId()).getStatus());
+        }
+        finally
+        {
+            release.countDown();
+        }
+
+        JobSnapshot cancelled = jobs.await(started.getId(), 2_000L);
+        assertEquals(Status.CANCELLED, cancelled.getStatus());
+        assertTrue(cancelled.getResult().toString().contains(
+            "termination was requested")); //$NON-NLS-1$
+        assertFalse(cancelled.getResult().toString().contains(
+            "clean-looking worker report")); //$NON-NLS-1$
+        verify(launch).terminate();
+        Files.deleteIfExists(reportDir);
+    }
+
+    @Test
+    public void testFailedYaxunitTerminateLeavesCommittedJobRunning() throws Exception
+    {
+        ILaunch launch = mock(ILaunch.class);
+        when(launch.canTerminate()).thenReturn(true);
+        when(launch.isTerminated()).thenReturn(false);
+        DebugException failure = new DebugException(new org.eclipse.core.runtime.Status(
+            IStatus.ERROR, "test", "terminate refused")); //$NON-NLS-1$ //$NON-NLS-2$
+        doThrow(failure).when(launch).terminate();
+
+        YaxunitJobCancellation cancellation = new YaxunitJobCancellation(null, 1);
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-failed-stop-test-"); //$NON-NLS-1$
+        cancellation.track(launch, reportDir);
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        JobSnapshot started = jobs.start(RunYaxunitTestsTool.NAME, 5_000L, "Accepted", //$NON-NLS-1$
+            cancellation.capability(), progress -> {
+                assertTrue(progress.tryCommit());
+                committed.countDown();
+                release.await();
+                return "normal worker result"; //$NON-NLS-1$
+            });
+        assertTrue(committed.await(2, TimeUnit.SECONDS));
+
+        try
+        {
+            String response = tool.execute(
+                Map.of("jobId", started.getId(), "confirm", "true")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertContains(response, "cancellation: alreadyCommitted", //$NON-NLS-1$
+                "was NOT cancelled", "could not be terminated", //$NON-NLS-1$ //$NON-NLS-2$
+                "terminate refused", "| status | running |"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(Status.RUNNING, jobs.get(started.getId()).getStatus());
+        }
+        finally
+        {
+            release.countDown();
+        }
+
+        JobSnapshot done = jobs.await(started.getId(), 2_000L);
+        assertEquals(Status.DONE, done.getStatus());
+        assertEquals("normal worker result", done.getResult()); //$NON-NLS-1$
+        verify(launch).terminate();
         Files.deleteIfExists(reportDir);
     }
 

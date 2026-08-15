@@ -815,6 +815,49 @@ public class RunYaxunitTestsToolTest
     }
 
     @Test
+    public void testUnverifiedTerminationRetainsEquivalentRunClaimUntilWorkerExit()
+        throws Exception
+    {
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        String partial = "Termination was requested but not confirmed; partial report"; //$NON-NLS-1$
+        CancellationCapability capability = CancellationCapability.of("stop live YAXUnit", //$NON-NLS-1$
+            () -> BackgroundJobs.CommittedCancellation.stopInitiated(partial, partial));
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
+        {
+            RunYaxunitTestsTool tool = new RunYaxunitTestsTool(jobs);
+            JobSnapshot started = jobs.start(RunYaxunitTestsTool.NAME, 60_000L, "start", capability, //$NON-NLS-1$
+                progress -> {
+                    assertTrue(progress.tryCommit());
+                    committed.countDown();
+                    releaseWorker.await();
+                    return "worker report"; //$NON-NLS-1$
+                });
+            assertTrue(committed.await(2, TimeUnit.SECONDS));
+
+            try
+            {
+                CancellationResult requested = jobs.cancel(started.getId());
+                assertEquals(CancellationOutcome.TERMINATION_REQUESTED,
+                    requested.getOutcome());
+                assertEquals(BackgroundJobs.Status.RUNNING,
+                    requested.getSnapshot().getStatus());
+                assertNotNull("an equivalent run must remain attached to the cancellation-pending " //$NON-NLS-1$
+                    + "job until its worker exits", tool.findRunningJob(started.getId())); //$NON-NLS-1$
+            }
+            finally
+            {
+                releaseWorker.countDown();
+            }
+
+            JobSnapshot cancelled = jobs.await(started.getId(), 2_000L);
+            assertEquals(BackgroundJobs.Status.CANCELLED, cancelled.getStatus());
+            assertEquals(partial, cancelled.getResult());
+            assertTrue(tool.findRunningJob(started.getId()) == null);
+        }
+    }
+
+    @Test
     public void testCancellingAttachmentStopsWaitWithoutStoppingMirroredRun() throws Exception
     {
         CountDownLatch mirroredStarted = new CountDownLatch(1);
