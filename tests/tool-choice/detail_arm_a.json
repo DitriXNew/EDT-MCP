@@ -341,6 +341,9 @@
   "tool_ok": true,
   "expected": "modify_metadata",
   "chosen": "modify_metadata",
+  "bad_selector": [
+   "modify_metadata"
+  ],
   "missing_must": [
    "dcs"
   ]
@@ -351,7 +354,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "modify_metadata",
-  "chosen": "modify_metadata"
+  "chosen": "modify_metadata",
+  "bad_selector": [
+   "modify_metadata"
+  ]
  },
  {
   "id": "q044",
@@ -1979,6 +1985,9 @@
   "tool_ok": true,
   "expected": "modify_metadata",
   "chosen": "modify_metadata",
+  "bad_selector": [
+   "modify_metadata"
+  ],
   "missing_must": [
    "dcs"
   ]
@@ -2020,6 +2029,9 @@
   "tool_ok": true,
   "expected": "modify_metadata",
   "chosen": "modify_metadata",
+  "bad_selector": [
+   "modify_metadata"
+  ],
   "missing_must": [
    "properties"
   ]

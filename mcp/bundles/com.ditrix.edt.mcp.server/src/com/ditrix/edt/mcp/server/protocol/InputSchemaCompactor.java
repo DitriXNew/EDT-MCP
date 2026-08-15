@@ -119,7 +119,9 @@ public final class InputSchemaCompactor
     {
         Map<String, Set<String>> keep = new HashMap<>();
         // The only statement anywhere that a 'task' marker means TODO/FIXME/XXX/HACK.
-        keep.put("get_markers", asSet("markerKind")); //$NON-NLS-1$ //$NON-NLS-2$
+        // priority sub-filters the TASK family only - a bookmark has no priority, and the
+        // combination is rejected. The enum lists high|normal|low with nothing saying that.
+        keep.put("get_markers", asSet("markerKind", "priority")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // Two filters that are mutually exclusive and differ in matching semantics.
         keep.put("get_project_errors", asSet("objects", "objectFqns")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // 'callers' vs 'callees' - the enum values alone do not say which way they point.
@@ -130,7 +132,10 @@ public final class InputSchemaCompactor
         keep.put("get_method_call_hierarchy", //$NON-NLS-1$
             asSet("direction", "methodName")); //$NON-NLS-1$ //$NON-NLS-2$
         // A scope limit that makes the tool inapplicable: FILE infobases only.
-        keep.put("create_infobase", asSet("infobaseFile")); //$NON-NLS-1$ //$NON-NLS-2$
+        // user carries a CROSS-FIELD rule as well as the credential fact: for a standalone
+        // server the credentials are accepted only with mode='register' and rejected for a
+        // newly created one, so a schema-valid create+credentials call fails before creating.
+        keep.put("create_infobase", asSet("infobaseFile", "user")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // The lost-update guard: what the hash is and where it comes from.
         // mode defaults to searchReplace, and THAT mode requires oldSource - so a call carrying
         // only the two declared required parameters looks schema-valid and fails at runtime.
@@ -159,8 +164,11 @@ public final class InputSchemaCompactor
             asSet("deleteRegistration", "deleteDatabaseFiles")); //$NON-NLS-1$ //$NON-NLS-2$
         keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
         // debug=true also changes the return contract (a wait_for_break follow-up).
-        keep.put("run_yaxunit_tests", //$NON-NLS-1$
-            asSet("debug", "updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$ //$NON-NLS-2$
+        // launchConfigurationName OR projectName+applicationId - the same target-selector
+        // contract the grader models, and the arms produced project-only calls without it.
+        keep.put("run_yaxunit_tests", asSet("debug", "updateBeforeLaunch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            KEY_EXTERNAL_CHANGES, McpKeys.PROJECT_NAME, McpKeys.APPLICATION_ID,
+            "launchConfigurationName")); //$NON-NLS-1$
         // The conflict policy for an infobase changed OUTSIDE EDT. The schema declares a
         // bare string - no enum - so the legal values ('override' / 'import' / 'cancel')
         // live only here, and so does the fact that the DEFAULT, 'override', DISCARDS the
@@ -264,7 +272,12 @@ public final class InputSchemaCompactor
         // 'Всё' is stored as 'Все' in names, synonyms, comments and predefined-item
         // descriptions unless normalizeYo=false is passed explicitly. Silently altering
         // user-supplied content is exactly what a caller must be able to see coming.
-        keep.put("create_metadata", asSet("normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The common-module modifiers are not independent: serverCall+privileged is
+        // rejected, and returnValuesReuse='DuringRequest' is illegal for some kinds - both
+        // combinations the compacted enums advertise as valid. Cross-field constraints are
+        // the one thing a flat schema cannot state at all.
+        keep.put("create_metadata", asSet("normalizeYo", "commonModuleKind", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "serverCall", "privileged", "returnValuesReuse")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         keep.put("modify_metadata", asSet("normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$
         // A CONDITIONAL protocol the schema cannot express: expectedHash carries the
         // preview's contentHash and becomes REQUIRED once confirm=true is paired with a

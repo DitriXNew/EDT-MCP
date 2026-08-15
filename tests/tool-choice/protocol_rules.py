@@ -82,9 +82,23 @@ def _definition_needs_module(args):
     return bool(str(args.get("modulePath") or "").strip())
 
 
+def _modify_needs_payload(args):
+    """modify_metadata refuses a call that changes NOTHING.
+
+    parseModifyArgs requires at least one non-empty payload among properties / rights /
+    templates / roleProperties / content / template / dcs. A call carrying only
+    projectName and fqn is schema-valid and rejected, and the committed answers contain
+    four of them (q042, q043, q232, q236).
+    """
+    payloads = ("properties", "rights", "templates", "roleProperties",
+                "content", "template", "dcs")
+    return any(args.get(k) for k in payloads)
+
+
 CONDITIONAL = {
     "get_method_call_hierarchy": [_hierarchy_needs_method],
     "go_to_definition": [_definition_needs_module],
+    "modify_metadata": [_modify_needs_payload],
 }
 
 EXCLUSIVE = {
