@@ -4077,7 +4077,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Stop 1C sessions started by EDT. Two-phase: call once WITHOUT confirm to see what would be stopped, then again with confirm=true to apply. Parameters and examples: get_tool_guide('terminate_launch').",
+    "description": "Stop 1C sessions started by EDT. NOT two-phase for a single launch: selecting one (launchConfigurationName, or projectName + applicationId) stops it IMMEDIATELY, with no preview call. Only mass termination is gated - all=true is rejected without confirm=true. Either way, list_configurations first to see what is running. Parameters and examples: get_tool_guide('terminate_launch').",
     "inputSchema": {
       "properties": {
         "all": {

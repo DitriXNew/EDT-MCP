@@ -1106,8 +1106,7 @@
   ],
   "tool_ok": true,
   "expected": "terminate_launch",
-  "chosen": "terminate_launch",
-  "twophase": "confirm"
+  "chosen": "terminate_launch"
  },
  {
   "id": "q126",
@@ -2718,8 +2717,7 @@
   ],
   "tool_ok": true,
   "expected": "terminate_launch",
-  "chosen": "terminate_launch",
-  "twophase": "NONE"
+  "chosen": "terminate_launch"
  },
  {
   "id": "q304",
@@ -3180,8 +3178,7 @@
   "guides": [
    "terminate_launch"
   ],
-  "coverage": "3/3",
-  "twophase": "NONE"
+  "coverage": "3/3"
  },
  {
   "id": "c006",
@@ -4008,8 +4005,7 @@
    "wait_for_break",
    "terminate_launch"
   ],
-  "coverage": "4/4",
-  "twophase": "NONE"
+  "coverage": "4/4"
  },
  {
   "id": "c105",

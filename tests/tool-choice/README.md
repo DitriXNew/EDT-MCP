@@ -26,9 +26,25 @@ what was measured to be load-bearing.
 
 500 Russian requests (`questions.json`), in two kinds:
 
-- **355 one-step** requests covering all 85 tools, the confusable pairs (`clean_project`
-  vs `revalidate_objects`, `read_module_source` vs `read_method_source`, `find_references`
-  vs `go_to_definition` vs `search_in_code`, …) and 12 requests no tool can serve.
+- **358 one-step** requests over the confusable pairs (`clean_project` vs
+  `revalidate_objects`, `read_module_source` vs `read_method_source`, `find_references`
+  vs `go_to_definition` vs `search_in_code`, …) plus 12 requests no tool can serve.
+
+  **Coverage is not automatic, and it was wrong once.** This line used to claim "all 85
+  tools"; a scan of the expected labels found 84 of 87, with `cancel_job` and
+  `get_job_status` missing entirely — so a destructive two-phase tool whose description
+  this benchmark was used to accept contributed no observations at all. Check it, do not
+  assert it:
+
+  ```bash
+  python3 - <<'EOF'
+  import json
+  qs = json.load(open("questions.json", encoding="utf-8"))
+  labelled = {q["tool"] for q in qs if q.get("tool")} | {t for q in qs for t in q.get("tools", [])}
+  contract = set(json.load(open("contract.json", encoding="utf-8")))
+  print("нет ни одного вопроса:", sorted(contract - labelled))
+  EOF
+  ```
 - **145 long multi-step scenarios** — a paragraph of real context ("the document stopped
   posting after yesterday's merge, find out why") whose answer is a PLAN, not one call.
   These are where a thin description should hurt most, so they carry their own metric:

@@ -101,6 +101,24 @@ GUIDE_NOTE = (
 V4 = json.load(open(os.path.join(HERE, "v4_overrides.json"), encoding="utf-8"))
 
 
+def render_guide(tool, desc, body):
+    """Reproduce what get_tool_guide actually RETURNS (GuideRenderer.render).
+
+    Production emits the tool name, the tool's DESCRIPTION, a parameter table built from
+    the RAW (never compacted) inputSchema, and only then the guide body. Staging the bare
+    .md gave the runner a different document from the one a real client reads - and the
+    missing table carries exactly the parameter prose V3/V4 strip from tools/list, so the
+    short arms were measured against an input no client ever sees. The description is
+    arm-specific; the table is not, because compaction happens at tools/list, not here.
+    """
+    out = ["# %s\n" % tool["name"], desc.strip() + "\n", "## Parameters"]
+    out.extend(render_params(tool, keep_prose=True))
+    if body:
+        out.append("\n## Guide")
+        out.append(body)
+    return "\n".join(out) + "\n"
+
+
 def build(use_short, keep_prose, pointer, v4=False):
     # No arm label is rendered: the catalog the runner reads must not name its variant,
     # or the blinding is decorative. The mapping lives in MAPPING.json, outside the arms.
@@ -164,10 +182,24 @@ for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c"), ("V4", "ar
     open(os.path.join(d, "catalog.md"), "w", encoding="utf-8").write(arms[arm])
     if os.path.isdir(plugin_guides):
         # Re-stage on every build: a guide edited since the last run must reach the arms,
-        # otherwise agents benchmark yesterday's text against today's catalog.
+        # otherwise agents benchmark yesterday's text against today's catalog. Each file is
+        # the RENDERED response, not the raw body - see render_guide().
         staged = os.path.join(d, "guides")
         shutil.rmtree(staged, ignore_errors=True)
-        shutil.copytree(plugin_guides, staged)
+        os.makedirs(staged, exist_ok=True)
+        for tool in tools:
+            name = tool["name"]
+            body_path = os.path.join(plugin_guides, "%s.md" % name)
+            if not os.path.isfile(body_path):
+                continue
+            if arm == "V4" and name in V4["descriptions"]:
+                desc = V4["descriptions"][name]
+            elif arm == "V1":
+                desc = tool["description"]
+            else:
+                desc = short[name]
+            open(os.path.join(staged, "%s.md" % name), "w", encoding="utf-8").write(
+                render_guide(tool, desc, open(body_path, encoding="utf-8").read()))
 json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"},
           open(os.path.join(HERE, "arms", "MAPPING.json"), "w", encoding="utf-8"), indent=1)
 
