@@ -26,6 +26,7 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -34,6 +35,7 @@ import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.Config;
@@ -428,10 +430,12 @@ public class GitTool implements IMcpTool
      * <p>
      * MOST conditions behind this refusal are ones where native git was measured to die as well
      * ({@code fatal: failed to read .../commondir}, {@code fatal: not a git repository}). Some are
-     * not - a pointer this JVM cannot decode, one over the size bound, one that is not a regular
-     * file - and the text therefore does NOT tell the caller that git would fail too. Claiming that
+     * not, and the text therefore does NOT tell the caller that git would fail too - claiming that
      * would be wrong in exactly the cases where the operator most needs to be told it is our limit
-     * they have hit; see {@link GitCommonDirectory#of}.
+     * they have hit. WHICH ones is not repeated here: it is
+     * {@link GitCommonDirectory.Fault#ours()}, and {@link #ourRefusals()} renders it into the
+     * message. This sentence used to carry the list, and it was stale within one round of adding a
+     * refusal - which is the entire reason the enumeration exists.
      * <p>
      * The repair it names is the FILE, not a command, and that too is measured rather than assumed:
      * {@code git worktree repair} does NOT rewrite {@code commondir}. Run against a worktree whose
@@ -449,10 +453,9 @@ public class GitTool implements IMcpTool
         + "remotes cannot be established at all, " //$NON-NLS-1$
         + "so the operation is refused instead of run blind. Check the worktree in a terminal " //$NON-NLS-1$
         + "first: most faults of this file stop git as well ('fatal: not a git repository'), but " //$NON-NLS-1$
-        + "not all of them - a pointer that is not valid UTF-8, is implausibly large, is not a " //$NON-NLS-1$
-        + "regular file, or (on Windows) starts with a slash without naming a drive is refused HERE " //$NON-NLS-1$
-        + "by choice, because following it would mean inspecting some other directory, reading " //$NON-NLS-1$
-        + "unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
+        + "not all of them. These are refused HERE by choice, and git may well carry on past " //$NON-NLS-1$
+        + "them: " + ourRefusals() + ". Following one anyway would mean inspecting some other " //$NON-NLS-1$ //$NON-NLS-2$
+        + "directory, reading unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
         + "Repair the 'commondir' file itself: it holds one line, the path to the shared " //$NON-NLS-1$
         + "repository. That path may be absolute; when it is relative it is resolved against the " //$NON-NLS-1$
         + "directory the file sits in, which is what 'git worktree add' writes ('../..'). A working " //$NON-NLS-1$
@@ -2190,6 +2193,27 @@ public class GitTool implements IMcpTool
      * @param failure the exception the resolution threw (may be {@code null})
      * @return the message to log; it embeds no file content
      */
+    /**
+     * The refusals THIS TOOL makes on a {@code commondir} where native git might carry on, rendered
+     * for the operator straight out of {@link GitCommonDirectory.Fault} - never re-typed.
+     * <p>
+     * This exists because re-typing them failed three review rounds in a row: the list lived in a
+     * javadoc, a constant's javadoc, a test's prose, a guide and this message, a refusal was added
+     * to the code, and every copy went on describing the older, shorter set. Reading it from the one
+     * enumeration makes "added a refusal, forgot the message" impossible rather than merely
+     * discouraged - and {@code GitCommonDirectoryTest} fails if a member ever has no fixture, so the
+     * enumeration cannot drift from the code either.
+     *
+     * @return the reasons, semicolon-separated, each describing the FILE and quoting nothing from it
+     */
+    private static String ourRefusals()
+    {
+        return Arrays.stream(GitCommonDirectory.Fault.values())
+            .filter(GitCommonDirectory.Fault::ours)
+            .map(GitCommonDirectory.Fault::reason)
+            .collect(Collectors.joining("; ")); //$NON-NLS-1$
+    }
+
     static String commonDirFailureLog(Throwable failure)
     {
         return GitFailureLog.typesOnly(

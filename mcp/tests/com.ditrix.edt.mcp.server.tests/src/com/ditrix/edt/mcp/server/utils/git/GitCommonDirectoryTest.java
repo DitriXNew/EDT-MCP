@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils.git;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -17,7 +18,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import com.ditrix.edt.mcp.server.utils.GuideLoader;
 
 import org.junit.After;
 import org.junit.Assume;
@@ -36,11 +43,11 @@ import org.junit.Test;
  * suggests should be accepted. Where a refusal here matches git's, it cannot be a false refusal:
  * the repository is already unusable.
  *
- * <p>The rest are DELIBERATE over-refusals, and they are kept in their own section below rather
- * than mixed in with the first kind: a pointer this JVM cannot decode, one over the size bound, one
- * that is not a regular file, and one rooted without a drive on Windows are all cases where git
- * might well carry on. Each is a trade made on purpose, and calling them "what git does" would be
- * the comfortable lie that hides the trade.
+ * <p>The rest are DELIBERATE over-refusals - the {@link GitCommonDirectory.Fault} members whose
+ * {@code ours()} is {@code true} - and they are kept in their own section below rather than mixed in
+ * with the first kind. They are NOT listed again in this sentence, and that is deliberate: this
+ * paragraph used to carry a copy of the list, and copies of it drifted three review rounds running.
+ * Calling them "what git does" would be the comfortable lie that hides the trade.
  */
 public class GitCommonDirectoryTest
 {
@@ -378,6 +385,173 @@ public class GitCommonDirectoryTest
             new File(adminDir, COMMON_DIR).mkdirs());
 
         assertRefused(adminDir, "a directory is not an absent file"); //$NON-NLS-1$
+    }
+
+    // ==================== the ratchet: the enumeration cannot drift from the code ====================
+
+    @Test
+    public void testEveryFaultIsReachableAndEveryReachableFaultIsEnumerated() throws Exception
+    {
+        // The reason this test exists is worth more than the test. THREE review rounds in a row
+        // found the same defect: a refusal added to the code and to none of the places that listed
+        // the refusals - a javadoc, a constant's javadoc, the test prose, the operator message and
+        // two guides. Each was fixed by hand, and each fix bought the next thread.
+        //
+        // So the list became one object (Fault), the operator message is derived from it, and this
+        // pins the last gap: a member with no fixture, or a fixture the code can no longer produce.
+        // Add a Fault and forget everything else, and this goes red before the review does.
+        Map<GitCommonDirectory.Fault, File> fixtures = new EnumMap<>(GitCommonDirectory.Fault.class);
+
+        fixtures.put(GitCommonDirectory.Fault.NOT_A_REGULAR_FILE, directoryNamedCommonDir());
+        fixtures.put(GitCommonDirectory.Fault.TOO_LARGE,
+            newLinkedWorktree("ratchet-too-large", oversizePointer()).adminDir); //$NON-NLS-1$
+        fixtures.put(GitCommonDirectory.Fault.NOT_UTF_8, undecodablePointer());
+        fixtures.put(GitCommonDirectory.Fault.EMPTY,
+            newLinkedWorktree("ratchet-empty", "").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
+        fixtures.put(GitCommonDirectory.Fault.NOT_A_DIRECTORY,
+            newLinkedWorktree("ratchet-not-a-dir", "../nowhere-at-all\n").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
+        // ROOTED_WITHOUT_DRIVE exists only where the two readings of a leading slash DISAGREE. On
+        // POSIX they agree, the branch is unreachable, and a fixture for it would resolve or trip a
+        // different fault - which is exactly how the first version of this ratchet would have gone
+        // red on the Linux CI while passing here.
+        if (!new File("/nowhere").isAbsolute()) //$NON-NLS-1$
+        {
+            fixtures.put(GitCommonDirectory.Fault.ROOTED_WITHOUT_DRIVE,
+                newLinkedWorktree("ratchet-rooted", "/nowhere\n").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        // The members with no fixture are NAMED, not skipped by a null nobody has to justify. A
+        // Fault added tomorrow lands in neither set and fails the assertion below, which is the
+        // whole job of this test.
+        Set<GitCommonDirectory.Fault> notConstructible =
+            EnumSet.of(GitCommonDirectory.Fault.UNREADABLE, GitCommonDirectory.Fault.TARGET_UNREADABLE);
+        if (new File("/nowhere").isAbsolute()) //$NON-NLS-1$
+        {
+            notConstructible.add(GitCommonDirectory.Fault.ROOTED_WITHOUT_DRIVE);
+        }
+        Set<GitCommonDirectory.Fault> accounted = EnumSet.copyOf(fixtures.keySet());
+        accounted.addAll(notConstructible);
+        assertEquals("every Fault must either have a fixture that produces it, or be named as one " //$NON-NLS-1$
+            + "this platform cannot construct - a member in neither set is a refusal nobody has " //$NON-NLS-1$
+            + "shown the code can actually make", //$NON-NLS-1$
+            EnumSet.allOf(GitCommonDirectory.Fault.class), accounted);
+
+        for (Map.Entry<GitCommonDirectory.Fault, File> entry : fixtures.entrySet())
+        {
+            try
+            {
+                GitCommonDirectory.of(entry.getValue());
+                fail(entry.getKey() + ": the fixture must be refused"); //$NON-NLS-1$
+            }
+            catch (GitCommonDirectory.FaultException e)
+            {
+                assertEquals("the fixture for " + entry.getKey() + " must produce THAT fault - " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "a fixture that happens to trip a different one proves nothing about the " //$NON-NLS-1$
+                    + "member it is filed under", entry.getKey(), e.fault()); //$NON-NLS-1$
+                assertFalse("a fault's reason must never be empty: it is what the operator reads", //$NON-NLS-1$
+                    e.fault().reason().isEmpty());
+            }
+        }
+    }
+
+    @Test
+    public void testTheShippedGuideListsEveryRefusalThatIsOursAndNoOther() throws Exception
+    {
+        // The guide is the LAST copy of this list, and prose cannot be generated the way the
+        // operator message now is - so it gets a ratchet instead, which is the same guarantee
+        // reached the other way round: add a Fault marked ours() and forget the guide, and this
+        // goes red. It also catches the opposite drift, a guide that still describes a refusal the
+        // code no longer makes.
+        String guide = GuideLoader.load("git"); //$NON-NLS-1$
+        assertNotNull("the git guide must be readable from the bundle", guide); //$NON-NLS-1$
+
+        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
+        {
+            // Counted, not merely found: a reason that appeared twice would mean the list had been
+            // duplicated somewhere in the guide, which is the drift this is here to stop.
+            assertEquals(fault + ": the guide must describe every refusal that is OURS exactly " //$NON-NLS-1$
+                + "once - in the enumeration's own words, so the two cannot drift - and must not " //$NON-NLS-1$
+                + "claim one that is git's own failure. Reason: '" + fault.reason() + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                fault.ours() ? 1 : 0, occurrencesOf(guide, fault.reason()));
+        }
+    }
+
+    @Test
+    public void testTheDocsCopyOfTheGuideSaysTheSameThing() throws Exception
+    {
+        // docs/tools/git.md is a second copy of the same paragraph, and it is what a reader on
+        // GitHub sees. The ratchet above only reaches the one inside the bundle, so this one reaches
+        // the other - otherwise "single source" would still leave a copy that no build checks.
+        File docs = new File(repositoryRoot(), "docs/tools/git.md"); //$NON-NLS-1$
+        Assume.assumeTrue("the source tree is not beside the test bundle in this layout", //$NON-NLS-1$
+            docs.isFile());
+        String published = new String(Files.readAllBytes(docs.toPath()), StandardCharsets.UTF_8);
+
+        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
+        {
+            assertEquals(fault + ": the published guide must say exactly what the shipped one " //$NON-NLS-1$
+                + "says. Reason: '" + fault.reason() + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                fault.ours() ? 1 : 0, occurrencesOf(published, fault.reason()));
+        }
+    }
+
+    /** How many times {@code needle} occurs in {@code haystack}. */
+    private static int occurrencesOf(String haystack, String needle)
+    {
+        int count = 0;
+        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1))
+        {
+            count++;
+        }
+        return count;
+    }
+
+    /**
+     * The repository root, walked up from the test bundle's own location - there is no workspace
+     * here, so the source tree has to be found rather than asked for.
+     *
+     * @return the root, or {@code null} when it cannot be located
+     */
+    private static File repositoryRoot()
+    {
+        File at = new File("").getAbsoluteFile(); //$NON-NLS-1$
+        for (int up = 0; at != null && up < 8; up++, at = at.getParentFile())
+        {
+            if (new File(at, "docs/tools/git.md").isFile()) //$NON-NLS-1$
+            {
+                return at;
+            }
+        }
+        return null;
+    }
+
+    /** A git directory whose {@code commondir} is a DIRECTORY - not a regular file. */
+    private File directoryNamedCommonDir() throws IOException
+    {
+        File adminDir = newDirectory("ratchet-not-regular"); //$NON-NLS-1$
+        assertTrue("fixture: commondir must be a directory here", //$NON-NLS-1$
+            new File(adminDir, COMMON_DIR).mkdirs());
+        return adminDir;
+    }
+
+    /** A git directory whose {@code commondir} holds a byte that is not legal UTF-8 anywhere. */
+    private File undecodablePointer() throws IOException
+    {
+        Linked linked = newLinkedWorktree("ratchet-bad-utf8", "placeholder\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
+            new byte[]{'.', '.', '/', '.', '.', (byte)0xFF, '\n'});
+        return linked.adminDir;
+    }
+
+    /** A {@code commondir} one byte past the bound, padded with strippable terminators. */
+    private static String oversizePointer()
+    {
+        StringBuilder huge = new StringBuilder("../.."); //$NON-NLS-1$
+        while (huge.length() <= 64 * 1024)
+        {
+            huge.append('\n');
+        }
+        return huge.toString();
     }
 
     // ==================== helpers ====================
