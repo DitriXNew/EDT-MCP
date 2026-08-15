@@ -188,6 +188,15 @@ public final class InputSchemaCompactor
         // before it even looks the check up. This parameter's prose is the only place the
         // always-loaded contract says the tool must be set up before it can answer at all.
         keep.put("get_check_description", asSet("checkId")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Same late-completion trap as rename_metadata_object.timeout: on expiry the call
+        // reports a timeout, but EDT keeps rebuilding - "failed" here does NOT mean the
+        // project is untouched, and a retry lands on top of a clean still in flight.
+        keep.put("clean_project", asSet("projectName", "timeout")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // responseFormat defaults to 'concise', which condenses the answer down to headers
+        // and member names - exactly the signatures, parameters and return types a caller
+        // asking for an API usually wants. The default is the lossy mode, and only this
+        // prose says so.
+        keep.put("get_platform_documentation", asSet("responseFormat")); //$NON-NLS-1$ //$NON-NLS-2$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after
@@ -222,7 +231,7 @@ public final class InputSchemaCompactor
         // workspace: without projectName, clean_project rebuilds EVERY EDT project and
         // discards unsaved in-memory edits in all of them. "Optional" reads as "safe to
         // leave out", and here it is the opposite.
-        keep.put("clean_project", asSet("projectName")); //$NON-NLS-1$ //$NON-NLS-2$
+
         // The value is EVALUATED on the suspended target as a BSL expression, so it can
         // call application code - it is not an inert literal being stored.
         keep.put("set_variable", asSet("value")); //$NON-NLS-1$ //$NON-NLS-2$

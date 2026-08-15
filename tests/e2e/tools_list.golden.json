@@ -220,6 +220,7 @@
           "type": "string"
         },
         "timeout": {
+          "description": "How long to wait for the clean build itself, per project, in seconds (default 120, clamped to 10..3600). On expiry the call fails with a timeout error instead of waiting forever; the clean may still be running in EDT afterwards. Does not cover the subsequent revalidation wait.",
           "type": "integer"
         }
       },
@@ -1701,7 +1702,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Investigate infobase activity and errors through its event log. Reads the LEGACY text format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLite .lgd log is rejected, so switch the log format in 1C or use another source. Returns PII and live infobase data - user names, session data and business-record references. Parameters and examples: get_tool_guide('get_event_log').",
+    "description": "Investigate infobase activity and errors through its event log. Reads the LEGACY text format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLite .lgd log is rejected, so switch the log format in 1C or use another source. A SERVER (client/server) infobase is NOT resolvable from projectName/applicationId - its cluster srvinfo path is not model-derivable, so pass an absolute logDir instead. Returns PII and live infobase data - user names, session data and business-record references. Parameters and examples: get_tool_guide('get_event_log').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -2302,6 +2303,7 @@
           "type": "string"
         },
         "responseFormat": {
+          "description": "'concise' (default) = leaner: headers + member names only; 'detailed' = full member signatures, parameters, types and flags.",
           "enum": [
             "concise",
             "detailed"
@@ -3302,7 +3304,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Rename a metadata object or member and rewrite every reference to it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply. Parameters and examples: get_tool_guide('rename_metadata_object').",
+    "description": "Rename a metadata object or member and rewrite the references EDT RESOLVES for it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems - but a reference the refactoring cannot resolve (a dynamically built name) is left pointing at the old name. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply. Parameters and examples: get_tool_guide('rename_metadata_object').",
     "inputSchema": {
       "properties": {
         "confirm": {

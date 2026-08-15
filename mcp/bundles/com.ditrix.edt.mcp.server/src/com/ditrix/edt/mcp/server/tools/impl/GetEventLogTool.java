@@ -164,7 +164,9 @@ public class GetEventLogTool implements IMcpTool
     {
         return "Investigate infobase activity and errors through its event log. Reads the LEGACY text " //$NON-NLS-1$
             + "format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLite .lgd log is " //$NON-NLS-1$
-            + "rejected, so switch the log format in 1C or use another source. Returns PII and live " //$NON-NLS-1$
+            + "rejected, so switch the log format in 1C or use another source. A SERVER (client/server) " //$NON-NLS-1$
+            + "infobase is NOT resolvable from projectName/applicationId - its cluster srvinfo path is " //$NON-NLS-1$
+            + "not model-derivable, so pass an absolute logDir instead. Returns PII and live " //$NON-NLS-1$
             + "infobase data - user names, session data and business-record references. Parameters and " //$NON-NLS-1$
             + "examples: get_tool_guide('get_event_log')."; //$NON-NLS-1$
     }
