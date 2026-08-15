@@ -131,8 +131,11 @@ public class GetOutgoingStructuresTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Discover the fields passed to outgoing or qualified BSL method calls. Parameters and " //$NON-NLS-1$
-            + "examples: get_tool_guide('get_outgoing_structures')."; //$NON-NLS-1$
+        return "Discover the fields passed to outgoing or qualified BSL method calls. BEST-EFFORT and " //$NON-NLS-1$
+            + "incomplete by design: only top-level LITERAL keys of the first argument, found by a " //$NON-NLS-1$
+            + "flow-insensitive scan - computed keys, constructor-supplied keys and deeper helper " //$NON-NLS-1$
+            + "chains are missed, so absence is not proof. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_outgoing_structures')."; //$NON-NLS-1$
     }
 
     @Override

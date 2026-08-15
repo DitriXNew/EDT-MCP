@@ -54,8 +54,10 @@ public class GetProfilingResultsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Identify performance hotspots in executed BSL code. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('get_profiling_results')."; //$NON-NLS-1$
+        return "Identify performance hotspots in executed BSL code. Returns the MOST RECENT " //$NON-NLS-1$
+            + "measurement session GLOBALLY - applicationId only changes the reported active-state " //$NON-NLS-1$
+            + "flag, so the results may belong to a different application than the one asked about. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('get_profiling_results')."; //$NON-NLS-1$
     }
 
     @Override

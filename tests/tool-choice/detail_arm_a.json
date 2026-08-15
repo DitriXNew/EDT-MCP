@@ -1183,6 +1183,9 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "delete_infobase",
+  "bad_selector": [
+   "delete_infobase"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2643,6 +2646,9 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "delete_infobase",
+  "bad_selector": [
+   "delete_infobase"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2652,6 +2658,9 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "delete_infobase",
+  "bad_selector": [
+   "delete_infobase"
+  ],
   "twophase": "confirm"
  },
  {

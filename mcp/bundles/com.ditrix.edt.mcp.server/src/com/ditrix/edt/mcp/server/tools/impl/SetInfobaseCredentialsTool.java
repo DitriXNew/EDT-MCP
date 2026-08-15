@@ -121,8 +121,10 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Enable EDT to connect to a protected infobase for updates or debugging. Parameters and " //$NON-NLS-1$
-            + "examples: get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
+        return "STORE infobase credentials (user/password) in EDT settings so update_database and " //$NON-NLS-1$
+            + "debug_launch can authenticate. The secret PERSISTS beyond this call, and addressing a " //$NON-NLS-1$
+            + "launch configuration also rewrites that configuration's client authentication. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('set_infobase_credentials')."; //$NON-NLS-1$
     }
 
     @Override

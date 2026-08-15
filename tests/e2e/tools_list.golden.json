@@ -2202,7 +2202,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Discover the fields passed to outgoing or qualified BSL method calls. Parameters and examples: get_tool_guide('get_outgoing_structures').",
+    "description": "Discover the fields passed to outgoing or qualified BSL method calls. BEST-EFFORT and incomplete by design: only top-level LITERAL keys of the first argument, found by a flow-insensitive scan - computed keys, constructor-supplied keys and deeper helper chains are missed, so absence is not proof. Parameters and examples: get_tool_guide('get_outgoing_structures').",
     "inputSchema": {
       "properties": {
         "limit": {
@@ -2339,7 +2339,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Identify performance hotspots in executed BSL code. Parameters and examples: get_tool_guide('get_profiling_results').",
+    "description": "Identify performance hotspots in executed BSL code. Returns the MOST RECENT measurement session GLOBALLY - applicationId only changes the reported active-state flag, so the results may belong to a different application than the one asked about. Parameters and examples: get_tool_guide('get_profiling_results').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3766,7 +3766,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Enable EDT to connect to a protected infobase for updates or debugging. Parameters and examples: get_tool_guide('set_infobase_credentials').",
+    "description": "STORE infobase credentials (user/password) in EDT settings so update_database and debug_launch can authenticate. The secret PERSISTS beyond this call, and addressing a launch configuration also rewrites that configuration's client authentication. Parameters and examples: get_tool_guide('set_infobase_credentials').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -4308,7 +4308,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Check an XDTO package for configuration validation problems. Parameters and examples: get_tool_guide('validate_xdto_package').",
+    "description": "Check an XDTO package for configuration validation problems. Reads the markers EDT computed EARLIER - it does not validate on demand, so a verdict right after an edit can be stale; run revalidate_objects first when you need it current. Parameters and examples: get_tool_guide('validate_xdto_package').",
     "inputSchema": {
       "properties": {
         "fqn": {
@@ -4415,6 +4415,7 @@
           "type": "string"
         },
         "mode": {
+          "description": "Write mode (default searchReplace).",
           "enum": [
             "searchReplace",
             "replace",
@@ -4441,6 +4442,7 @@
           "type": "string"
         },
         "oldSource": {
+          "description": "Fragment to find and replace; required for searchReplace, must match exactly once.",
           "type": "string"
         },
         "overwrite": {

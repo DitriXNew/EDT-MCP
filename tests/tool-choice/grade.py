@@ -115,6 +115,8 @@ SELECTORS = {
     "update_database": [{"launchConfigurationName"}, {"projectName", "applicationId"}],
     "terminate_launch": [{"launchConfigurationName"}, {"projectName", "applicationId"},
                          {"all"}],
+    # delete_infobase rejects a call that names neither the application nor the infobase.
+    "delete_infobase": [{"applicationId"}, {"infobaseName"}],
 }
 
 

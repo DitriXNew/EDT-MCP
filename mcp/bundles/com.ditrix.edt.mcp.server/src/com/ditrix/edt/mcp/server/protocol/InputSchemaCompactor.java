@@ -127,7 +127,10 @@ public final class InputSchemaCompactor
         // A scope limit that makes the tool inapplicable: FILE infobases only.
         keep.put("create_infobase", asSet("infobaseFile")); //$NON-NLS-1$ //$NON-NLS-2$
         // The lost-update guard: what the hash is and where it comes from.
-        keep.put("write_module_source", asSet("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
+        // mode defaults to searchReplace, and THAT mode requires oldSource - so a call carrying
+        // only the two declared required parameters looks schema-valid and fails at runtime.
+        keep.put("write_module_source", //$NON-NLS-1$
+            asSet("expectedHash", "mode", "oldSource")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
         // the caller never asked for - the build stamps every object's Comment and flushes
         // the .mdo; the launch tools silently run a configuration->DB update; update_database

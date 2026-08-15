@@ -124,12 +124,12 @@ An empty list means "no suitable tool exists".
 | Покрытие плана (сценарии) | 97.8% | 97.3% | 97.3% | 97.3% |
 | Вызовов без обязательного параметра | 22/882 | 16/853 | 30/845 | **7/905** |
 | Устаревший алиас выбран | 0/6 | 6/6 | 4/6 | **0/6** |
-| **preview→confirm (57 разрушающих)** | 44% | 32% | 21% | **74%** |
+| **preview→confirm (57 разрушающих)** | 44% | 32% | 19% | **68%** |
 | `tools/list` на старте | 37.6K | 30.3K | 15.4K | **15.9K** |
 | Взвешенный балл | 8.83 | 8.20 | 7.97 | **8.95** |
 
 V4 beats the payload we ship today on every axis except wide-session cost, and beats it
-by a lot on the one that matters most: the two-phase protocol goes from 44% to 74%. The
+by a lot on the one that matters most: the two-phase protocol goes from 44% to 68%. The
 whole gain comes from one imperative sentence per destructive tool - *"call once WITHOUT
 confirm to preview, then again with confirm=true to apply"* - instead of the paragraph of
 prose that carries the same rule today.
@@ -139,7 +139,8 @@ regenerated, not remembered.** The safety metric read 54% for V1 when the denomi
 included `terminate_launch` requests whose tool implements no preview at all, 58% once
 those labels were removed, and 49% once a confirm was required to apply WHAT THE PREVIEW
 SHOWED rather than merely to appear later, and 44% once a preview the tool would REJECT
-(update_database without a working selector) stopped counting as a preview at all. Every
+(update_database or delete_infobase without a working selector) stopped counting as a
+preview at all - 68% for V4 after that, down from the 98% first published. Every
 one of those was a defect in the measurement, not in the arms. Regenerate before quoting:
 
 ```bash
@@ -161,7 +162,7 @@ right plan whether the catalog is 28K tokens or 7K.
 What the cut actually costs:
 
 - **The two-phase `confirm` protocol.** Strict preview→confirm on the 57 destructive
-  requests: V1 25/57 (44%), V2 18/57 (32%), V3 12/57 (21%). Every arm knows the `confirm`
+  requests: V1 25/57 (44%), V2 18/57 (32%), V3 11/57 (19%). Every arm knows the `confirm`
   parameter exists (56/57 pass `confirm: true` somewhere); what the short descriptions
   lose is *looking before deleting*. Strict means the confirm applies the same arguments
   the preview showed - a confirm that adds `deleteContent`, `force` or

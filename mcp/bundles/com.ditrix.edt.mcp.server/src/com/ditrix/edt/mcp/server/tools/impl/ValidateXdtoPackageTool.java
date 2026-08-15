@@ -62,8 +62,10 @@ public class ValidateXdtoPackageTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Check an XDTO package for configuration validation problems. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('validate_xdto_package')."; //$NON-NLS-1$
+        return "Check an XDTO package for configuration validation problems. Reads the markers EDT " //$NON-NLS-1$
+            + "computed EARLIER - it does not validate on demand, so a verdict right after an edit " //$NON-NLS-1$
+            + "can be stale; run revalidate_objects first when you need it current. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('validate_xdto_package')."; //$NON-NLS-1$
     }
 
     @Override

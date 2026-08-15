@@ -2690,6 +2690,9 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "get_applications",
+  "bad_selector": [
+   "delete_infobase"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2699,6 +2702,9 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "get_applications",
+  "bad_selector": [
+   "delete_infobase"
+  ],
   "twophase": "confirm"
  },
  {

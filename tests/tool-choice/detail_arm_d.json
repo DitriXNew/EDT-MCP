@@ -1341,7 +1341,11 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "delete_infobase",
-  "twophase": "strict"
+  "bad_selector": [
+   "delete_infobase",
+   "delete_infobase"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q140",
@@ -2958,7 +2962,11 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "delete_infobase",
-  "twophase": "strict"
+  "bad_selector": [
+   "delete_infobase",
+   "delete_infobase"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q313",
@@ -2967,7 +2975,11 @@
   "tool_ok": true,
   "expected": "delete_infobase",
   "chosen": "delete_infobase",
-  "twophase": "strict"
+  "bad_selector": [
+   "delete_infobase",
+   "delete_infobase"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q314",
@@ -3647,6 +3659,10 @@
    "delete_project"
   ],
   "coverage": "3/3",
+  "bad_selector": [
+   "delete_infobase",
+   "delete_infobase"
+  ],
   "twophase": "confirm"
  },
  {
@@ -4094,6 +4110,10 @@
    "delete_project"
   ],
   "coverage": "2/2",
+  "bad_selector": [
+   "delete_infobase",
+   "delete_infobase"
+  ],
   "twophase": "strict"
  },
  {
