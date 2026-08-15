@@ -15,6 +15,13 @@ import json
 import os
 import glob
 
+# The SAME rule object grade.py scores the headline with. This script used to carry its
+# own copy, and the copy fell behind: it never learned that a call the tool would REJECT
+# (update_database / terminate_launch / delete_infobase without a working selector) is not
+# a preview. That copy reported V4 r0 as 53/57 while the headline said 39/57 - two numbers
+# for one metric, the more flattering one printed under the word "разброс".
+from protocol_rules import two_phase_ok
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 Q = {q["id"]: q for q in json.load(open(os.path.join(HERE, "questions.json"), encoding="utf-8"))}
 # The headline metric in grade.py counts BOTH one-step two_phase questions and chain
@@ -45,17 +52,13 @@ def score(answers):
         answered += 1
         calls = a.get("calls") or []
         guides += sum(1 for c in calls if c.get("tool") == "get_tool_guide")
-        same = [c for c in calls if c.get("tool") == TP_TOOL[qid]]
-        if any((c.get("args") or {}).get("confirm") is True for c in same):
-            confirm += 1
-        # Same rule as grade.two_phase_ok: the confirm must apply WHAT WAS PREVIEWED, so a
-        # confirm that adds destructive arguments (deleteContent, force, deleteDatabaseFiles)
-        # is not the protocol and is not credited here either.
-        effect = lambda c: {k: v for k, v in (c.get("args") or {}).items() if k != "confirm"}
-        if (len(same) >= 2 and (same[0].get("args") or {}).get("confirm") is not True
-                and any((c.get("args") or {}).get("confirm") is True and effect(c) == effect(same[0])
-                        for c in same[1:])):
-            strict += 1
+        # Not "the same rule as grade.py" by description - the same function.
+        res = two_phase_ok(calls, TP_TOOL[qid])
+        if res is None:
+            continue
+        is_strict, any_confirm = res
+        strict += is_strict
+        confirm += any_confirm
     return strict, confirm, guides, answered
 
 

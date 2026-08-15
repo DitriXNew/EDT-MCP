@@ -1455,7 +1455,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Collect translatable strings of a configuration for a translation provider. Parameters and examples: get_tool_guide('generate_translation_strings').",
+    "description": "Collect translatable strings of a configuration and WRITE the generated keys into the project's translation storage (.lstr/.trans/.dict; storageId, default 'edit:default'). This changes project files - it is not a read-only scan. Run it on the configuration project (V8ConfigurationNature), not a dictionary storage project; requires LanguageTool installed in EDT. Parameters and examples: get_tool_guide('generate_translation_strings').",
     "inputSchema": {
       "properties": {
         "collectInterface": {
@@ -1810,7 +1810,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
+    "description": "Inspect the calculated visual layout of an EDT form. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the layout comes back BLANK rather than failing, so an empty snapshot means the flag is missing, not that the form has no elements. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
     "inputSchema": {
       "properties": {
         "formPath": {

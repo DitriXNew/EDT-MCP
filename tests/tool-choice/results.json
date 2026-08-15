@@ -15,6 +15,7 @@
   "guide_chars": 1573890,
   "bad_type": 12,
   "bad_selector": 19,
+  "bad_selector_q": 16,
   "deprecated_n": 6,
   "notool_n": 12,
   "notool_ok": 12,
@@ -42,6 +43,7 @@
   "twophase_confirm": 56,
   "missing_required_calls": 36,
   "bad_selector": 20,
+  "bad_selector_q": 20,
   "deprecated_n": 6,
   "deprecated_pick": 6,
   "notool_n": 12,
@@ -74,6 +76,7 @@
   "missing_required_calls": 47,
   "bad_type": 10,
   "bad_selector": 17,
+  "bad_selector_q": 14,
   "deprecated_n": 6,
   "deprecated_pick": 4,
   "notool_n": 12,
@@ -98,13 +101,14 @@
   "calls_checked": 905,
   "mustparam_n": 304,
   "mustparam_ok": 293,
-  "guide_chars": 5185125,
+  "guide_chars": 5186699,
   "twophase_n": 57,
   "twophase_strict": 39,
   "twophase_confirm": 56,
   "missing_required_calls": 45,
   "bad_type": 12,
   "bad_selector": 38,
+  "bad_selector_q": 19,
   "deprecated_n": 6,
   "notool_n": 12,
   "notool_ok": 12,
@@ -115,6 +119,6 @@
   "chain_complete": 134,
   "missing": 3,
   "guide_uniq": 74,
-  "guide_uniq_chars": 493971
+  "guide_uniq_chars": 494741
  }
 }

@@ -31,7 +31,10 @@ public class GetFormLayoutSnapshotTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Inspect the calculated visual layout of an EDT form. Parameters and examples: " //$NON-NLS-1$
+        return "Inspect the calculated visual layout of an EDT form. Requires EDT launched with " //$NON-NLS-1$
+            + "-DnativeFormBufferedLayoutRender=true: without the flag the layout comes back BLANK " //$NON-NLS-1$
+            + "rather than failing, so an empty snapshot means the flag is missing, not that the " //$NON-NLS-1$
+            + "form has no elements. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('get_form_layout_snapshot')."; //$NON-NLS-1$
     }
 

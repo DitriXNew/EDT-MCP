@@ -122,11 +122,19 @@ An empty list means "no suitable tool exists".
 |---|---:|---:|---:|---:|
 | Верный тул (одношаговые) | 100% | 98.9% | 99.2% | **100%** |
 | Покрытие плана (сценарии) | 97.8% | 97.3% | 97.3% | 97.3% |
-| Вызовов без обязательного параметра | 22/882 | 16/853 | 30/845 | **7/905** |
+| Вызовов без обязательного параметра или рабочего селектора | 41/882 | 36/853 | 47/845 | 45/905 |
+| — из них разных ЗАПРОСОВ с плохим селектором | 16 | 20 | 14 | 19 |
 | Устаревший алиас выбран | 0/6 | 6/6 | 4/6 | **0/6** |
 | **preview→confirm (57 разрушающих)** | 44% | 32% | 19% | **68%** |
-| `tools/list` на старте | 37.6K | 30.3K | 15.4K | **15.9K** |
-| Взвешенный балл | 8.83 | 8.20 | 7.97 | **8.95** |
+| Каталог в контексте на старте (ток, из `grade.py`) | ~28K | ~21K | ~7K | **~12K** |
+| Взвешенный балл | 8.83 | 8.20 | 7.93 | **8.84** |
+
+Строка селекторов читается по второй половине, а не по первой. Счётчик считает ВЫЗОВЫ, а
+двухфазный протокол шлёт одни и те же аргументы дважды — один неверный селектор стоит V4
+двух вызовов там, где одношаговой ветви он стоит одного. По вызовам V4 выглядит вдвое
+хуже V1 (38 против 19), по запросам разница исчезает (19 против 16). Это цена самой
+безопасной последовательности, а не отдельная небрежность; ни одна ветвь этот селектор
+из схемы не видит — его там нет.
 
 V4 beats the payload we ship today on every axis except wide-session cost, and beats it
 by a lot on the one that matters most: the two-phase protocol goes from 44% to 68%. The
@@ -141,7 +149,14 @@ those labels were removed, and 49% once a confirm was required to apply WHAT THE
 SHOWED rather than merely to appear later, and 44% once a preview the tool would REJECT
 (update_database or delete_infobase without a working selector) stopped counting as a
 preview at all - 68% for V4 after that, down from the 98% first published. Every
-one of those was a defect in the measurement, not in the arms. Regenerate before quoting:
+one of those was a defect in the measurement, not in the arms.
+
+The last of them was a defect of DUPLICATION, worth naming separately: `grade_reps.py`
+carried its own copy of the two-phase rule, the copy never learned the selector check, and
+it printed V4 r0 as 53/57 while the headline said 39/57 - two numbers for one metric,
+the flattering one under the word "разброс". Both scripts now import
+`protocol_rules.two_phase_ok`; there is one rule object, so the next correction lands in
+both by construction. Regenerate before quoting:
 
 ```bash
 python3 grade.py | tail -20     # the table below comes from this
