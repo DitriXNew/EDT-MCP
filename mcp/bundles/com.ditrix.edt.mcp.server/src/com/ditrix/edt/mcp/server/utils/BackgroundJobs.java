@@ -462,8 +462,19 @@ public final class BackgroundJobs implements AutoCloseable
             finally
             {
                 state.set(HandlerExecutionState.EXITED);
-                record.committedCancellationHandlerExited(outcome);
-                exited.countDown();
+                try
+                {
+                    if (record.committedCancellationHandlerExited(outcome, failure))
+                    {
+                        // The record monitor is deliberately not held here: cancelling queued
+                        // work may release its admission slot through the registry callback.
+                        record.cancelWork();
+                    }
+                }
+                finally
+                {
+                    exited.countDown();
+                }
             }
         }
 
@@ -479,7 +490,7 @@ public final class BackgroundJobs implements AutoCloseable
             if (state.compareAndSet(HandlerExecutionState.QUEUED,
                 HandlerExecutionState.EXITED))
             {
-                record.committedCancellationHandlerExited(null);
+                record.committedCancellationHandlerExited(null, null);
                 exited.countDown();
             }
         }
@@ -807,7 +818,7 @@ public final class BackgroundJobs implements AutoCloseable
         }
         catch (RejectedExecutionException e)
         {
-            record.committedCancellationHandlerExited(null);
+            record.committedCancellationHandlerExited(null, null);
             String detail = "The owning tool's cancellation handler could not start because the " //$NON-NLS-1$
                 + "registry is stopping, so the committed work was NOT reported as stopped."; //$NON-NLS-1$
             return record.publishCommittedCancellation(null, detail);
@@ -849,8 +860,7 @@ public final class BackgroundJobs implements AutoCloseable
             return record.publishCommittedCancellation(invocation.outcome, null);
         }
 
-        String detail = "The owning tool's cancellation handler failed, so the committed " //$NON-NLS-1$
-            + "work was NOT reported as stopped: " + failureMessage(invocation.failure); //$NON-NLS-1$
+        String detail = committedCancellationFailureDetail(invocation.failure);
         CancellationAttempt attempt = record.publishCommittedCancellation(null, detail);
         if (invocation.failure instanceof Error)
         {
@@ -1016,6 +1026,12 @@ public final class BackgroundJobs implements AutoCloseable
             ? failure.getClass().getSimpleName() : message;
     }
 
+    private static String committedCancellationFailureDetail(Throwable failure)
+    {
+        return "The owning tool's cancellation handler failed, so the committed " //$NON-NLS-1$
+            + "work was NOT reported as stopped: " + failureMessage(failure); //$NON-NLS-1$
+    }
+
     private static void awaitTermination(ExecutorService executor)
     {
         try
@@ -1051,6 +1067,8 @@ public final class BackgroundJobs implements AutoCloseable
         private boolean committedCancellationSettled;
         /** Real handler outcome that arrived before the requester published its decision. */
         private CommittedCancellation lateCancellationOutcome;
+        /** Real handler failure that arrived before the requester published its decision. */
+        private Throwable lateCancellationFailure;
         /** Worker terminal publication waits only while the cancellation requester still waits. */
         private boolean terminalOutcomeDeferred;
         /** A cancellation won; its terminal state waits for the admission-slot release. */
@@ -1280,20 +1298,34 @@ public final class BackgroundJobs implements AutoCloseable
             return new CancellationAttempt(CancellationOutcome.CANCELLED, null);
         }
 
-        /** Signals actual handler exit; only the registry-owned handler thread calls this. */
-        synchronized void committedCancellationHandlerExited(CommittedCancellation outcome)
+        /**
+         * Signals actual handler exit; only the registry-owned handler thread calls this.
+         *
+         * @return {@code true} when a late verified stop must interrupt the worker after this
+         *         method releases the record monitor
+         */
+        synchronized boolean committedCancellationHandlerExited(CommittedCancellation outcome,
+            Throwable failure)
         {
             cancellationHandlerInFlight = false;
-            if (outcome == null)
+            if (outcome == null && failure == null)
             {
-                return;
+                return false;
             }
             if (!committedCancellationSettled)
             {
                 lateCancellationOutcome = outcome;
-                return;
+                lateCancellationFailure = failure;
+                return false;
             }
-            reconcileLateCancellation(outcome);
+            if (failure != null)
+            {
+                progress.add(new ProgressEntry(System.currentTimeMillis(),
+                    "The owning tool's cancellation handler failed after its guard expired; " //$NON-NLS-1$
+                        + "no late stop was reconciled: " + failureMessage(failure))); //$NON-NLS-1$
+                return false;
+            }
+            return reconcileLateCancellation(outcome);
         }
 
         /** Settles the bounded wait independently of whether the handler thread is still alive. */
@@ -1307,7 +1339,14 @@ public final class BackgroundJobs implements AutoCloseable
                 stopped = lateCancellationOutcome;
                 failureDetail = null;
             }
+            else if (stopped == null && lateCancellationFailure != null)
+            {
+                // A real failure that won the same narrow race is more precise than saying only
+                // that the handler missed its budget.
+                failureDetail = committedCancellationFailureDetail(lateCancellationFailure);
+            }
             lateCancellationOutcome = null;
+            lateCancellationFailure = null;
             committedCancellationSettled = true;
             terminalOutcomeDeferred = false;
             if (failureDetail != null)
@@ -1354,7 +1393,7 @@ public final class BackgroundJobs implements AutoCloseable
             return new CancellationAttempt(cancellationOutcome, stopped.message);
         }
 
-        private void reconcileLateCancellation(CommittedCancellation outcome)
+        private boolean reconcileLateCancellation(CommittedCancellation outcome)
         {
             if (outcome.state == CommittedCancellationState.NOT_STOPPED)
             {
@@ -1362,12 +1401,30 @@ public final class BackgroundJobs implements AutoCloseable
                 // now, and "the handler eventually reported it stopped nothing" is exactly the
                 // context that explains why the published outcome was left standing.
                 progress.add(new ProgressEntry(System.currentTimeMillis(), outcome.message));
-                return;
+                return false;
             }
 
+            String supersession;
+            if (status == Status.DONE)
+            {
+                supersession = "its destructive result supersedes the outcome already " //$NON-NLS-1$
+                    + "published. The job had been published as done before the owning tool's " //$NON-NLS-1$
+                    + "handler returned."; //$NON-NLS-1$
+            }
+            else if (status == Status.FAILED)
+            {
+                supersession = "its destructive result supersedes the outcome already " //$NON-NLS-1$
+                    + "published. The job had been published as failed before the owning tool's " //$NON-NLS-1$
+                    + "handler returned; the original failure was: " + errorMessage; //$NON-NLS-1$
+            }
+            else
+            {
+                supersession = "its destructive result supersedes any worker outcome when " //$NON-NLS-1$
+                    + "cancellation is published."; //$NON-NLS-1$
+            }
             progress.add(new ProgressEntry(System.currentTimeMillis(),
-                "The owning tool's cancellation handler returned after its guard expired; its " //$NON-NLS-1$
-                    + "destructive result supersedes the outcome already published.")); //$NON-NLS-1$
+                "The owning tool's cancellation handler returned after its guard expired; " //$NON-NLS-1$
+                    + supersession));
             boolean verified = outcome.state == CommittedCancellationState.STOPPED;
             cancellationRequested = true;
             cancellationOutcome = verified ? CancellationOutcome.TERMINATED
@@ -1378,6 +1435,7 @@ public final class BackgroundJobs implements AutoCloseable
             {
                 markCancelled(cancellationResult);
             }
+            return verified;
         }
 
         private void markCancelled(Object cancellationResult)

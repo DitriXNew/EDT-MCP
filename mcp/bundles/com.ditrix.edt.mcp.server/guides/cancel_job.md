@@ -68,12 +68,19 @@ the job stays claimed, a second `cancel_job` cannot start another handler, and a
 equivalent run is not admitted while the stale handler can still mutate owner
 state. A late `notStopped` result leaves the worker outcome unchanged. A late
 `stopped` or `stopInitiated` result is reconciled because it describes a real
-destructive action: it supersedes even an outcome already published and corrects
-the job to `cancelled` with the honest partial result. A poller may therefore see
-`done` corrected to `cancelled` after the handler exits.
+destructive action. A verified late `stopped` interrupts a worker that is still
+running, and the job becomes `cancelled` when that worker exits. A late
+`stopInitiated` does not interrupt the worker, because the stop is unverified;
+the job stays `running` until its work ends on its own. If the worker outcome was
+already published, either destructive result supersedes it and corrects the job
+to `cancelled` with the honest partial result. The progress journal names whether
+the replaced outcome was `done` or `failed` and retains the original failure
+message. A poller may therefore see `done` or `failed` corrected to `cancelled`
+after the handler exits.
 
-A job that was already done, failed, or cancelled is left unchanged and reported
-as already terminal.
+A new cancellation request for a job that was already done, failed, or cancelled
+is left unchanged and reported as already terminal. This does not discard a
+destructive result from a cancellation handler that was already in flight.
 
 ## Unknown and expired jobs
 
