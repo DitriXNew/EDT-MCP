@@ -426,17 +426,22 @@ public class GitTool implements IMcpTool
      * guarantee the {@code .git/worktrees/<name>} layout that {@code git worktree add} happens to
      * produce - and quotes no content.
      * <p>
-     * Every condition behind this refusal is one where native git was measured to die as well
-     * ({@code fatal: failed to read .../commondir}, {@code fatal: not a git repository}), so it
-     * cannot take a working repository off the air: it names the fault the command would have hit
-     * anyway.
+     * MOST conditions behind this refusal are ones where native git was measured to die as well
+     * ({@code fatal: failed to read .../commondir}, {@code fatal: not a git repository}). Some are
+     * not - a pointer this JVM cannot decode, one over the size bound, one that is not a regular
+     * file - and the text therefore does NOT tell the caller that git would fail too. Claiming that
+     * would be wrong in exactly the cases where the operator most needs to be told it is our limit
+     * they have hit; see {@link GitCommonDirectory#of}.
      */
     private static final String COMMON_DIR_UNREADABLE_REFUSAL =
         "This is a linked git worktree, and the 'commondir' file in its git directory - the pointer " //$NON-NLS-1$
         + "to the shared repository holding the configuration and the remotes - could not be " //$NON-NLS-1$
         + "resolved to a directory. Nothing about the stored remotes can be inspected without it, " //$NON-NLS-1$
-        + "so the operation is refused instead of run blind. git itself cannot use this worktree " //$NON-NLS-1$
-        + "either: run any git command in it from a terminal and it will report the same fault. " //$NON-NLS-1$
+        + "so the operation is refused instead of run blind. Check the worktree in a terminal " //$NON-NLS-1$
+        + "first: most faults of this file stop git as well ('fatal: not a git repository'), but " //$NON-NLS-1$
+        + "not all of them - a pointer that is not valid UTF-8, is implausibly large, or is not a " //$NON-NLS-1$
+        + "regular file is refused HERE by choice, because following it would mean inspecting some " //$NON-NLS-1$
+        + "other directory, reading unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
         + "'git worktree repair' - run from the main worktree, with the path of this one - rewrites " //$NON-NLS-1$
         + "the pointer and is the usual fix; a worktree laid out by hand or by another tool may " //$NON-NLS-1$
         + "need the file corrected directly. This tool logs only the failure's exception types."; //$NON-NLS-1$
@@ -1866,9 +1871,12 @@ public class GitTool implements IMcpTool
      * The KEY comes off first: {@code URL: } / {@code Push: } / {@code Pull: } in a
      * {@code remotes/} file. It has to, because it ends in a colon, and a colon in front of an
      * {@code @} is exactly what marks a password - the raw line would refuse every legacy file ever
-     * written. The key is recognised only as letters, a colon and then a SPACE, which keeps a bare
-     * {@code https://host/r.git} line intact ({@code https:} is letters and a colon too) so it is
-     * still judged as the URL it is.
+     * written. The key is recognised by NAME, anchored at the start of the line and case-sensitively
+     * - one of exactly three - with any run of indent after the colon, or none at all. A space is
+     * NOT required, and demanding one was the bug: it left the key on the perfectly ordinary
+     * {@code URL:git@github.com:acme/repo.git} and refused a healthy repository. A bare
+     * {@code https://host/r.git} line survives on the other half of the same rule - {@code https:}
+     * is not one of the three names - so it is still judged as the URL it is.
      * <p>
      * A {@code branches/} file then splits at {@code #}. There that character is NOT a URL
      * fragment: the documented format is {@code <url>#<head>}, and git turns the tail into a REF -
@@ -2320,8 +2328,10 @@ public class GitTool implements IMcpTool
             + "those answer 'No such remote' - drop the 'remote.<name>' section from the file that " //$NON-NLS-1$
             + "defines it instead ('git config --global --remove-section remote.<name>', or " //$NON-NLS-1$
             + "--system); and if this repository uses extensions.worktreeConfig, the entry may sit " //$NON-NLS-1$
-            + "in '.git/config.worktree', where 'git remote remove' answers 'Could not remove " //$NON-NLS-1$
-            + "config section' - there it is 'git config --worktree --remove-section " //$NON-NLS-1$
+            + "in the file 'git rev-parse --git-path config.worktree' prints ('.git/config.worktree' " //$NON-NLS-1$
+            + "in a plain clone; beside the worktree's own HEAD in a linked one, where '.git' is a " //$NON-NLS-1$
+            + "FILE and that path does not exist), where 'git remote remove' answers 'Could not " //$NON-NLS-1$
+            + "remove config section' - there it is 'git config --worktree --remove-section " //$NON-NLS-1$
             + "remote.<name>'."; //$NON-NLS-1$
     }
 

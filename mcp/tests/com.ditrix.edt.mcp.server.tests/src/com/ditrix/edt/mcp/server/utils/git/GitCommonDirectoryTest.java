@@ -264,11 +264,17 @@ public class GitCommonDirectoryTest
         // short relative path. The bound is refused, not truncated: a truncated path would name some
         // OTHER directory, and reading a repository's remotes out of the wrong place is worse than
         // declining to read them at all.
+        //
+        // The padding is line terminators, and that is the whole point of the fixture: they are
+        // stripped back off, so an implementation that TRUNCATED at the bound instead of refusing
+        // would be left with a perfectly good '../..' and would resolve it. Padding with 'x' would
+        // not discriminate - the truncated path would not exist and the test would pass either way,
+        // which is the same vacuum the malformed-UTF-8 test was written into first.
         Linked linked = newLinkedWorktree("common-dir-huge", "../..\n"); //$NON-NLS-1$ //$NON-NLS-2$
         StringBuilder huge = new StringBuilder("../.."); //$NON-NLS-1$
         while (huge.length() <= 64 * 1024)
         {
-            huge.append('x');
+            huge.append('\n');
         }
         Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
             huge.toString().getBytes(StandardCharsets.UTF_8));
@@ -282,6 +288,12 @@ public class GitCommonDirectoryTest
         // The failure mode this class exists to avoid, in miniature: anything that is not "the entry
         // is not there" has to fail closed, or a broken worktree reads as an ordinary clone and the
         // check that follows approves a repository it never looked at.
+        //
+        // This is also the only observable half of the "must be a regular file" guard on Windows.
+        // The half that guard exists FOR is a FIFO: on Linux a named pipe passes every existence
+        // test and then blocks the open() for ever, with no deadline anywhere near this code. That
+        // case cannot be built here - Windows has no mkfifo - so it is stated as unverified rather
+        // than claimed. A directory exercises the same branch.
         File adminDir = newDirectory("common-dir-is-a-directory"); //$NON-NLS-1$
         assertTrue("fixture: commondir must be a DIRECTORY here", //$NON-NLS-1$
             new File(adminDir, COMMON_DIR).mkdirs());

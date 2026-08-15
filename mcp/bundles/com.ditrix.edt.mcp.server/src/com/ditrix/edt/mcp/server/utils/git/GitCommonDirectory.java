@@ -149,9 +149,22 @@ public final class GitCommonDirectory
      * <li><b>The target must be a directory.</b> git answers {@code fatal: not a git repository}
      * when it is not.</li>
      * </ul>
-     * <b>Fails CLOSED past the existence test</b>, and that is not a promise of care but a property:
-     * every condition it throws on is one where git itself was measured to die, so a refusal built
-     * on it cannot be a false refusal - the repository is already unusable. What it does NOT do is
+     * <b>Fails CLOSED past the existence test</b>, in two kinds of case that are worth keeping
+     * apart rather than blurring into one comfortable claim:
+     * <ul>
+     * <li><b>where git dies too</b> - an empty pointer, one that is nothing but a line terminator,
+     * one naming something that is not a directory, one that cannot be read at all. These were
+     * measured, and a refusal on them cannot be a false refusal: the repository is already unusable,
+     * and the command would have failed anyway;</li>
+     * <li><b>where WE choose to refuse and git might not</b> - a pointer this JVM cannot decode
+     * (git takes path bytes literally, so on a POSIX filesystem it can use a name we cannot spell),
+     * one over {@link #MAX_COMMON_DIR_BYTES}, and one that is not a regular file. These are
+     * deliberate over-refusals, and they are written down as such instead of being dressed up as
+     * git's own failure. Each buys something the alternative cannot: inspecting a DIFFERENT
+     * directory, reading unbounded untrusted content, and blocking for ever on a named pipe are all
+     * worse than declining.</li>
+     * </ul>
+     * What it does NOT do is
      * judge whether the target is a REPOSITORY. An existing directory that is not one is accepted
      * here, and whatever {@code config} / {@code remotes} / {@code branches} happen to sit in it are
      * read; git cannot run there at all, so it prints nothing and there is nothing to leak, and
@@ -171,8 +184,9 @@ public final class GitCommonDirectory
      *            {@link #directory()} and the caller's own null handling decides
      * @return where the shared part of the repository lives, and whether this is a linked worktree
      * @throws IOException when a {@code commondir} file is there but cannot be turned into a usable
-     *             directory - unreadable, over {@link #MAX_COMMON_DIR_BYTES}, empty, or naming
-     *             something that is not a directory
+     *             directory - unreadable, not a regular file, over {@link #MAX_COMMON_DIR_BYTES},
+     *             not valid UTF-8, empty (or nothing but a line terminator), or naming something
+     *             that is not a directory
      */
     public static GitCommonDirectory of(File gitDir) throws IOException
     {
@@ -188,6 +202,15 @@ public final class GitCommonDirectory
         catch (NoSuchFileException e) // NOSONAR the ordinary repository: git's file_exists() is false
         {
             return new GitCommonDirectory(gitDir, false);
+        }
+        // Past the existence test, and now FOLLOWING links, because what has to be a regular file is
+        // what will be OPENED. A symbolic link to one is fine - git reads through it too - but a
+        // FIFO is not: opening a named pipe with no writer blocks for ever, and this runs before the
+        // command that would have had a deadline. git blocks there as well; that is not a licence to,
+        // because nothing in this plug-in may make an unattended call wait without a bound.
+        if (!Files.readAttributes(commonDirFile, BasicFileAttributes.class).isRegularFile())
+        {
+            throw new IOException("commondir is not a regular file"); //$NON-NLS-1$
         }
         String value = stripLineTerminators(readBounded(commonDirFile));
         if (value.isEmpty())
@@ -212,7 +235,9 @@ public final class GitCommonDirectory
      *
      * @param file the file to read
      * @return its bytes, decoded as UTF-8
-     * @throws IOException when it cannot be read, or is longer than the bound
+     * @throws IOException when it cannot be read, is longer than the bound, or is not valid UTF-8
+     *             ({@code MalformedInputException} / {@code UnmappableCharacterException}, both of
+     *             which are {@code IOException}s, so the caller's one handler covers them)
      */
     private static String readBounded(Path file) throws IOException
     {
