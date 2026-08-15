@@ -1861,13 +1861,141 @@ public class GitToolStoredRemoteTest
         assertTrue("the refusal must name the file at fault: " + refusal, //$NON-NLS-1$
             refusal.contains("commondir")); //$NON-NLS-1$
         assertTrue("...and the repair, which is the FILE and not the config repair: " + refusal, //$NON-NLS-1$
-            refusal.contains("Repair the 'commondir' file itself")); //$NON-NLS-1$
+            refusal.contains("repair that file itself")); //$NON-NLS-1$
+        assertTrue("...stated as what the file MUST be, not as what it currently is - the old " //$NON-NLS-1$
+            + "wording claimed it 'holds one line' in the very message saying it is empty: " //$NON-NLS-1$
+            + refusal, refusal.contains("must be a regular file holding exactly one line")); //$NON-NLS-1$
         assertTrue("...and it must warn AGAINST the command that does not fix this, or an " //$NON-NLS-1$
             + "operator follows the obvious one and gets the same refusal back: " + refusal, //$NON-NLS-1$
             refusal.contains("Do NOT reach for 'git worktree repair'"));
         assertFalse("...and it must not quote what the file said: " + refusal, //$NON-NLS-1$
             refusal.contains("nowhere-at-all")); //$NON-NLS-1$
         assertRefusalLeaksNothing(refusal);
+
+        // It must name THE fault this pointer hit - and only it. The earlier version pasted in every
+        // ours() reason and left the operator to work out which line was theirs; an assertion over
+        // that aggregate passed no matter which fault the fixture actually produced, which is a
+        // predicate that cannot fail for the reason it exists.
+        GitCommonDirectory.Fault expected = GitCommonDirectory.Fault.NOT_A_DIRECTORY;
+        assertTrue("the refusal must name the fault this pointer actually hit: " + refusal, //$NON-NLS-1$
+            refusal.contains(expected.reason()));
+        assertTrue("...and say whose limit it is - this one git was measured to share: " + refusal, //$NON-NLS-1$
+            refusal.contains("git was measured to fail on the same file")); //$NON-NLS-1$
+        for (GitCommonDirectory.Fault other : GitCommonDirectory.Fault.values())
+        {
+            if (other != expected && !other.reason().equals(expected.reason()))
+            {
+                assertFalse(other + ": no OTHER fault may be named - an operator reading a list of " //$NON-NLS-1$
+                    + "five has to work out which line is about their repository: " + refusal, //$NON-NLS-1$
+                    refusal.contains(other.reason()));
+            }
+        }
+    }
+
+    @Test
+    public void testTheUnclassifiedFailureClaimsNothingItHasNotEstablished()
+    {
+        // This branch fires when resolving the layout threw something GitCommonDirectory does not
+        // classify - and that can happen BEFORE anything is known, including whether this is a
+        // linked worktree at all (the throw can come from the very call that would have told us).
+        // It used to borrow the head written for the classified case, which asserts both that this
+        // IS a linked worktree and that its commondir pointer is the thing at fault. Two claims
+        // from a branch that established neither.
+        String refusal = GitTool.commonDirRefusal(null);
+
+        assertFalse("it may not assert this is a linked worktree - that is what could not be " //$NON-NLS-1$
+            + "established: " + refusal, refusal.contains("linked git worktree")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The word may appear - the repair sentence says "IF this worktree has a 'commondir'
+        // file" - and that is fine, because it asserts nothing. What must not appear is the head's
+        // flat statement that there IS one and that it is the thing at fault.
+        assertFalse("nor ASSERT that a 'commondir' pointer exists and is at fault: " + refusal, //$NON-NLS-1$
+            refusal.contains("the 'commondir' file in its git directory")); //$NON-NLS-1$
+        assertTrue("...though naming the file conditionally in the repair is fine: " + refusal, //$NON-NLS-1$
+            refusal.contains("If this worktree has a 'commondir' file")); //$NON-NLS-1$
+        assertFalse("nor name a fault, since none was identified: " + refusal, //$NON-NLS-1$
+            refusal.contains("The fault:")); //$NON-NLS-1$
+        assertTrue("it must still say the operation was refused rather than run: " + refusal, //$NON-NLS-1$
+            refusal.contains("refused")); //$NON-NLS-1$
+        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
+        {
+            assertFalse(fault + ": no fault's words may appear either: " + refusal, //$NON-NLS-1$
+                refusal.contains(fault.reason()));
+        }
+    }
+
+    @Test
+    public void testAnUNCONFIRMEDFaultDoesNotBorrowTheCommondirHeadEither()
+    {
+        // The null branch was fixed first, but it was only half the hole: a fault can be CLASSIFIED
+        // and still have established nothing, because the failure came from the very look that
+        // would have told us whether a commondir exists. LAYOUT_UNREADABLE is that case, and it
+        // must get the same neutral head as the unclassified one.
+        //
+        // Without this, confirmed() could be ignored entirely and every test stayed green - which is
+        // how the mutation run found it.
+        String refusal = GitTool.commonDirRefusal(GitCommonDirectory.Fault.LAYOUT_UNREADABLE);
+
+        assertFalse("an unconfirmed fault may not assert there IS a commondir at fault: " + refusal, //$NON-NLS-1$
+            refusal.contains("the 'commondir' file in its git directory")); //$NON-NLS-1$
+        assertFalse("nor that this is a linked worktree: " + refusal, //$NON-NLS-1$
+            refusal.contains("This is a linked git worktree")); //$NON-NLS-1$
+        assertTrue("it must still name the fault it did reach: " + refusal, //$NON-NLS-1$
+            refusal.contains(GitCommonDirectory.Fault.LAYOUT_UNREADABLE.reason()));
+        assertTrue("...and say the ownership is not established, since it is not: " + refusal, //$NON-NLS-1$
+            refusal.contains("has not been established either way")); //$NON-NLS-1$
+
+        // The contrast that makes it a real assertion: a CONFIRMED fault does get the head.
+        String confirmed = GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY);
+        assertTrue("a confirmed fault DOES speak of the commondir - otherwise the head would be " //$NON-NLS-1$
+            + "dead code and this test would pass on a version that never used it: " + confirmed, //$NON-NLS-1$
+            confirmed.contains("the 'commondir' file in its git directory")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRepairAdviceFitsTheFaultRatherThanAlwaysNamingTheFile()
+    {
+        // TARGET_UNREADABLE means the pointer may be flawless and what it NAMES could not be
+        // examined - a denied directory, say. Telling the operator to repair the file would send
+        // them to edit something already correct, which is the retry loop every other refusal in
+        // this tool is held away from.
+        String target = GitTool.commonDirRefusal(GitCommonDirectory.Fault.TARGET_UNREADABLE);
+
+        assertTrue("it must point at what the pointer NAMES: " + target, //$NON-NLS-1$
+            target.contains("what it POINTS AT is what could not be examined")); //$NON-NLS-1$
+        assertFalse("...and must not order the file repaired: " + target, //$NON-NLS-1$
+            target.contains("repair that file itself")); //$NON-NLS-1$
+
+        // The contrast: a fault that IS about the file still gets the file's repair.
+        String pointer = GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY);
+        assertTrue("a fault about the file itself keeps the file's repair: " + pointer, //$NON-NLS-1$
+            pointer.contains("repair that file itself")); //$NON-NLS-1$
+
+        // And a layout failure has no pointer to send anyone to at all.
+        String layout = GitTool.commonDirRefusal(GitCommonDirectory.Fault.LAYOUT_UNREADABLE);
+        assertTrue("a layout failure sends the operator to the git directory: " + layout, //$NON-NLS-1$
+            layout.contains("Check the git directory of this project")); //$NON-NLS-1$
+        assertFalse("...and not to a file it never established exists: " + layout, //$NON-NLS-1$
+            layout.contains("repair that file itself")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePermanentLogDoesNotAssertWhatTheRefusalStoppedAsserting()
+    {
+        // The response was corrected not to claim a linked worktree it had not established. The EDT
+        // log is permanent and outlives the response, so leaving the old claim there would be the
+        // worse half of the same mistake.
+        String unconfirmed =
+            GitTool.commonDirFailureLog(GitCommonDirectory.Fault.LAYOUT_UNREADABLE, null);
+        assertFalse("an unconfirmed fault may not be logged as a commondir resolution: " //$NON-NLS-1$
+            + unconfirmed, unconfirmed.contains("commondir")); //$NON-NLS-1$
+
+        String unclassified = GitTool.commonDirFailureLog(null, null);
+        assertFalse("nor may an unclassified one: " + unclassified, //$NON-NLS-1$
+            unclassified.contains("commondir")); //$NON-NLS-1$
+
+        String confirmed = GitTool.commonDirFailureLog(GitCommonDirectory.Fault.EMPTY, null);
+        assertTrue("a CONFIRMED fault still says what it really was, or the head would be dead " //$NON-NLS-1$
+            + "code: " + confirmed, confirmed.contains("commondir")); //$NON-NLS-1$
     }
 
     // ==================== the pre-flight execute() actually runs ====================

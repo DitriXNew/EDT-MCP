@@ -76,24 +76,50 @@ public final class GitCommonDirectory
      * is the worse trade - but it is a trade, and it is recorded here rather than dressed up as a
      * fact about paths. No claim is made about any operating system's path limit either.
      * <p>
-     * {@link Fault#TOO_LARGE} carries {@code ours() == true} for exactly this reason; a reader who
+     * {@link Fault#TOO_LARGE} carries {@link Ownership#OURS} for exactly this reason; a reader who
      * finds only this constant should not be left thinking git would have failed too.
      */
     private static final int MAX_COMMON_DIR_BYTES = 64 * 1024;
 
     /**
+     * Whose limit a refusal is. THREE states, because two could not say the third: a boolean forced
+     * "not established" to be spelled as "git fails too", and the operator-facing message then
+     * rendered a measurement that had never been taken.
+     */
+    public enum Ownership
+    {
+        /**
+         * This tool refuses, and git was NOT measured to reject the same file. Usually that means
+         * git carries on; for {@link Fault#NOT_A_REGULAR_FILE} it means git blocks for ever instead,
+         * which is not a licence to. Either way the refusal is this tool's decision, not a fault git
+         * shares.
+         */
+        OURS,
+
+        /** git was measured to fail on the same file, so the command would have failed anyway. */
+        GIT_TOO,
+
+        /**
+         * Nobody has run git against this one. Refused all the same - it fails closed either way -
+         * but never described to an operator as git's failure.
+         */
+        UNKNOWN
+    }
+
+    /**
      * Every way a {@code commondir} can be unusable, and - the part that keeps being got wrong -
      * WHOSE limit each one is.
      * <p>
-     * This enumeration is the single source. The operator-facing refusal in the {@code git} tool is
-     * BUILT from the {@link #ours()} members rather than repeating them, and
+     * This enumeration is the single source. The operator-facing refusal in the {@code git} tool
+     * names the ONE fault that fired, reading its words and its {@link Fault#ownership()} from
+     * here rather than repeating them, and
      * {@code GitCommonDirectoryTest} fails if any member has no fixture. Three review rounds in a row
      * found the same defect - a refusal added to the code and to none of the places that listed the
      * refusals - and the answer to that is not another careful edit, it is having one list.
      * <p>
-     * The distinction {@link #ours()} carries is not decoration. Telling an operator "git would fail
-     * here too" when it would not is wrong in exactly the case where they most need to know the
-     * limit is this tool's.
+     * The distinction {@link Fault#ownership()} carries is not decoration. Telling an operator "git
+     * would fail here too" when it would not - or when nobody has checked - is wrong in exactly the
+     * case where they most need to know the limit is this tool's.
      */
     public enum Fault
     {
@@ -101,42 +127,81 @@ public final class GitCommonDirectory
          * The file is there and cannot be read - denied, a dangling symbolic link, a loop. git
          * dies too ({@code fatal: failed to read .../commondir}).
          */
-        UNREADABLE("it could not be read", false), //$NON-NLS-1$
+        UNREADABLE("it could not be read", Ownership.GIT_TOO, true), //$NON-NLS-1$
+
+        /**
+         * The git directory's layout could not be examined at all - the path could not be spelled,
+         * or the very look that would have said whether a {@code commondir} exists failed.
+         * <p>
+         * Its own member because of what the CALLER may then say. Every other fault here has
+         * established that this is a linked worktree with a {@code commondir} in it; this one has
+         * established neither, so a refusal built on it must not assert either. {@link #confirmed()}
+         * is what carries that, and it is {@code false} only here.
+         */
+        LAYOUT_UNREADABLE("the git directory's layout could not be read", Ownership.UNKNOWN, false), //$NON-NLS-1$
 
         /**
          * It is not a regular file. OURS: git would open a FIFO and block for ever, and so would
          * this - but nothing here may wait without a bound.
          */
-        NOT_A_REGULAR_FILE("it is not a regular file", true), //$NON-NLS-1$
+        NOT_A_REGULAR_FILE("it is not a regular file", Ownership.OURS, true), //$NON-NLS-1$
 
         /**
          * Longer than this tool reads. OURS, and measured: a file of {@code .} plus 64 KiB of line
          * terminators strips down to a valid pointer and git carries on.
          */
-        TOO_LARGE("it is larger than this tool will read", true), //$NON-NLS-1$
+        TOO_LARGE("it is larger than this tool will read", Ownership.OURS, true), //$NON-NLS-1$
 
         /**
          * Not decodable as UTF-8. OURS: git takes path bytes literally, so on a POSIX filesystem it
          * can use a name this JVM cannot spell - and the lenient decoding would not fail, it would
          * silently name a DIFFERENT directory.
          */
-        NOT_UTF_8("it is not valid UTF-8", true), //$NON-NLS-1$
+        NOT_UTF_8("it is not valid UTF-8", Ownership.OURS, true), //$NON-NLS-1$
 
         /**
-         * Starts with a slash but names no drive. OURS, and Windows-only: git roots such a path on
-         * the current drive, {@link File#isAbsolute} calls it relative, and taking the second
-         * reading resolves it underneath the git directory - a different directory again.
+         * A Windows spelling whose ROOT the two readings disagree about: {@code \shared} and
+         * {@code /shared} (git roots them on the current drive, {@link File#isAbsolute} calls them
+         * relative), and {@code C:foo} or a bare {@code C:} (drive-RELATIVE - git resolves those
+         * against that drive's current directory, {@link File#isAbsolute} again says relative).
+         * <p>
+         * What the second reading then does differs, and both endings are wrong: the first two
+         * resolve UNDERNEATH the git directory - a real, different directory - while the drive forms
+         * produce a composite with a colon in the middle that the platform will not spell at all, so
+         * they used to arrive as "this cannot be a path" about a path git uses perfectly well.
+         * <p>
+         * OURS, because git can use every one of them. Reproducing "the current directory of drive
+         * C:" is not something to guess at, so the pointer is refused and said to be refused.
          */
-        ROOTED_WITHOUT_DRIVE("it starts with a slash but names no drive", true), //$NON-NLS-1$
+        AMBIGUOUS_WINDOWS_ROOT("Windows roots it somewhere this tool cannot reproduce", Ownership.OURS, true), //$NON-NLS-1$
 
         /**
          * Empty, or nothing but a line terminator. git dies on both - measured, because its source
          * alone suggests the second should resolve back to the git directory.
          */
-        EMPTY("it is empty, or holds nothing but a line terminator", false), //$NON-NLS-1$
+        EMPTY("it is empty, or holds nothing but a line terminator", Ownership.GIT_TOO, true), //$NON-NLS-1$
 
         /** What it names is not a directory. git dies too ({@code fatal: not a git repository}). */
-        NOT_A_DIRECTORY("what it names is not a directory", false), //$NON-NLS-1$
+        NOT_A_DIRECTORY("what it names is not a directory", Ownership.GIT_TOO, true), //$NON-NLS-1$
+
+        /**
+         * It holds a NUL byte. OURS, and measured: git treats a NUL as the end of the string,
+         * resolves the {@code ../..} in front of it and carries on. We refuse, because silently
+         * truncating a pointer at a byte would resolve a DIFFERENT directory than the one the file
+         * names - the failure this whole class exists to stop.
+         * <p>
+         * Split from {@link #UNSPELLABLE_PATH} because one boolean cannot honestly cover both: the
+         * two arrive through the same {@code InvalidPathException} and git was measured to survive
+         * this one and to die on that one.
+         */
+        PATH_HOLDS_NUL("it holds a NUL byte, which git reads as the end of the path", Ownership.OURS, true), //$NON-NLS-1$
+
+        /**
+         * The platform will not accept it as a path for some other reason - on Windows, a trailing
+         * tab. NOT ours: git was measured to fail on that same pointer
+         * ({@code fatal: not a git repository}).
+         */
+        UNSPELLABLE_PATH("the platform cannot use it as a path", Ownership.GIT_TOO, true), //$NON-NLS-1$
 
         /**
          * What it names is there but could not be looked at. Distinct from {@link #NOT_A_DIRECTORY}
@@ -144,22 +209,24 @@ public final class GitCommonDirectory
          * hunting for a missing directory that is in fact right there - and distinct from
          * {@link #UNREADABLE}, which is about the POINTER rather than its target.
          * <p>
-         * Left at {@code ours() == false} deliberately: it LOOKS like our limit, and the honest
-         * position is that it has not been measured against git, which needs to read that directory
-         * too and would very likely fail as well. Classifying it as ours on a hunch would put a
-         * sentence in front of operators that no probe backs - the thing this whole enumeration
-         * exists to stop.
+         * {@link Ownership#UNKNOWN}, and that state exists because of this member: it LOOKS like
+         * our limit, git needs to read that directory too and would very likely fail as well, and
+         * nobody has run the probe. Under a boolean it had to be spelled as one or the other, and
+         * "git was measured to fail" duly appeared in a message about a case nobody had measured.
          */
-        TARGET_UNREADABLE("what it names could not be looked at", false); //$NON-NLS-1$
+        TARGET_UNREADABLE("what it names could not be looked at", Ownership.UNKNOWN, true); //$NON-NLS-1$
 
         private final String reason;
 
-        private final boolean ours;
+        private final Ownership ownership;
 
-        Fault(String reason, boolean ours)
+        private final boolean confirmed;
+
+        Fault(String reason, Ownership ownership, boolean confirmed)
         {
             this.reason = reason;
-            this.ours = ours;
+            this.ownership = ownership;
+            this.confirmed = confirmed;
         }
 
         /**
@@ -172,12 +239,29 @@ public final class GitCommonDirectory
         }
 
         /**
-         * @return {@code true} when this tool refuses and native git might well have carried on;
-         *         {@code false} when git was measured to fail on the same file
+         * @return whose limit this fault is - and, crucially, {@link Ownership#UNKNOWN} when nobody
+         *         has established it, which a boolean could not say and so used to be reported as
+         *         a measurement that had never been taken
          */
-        public boolean ours()
+        public Ownership ownership()
         {
-            return ours;
+            return ownership;
+        }
+
+        /**
+         * Whether reaching this fault ESTABLISHED that this is a linked worktree carrying a
+         * {@code commondir} file.
+         * <p>
+         * True for every fault about the pointer's content, because getting that far proved the
+         * file was there. False for {@link #LAYOUT_UNREADABLE}, which is the failure of the look
+         * itself - and a caller that says "this is a linked worktree, and its commondir is at
+         * fault" on the strength of it would be asserting two things nobody checked.
+         *
+         * @return {@code true} when a message may speak of this worktree's {@code commondir}
+         */
+        public boolean confirmed()
+        {
+            return confirmed;
         }
     }
 
@@ -305,7 +389,8 @@ public final class GitCommonDirectory
      * measured, and a refusal on them cannot be a false refusal: the repository is already unusable,
      * and the command would have failed anyway;</li>
      * <li><b>where WE choose to refuse and git might not</b> - the {@link Fault} members whose
-     * {@link Fault#ours()} is {@code true}. They are NOT listed again here, and that is the point:
+     * {@link Fault#ownership()} is {@link Ownership#OURS}. They are NOT listed again here, and that
+     * is the point:
      * this sentence used to carry a count and a copy of the list, and three review rounds running
      * found a refusal that had been added to the code and to none of the copies. Each of them buys
      * something the alternative cannot - inspecting a DIFFERENT directory, reading unbounded
@@ -350,7 +435,10 @@ public final class GitCommonDirectory
             // The LAST unchecked way out of this method. A git directory the platform cannot spell
             // as a path is not something to let escape as a RuntimeException past a contract that
             // says every failure carries a Fault - even though the one caller catches those too.
-            throw new FaultException(Fault.UNREADABLE, e);
+            //
+            // LAYOUT_UNREADABLE, not UNSPELLABLE_PATH: nothing has been established here. We have
+            // not looked at a commondir, so no message built on this may claim there is one.
+            throw new FaultException(Fault.LAYOUT_UNREADABLE, e);
         }
         try
         {
@@ -366,7 +454,10 @@ public final class GitCommonDirectory
             // It is deliberately NOT the ordinary-repository branch above: that one branch is the
             // only way to report "no linked worktree", which is what stops a failure to look from
             // being mistaken for having looked.
-            throw new FaultException(Fault.UNREADABLE, e);
+            //
+            // And it is LAYOUT_UNREADABLE rather than UNREADABLE: this IS the look that would have
+            // told us whether a commondir exists, so it has established nothing to speak of.
+            throw new FaultException(Fault.LAYOUT_UNREADABLE, e);
         }
         // Past the existence test, and now FOLLOWING links, because what has to be a regular file is
         // what will be OPENED. A symbolic link to one is fine - git reads through it too - but a
@@ -389,7 +480,26 @@ public final class GitCommonDirectory
         {
             throw new FaultException(Fault.EMPTY);
         }
+        // BEFORE the ambiguity test, because a pointer can be both and the NUL is the more
+        // specific fact: git carries on past one (measured), so filing it under a Windows-rooting
+        // ambiguity would attach the wrong ownership and the wrong repair to it.
+        if (value.indexOf('\0') >= 0)
+        {
+            throw new FaultException(Fault.PATH_HOLDS_NUL);
+        }
         File named = new File(value);
+        // Spelled-ness BEFORE rooting. Both are refusals, but they carry opposite ownership: a
+        // trailing tab is a fault git shares, a rooted spelling is ours alone. Testing rooting
+        // first made '\shared<TAB>' - just as unusable as '../..<TAB>' - come out as OUR limit,
+        // purely because it happened to start with a separator.
+        try
+        {
+            named.toPath();
+        }
+        catch (InvalidPathException e)
+        {
+            throw new FaultException(Fault.UNSPELLABLE_PATH, e);
+        }
         if (!named.isAbsolute() && isRooted(value))
         {
             // A spelling this JVM and git do not agree on, so it is refused rather than guessed at.
@@ -403,7 +513,7 @@ public final class GitCommonDirectory
             // On a POSIX filesystem this branch is unreachable: there a leading '/' IS absolute to
             // both, File.isAbsolute() is already true, and the ordinary absolute path below handles
             // it. So nothing git itself produces is affected - 'git worktree add' writes '../..'.
-            throw new FaultException(Fault.ROOTED_WITHOUT_DRIVE);
+            throw new FaultException(Fault.AMBIGUOUS_WINDOWS_ROOT);
         }
         File resolved = named.isAbsolute() ? named : new File(gitDir, value);
         // Not File.isDirectory(), which answers false for "it is not one" AND for "I could not
@@ -411,7 +521,7 @@ public final class GitCommonDirectory
         // the fault git dies on, when it is really ours. Both still refuse; what changes is that
         // the operator is told the truth about whose limit they hit. (Found while making this list
         // the single source - the fifth case, and it had been hiding inside the fourth.)
-        if (!resolvesToDirectory(resolved))
+        if (!resolvesToDirectory(resolved, value))
         {
             throw new FaultException(Fault.NOT_A_DIRECTORY);
         }
@@ -475,7 +585,7 @@ public final class GitCommonDirectory
      * not be looked at" - two faults, and {@link File#isDirectory} answers {@code false} to both.
      * <p>
      * Both still refuse, so this changes no outcome; what it changes is which fault the operator is
-     * told about, and that is the whole point of {@link Fault} carrying {@link Fault#ours()}. An
+     * told about, and that is the whole point of {@link Fault} carrying an {@link Ownership}. An
      * existing directory that cannot be statted is OUR limit, not git's, and reporting it as
      * "what it names is not a directory" would send someone to look for a missing directory that is
      * in fact right there.
@@ -487,10 +597,12 @@ public final class GitCommonDirectory
      * directory, so that is the fault it gets.
      *
      * @param resolved where the pointer resolved to
+     * @param pointer the pointer's own text, which decides WHICH unspellable-path fault applies
      * @return {@code true} when it is a directory
      * @throws FaultException when it is unreadable, or cannot be named at all
      */
-    private static boolean resolvesToDirectory(File resolved) throws FaultException
+    private static boolean resolvesToDirectory(File resolved, String pointer)
+        throws FaultException
     {
         Path path;
         try
@@ -499,7 +611,10 @@ public final class GitCommonDirectory
         }
         catch (InvalidPathException e)
         {
-            throw new FaultException(Fault.NOT_A_DIRECTORY, e);
+            // Two different faults arrive here and they are NOT the same trade: git carries on past
+            // a NUL (measured) and dies on a trailing tab (measured). One boolean cannot describe
+            // both, so the byte itself decides.
+            throw new FaultException(unspellableFault(pointer), e);
         }
         try
         {
@@ -541,19 +656,65 @@ public final class GitCommonDirectory
     }
 
     /**
-     * Whether {@code value} begins with a path separator, which git's {@code is_absolute_path}
-     * treats as ABSOLUTE (rooted on the current drive) while {@link File#isAbsolute} does not,
-     * because it names no drive.
+     * Which fault a path the platform will not accept deserves - the one case git survives, or the
+     * one it was measured to die on.
+     *
+     * @param value the pointer's content
+     * @return {@link Fault#PATH_HOLDS_NUL} when it holds a NUL, {@link Fault#UNSPELLABLE_PATH}
+     *         otherwise
+     */
+    private static Fault unspellableFault(String value)
+    {
+        return value.indexOf('\0') >= 0 ? Fault.PATH_HOLDS_NUL : Fault.UNSPELLABLE_PATH;
+    }
+
+    /**
+     * Whether {@code value} is a Windows spelling whose ROOT git and {@link File#isAbsolute}
+     * disagree about - the spellings that would otherwise resolve underneath the git directory.
      * <p>
-     * Only ever consulted when {@link File#isAbsolute} already said no, so on a POSIX filesystem -
-     * where a leading {@code /} is absolute to both - it never decides anything.
+     * <b>Windows only, and that is the correction that matters.</b> The first version of this test
+     * was platform-INDEPENDENT, and it was a false refusal waiting on the CI: on POSIX a leading
+     * backslash is not a separator at all, it is an ORDINARY FILENAME CHARACTER, so
+     * {@code \shared} is a perfectly good relative path that git resolves and uses. Refusing it
+     * would have taken every {@code remote}, {@code push}, {@code fetch} and {@code pull} off a
+     * repository native git is happy with - the same shape as the {@code URL:} prefix that blocked
+     * a healthy legacy file before it was measured rather than assumed.
+     * <p>
+     * A leading {@code /} needs no handling on POSIX either: there it is absolute to BOTH readings,
+     * so {@link File#isAbsolute} already said yes and this is never consulted.
+     * <p>
+     * The drive-RELATIVE form {@code C:foo} is here for the same reason and was arriving by
+     * accident before: {@code File.isAbsolute()} calls it relative, so the pointer was joined onto
+     * the git directory, and the colon in the middle of the result made {@code toPath()} throw -
+     * a refusal, but one that reported the platform could not spell a path git uses perfectly well.
+     * Named rather than stumbled into.
      *
      * @param value the pointer's content
      * @return {@code true} when the two readings of it would disagree
      */
     private static boolean isRooted(String value)
     {
-        return !value.isEmpty() && (value.charAt(0) == '/' || value.charAt(0) == '\\');
+        if (File.separatorChar != '\\' || value.isEmpty())
+        {
+            return false;
+        }
+        if (value.charAt(0) == '/' || value.charAt(0) == '\\')
+        {
+            return true;
+        }
+        // 'C:foo' and the bare 'C:' - an ASCII drive letter, a colon, and NOT a separator after
+        // it. ASCII deliberately: Windows drive letters are A-Z, and Character.isLetter would accept
+        // a Cyrillic one and label a plainly invalid path as an ambiguity this tool owns. The bare
+        // 'C:' is included because it IS the drive's current directory to git - excluding it left it
+        // falling through to whatever the platform threw, which is how 'C:foo' used to be handled.
+        if (value.length() < 2 || value.charAt(1) != ':')
+        {
+            return false;
+        }
+        char drive = value.charAt(0);
+        boolean asciiLetter = (drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z');
+        return asciiLetter
+            && (value.length() == 2 || (value.charAt(2) != '/' && value.charAt(2) != '\\'));
     }
 
     /**

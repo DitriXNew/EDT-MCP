@@ -26,7 +26,6 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -35,7 +34,6 @@ import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.Config;
@@ -432,10 +430,10 @@ public class GitTool implements IMcpTool
      * ({@code fatal: failed to read .../commondir}, {@code fatal: not a git repository}). Some are
      * not, and the text therefore does NOT tell the caller that git would fail too - claiming that
      * would be wrong in exactly the cases where the operator most needs to be told it is our limit
-     * they have hit. WHICH ones is not repeated here: it is
-     * {@link GitCommonDirectory.Fault#ours()}, and {@link #ourRefusals()} renders it into the
-     * message. This sentence used to carry the list, and it was stale within one round of adding a
-     * refusal - which is the entire reason the enumeration exists.
+     * they have hit. WHICH one is not decided here at all: the exception carries the fault, and
+     * {@link #commonDirRefusal} renders that ONE fault and its
+     * {@link GitCommonDirectory.Fault#ownership()}. This sentence used to carry a list, and it was
+     * stale within one round of adding a refusal - which is why nothing enumerates any more.
      * <p>
      * The repair it names is the FILE, not a command, and that too is measured rather than assumed:
      * {@code git worktree repair} does NOT rewrite {@code commondir}. Run against a worktree whose
@@ -445,18 +443,52 @@ public class GitTool implements IMcpTool
      * retry loop this refusal exists to prevent, which is the standard {@link #repairClause} holds
      * every other refusal in this tool to.
      */
-    private static final String COMMON_DIR_UNREADABLE_REFUSAL =
+    private static final String COMMON_DIR_UNREADABLE_REFUSAL_HEAD =
         "This is a linked git worktree, and the 'commondir' file in its git directory - the pointer " //$NON-NLS-1$
         + "to the shared repository holding the configuration and the remotes - could not be " //$NON-NLS-1$
         + "resolved to a directory. Without it this tool cannot read the shared configuration, and " //$NON-NLS-1$
         + "cannot even tell whether the per-worktree one is switched on, so the effective set of " //$NON-NLS-1$
-        + "remotes cannot be established at all, " //$NON-NLS-1$
-        + "so the operation is refused instead of run blind. Check the worktree in a terminal " //$NON-NLS-1$
-        + "first: most faults of this file stop git as well ('fatal: not a git repository'), but " //$NON-NLS-1$
-        + "not all of them. These are refused HERE by choice, and git may well carry on past " //$NON-NLS-1$
-        + "them: " + ourRefusals() + ". Following one anyway would mean inspecting some other " //$NON-NLS-1$ //$NON-NLS-2$
-        + "directory, reading unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
-        + "Repair the 'commondir' file itself: it holds one line, the path to the shared " //$NON-NLS-1$
+        + "remotes cannot be established at all and the operation is refused instead of run blind. "; //$NON-NLS-1$
+
+    /**
+     * The head for a refusal that established NOTHING - not that this is a linked worktree, not
+     * that it has a {@code commondir}. Used when the fault is unclassified, and when it is
+     * {@link GitCommonDirectory.Fault#confirmed()} {@code == false}.
+     */
+    /**
+     * The repair for a failure at the LAYOUT level - the git directory itself could not be read, so
+     * there is no pointer to send anyone to.
+     */
+    private static final String LAYOUT_REPAIR_TAIL =
+        "Check the git directory of this project in a terminal: whether it exists, whether it can " //$NON-NLS-1$
+        + "be read, and whether its path is one this platform accepts. This tool logs only the " //$NON-NLS-1$
+        + "failure's exception types."; //$NON-NLS-1$
+
+    /**
+     * The repair when the POINTER is fine and what it names is not reachable - a different fault
+     * and a different fix, which is why it is not the tail below.
+     */
+    private static final String TARGET_REPAIR_TAIL =
+        "The 'commondir' file itself may be perfectly good: what it POINTS AT is what could not be " //$NON-NLS-1$
+        + "examined. Check that directory in a terminal - that it exists, and that this user may " //$NON-NLS-1$
+        + "read it - before editing the pointer, which may need no change at all. This tool logs " //$NON-NLS-1$
+        + "only the failure's exception types."; //$NON-NLS-1$
+
+    private static final String UNEXAMINED_REPOSITORY_REFUSAL_HEAD =
+        "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
+        + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
+        + "blind. Check the repository in a terminal. "; //$NON-NLS-1$
+
+    /**
+     * The tail of that refusal: the repair, which is the same whichever fault fired.
+     * <p>
+     * NORMATIVE, not descriptive. It used to say the file "holds one line", which the refusal for
+     * an EMPTY pointer then contradicted in its own second sentence; what it means is what the
+     * repaired file must look like.
+     */
+    private static final String COMMON_DIR_UNREADABLE_REFUSAL_TAIL =
+        "If this worktree has a 'commondir' file, repair that file itself: it must be a regular " //$NON-NLS-1$
+        + "file holding exactly one line, the path to the shared " //$NON-NLS-1$
         + "repository. That path may be absolute; when it is relative it is resolved against the " //$NON-NLS-1$
         + "directory the file sits in, which is what 'git worktree add' writes ('../..'). A working " //$NON-NLS-1$
         + "absolute spelling does not need to be made relative. " //$NON-NLS-1$
@@ -1635,7 +1667,7 @@ public class GitTool implements IMcpTool
      * <p>
      * Fails CLOSED: when the configuration cannot be read at all the command is refused with
      * {@link #CONFIG_UNREADABLE_REFUSAL}, and when a linked worktree's {@code commondir} pointer
-     * cannot be resolved with {@link #COMMON_DIR_UNREADABLE_REFUSAL}. Neither text embeds any file
+     * cannot be resolved with {@link #commonDirRefusal}. Neither text embeds any file
      * content.
      * <p>
      * A limit worth stating, because it is not one this check can close: opening a linked worktree
@@ -1676,14 +1708,22 @@ public class GitTool implements IMcpTool
         {
             common = GitCommonDirectory.of(repo.getDirectory());
         }
-        // NOSONAR fail closed: a commondir we cannot resolve hides the whole shared repository
-        catch (IOException | RuntimeException e)
+        catch (GitCommonDirectory.FaultException e)
         {
             // Its own refusal, not CONFIG_UNREADABLE_REFUSAL: the file at fault is not a
-            // configuration file and the repair is a different one. The message is withheld for the
-            // reason spelled out on configReadFailureLog.
-            Activator.logError(commonDirFailureLog(e), null);
-            return COMMON_DIR_UNREADABLE_REFUSAL;
+            // configuration file and the repair is a different one. It names THE fault this pointer
+            // hit rather than every fault that exists - the exception carries it, so there is no
+            // reason to hand back a list and make the operator work out which line applies to them.
+            // That is also what keeps the guides honest: they can promise the refusal identifies the
+            // fault because it does.
+            Activator.logError(commonDirFailureLog(e.fault(), e), null);
+            return commonDirRefusal(e.fault());
+        }
+        // NOSONAR fail closed: a commondir we cannot resolve hides the whole shared repository
+        catch (RuntimeException e)
+        {
+            Activator.logError(commonDirFailureLog(null, e), null);
+            return commonDirRefusal(null);
         }
         try
         {
@@ -2183,42 +2223,92 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * The EDT-log line for a {@code commondir} that could not be resolved - types only, for the same
+     * The refusal for an unusable {@code commondir}, naming THE fault this pointer hit and whose
+     * limit it is.
+     * <p>
+     * It names one fault rather than listing every fault that exists, and that is the whole point.
+     * The earlier version pasted in every {@link GitCommonDirectory.Ownership#OURS} reason and
+     * left the operator to work out
+     * which line was about their repository - which is also how the list ended up duplicated in two
+     * guides, a constant's javadoc and a test, and drifted out of step three review rounds running.
+     * The exception carries the fault; there was never a reason to enumerate.
+     * <p>
+     * Nothing here quotes the file: {@link GitCommonDirectory.Fault#reason()} is fixed text that
+     * describes the FILE, never its content.
+     *
+     * Package-visible so the {@code null} branch is reachable from a test: it fires only on an
+     * unchecked failure of the resolution itself, which a fixture cannot provoke, and it is exactly
+     * the branch that must NOT borrow the confident head above.
+     *
+     * @param fault which way the pointer is unusable, or {@code null} when it failed in a way
+     *            {@link GitCommonDirectory} does not classify (an unchecked failure)
+     * @return the refusal
+     */
+    static String commonDirRefusal(GitCommonDirectory.Fault fault)
+    {
+        if (fault == null)
+        {
+            // Nothing has been established here - not even that this IS a linked worktree, because
+            // the failure can come from the very call that would have told us. So this branch says
+            // only what it knows, and does not borrow the head above, which asserts both.
+            return UNEXAMINED_REPOSITORY_REFUSAL_HEAD
+                + "The failure is of a kind this tool does not classify. " //$NON-NLS-1$
+                + COMMON_DIR_UNREADABLE_REFUSAL_TAIL;
+        }
+        // Exhaustive over Ownership with NO default, deliberately: a fourth state added later
+        // must fail to COMPILE here rather than be quietly rendered as one of these three. A
+        // default arm is exactly how the old boolean hid "not established" inside "git fails too".
+        String whose = switch (fault.ownership())
+        {
+            case OURS -> "That is THIS TOOL's limit, not git's - git may well carry on past it, " //$NON-NLS-1$
+                + "and following it here would mean inspecting some other directory, reading " //$NON-NLS-1$
+                + "unbounded untrusted content, or blocking with no deadline. "; //$NON-NLS-1$
+            case GIT_TOO -> "git was measured to fail on the same file, so this refusal names a " //$NON-NLS-1$
+                + "fault the command would have hit anyway. "; //$NON-NLS-1$
+            case UNKNOWN -> "Whether git can use this repository has not been established either " //$NON-NLS-1$
+                + "way, so check it in a terminal before assuming the fault is only this tool's. "; //$NON-NLS-1$
+        };
+        String what = "The fault: " + fault.reason() + ". " + whose; //$NON-NLS-1$ //$NON-NLS-2$
+        if (!fault.confirmed())
+        {
+            // Nothing established: not that this is a linked worktree, not that it has a commondir.
+            return UNEXAMINED_REPOSITORY_REFUSAL_HEAD + what + LAYOUT_REPAIR_TAIL;
+        }
+        if (fault == GitCommonDirectory.Fault.TARGET_UNREADABLE)
+        {
+            // The POINTER may be flawless here - one line, the right path - and what it names is
+            // what could not be examined. Telling the operator to repair the file would send them
+            // to edit something that is already correct, which is the retry loop repairClause holds
+            // every other refusal in this tool to.
+            return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + TARGET_REPAIR_TAIL;
+        }
+        return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + COMMON_DIR_UNREADABLE_REFUSAL_TAIL;
+    }
+
+    /**
+     * The EDT-log line for a git directory that could not be resolved - types only, for the same
      * reason as {@link #configReadFailureLog}.
      * <p>
      * The reason is narrower here but not absent: the exception's message carries the path this
-     * pointer names, which is repository content and travels into a permanent log. There is no
-     * gain in writing it there when the refusal already tells the caller which file to repair.
+     * pointer names, which is repository content and travels into a permanent log. There is no gain
+     * in writing it there when the refusal already tells the caller which file to repair.
+     * <p>
+     * The HEAD is chosen the way the refusal's is, and for the same reason. It used to say
+     * "resolving the linked worktree's commondir" unconditionally, which is false for a failure
+     * that happened before anything established there was a linked worktree or a {@code commondir}
+     * at all. A permanent log is the worst place to leave an assertion nobody checked: it outlives
+     * the response that was carefully corrected not to make it.
      *
+     * @param fault which way the resolution failed, or {@code null} when it was not classified
      * @param failure the exception the resolution threw (may be {@code null})
      * @return the message to log; it embeds no file content
      */
-    /**
-     * The refusals THIS TOOL makes on a {@code commondir} where native git might carry on, rendered
-     * for the operator straight out of {@link GitCommonDirectory.Fault} - never re-typed.
-     * <p>
-     * This exists because re-typing them failed three review rounds in a row: the list lived in a
-     * javadoc, a constant's javadoc, a test's prose, a guide and this message, a refusal was added
-     * to the code, and every copy went on describing the older, shorter set. Reading it from the one
-     * enumeration makes "added a refusal, forgot the message" impossible rather than merely
-     * discouraged - and {@code GitCommonDirectoryTest} fails if a member ever has no fixture, so the
-     * enumeration cannot drift from the code either.
-     *
-     * @return the reasons, semicolon-separated, each describing the FILE and quoting nothing from it
-     */
-    private static String ourRefusals()
+    static String commonDirFailureLog(GitCommonDirectory.Fault fault, Throwable failure)
     {
-        return Arrays.stream(GitCommonDirectory.Fault.values())
-            .filter(GitCommonDirectory.Fault::ours)
-            .map(GitCommonDirectory.Fault::reason)
-            .collect(Collectors.joining("; ")); //$NON-NLS-1$
-    }
-
-    static String commonDirFailureLog(Throwable failure)
-    {
-        return GitFailureLog.typesOnly(
-            "git: resolving the linked worktree's commondir to check stored remotes failed", //$NON-NLS-1$
-            failure);
+        String what = fault != null && fault.confirmed()
+            ? "git: resolving the linked worktree's commondir to check stored remotes failed" //$NON-NLS-1$
+            : "git: reading a repository's git-directory layout to check stored remotes failed"; //$NON-NLS-1$
+        return GitFailureLog.typesOnly(what, failure);
     }
 
     /**

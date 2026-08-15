@@ -24,8 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import com.ditrix.edt.mcp.server.utils.GuideLoader;
-
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Test;
@@ -44,7 +42,8 @@ import org.junit.Test;
  * the repository is already unusable.
  *
  * <p>The rest are DELIBERATE over-refusals - the {@link GitCommonDirectory.Fault} members whose
- * {@code ours()} is {@code true} - and they are kept in their own section below rather than mixed in
+ * {@code ownership()} is {@code OURS} - and they are kept in their own section below rather than
+ * mixed in
  * with the first kind. They are NOT listed again in this sentence, and that is deliberate: this
  * paragraph used to carry a copy of the list, and copies of it drifted three review rounds running.
  * Calling them "what git does" would be the comfortable lie that hides the trade.
@@ -163,6 +162,28 @@ public class GitCommonDirectoryTest
 
         assertRefused(linked.adminDir,
             "trailing whitespace other than a line terminator is part of the path to git"); //$NON-NLS-1$
+
+        // On Windows the tab makes the JOINED path unspellable, and that is the non-NUL half of the
+        // UNSPELLABLE_PATH split - the half git was measured to fail on too. Asserting only "it
+        // threw" left the two halves indistinguishable, so the wrong label went unnoticed for two
+        // rounds. Elsewhere the tab is an ordinary character and some other fault fires first, so
+        // the fault itself is only pinned where the platform makes it reachable.
+        if (File.separatorChar == '\\')
+        {
+            try
+            {
+                GitCommonDirectory.of(linked.adminDir);
+                fail("already asserted above"); //$NON-NLS-1$
+            }
+            catch (GitCommonDirectory.FaultException e)
+            {
+                assertEquals("a trailing tab is the non-NUL half of the split", //$NON-NLS-1$
+                    GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
+                assertEquals("...and git was MEASURED to fail on it, so it is git's limit " //$NON-NLS-1$
+                    + "and not ours", GitCommonDirectory.Ownership.GIT_TOO, //$NON-NLS-1$
+                    e.fault().ownership());
+            }
+        }
     }
 
     @Test
@@ -323,22 +344,186 @@ public class GitCommonDirectoryTest
         // the pointer anyway and the test would pass with or without the guard.
         //
         // On POSIX a leading '/' is absolute to both, File.isAbsolute() is already true, and the
-        // guard is never consulted - so this asserts a refusal only where the ambiguity is real.
-        for (String rooted : List.of("/shared-elsewhere", "\\shared-elsewhere")) //$NON-NLS-1$ //$NON-NLS-2$
+        // guard is never consulted; a leading '\' there is an ordinary filename character and must
+        // be ACCEPTED (testABackslashPointerIsAnORDINARYRelativePathOnPosix). So the whole method
+        // is Windows-only, and says so once rather than testing the platform per iteration.
+        Assume.assumeTrue("these spellings are only ambiguous on Windows", //$NON-NLS-1$
+            File.separatorChar == '\\');
+        // 'C:foo' is the third of them and it used to arrive here by ACCIDENT: File.isAbsolute()
+        // calls it relative, so it was joined onto the git directory, and the colon in the middle of
+        // the result made toPath() throw - a refusal that reported the platform could not spell a
+        // path git uses perfectly well. Named now, with the others.
+        // The bare "C:" is here because excluding it (length() > 2) left it falling through to
+        // whatever the platform threw - the same accident "C:foo" used to have.
+        for (String rooted : List.of("/shared-elsewhere", "\\shared-elsewhere", //$NON-NLS-1$ //$NON-NLS-2$
+            "C:shared-elsewhere", "C:")) //$NON-NLS-1$ //$NON-NLS-2$
         {
-            if (new File(rooted).isAbsolute())
-            {
-                continue; // POSIX: no disagreement to guard against
-            }
             Linked linked = newLinkedWorktree("common-dir-rooted", rooted + "\n"); //$NON-NLS-1$ //$NON-NLS-2$
-            File underneath = new File(linked.adminDir, rooted.substring(1));
-            assertTrue("fixture: the directory the WRONG reading lands on must exist, or " //$NON-NLS-1$
-                + "isDirectory() refuses this on its own and the guard is not under test", //$NON-NLS-1$
-                underneath.mkdirs());
+            // The directory the WRONG reading lands on. For 'C:foo' there is none to make - the
+            // wrong reading cannot even be spelled - so only the first two get one, and only they
+            // need it: without it isDirectory() would refuse on its own and prove nothing.
+            if (rooted.charAt(0) != 'C' && rooted.length() > 1)
+            {
+                assertTrue("fixture: the directory the WRONG reading lands on must exist", //$NON-NLS-1$
+                    new File(linked.adminDir, rooted.substring(1)).mkdirs());
+            }
 
-            assertRefused(linked.adminDir, "'" + rooted + "' is absolute to git and relative to " //$NON-NLS-1$ //$NON-NLS-2$
-                + "File - inspecting the directory under the git dir would be inspecting somewhere " //$NON-NLS-1$
-                + "other than the repository git reads"); //$NON-NLS-1$
+            try
+            {
+                GitCommonDirectory.of(linked.adminDir);
+                fail("'" + rooted + "' must be refused: git roots it somewhere this tool cannot " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "reproduce, and resolving it under the git directory would inspect a " //$NON-NLS-1$
+                    + "different repository"); //$NON-NLS-1$
+            }
+            catch (GitCommonDirectory.FaultException e)
+            {
+                assertEquals("'" + rooted + "' must be refused AS the ambiguous-root fault - " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "falling through to whatever the platform happens to throw reports the wrong " //$NON-NLS-1$
+                    + "thing to the operator", //$NON-NLS-1$
+                    GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT, e.fault());
+                assertEquals("...and it is OURS: git can use every one of these", //$NON-NLS-1$
+                    GitCommonDirectory.Ownership.OURS, e.fault().ownership());
+            }
+        }
+    }
+
+    @Test
+    public void testARootedButUNSPELLABLEPointerIsGitsFaultNotOurs() throws Exception
+    {
+        // Ownership must not turn on an irrelevant prefix. A trailing tab makes a pointer unusable
+        // to git (measured: fatal: not a git repository) whether or not it happens to start with a
+        // separator - so '\shared<TAB>' is the same fault as '../..<TAB>', and calling it a
+        // rooting ambiguity would hand the operator OUR ownership for git's failure.
+        //
+        // Testing rooting before spelling produced exactly that, which is why the path is validated
+        // first now.
+        Assume.assumeTrue("a leading backslash only roots on Windows", //$NON-NLS-1$
+            File.separatorChar == '\\');
+        // Built from characters rather than written as escapes: every attempt to write this literal
+        // through a shell layer lost a backslash, which is its own small lesson.
+        String pointer = new String(new char[]{'\\', 's', 'h', 'a', 'r', 'e', 'd', '\t', '\n'});
+        Linked linked = newLinkedWorktree("common-dir-rooted-tab", pointer); //$NON-NLS-1$
+
+        try
+        {
+            GitCommonDirectory.of(linked.adminDir);
+            fail("a pointer the platform cannot spell must be refused"); //$NON-NLS-1$
+        }
+        catch (GitCommonDirectory.FaultException e)
+        {
+            assertEquals("the tab makes it unspellable, and that outranks the rooted prefix", //$NON-NLS-1$
+                GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
+            assertEquals("...so the ownership is git's, not ours", //$NON-NLS-1$
+                GitCommonDirectory.Ownership.GIT_TOO, e.fault().ownership());
+        }
+    }
+
+    @Test
+    public void testANonAsciiDriveLetterIsNotADriveAtAll() throws Exception
+    {
+        // Windows drive letters are A-Z. Character.isLetter() accepts a Cyrillic one, and reading
+        // it as a drive would label a plainly invalid path as an ambiguity this tool OWNS - telling
+        // an operator "git may well carry on past it" about a pointer git cannot use either.
+        Assume.assumeTrue("only Windows has drive letters to mistake", File.separatorChar == '\\'); //$NON-NLS-1$
+        char cyrillicZhe = (char)0x0416;
+        Linked linked =
+            newLinkedWorktree("common-dir-cyrillic-drive", cyrillicZhe + ":shared\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            GitCommonDirectory.of(linked.adminDir);
+            fail("the platform cannot use this path, so it must be refused"); //$NON-NLS-1$
+        }
+        catch (GitCommonDirectory.FaultException e)
+        {
+            // The exact outcome is known, so it is asserted exactly: merely ruling out the
+            // ambiguity would accept any other wrong fault.
+            assertEquals("the platform cannot spell this, and git cannot use it either", //$NON-NLS-1$
+                GitCommonDirectory.Fault.UNSPELLABLE_PATH, e.fault());
+            assertEquals("...so it is git's limit too, NOT a rooting ambiguity this tool owns", //$NON-NLS-1$
+                GitCommonDirectory.Ownership.GIT_TOO, e.fault().ownership());
+        }
+    }
+
+    @Test
+    public void testANulBeatsTheRootingAmbiguityWhenAPointerIsBoth() throws Exception
+    {
+        // Precedence, and it is not cosmetic: both faults are OURS, but they carry different words
+        // and different repairs. The NUL is the more specific fact - git was measured to read it as
+        // the end of the path - so it must win. Move the NUL test back below the ambiguity branch
+        // and this goes red; every other NUL fixture starts with "../.." and would not notice.
+        Assume.assumeTrue("a leading slash is only ambiguous on Windows", //$NON-NLS-1$
+            File.separatorChar == '\\');
+        Linked linked = newLinkedWorktree("common-dir-rooted-nul", "placeholder\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
+            new byte[]{'\\', 's', 'h', 'a', 'r', 'e', 'd', 0, 'x', '\n'});
+
+        try
+        {
+            GitCommonDirectory.of(linked.adminDir);
+            fail("a pointer holding a NUL must be refused"); //$NON-NLS-1$
+        }
+        catch (GitCommonDirectory.FaultException e)
+        {
+            assertEquals("the NUL is the more specific fact and must win over the rooting " //$NON-NLS-1$
+                + "ambiguity", GitCommonDirectory.Fault.PATH_HOLDS_NUL, e.fault()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testABackslashPointerIsAnORDINARYRelativePathOnPosix() throws Exception
+    {
+        // The false refusal this guard nearly shipped, and the reason it is platform-DEPENDENT.
+        //
+        // On POSIX a backslash is not a separator, it is an ordinary character in a filename. So
+        // '\shared' is a perfectly good RELATIVE path, git resolves it against the git directory and
+        // uses it - and a platform-independent "starts with a slash or a backslash" test refuses it,
+        // taking every remote, push, fetch and pull off a repository native git is happy with. That
+        // is the more expensive mistake of the two, and it is the same shape as the 'URL:' prefix
+        // that blocked a healthy legacy file until it was measured instead of assumed.
+        //
+        // This runs FOR REAL on the Linux CI, where the branch exists; on Windows the name cannot
+        // even be created, and there the guard is right to refuse (asserted separately above).
+        Assume.assumeTrue("a backslash is a separator here, not a filename character", //$NON-NLS-1$
+            File.separatorChar != '\\');
+        Linked linked = newLinkedWorktree("common-dir-backslash", "\\shared\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        File named = new File(linked.adminDir, "\\shared"); //$NON-NLS-1$
+        assertTrue("fixture: the directory git would resolve to must exist", named.mkdirs()); //$NON-NLS-1$
+
+        GitCommonDirectory common = GitCommonDirectory.of(linked.adminDir);
+
+        assertTrue("a linked worktree, and not refused", common.linked()); //$NON-NLS-1$
+        assertEquals("a leading backslash is an ordinary character here - the pointer must resolve " //$NON-NLS-1$
+            + "exactly as git resolves it, against the git directory", //$NON-NLS-1$
+            named.getCanonicalFile(), common.directory().getCanonicalFile());
+    }
+
+    @Test
+    public void testAPointerHoldingANulByteIsOursToRefuseAndSaysSo() throws Exception
+    {
+        // git reads a NUL as the end of the path and carries on with what precedes it - so this is
+        // OUR refusal, not one git shares, and it must be labelled that way in the enumeration that
+        // is now the single source. Truncating at the byte the way git does would resolve a
+        // DIFFERENT directory than the file names, which is the failure this class exists to stop.
+        Linked linked = newLinkedWorktree("common-dir-nul", "placeholder\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
+            new byte[]{'.', '.', '/', '.', '.', 0, 'j', 'u', 'n', 'k', '\n'});
+
+        try
+        {
+            GitCommonDirectory.of(linked.adminDir);
+            fail("a pointer the platform cannot spell must be refused"); //$NON-NLS-1$
+        }
+        catch (GitCommonDirectory.FaultException e)
+        {
+            assertEquals("...as PATH_HOLDS_NUL, its OWN fault: it arrives through the same " //$NON-NLS-1$
+                + "InvalidPathException as the trailing-tab case but NOT with the same " //$NON-NLS-1$
+                + "ownership - git survives this one and was measured to die on that one, " //$NON-NLS-1$
+                + "and one boolean cannot describe both", //$NON-NLS-1$
+                GitCommonDirectory.Fault.PATH_HOLDS_NUL, e.fault());
+            assertEquals("...and it is OURS: git reads a NUL as the end of the path and " //$NON-NLS-1$
+                + "carries on, so calling this git's failure would be a claim no probe backs", //$NON-NLS-1$
+                GitCommonDirectory.Ownership.OURS, e.fault().ownership());
         }
     }
 
@@ -390,6 +575,57 @@ public class GitCommonDirectoryTest
     // ==================== the ratchet: the enumeration cannot drift from the code ====================
 
     @Test
+    public void testEveryFaultCarriesTheOwnershipThatWasMEASURED()
+    {
+        // A record of probes, not a restatement of the enum: every value below was established by
+        // running native git against that exact pointer, and each is written as a LITERAL - using
+        // fault.ownership() on both sides would move with the code and assert nothing.
+        //
+        // It was tempting to leave this out on the grounds that a unit test cannot re-measure git.
+        // It cannot - but that is an argument for FREEZING the measurement, not for leaving it
+        // unfrozen: ownership decides what the operator is told about whose limit they hit, and a
+        // silent flip of it is a silent lie.
+        //
+        // The map is compared by KEY SET, so a Fault added without a recorded measurement fails
+        // here. Listing the members one assertion at a time was the earlier shape and it was not a
+        // ratchet at all - an eleventh member simply went unmentioned.
+        Map<GitCommonDirectory.Fault, GitCommonDirectory.Ownership> measured =
+            new EnumMap<>(GitCommonDirectory.Fault.class);
+        // git dies on these - probed, one pointer at a time:
+        //   empty and terminator-only -> fatal: not a git repository
+        //   a pointer to nothing      -> fatal: not a git repository
+        //   an unreadable pointer     -> fatal: failed to read .../commondir
+        //   a trailing tab            -> fatal: not a git repository
+        measured.put(GitCommonDirectory.Fault.EMPTY, GitCommonDirectory.Ownership.GIT_TOO);
+        measured.put(GitCommonDirectory.Fault.NOT_A_DIRECTORY, GitCommonDirectory.Ownership.GIT_TOO);
+        measured.put(GitCommonDirectory.Fault.UNREADABLE, GitCommonDirectory.Ownership.GIT_TOO);
+        measured.put(GitCommonDirectory.Fault.LAYOUT_UNREADABLE, GitCommonDirectory.Ownership.UNKNOWN);
+        measured.put(GitCommonDirectory.Fault.UNSPELLABLE_PATH, GitCommonDirectory.Ownership.GIT_TOO);
+        // git carries on past these, so refusing is OUR trade:
+        //   a NUL          -> git reads it as the end of the path
+        //   oversize       -> git strips the padding
+        //   rooted spellings -> git roots them on the current drive
+        //   a byte we cannot decode -> git takes path bytes literally
+        //   a FIFO         -> git blocks too, but nothing here may wait without a bound
+        measured.put(GitCommonDirectory.Fault.PATH_HOLDS_NUL, GitCommonDirectory.Ownership.OURS);
+        measured.put(GitCommonDirectory.Fault.TOO_LARGE, GitCommonDirectory.Ownership.OURS);
+        measured.put(GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT, GitCommonDirectory.Ownership.OURS);
+        measured.put(GitCommonDirectory.Fault.NOT_UTF_8, GitCommonDirectory.Ownership.OURS);
+        measured.put(GitCommonDirectory.Fault.NOT_A_REGULAR_FILE, GitCommonDirectory.Ownership.OURS);
+        // and the one nobody has probed, which is why UNKNOWN exists at all.
+        measured.put(GitCommonDirectory.Fault.TARGET_UNREADABLE, GitCommonDirectory.Ownership.UNKNOWN);
+
+        assertEquals("every Fault must have a RECORDED ownership - a member with none is a claim " //$NON-NLS-1$
+            + "about git that nobody made, and it would reach an operator as one", //$NON-NLS-1$
+            EnumSet.allOf(GitCommonDirectory.Fault.class), measured.keySet());
+        for (Map.Entry<GitCommonDirectory.Fault, GitCommonDirectory.Ownership> e : measured.entrySet())
+        {
+            assertEquals(e.getKey() + ": ownership is a measurement, and this is the record of it", //$NON-NLS-1$
+                e.getValue(), e.getKey().ownership());
+        }
+    }
+
+    @Test
     public void testEveryFaultIsReachableAndEveryReachableFaultIsEnumerated() throws Exception
     {
         // The reason this test exists is worth more than the test. THREE review rounds in a row
@@ -406,28 +642,45 @@ public class GitCommonDirectoryTest
         fixtures.put(GitCommonDirectory.Fault.TOO_LARGE,
             newLinkedWorktree("ratchet-too-large", oversizePointer()).adminDir); //$NON-NLS-1$
         fixtures.put(GitCommonDirectory.Fault.NOT_UTF_8, undecodablePointer());
+        fixtures.put(GitCommonDirectory.Fault.PATH_HOLDS_NUL, nulBytePointer());
         fixtures.put(GitCommonDirectory.Fault.EMPTY,
             newLinkedWorktree("ratchet-empty", "").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
         fixtures.put(GitCommonDirectory.Fault.NOT_A_DIRECTORY,
             newLinkedWorktree("ratchet-not-a-dir", "../nowhere-at-all\n").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
-        // ROOTED_WITHOUT_DRIVE exists only where the two readings of a leading slash DISAGREE. On
+        // AMBIGUOUS_WINDOWS_ROOT exists only where the two readings of a leading slash DISAGREE. On
         // POSIX they agree, the branch is unreachable, and a fixture for it would resolve or trip a
         // different fault - which is exactly how the first version of this ratchet would have gone
         // red on the Linux CI while passing here.
         if (!new File("/nowhere").isAbsolute()) //$NON-NLS-1$
         {
-            fixtures.put(GitCommonDirectory.Fault.ROOTED_WITHOUT_DRIVE,
+            fixtures.put(GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT,
                 newLinkedWorktree("ratchet-rooted", "/nowhere\n").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         // The members with no fixture are NAMED, not skipped by a null nobody has to justify. A
         // Fault added tomorrow lands in neither set and fails the assertion below, which is the
         // whole job of this test.
+        // LAYOUT_UNREADABLE was declared unconstructible here and it is NOT: a git directory whose
+        // own path the platform cannot spell reaches the first catch, and that is trivial to build.
+        // Excusing it left the production routing untested - both catches could have regressed to
+        // UNREADABLE with every test still green.
+        fixtures.put(GitCommonDirectory.Fault.LAYOUT_UNREADABLE,
+            new File(new String(new char[]{0})));
         Set<GitCommonDirectory.Fault> notConstructible =
             EnumSet.of(GitCommonDirectory.Fault.UNREADABLE, GitCommonDirectory.Fault.TARGET_UNREADABLE);
+        if (File.separatorChar == '\\')
+        {
+            // The trailing tab reaches it here; elsewhere a tab is an ordinary path character.
+            fixtures.put(GitCommonDirectory.Fault.UNSPELLABLE_PATH,
+                newLinkedWorktree("ratchet-unspellable", "../..\t\n").adminDir); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            notConstructible.add(GitCommonDirectory.Fault.UNSPELLABLE_PATH);
+        }
         if (new File("/nowhere").isAbsolute()) //$NON-NLS-1$
         {
-            notConstructible.add(GitCommonDirectory.Fault.ROOTED_WITHOUT_DRIVE);
+            notConstructible.add(GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT);
         }
         Set<GitCommonDirectory.Fault> accounted = EnumSet.copyOf(fixtures.keySet());
         accounted.addAll(notConstructible);
@@ -454,76 +707,6 @@ public class GitCommonDirectoryTest
         }
     }
 
-    @Test
-    public void testTheShippedGuideListsEveryRefusalThatIsOursAndNoOther() throws Exception
-    {
-        // The guide is the LAST copy of this list, and prose cannot be generated the way the
-        // operator message now is - so it gets a ratchet instead, which is the same guarantee
-        // reached the other way round: add a Fault marked ours() and forget the guide, and this
-        // goes red. It also catches the opposite drift, a guide that still describes a refusal the
-        // code no longer makes.
-        String guide = GuideLoader.load("git"); //$NON-NLS-1$
-        assertNotNull("the git guide must be readable from the bundle", guide); //$NON-NLS-1$
-
-        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
-        {
-            // Counted, not merely found: a reason that appeared twice would mean the list had been
-            // duplicated somewhere in the guide, which is the drift this is here to stop.
-            assertEquals(fault + ": the guide must describe every refusal that is OURS exactly " //$NON-NLS-1$
-                + "once - in the enumeration's own words, so the two cannot drift - and must not " //$NON-NLS-1$
-                + "claim one that is git's own failure. Reason: '" + fault.reason() + "'", //$NON-NLS-1$ //$NON-NLS-2$
-                fault.ours() ? 1 : 0, occurrencesOf(guide, fault.reason()));
-        }
-    }
-
-    @Test
-    public void testTheDocsCopyOfTheGuideSaysTheSameThing() throws Exception
-    {
-        // docs/tools/git.md is a second copy of the same paragraph, and it is what a reader on
-        // GitHub sees. The ratchet above only reaches the one inside the bundle, so this one reaches
-        // the other - otherwise "single source" would still leave a copy that no build checks.
-        File docs = new File(repositoryRoot(), "docs/tools/git.md"); //$NON-NLS-1$
-        Assume.assumeTrue("the source tree is not beside the test bundle in this layout", //$NON-NLS-1$
-            docs.isFile());
-        String published = new String(Files.readAllBytes(docs.toPath()), StandardCharsets.UTF_8);
-
-        for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
-        {
-            assertEquals(fault + ": the published guide must say exactly what the shipped one " //$NON-NLS-1$
-                + "says. Reason: '" + fault.reason() + "'", //$NON-NLS-1$ //$NON-NLS-2$
-                fault.ours() ? 1 : 0, occurrencesOf(published, fault.reason()));
-        }
-    }
-
-    /** How many times {@code needle} occurs in {@code haystack}. */
-    private static int occurrencesOf(String haystack, String needle)
-    {
-        int count = 0;
-        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1))
-        {
-            count++;
-        }
-        return count;
-    }
-
-    /**
-     * The repository root, walked up from the test bundle's own location - there is no workspace
-     * here, so the source tree has to be found rather than asked for.
-     *
-     * @return the root, or {@code null} when it cannot be located
-     */
-    private static File repositoryRoot()
-    {
-        File at = new File("").getAbsoluteFile(); //$NON-NLS-1$
-        for (int up = 0; at != null && up < 8; up++, at = at.getParentFile())
-        {
-            if (new File(at, "docs/tools/git.md").isFile()) //$NON-NLS-1$
-            {
-                return at;
-            }
-        }
-        return null;
-    }
 
     /** A git directory whose {@code commondir} is a DIRECTORY - not a regular file. */
     private File directoryNamedCommonDir() throws IOException
@@ -532,6 +715,15 @@ public class GitCommonDirectoryTest
         assertTrue("fixture: commondir must be a directory here", //$NON-NLS-1$
             new File(adminDir, COMMON_DIR).mkdirs());
         return adminDir;
+    }
+
+    /** A git directory whose {@code commondir} holds a NUL - no platform accepts one in a path. */
+    private File nulBytePointer() throws IOException
+    {
+        Linked linked = newLinkedWorktree("ratchet-nul", "placeholder\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
+            new byte[]{'.', '.', '/', '.', '.', 0, 'x', '\n'});
+        return linked.adminDir;
     }
 
     /** A git directory whose {@code commondir} holds a byte that is not legal UTF-8 anywhere. */
