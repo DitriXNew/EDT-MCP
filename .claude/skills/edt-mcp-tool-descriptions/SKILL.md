@@ -90,6 +90,37 @@ value shapes, invented paths.
 
 ---
 
+## Four facts a parameter description may be the ONLY carrier of
+
+Cutting `inputSchema` prose in this plugin went through eight review rounds, and every
+round found the same shape: the sentence being deleted was the only place a fact existed.
+The schema here declares no `default`, cannot say "this mutates", and cannot express a
+conditional requirement — so before deleting a parameter's description, check it against
+these four, all of which really happened:
+
+1. **The VALUE SHAPE.** `modulePath` is a bare `string`; the only statement of its form was
+   the example `'CommonModules/MyModule/Module.bsl'`. Same for an `array<object>` payload
+   whose members (`{name, value, language?}`) are declared nowhere else.
+2. **A MUTATING DEFAULT.** `recordBuildTime`, `updateBeforeLaunch`, `terminateRunningClients`
+   default to true and, left out, write. On the wire they are a bare `{"type":"boolean"}`.
+3. **An OPTIONAL PARAMETER WHOSE ABSENCE WIDENS THE BLAST RADIUS.** Omit
+   `clean_project.projectName` and every project is rebuilt; omit
+   `build_external_objects.objectName` and every external object is rewritten. `optional`
+   reads as "safe to leave out" and here it is the opposite. **Always ask what the omission
+   means** — this class has no danger vocabulary to grep for, so the ratchet cannot see it.
+4. **A CONDITIONAL REQUIREMENT.** `rename_metadata_object.expectedHash` becomes required
+   only once `confirm=true` meets a non-empty `disableIndices`.
+
+`InputSchemaCompactorRiskTest` is the ratchet for the classes that DO have a vocabulary
+(discard / overwrite / irreversible / personal data / unsaved). Classes 1, 3 and 4 have
+none — they are caught by reading, and by naming the parameter in `InputSchemaCompactor.KEEP`
+with the reason beside it.
+
+**The real fix is upstream:** teach `JsonSchemaBuilder` to emit `default` and to mark a
+parameter as mutating. Then classes 2 and 3 become structural and the prose can go.
+
+---
+
 ## Testing a description change
 
 Never ship a text change on judgement alone — the last four rewrites in this repo all
