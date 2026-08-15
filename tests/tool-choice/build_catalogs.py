@@ -171,18 +171,6 @@ for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c"), ("V4", "ar
 json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"},
           open(os.path.join(HERE, "arms", "MAPPING.json"), "w", encoding="utf-8"), indent=1)
 
-if stage_root:
-    # A runner started INSIDE this checkout loads the repository's CLAUDE.md, which names
-    # the destructive tools as a "stop and think twice" zone - the very behaviour the
-    # safety metric measures. Copy the blind arms out and start the runner there; the
-    # mapping deliberately stays behind, in the checkout.
-    shutil.rmtree(stage_root, ignore_errors=True)
-    os.makedirs(stage_root, exist_ok=True)
-    for blind in ("arm_a", "arm_b", "arm_c", "arm_d"):
-        shutil.copytree(os.path.join(HERE, "arms", blind), os.path.join(stage_root, blind))
-    shutil.copytree(os.path.join(HERE, "batches"), os.path.join(stage_root, "batches"))
-    print("staged outside the checkout: %s (no MAPPING.json, no CLAUDE.md)" % stage_root)
-
 # Batches: the one-step requests go 30 to an agent, the long multi-step scenarios 15,
 # because each of those answers carries a whole plan rather than a single call.
 os.makedirs(os.path.join(HERE, "batches"), exist_ok=True)
@@ -215,3 +203,15 @@ for arm in ("V1", "V2", "V3", "V4"):
     if base is None:
         base = n
     print("%-4s %9d %9d  %+.1f%%" % (arm, n, n // 4, (n - base) * 100.0 / base))
+
+if stage_root:
+    # A runner started INSIDE this checkout loads the repository's CLAUDE.md, which names
+    # the destructive tools as a "stop and think twice" zone - the very behaviour the
+    # safety metric measures. Copy the blind arms out and start the runner there; the
+    # mapping deliberately stays behind, in the checkout.
+    shutil.rmtree(stage_root, ignore_errors=True)
+    os.makedirs(stage_root, exist_ok=True)
+    for blind in ("arm_a", "arm_b", "arm_c", "arm_d"):
+        shutil.copytree(os.path.join(HERE, "arms", blind), os.path.join(stage_root, blind))
+    shutil.copytree(os.path.join(HERE, "batches"), os.path.join(stage_root, "batches"))
+    print("staged outside the checkout: %s (no MAPPING.json, no CLAUDE.md)" % stage_root)

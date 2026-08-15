@@ -25,8 +25,45 @@ ARMS = {"arm_a": "V1 (текущая)", "arm_b": "V2 (короткие опис�
         "arm_d": "V4 (V3 + несущие клаузы в описании)"}
 ORDER = ["arm_a", "arm_b", "arm_c", "arm_d"]
 GUIDE_DIR = os.path.join(ROOT, "mcp/bundles/com.ditrix.edt.mcp.server/guides")
-GUIDE_CHARS = {f[:-3]: os.path.getsize(os.path.join(GUIDE_DIR, f))
-               for f in os.listdir(GUIDE_DIR) if f.endswith(".md")}
+BASELINE = os.path.join(HERE, "tools_list.v1_baseline.json")
+
+
+def _guide_response_chars():
+    """Price what get_tool_guide actually RETURNS, not the .md file on disk.
+
+    GuideRenderer.render() emits the tool name, the tool DESCRIPTION, a generated
+    parameter table built from the RAW (uncompacted) inputSchema, and only then the
+    guide body. Charging just the .md understates every arm - and understates the short
+    arms most, because they fetch far more guides, which is exactly the direction that
+    flatters the proposal. The table is reconstructed here from the pre-compaction
+    baseline, the same schema the renderer walks.
+    """
+    schemas = {t["name"]: t for t in json.load(open(BASELINE, encoding="utf-8"))}
+    out = {}
+    for f in os.listdir(GUIDE_DIR):
+        if not f.endswith(".md"):
+            continue
+        name = f[:-3]
+        total = len("# %s\n\n" % name) + os.path.getsize(os.path.join(GUIDE_DIR, f))
+        tool = schemas.get(name)
+        if tool:
+            total += len(tool.get("description") or "") + len("## Parameters\n")
+            props = (tool.get("inputSchema") or {}).get("properties") or {}
+            required = set((tool.get("inputSchema") or {}).get("required") or [])
+            for pname, spec in props.items():
+                spec = spec if isinstance(spec, dict) else {}
+                # one rendered row: name, type, required marker, description
+                total += len(pname) + len(str(spec.get("type", ""))) + 12
+                total += len(spec.get("description") or "")
+                if pname in required:
+                    total += len(" (required)")
+                if "enum" in spec:
+                    total += len(json.dumps(spec["enum"], ensure_ascii=False))
+        out[name] = total
+    return out
+
+
+GUIDE_CHARS = _guide_response_chars()
 CATALOG_CHARS = {a: os.path.getsize(os.path.join(HERE, "arms", a, "catalog.md")) for a in ARMS}
 
 

@@ -1411,7 +1411,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_type": [
+   "tests='ОМ_ТестыРасчетов.ТестСкидки' (ожидался array<string>)"
+  ]
  },
  {
   "id": "q163",
@@ -1420,7 +1423,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_type": [
+   "modules='ОМ_ТестыОбмена' (ожидался array<string>)"
+  ]
  },
  {
   "id": "q164",
@@ -1429,7 +1435,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_type": [
+   "extensions='ТестовоеРасширение' (ожидался array<string>)"
+  ]
  },
  {
   "id": "q165",
@@ -2813,7 +2822,10 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_type": [
+   "tests='ОМ_ТестыПроведения.ТестОстатков' (ожидался array<string>)"
+  ]
  },
  {
   "id": "q329",
@@ -3379,7 +3391,10 @@
   "missing_tools": [
    "run_yaxunit_tests"
   ],
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_type": [
+   "modules='ОМ_ТестыРасчетов' (ожидался array<string>)"
+  ]
  },
  {
   "id": "c046",
@@ -4031,7 +4046,10 @@
   "missing_tools": [
    "run_yaxunit_tests"
   ],
-  "deprecated": "debug_yaxunit_tests"
+  "deprecated": "debug_yaxunit_tests",
+  "bad_type": [
+   "extensions='ТестовоеРасширение' (ожидался array<string>)"
+  ]
  },
  {
   "id": "c138",

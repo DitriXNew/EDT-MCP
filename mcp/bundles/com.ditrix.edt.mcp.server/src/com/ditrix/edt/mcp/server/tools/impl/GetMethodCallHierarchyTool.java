@@ -128,7 +128,8 @@ public class GetMethodCallHierarchyTool implements IMcpTool
                 + "Required for direction 'callers'/'callees'; optional for 'outgoing' " //$NON-NLS-1$
                 + "(omit to aggregate the whole module).", false) //$NON-NLS-1$
             .enumProperty(KEY_DIRECTION,
-                "'callers' = who calls this method, 'callees' = what it calls.", //$NON-NLS-1$
+                "'callers' = who calls this method, 'callees' = what it calls, 'outgoing' = " //$NON-NLS-1$
+                    + "aggregated distinct call targets (module-wide when methodName is omitted).", //$NON-NLS-1$
                 KEY_CALLERS, "callees", KEY_OUTGOING) //$NON-NLS-1$
             .stringProperty(KEY_EXT_API_PREFIX,
                 "For direction 'outgoing': literal call-qualifier prefix (case-insensitive) that " //$NON-NLS-1$

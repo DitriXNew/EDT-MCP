@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Rewrite every tool's getDescription() body from the measured V4 text set.
+"""ONE-SHOT migration: rewrite every tool's getDescription() from the V4 text set.
 
 Reads v4_final.json (generated from the same data that built the measured V4 arm) and
 replaces the `return "...";` expression inside `public String getDescription()` in each
 class under tools/impl. Nothing else in the file is touched.
 
-Run with --check to see what would change without writing.
+THIS MIGRATION HAS ALREADY BEEN APPLIED, and v4_final.json is a SNAPSHOT of that moment,
+not a live source of truth. Descriptions have moved on since - run_yaxunit_tests and
+debug_yaxunit_tests carry background-job clauses (jobId, Pending, the repeated-start rule)
+that postdate the snapshot - so a plain re-run would silently REVERT them. It therefore
+refuses to write unless --force is given, and --check shows what it would do.
+
+Rewriting a description now is an edit to the Java source plus a measurement, not a re-run
+of this script; see the skill edt-mcp-tool-descriptions.
 """
 import json
 import os
@@ -46,6 +53,11 @@ def java_literal(text, indent="        "):
 
 def main():
     check = "--check" in sys.argv
+    if not check and "--force" not in sys.argv:
+        sys.exit("apply_descriptions is a spent one-shot migration: v4_final.json is a "
+                 "snapshot and is now STALE against the shipped descriptions. Re-running "
+                 "would revert them. Use --check to see the diff, --force only if you "
+                 "genuinely mean to overwrite the sources from the snapshot.")
     changed = skipped = 0
     for fn in sorted(os.listdir(IMPL)):
         if not fn.endswith(".java"):

@@ -120,7 +120,11 @@ JSON with `action='created'`, the normalized `fqn`, `kind` (the EClass - `EventH
 
 ## ObjectType members
 
-A characteristics/objects-kind member is addressed with the `ObjectType` segment in the member FQN, e.g. `ChartOfCharacteristicTypes.Properties.ObjectType.Products`.
+`ObjectType` is an XDTO segment only — it addresses a type inside an XDTO package, as
+`XDTOPackage.<Package>.ObjectType.<Name>`. There is no `ObjectType` child kind on an
+mdclass object: an FQN like `ChartOfCharacteristicTypes.Properties.ObjectType.Products`
+falls through to `MetadataNodeResolver`, whose child-kind map has no such token, and the
+call fails with "Cannot resolve a create target".
 
 ## Nested XDTO member addresses
 

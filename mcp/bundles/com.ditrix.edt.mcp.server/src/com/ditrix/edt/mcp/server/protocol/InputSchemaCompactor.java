@@ -95,6 +95,18 @@ public final class InputSchemaCompactor
      */
     private static final Set<String> KEEP_IN_EVERY_TOOL = asSet("modulePath"); //$NON-NLS-1$
 
+    /** JSON Schema {@code "type"} keyword, as a VALUE (never as a property name). */
+    private static final String KEY_TYPE = "type"; //$NON-NLS-1$
+
+    /** JSON Schema {@code "items"} keyword, as a VALUE. */
+    private static final String KEY_ITEMS = "items"; //$NON-NLS-1$
+
+    /** The {@code "object"} type token. */
+    private static final String TYPE_OBJECT = "object"; //$NON-NLS-1$
+
+    /** The {@code "array"} type token. */
+    private static final String TYPE_ARRAY = "array"; //$NON-NLS-1$
+
     private InputSchemaCompactor()
     {
         // Utility class
@@ -147,6 +159,52 @@ public final class InputSchemaCompactor
     }
 
     /**
+     * Tells whether {@code param} is an OPAQUE payload: an {@code object}, or an array of
+     * {@code object}, that declares no members of its own.
+     * <p>
+     * For such a parameter the description is not prose about the value — it IS the only
+     * declaration of the value's shape, so stripping it leaves a caller with
+     * {@code {"type":"array","items":{"type":"object"}}} and no way to build the call.
+     * {@code create_metadata.properties} (members are {@code {name, value, language?}}) and
+     * {@code modify_metadata.rights} ({@code {object, right, value?, rls?, rlsFields?}}) are
+     * the measured cases: #395 saw exactly this failure on Haiku, where the model invented a
+     * {@code metadata} key for the role-rights {@code object} key.
+     * <p>
+     * This is a structural rule rather than another allowlist entry on purpose: it holds for
+     * a tool added later, and it stops holding by itself the moment someone models the
+     * members in JSON Schema, which is the better fix and makes the prose redundant.
+     *
+     * @param param the top-level parameter subschema; never {@code null}
+     * @return {@code true} when the schema cannot express what the value must contain
+     */
+    private static boolean isOpaquePayload(JsonObject param)
+    {
+        JsonElement type = param.get(KEY_TYPE);
+        if (type == null || !type.isJsonPrimitive())
+        {
+            return false;
+        }
+        String declared = type.getAsString();
+        if (TYPE_OBJECT.equals(declared))
+        {
+            return !param.has(KEY_PROPERTIES);
+        }
+        if (!TYPE_ARRAY.equals(declared))
+        {
+            return false;
+        }
+        JsonElement items = param.get(KEY_ITEMS);
+        if (items == null || !items.isJsonObject())
+        {
+            return false;
+        }
+        JsonObject element = items.getAsJsonObject();
+        JsonElement itemType = element.get(KEY_TYPE);
+        return itemType != null && itemType.isJsonPrimitive()
+            && TYPE_OBJECT.equals(itemType.getAsString()) && !element.has(KEY_PROPERTIES);
+    }
+
+    /**
      * Removes the {@code description} keyword from {@code element} (treated as a schema)
      * and from every nested subschema, in place. The allowlist applies to the TOP-LEVEL
      * parameter map only: a nested field never keeps its prose, because the measurement
@@ -188,8 +246,8 @@ public final class InputSchemaCompactor
             for (String name : entries.keySet())
             {
                 JsonElement child = entries.get(name);
-                if (KEY_PROPERTIES.equals(keyword) && keepTopLevel.contains(name)
-                    && child.isJsonObject())
+                if (KEY_PROPERTIES.equals(keyword) && child.isJsonObject()
+                    && (keepTopLevel.contains(name) || isOpaquePayload(child.getAsJsonObject())))
                 {
                     // Allowlisted parameter: keep its own description, strip anything
                     // nested below it.
