@@ -126,8 +126,11 @@ public class GetProjectErrorsTool implements IMcpTool
             .stringProperty("checkId", "Filter by check-id substring; matches the symbolic id (e.g. 'ql-temp-table-index') or short UID (e.g. 'SU23') (optional)") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty(PARAM_OBJECTS, "Loose case-insensitive SUBSTRING match against the reported location; mutually exclusive " //$NON-NLS-1$
                 + "with objectFqns." ) //$NON-NLS-1$
-            .stringArrayProperty(PARAM_OBJECT_FQNS, "EXACT model addresses; mutually exclusive with objects. Returns objectsNotFound / " //$NON-NLS-1$
-                + "objectsUnsupported." ) //$NON-NLS-1$
+            .stringArrayProperty(PARAM_OBJECT_FQNS,
+                "EXACT model addresses; mutually exclusive with objects. A MEMBER address " //$NON-NLS-1$
+                    + "(Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - " //$NON-NLS-1$
+                    + "EDT indexes the marker there - so the result can carry problems from " //$NON-NLS-1$
+                    + "elsewhere in that object. Returns objectsNotFound / objectsUnsupported." ) //$NON-NLS-1$
             .integerProperty(McpKeys.LIMIT, "Max results; default 100, max 1000 (optional)") //$NON-NLS-1$
             .enumProperty("responseFormat", //$NON-NLS-1$
                 "Output verbosity (optional): concise (default) = leaner table without the secondary 'Has docs' column; detailed = full table including 'Has docs'", //$NON-NLS-1$

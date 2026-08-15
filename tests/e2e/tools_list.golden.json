@@ -1842,7 +1842,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Visually inspect an EDT form as rendered by the designer. Parameters and examples: get_tool_guide('get_form_screenshot').",
+    "description": "Visually inspect an EDT form as rendered by the designer. Requires EDT launched with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back BLANK instead of failing, so an empty screenshot means the flag is missing, not that the call was wrong. Parameters and examples: get_tool_guide('get_form_screenshot').",
     "inputSchema": {
       "properties": {
         "formPath": {
@@ -2406,7 +2406,7 @@
           "type": "integer"
         },
         "objectFqns": {
-          "description": "EXACT model addresses; mutually exclusive with objects. Returns objectsNotFound / objectsUnsupported.",
+          "description": "EXACT model addresses; mutually exclusive with objects. A MEMBER address (Catalog.Products.Attribute.Weight) widens the scan to its OWNING object - EDT indexes the marker there - so the result can carry problems from elsewhere in that object. Returns objectsNotFound / objectsUnsupported.",
           "items": {
             "type": "string"
           },

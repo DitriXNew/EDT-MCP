@@ -1233,7 +1233,11 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q138",
@@ -1244,7 +1248,11 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q139",
@@ -1461,10 +1469,7 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests",
-  "bad_type": [
-   "tests='ОМ_ТестыРасчетов.ТестСкидки' (ожидался array<string>)"
-  ]
+  "deprecated": "debug_yaxunit_tests"
  },
  {
   "id": "q163",
@@ -1473,10 +1478,7 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests",
-  "bad_type": [
-   "modules='ОМ_ТестыОбмена' (ожидался array<string>)"
-  ]
+  "deprecated": "debug_yaxunit_tests"
  },
  {
   "id": "q164",
@@ -1485,10 +1487,7 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests",
-  "bad_type": [
-   "extensions='ТестовоеРасширение' (ожидался array<string>)"
-  ]
+  "deprecated": "debug_yaxunit_tests"
  },
  {
   "id": "q165",
@@ -2747,7 +2746,10 @@
   ],
   "tool_ok": true,
   "expected": "terminate_launch",
-  "chosen": "terminate_launch"
+  "chosen": "terminate_launch",
+  "bad_selector": [
+   "terminate_launch"
+  ]
  },
  {
   "id": "q304",
@@ -2808,6 +2810,9 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2817,6 +2822,9 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2959,10 +2967,7 @@
   "tool_ok": true,
   "expected": "run_yaxunit_tests",
   "chosen": "debug_yaxunit_tests",
-  "deprecated": "debug_yaxunit_tests",
-  "bad_type": [
-   "tests='ОМ_ТестыПроведения.ТестОстатков' (ожидался array<string>)"
-  ]
+  "deprecated": "debug_yaxunit_tests"
  },
  {
   "id": "q329",
@@ -3722,6 +3727,9 @@
   "missing_tools": [
    "switch_git_branch"
   ],
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -3743,6 +3751,9 @@
    "update_database"
   ],
   "coverage": "3/3",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -3845,6 +3856,9 @@
    "set_branch_infobase"
   ],
   "coverage": "4/4",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -3940,6 +3954,9 @@
   "kind": "chain",
   "guides": [],
   "coverage": "1/1",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -4035,7 +4052,10 @@
    "wait_for_break",
    "terminate_launch"
   ],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "terminate_launch"
+  ]
  },
  {
   "id": "c105",

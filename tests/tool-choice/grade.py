@@ -92,7 +92,41 @@ def _is_placeholder(value):
     return text.startswith("<") and text.endswith(">")
 
 
-def type_ok(value, declared):
+# Parameters the IMPLEMENTATION accepts in more than one shape, though the schema names
+# one. RunYaxunitTestsTool routes these through extractArrayArgument, which takes an array
+# OR a comma-separated string; scoring the string form as malformed penalised arms for a
+# call the server executes happily.
+UNION_TYPES = {
+    ("run_yaxunit_tests", "extensions"): (list, str),
+    ("run_yaxunit_tests", "modules"): (list, str),
+    ("run_yaxunit_tests", "tests"): (list, str),
+    ("run_yaxunit_tests", "tags"): (list, str),
+    ("debug_yaxunit_tests", "extensions"): (list, str),
+    ("debug_yaxunit_tests", "modules"): (list, str),
+    ("debug_yaxunit_tests", "tests"): (list, str),
+    ("debug_yaxunit_tests", "tags"): (list, str),
+}
+
+# Selector combinations enforced in code but absent from the schema's `required` array.
+# Each entry is a list of ACCEPTABLE key sets: a call must satisfy at least one of them.
+# Without this the grader called a rejected update_database preview "schema-valid" and
+# credited it toward the headline two-phase numerator.
+SELECTORS = {
+    "update_database": [{"launchConfigurationName"}, {"projectName", "applicationId"}],
+    "terminate_launch": [{"launchConfigurationName"}, {"projectName", "applicationId"},
+                         {"all"}],
+}
+
+
+def selector_ok(tool, args):
+    """True when `args` satisfies at least one accepted selector combination."""
+    combos = SELECTORS.get(tool)
+    if not combos:
+        return True
+    return any(keys <= set(args) for keys in combos)
+
+
+def type_ok(value, declared, tool=None, name=None):
     """Classify `value` against `declared`: 'ok', 'bad', or 'runtime'.
 
     'runtime' is a non-numeric string standing in for a number the caller cannot know
@@ -102,6 +136,9 @@ def type_ok(value, declared):
     counted and shown separately, and they do not feed the call-validity score.
     """
     if not declared:
+        return OK
+    accepted = UNION_TYPES.get((tool, name))
+    if accepted is not None and isinstance(value, accepted) and not isinstance(value, bool):
         return OK
     if value is None:
         # A declared parameter passed as null carries no value - the caller left it unfilled.
@@ -138,6 +175,11 @@ def two_phase_ok(calls, tool):
     same = [c for c in calls if c.get("tool") == tool]
     if not same:
         return None
+    # A call the tool would REJECT is not a preview: update_database without a working
+    # selector never reaches the preview path, so crediting the sequence would count a
+    # protocol the model did not actually perform.
+    if not selector_ok(tool, (same[0].get("args") or {})):
+        return False, any((c.get("args") or {}).get("confirm") is True for c in same)
     preview = _effect_args(same[0])
     strict = (len(same) >= 2
               and (same[0].get("args") or {}).get("confirm") is not True
@@ -229,6 +271,12 @@ def grade_arm(arm):
                 row.setdefault("invented_params", []).extend(bad)
             if [r for r in C[t]["required"] if r not in args]:
                 m["missing_required_calls"] += 1
+            elif not selector_ok(t, args):
+                # Satisfies the schema but not the tool: update_database needs
+                # launchConfigurationName, or projectName AND applicationId together.
+                m["missing_required_calls"] += 1
+                m["bad_selector"] += 1
+                row.setdefault("bad_selector", []).append(t)
             for k, v in args.items():
                 if k in C[t].get("enums", {}) and v not in C[t]["enums"][k]:
                     # Not `isinstance(v, str) and ...`: a non-string value against an enum is
@@ -236,7 +284,7 @@ def grade_arm(arm):
                     # scored the worst offenders as valid.
                     m["bad_enum"] += 1
                     row.setdefault("bad_enum", []).append("%s=%s" % (k, v))
-                verdict = type_ok(v, C[t].get("types", {}).get(k))
+                verdict = type_ok(v, C[t].get("types", {}).get(k), t, k)
                 if verdict == BAD:
                     m["bad_type"] += 1
                     row.setdefault("bad_type", []).append(
@@ -326,6 +374,7 @@ row("вызовов с выдуманным параметром",
 row("вызовов без обязательного параметра",
     lambda m: "%d/%d" % (m["missing_required_calls"], m["calls_checked"]))
 row("неверные значения enum", lambda m: str(m["bad_enum"]))
+row("вызовов без рабочего набора селекторов", lambda m: str(m["bad_selector"]))
 row("аргументы не того типа", lambda m: str(m["bad_type"]))
 row("  из них плейсхолдеры под runtime-значение (не в счёт)",
     lambda m: str(m["runtime_placeholder"]))

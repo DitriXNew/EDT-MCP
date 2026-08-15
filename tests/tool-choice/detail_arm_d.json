@@ -1207,7 +1207,11 @@
   ],
   "tool_ok": true,
   "expected": "terminate_launch",
-  "chosen": "terminate_launch"
+  "chosen": "terminate_launch",
+  "bad_selector": [
+   "terminate_launch",
+   "terminate_launch"
+  ]
  },
  {
   "id": "q126",
@@ -1311,7 +1315,11 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q138",
@@ -1320,7 +1328,11 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q139",
@@ -2861,7 +2873,11 @@
   "guides": [],
   "tool_ok": true,
   "expected": "terminate_launch",
-  "chosen": "terminate_launch"
+  "chosen": "terminate_launch",
+  "bad_selector": [
+   "terminate_launch",
+   "terminate_launch"
+  ]
  },
  {
   "id": "q304",
@@ -2916,7 +2932,11 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q311",
@@ -2925,7 +2945,11 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "q312",
@@ -3595,7 +3619,11 @@
    "create_launch_config"
   ],
   "coverage": "4/4",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c037",
@@ -3605,7 +3633,11 @@
    "update_database"
   ],
   "coverage": "3/3",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c038",
@@ -3835,7 +3867,11 @@
   "missing_tools": [
    "switch_git_branch"
   ],
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c066",
@@ -3856,7 +3892,11 @@
    "get_event_log"
   ],
   "coverage": "3/3",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c069",
@@ -4063,7 +4103,11 @@
    "update_database"
   ],
   "coverage": "1/1",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c095",
@@ -4146,7 +4190,11 @@
   "guides": [
    "terminate_launch"
   ],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "terminate_launch",
+   "terminate_launch"
+  ]
  },
  {
   "id": "c105",
@@ -4204,7 +4252,11 @@
    "update_database"
   ],
   "coverage": "5/5",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c112",
@@ -4352,7 +4404,11 @@
    "update_database"
   ],
   "coverage": "4/4",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c130",

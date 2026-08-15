@@ -40,7 +40,10 @@ public class GetFormScreenshotTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Visually inspect an EDT form as rendered by the designer. Parameters and examples: " //$NON-NLS-1$
+        return "Visually inspect an EDT form as rendered by the designer. Requires EDT launched " //$NON-NLS-1$
+            + "with -DnativeFormBufferedLayoutRender=true: without the flag the image comes back " //$NON-NLS-1$
+            + "BLANK instead of failing, so an empty screenshot means the flag is missing, not " //$NON-NLS-1$
+            + "that the call was wrong. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('get_form_screenshot')."; //$NON-NLS-1$
     }
 

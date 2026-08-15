@@ -1159,6 +1159,9 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -1168,6 +1171,9 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2555,7 +2561,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "terminate_launch",
-  "chosen": "terminate_launch"
+  "chosen": "terminate_launch",
+  "bad_selector": [
+   "terminate_launch"
+  ]
  },
  {
   "id": "q304",
@@ -2610,6 +2619,9 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2619,6 +2631,9 @@
   "tool_ok": true,
   "expected": "update_database",
   "chosen": "update_database",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -2992,7 +3007,10 @@
   "id": "c005",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_selector": [
+   "terminate_launch"
+  ]
  },
  {
   "id": "c006",
@@ -3050,7 +3068,11 @@
   "kind": "chain",
   "guides": [],
   "coverage": "4/4",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c015",
@@ -3076,7 +3098,11 @@
   "kind": "chain",
   "guides": [],
   "coverage": "3/3",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c019",
@@ -3101,7 +3127,11 @@
   "kind": "chain",
   "guides": [],
   "coverage": "3/3",
-  "twophase": "strict"
+  "bad_selector": [
+   "update_database",
+   "update_database"
+  ],
+  "twophase": "confirm"
  },
  {
   "id": "c023",
@@ -3392,6 +3422,9 @@
   "missing_tools": [
    "switch_git_branch"
   ],
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -3411,6 +3444,9 @@
   "kind": "chain",
   "guides": [],
   "coverage": "3/3",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
@@ -3644,7 +3680,10 @@
   "id": "c104",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "terminate_launch"
+  ]
  },
  {
   "id": "c105",
@@ -3913,6 +3952,9 @@
   "kind": "chain",
   "guides": [],
   "coverage": "6/6",
+  "bad_selector": [
+   "update_database"
+  ],
   "twophase": "confirm"
  },
  {
