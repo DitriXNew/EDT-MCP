@@ -1,0 +1,239 @@
+/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.utils.git;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+
+/**
+ * git's COMMON directory - where a linked worktree keeps everything that is shared with the
+ * repository it was added to, and where JGit 6.8 never looks.
+ * <p>
+ * {@code git worktree add} gives the new worktree a git directory of its own,
+ * {@code .git/worktrees/<name>}, holding only what is per-worktree ({@code HEAD}, {@code index},
+ * {@code config.worktree}). Everything else - the configuration, the object store, the refs, and
+ * git's legacy {@code remotes/} and {@code branches/} files - stays in the repository's original
+ * {@code .git}, and the worktree finds it through a {@code commondir} file. Measured on git 2.35.1
+ * from inside such a worktree:
+ * <ul>
+ * <li>{@code git rev-parse --git-path config} / {@code remotes} / {@code branches} all resolve into
+ * the COMMON directory, and {@code git remote get-url <name>} prints what stands in a legacy file
+ * there, credential and all;</li>
+ * <li>the same files placed in the worktree's OWN git directory are IGNORED - {@code git remote
+ * get-url} answers {@code No such remote} - which is why anything read through here must be read
+ * from {@link #directory()} and from nowhere else. Reading both would refuse a repository over a
+ * file git never looks at;</li>
+ * <li>{@code config.worktree} is the exception that proves it: {@code --git-path} keeps that one in
+ * the worktree's own directory, and the remote it declares is visible from the linked worktree and
+ * NOT from the main one.</li>
+ * </ul>
+ * JGit 6.8 has no notion of any of this: {@code commondir} occurs nowhere in its sources, and
+ * {@code FileRepository} reads its configuration from {@code getDirectory()/config} - a file that
+ * does not exist in a linked worktree - so such a repository reports no format version and no
+ * remotes whatsoever. Hence this class.
+ * <p>
+ * <b>What it does NOT do.</b> It answers where the shared directory is, and nothing else. It does
+ * not decide whether what it points at is a repository (see {@link #of}), and it does not read the
+ * {@code GIT_COMMON_DIR} environment variable - deliberately: that variable is stripped from the
+ * environment of every git process this plug-in starts, so a value inherited from the IDE's own
+ * environment would make this class and the git it is guarding disagree about which repository they
+ * are talking about.
+ */
+public final class GitCommonDirectory
+{
+    /** The file a linked worktree's git directory carries, naming the shared one. */
+    private static final String COMMON_DIR_FILE = "commondir"; //$NON-NLS-1$
+
+    /**
+     * Most bytes read from a {@code commondir} file.
+     * <p>
+     * A deliberate bound on untrusted repository content, and a deliberate divergence from git,
+     * which reads the file whole: a genuine one holds a single relative path ({@code git worktree
+     * add} writes {@code ../..} and nothing else), so anything of this size is not a path. It is
+     * written down rather than implied, and it is the same convention the legacy remote files are
+     * read under. No claim is made about any operating system's path limit - this is a bound we
+     * choose, not one the platform imposes.
+     */
+    private static final int MAX_COMMON_DIR_BYTES = 64 * 1024;
+
+    /** The resolved shared directory; equal to the git directory when there is no linked worktree. */
+    private final File directory;
+
+    /** Whether a {@code commondir} file was there at all. */
+    private final boolean linked;
+
+    private GitCommonDirectory(File directory, boolean linked)
+    {
+        this.directory = directory;
+        this.linked = linked;
+    }
+
+    /**
+     * The directory holding the SHARED part of the repository - the configuration, the legacy
+     * {@code remotes/} and {@code branches/} files, the object store and the refs.
+     *
+     * @return the shared directory; the git directory itself when {@link #linked()} is
+     *         {@code false}, and {@code null} exactly when the git directory handed in was
+     *         {@code null}
+     */
+    public File directory()
+    {
+        return directory;
+    }
+
+    /**
+     * Whether this git directory belongs to a LINKED worktree - that is, whether a
+     * {@code commondir} file was found in it.
+     * <p>
+     * This is git's own test ({@code get_common_dir_noenv} returns 1 iff the file exists), not a
+     * comparison of paths: a caller may need to know that git reads {@code <git dir>/config} NOT AT
+     * ALL here, which no path comparison can tell it.
+     *
+     * @return {@code true} when this is a linked worktree
+     */
+    public boolean linked()
+    {
+        return linked;
+    }
+
+    /**
+     * Resolves the common directory of {@code gitDir}, mirroring git's {@code get_common_dir_noenv}
+     * step for step - each step below was measured against git 2.35.1 rather than read off the
+     * manual.
+     * <ul>
+     * <li><b>Existence is tested the way git tests it</b>, with an {@code lstat} that does not
+     * follow a symbolic link ({@link LinkOption#NOFOLLOW_LINKS}). Opening the file instead would
+     * follow the link, and a DANGLING one would arrive as "no such file" - a linked worktree
+     * silently mistaken for an ordinary clone, which is precisely the fail-open this class exists
+     * to remove. To git that entry exists and reading it then kills the command.</li>
+     * <li><b>Absent means ordinary.</b> This is the only branch that reports "not linked", so an
+     * access failure can never be mistaken for one.</li>
+     * <li><b>Only {@code \r} and {@code \n} come off the END.</b> Not {@link String#trim}, which
+     * removes every character up to {@code U+0020}: git strips exactly those two, and a trailing
+     * SPACE was measured to stay part of the path - {@code ../.. } made git answer
+     * {@code fatal: not a git repository}. Swallowing it here would resolve a directory git cannot.
+     * (What the operating system then does with the byte is its own business, and Windows differs:
+     * its path layer drops a trailing space from a component, so such a pointer resolves there
+     * whatever this class does. Harmless in the direction it goes - git refuses to run at all, so
+     * there is no output for the check to have missed - and the reason the test for this pins a
+     * TAB, which nothing but {@code trim} would remove.)</li>
+     * <li><b>Empty is fatal</b>, as it is to git ({@code fatal: failed to read .../commondir}).</li>
+     * <li><b>A relative path is resolved against the git directory</b>, an absolute one is used as
+     * it stands - git's rule.</li>
+     * <li><b>Not canonicalized.</b> git real-paths the result for its own bookkeeping; nothing here
+     * needs that - the files are simply opened underneath it, and {@code ..} is resolved by the
+     * operating system - while {@code getCanonicalFile()} would add a whole class of failure (UNC
+     * paths, junctions, an unreachable network component) that git does not have, on a check whose
+     * every refusal is supposed to be one git would make too.</li>
+     * <li><b>The target must be a directory.</b> git answers {@code fatal: not a git repository}
+     * when it is not.</li>
+     * </ul>
+     * <b>Fails CLOSED past the existence test</b>, and that is not a promise of care but a property:
+     * every condition it throws on is one where git itself was measured to die, so a refusal built
+     * on it cannot be a false refusal - the repository is already unusable. What it does NOT do is
+     * judge whether the target is a REPOSITORY. An existing directory that is not one is accepted
+     * here, and whatever {@code config} / {@code remotes} / {@code branches} happen to sit in it are
+     * read; git cannot run there at all, so it prints nothing and there is nothing to leak, and
+     * inventing a repository-shaped predicate is how a check starts refusing healthy files.
+     * <p>
+     * The bytes are decoded as UTF-8, like every other file read on this path. git treats a path as
+     * raw bytes, so a non-UTF-8 path on a non-UTF-8 platform would mis-resolve and be refused;
+     * {@code git worktree add} writes {@code ../..} and nothing else, so no layout git itself
+     * produced can reach that - a hand-built or third-party one can, and the limit is stated rather
+     * than called impossible.
+     *
+     * @param gitDir the repository's git directory ({@code Repository.getDirectory()}); may be
+     *            {@code null}, in which case the result is "not linked" with a {@code null}
+     *            {@link #directory()} and the caller's own null handling decides
+     * @return where the shared part of the repository lives, and whether this is a linked worktree
+     * @throws IOException when a {@code commondir} file is there but cannot be turned into a usable
+     *             directory - unreadable, over {@link #MAX_COMMON_DIR_BYTES}, empty, or naming
+     *             something that is not a directory
+     */
+    public static GitCommonDirectory of(File gitDir) throws IOException
+    {
+        if (gitDir == null)
+        {
+            return new GitCommonDirectory(null, false);
+        }
+        Path commonDirFile = new File(gitDir, COMMON_DIR_FILE).toPath();
+        try
+        {
+            Files.readAttributes(commonDirFile, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        }
+        catch (NoSuchFileException e) // NOSONAR the ordinary repository: git's file_exists() is false
+        {
+            return new GitCommonDirectory(gitDir, false);
+        }
+        String value = stripLineTerminators(readBounded(commonDirFile));
+        if (value.isEmpty())
+        {
+            throw new IOException("commondir is empty"); //$NON-NLS-1$
+        }
+        File named = new File(value);
+        File resolved = named.isAbsolute() ? named : new File(gitDir, value);
+        if (!resolved.isDirectory())
+        {
+            throw new IOException("commondir does not name a directory"); //$NON-NLS-1$
+        }
+        return new GitCommonDirectory(resolved, true);
+    }
+
+    /**
+     * Reads at most {@link #MAX_COMMON_DIR_BYTES}, refusing anything longer instead of holding it.
+     * <p>
+     * Streamed rather than {@link Files#readAllBytes}: the size has to be known before the content
+     * is in memory, and asking for it first and reading afterwards would answer about a different
+     * file than the one read.
+     *
+     * @param file the file to read
+     * @return its bytes, decoded as UTF-8
+     * @throws IOException when it cannot be read, or is longer than the bound
+     */
+    private static String readBounded(Path file) throws IOException
+    {
+        byte[] buffer = new byte[MAX_COMMON_DIR_BYTES + 1];
+        int read = 0;
+        try (InputStream in = Files.newInputStream(file))
+        {
+            int chunk;
+            while (read < buffer.length && (chunk = in.read(buffer, read, buffer.length - read)) > 0)
+            {
+                read += chunk;
+            }
+        }
+        if (read > MAX_COMMON_DIR_BYTES)
+        {
+            throw new IOException("commondir is too large to be a path"); //$NON-NLS-1$
+        }
+        return new String(buffer, 0, read, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Removes the line terminators git removes, and nothing else - see {@link #of} for why
+     * {@link String#trim} is not what is wanted here.
+     *
+     * @param value the file's content
+     * @return it without any trailing {@code \r} / {@code \n}
+     */
+    private static String stripLineTerminators(String value)
+    {
+        int end = value.length();
+        while (end > 0 && (value.charAt(end - 1) == '\n' || value.charAt(end - 1) == '\r'))
+        {
+            end--;
+        }
+        return value.substring(0, end);
+    }
+}

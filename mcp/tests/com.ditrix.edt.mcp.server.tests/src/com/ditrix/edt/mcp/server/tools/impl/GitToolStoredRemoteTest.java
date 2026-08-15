@@ -32,6 +32,7 @@ import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.eclipse.jgit.storage.file.FileBasedConfig;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.eclipse.jgit.util.FS;
 import org.eclipse.jgit.util.SystemReader;
 import org.junit.After;
@@ -39,6 +40,7 @@ import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
+import com.ditrix.edt.mcp.server.utils.git.GitCommonDirectory;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -155,6 +157,12 @@ public class GitToolStoredRemoteTest
     /** Temporary directories created by a test, deleted in {@link #closeAndDeleteRepositories()}. */
     private final List<File> temporaries = new ArrayList<>();
 
+    /**
+     * Linked worktrees opened by {@link #linkedWorktreeOf} - owned by the caller (they come from
+     * {@code discoverFromDirectory}, not from EGit's cache), so they are closed here.
+     */
+    private final List<Repository> linkedRepositories = new ArrayList<>();
+
     @After
     public void closeAndDeleteRepositories()
     {
@@ -170,6 +178,18 @@ public class GitToolStoredRemoteTest
             }
         }
         opened.clear();
+        for (Repository linked : linkedRepositories)
+        {
+            try
+            {
+                linked.close();
+            }
+            catch (RuntimeException e) // NOSONAR cleanup must never mask the failure under test
+            {
+                // Nothing to do: the directory is deleted below either way.
+            }
+        }
+        linkedRepositories.clear();
         for (File directory : temporaries)
         {
             deleteRecursively(directory);
@@ -1019,9 +1039,17 @@ public class GitToolStoredRemoteTest
                 refusal.contains(entry));
             assertRefusalIsActionable(refusal);
             // A legacy file is not configuration at all, so the remedy is to delete it - 'git remote
-            // remove' does not know it exists.
+            // remove' does not know it exists. The remedy has to say WHICH file without handing out
+            // a path that does not exist: in a linked worktree '.git' is a FILE and these
+            // directories live in the shared repository, so 'rev-parse --git-path' is what names
+            // them in every layout. Both halves are pinned, because dropping either one leaves the
+            // caller in the retry loop this text exists to prevent.
             assertTrue("a legacy file must be cleared by deleting it: " + refusal, //$NON-NLS-1$
-                refusal.contains(".git/remotes/<name>")); //$NON-NLS-1$
+                refusal.contains("Delete the file itself")); //$NON-NLS-1$
+            assertTrue("...and the remedy must locate it in EVERY layout, so it points at " //$NON-NLS-1$
+                + "'rev-parse --git-path' rather than at a bare '.git/...' path that a linked " //$NON-NLS-1$
+                + "worktree does not have: " + refusal, //$NON-NLS-1$
+                refusal.contains("git rev-parse --git-path " + directory)); //$NON-NLS-1$
             assertRefusalLeaksNothing(refusal);
         }
     }
@@ -1493,6 +1521,335 @@ public class GitToolStoredRemoteTest
         }
     }
 
+    // ==================== a LINKED worktree: the shared repository is what git reads ====================
+
+    // Inside a linked worktree ('git worktree add') git reads its configuration and both legacy
+    // remote directories from the SHARED repository the worktree was added to, never from the
+    // worktree's own git directory - measured on git 2.35.1, one probe at a time:
+    //
+    //   $GIT_COMMON_DIR/remotes/legacy  -> 'git remote get-url legacy' prints it, credential and all
+    //   $GIT_DIR/remotes/wtonly         -> 'error: No such remote' - IGNORED
+    //   --git-path config / remotes / branches   -> all resolve into the shared directory
+    //   --git-path config.worktree               -> stays in the worktree's own git directory
+    //
+    // JGit 6.8 knows none of it: 'commondir' appears nowhere in its sources and FileRepository reads
+    // '<git dir>/config', which does not exist there - so this check used to enumerate no remotes at
+    // all and approve because it had found nothing, which is indistinguishable from having looked.
+    //
+    // Both halves of that blindness - the configuration and the legacy files - are closed together
+    // here, because they had one cause. The fixtures below are built BY HAND rather than by shelling
+    // out to 'git worktree add': it keeps these unit tests free of a git executable, and the layout
+    // is the one measured above.
+
+    @Test
+    public void testARemoteInTheSHAREDConfigIsJudgedFromALinkedWorktree() throws Exception
+    {
+        // The heart of it: every remote of every ordinary clone lives in the shared config, so a
+        // check that cannot see that file sees nothing whatsoever in a linked worktree.
+        Repository shared = newRepository("git-stored-linked-shared"); //$NON-NLS-1$
+        storeRemoteUrls(shared, ORIGIN, URL_KEY, poisonedUrl(SPACE));
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("git reads the SHARED config in a linked worktree and 'remote -v' prints " //$NON-NLS-1$
+            + "this remote there - it must be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the remote: " + refusal, refusal.contains(ORIGIN)); //$NON-NLS-1$
+        assertRefusalIsActionable(refusal);
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testALegacyFileInTheSHAREDDirectoryIsJudgedFromALinkedWorktree() throws Exception
+    {
+        // The other half. 'remotes/' and 'branches/' are listed in git's own set of paths that live
+        // in the common directory, so a linked worktree reads exactly the main worktree's files.
+        for (String directory : List.of("remotes", "branches")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Repository shared = newRepository("git-stored-linked-legacy-" + directory); //$NON-NLS-1$
+            File legacy = new File(shared.getDirectory(), directory);
+            assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+                legacy.mkdirs() || legacy.isDirectory());
+            // A branches/ file is a bare URL, a remotes/ file a 'URL: ' line - two formats, and the
+            // check reads each on its own terms.
+            String content = "remotes".equals(directory) //$NON-NLS-1$
+                ? "URL: " + poisonedUrl(SPACE) + "\n" //$NON-NLS-1$ //$NON-NLS-2$
+                : poisonedUrl(SPACE) + "\n"; //$NON-NLS-1$
+            Files.write(new File(legacy, "shared-legacy").toPath(), //$NON-NLS-1$
+                content.getBytes(StandardCharsets.UTF_8));
+            Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+            String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+            assertNotNull("'git remote get-url' inside a linked worktree prints the SHARED " //$NON-NLS-1$
+                + directory + "/<name> verbatim - it must be judged", refusal); //$NON-NLS-1$
+            assertTrue("the refusal must name the file: " + refusal, //$NON-NLS-1$
+                refusal.contains("shared-legacy")); //$NON-NLS-1$
+            assertRefusalLeaksNothing(refusal);
+        }
+    }
+
+    @Test
+    public void testTheWorktreeConfigIsSwitchedOnByTheSHAREDConfigInALinkedWorktree() throws Exception
+    {
+        // The switch and the file it switches on live in DIFFERENT places here:
+        // 'extensions.worktreeConfig' in the shared config, 'config.worktree' beside the worktree's
+        // own HEAD. Measured - that pair makes 'remote -v' print the remote from the linked worktree
+        // and NOT from the main one. Reading the switch from '<git dir>/config' would find nothing
+        // and silently turn this whole layer off, which is the failure mode that looks like success.
+        Repository shared = newRepository("git-stored-linked-wtconfig"); //$NON-NLS-1$
+        // repositoryformatversion 0 on purpose: the default every ordinary repository carries, and
+        // git was measured to honour the extension at that version all the same.
+        Files.write(new File(shared.getDirectory(), CONFIG_FILE).toPath(),
+            ("[core]\n\trepositoryformatversion = 0\n[extensions]\n\tworktreeConfig = true\n") //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8));
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), "config.worktree").toPath(), //$NON-NLS-1$
+            ("[remote \"wtonly\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("the switch lives in the SHARED config and the file beside the worktree - " //$NON-NLS-1$
+            + "git reads both, so this remote must be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the remote: " + refusal, refusal.contains("wtonly")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertRefusalLeaksNothing(refusal);
+    }
+
+    @Test
+    public void testAnEditBehindJGitsCacheIsSeenInTheSHAREDConfigToo() throws Exception
+    {
+        // The same case as testAConfigEditedBehindJGitsCacheIsStillJudged, on the shared file: the
+        // layer added for a linked worktree must be built FRESH on every call. Cache it once and
+        // this goes green for ever while 'remote -v' prints the credential written afterwards.
+        Repository shared = newRepository("git-stored-linked-fresh"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        File sharedConfig = new File(shared.getDirectory(), CONFIG_FILE);
+        Files.write(sharedConfig.toPath(),
+            configText("https://" + HOST + "/team/repo.git").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("fixture: the clean state must not be refused, or the edit below proves nothing", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+
+        Files.write(sharedConfig.toPath(),
+            configText(poisonedUrl(SPACE)).getBytes(StandardCharsets.UTF_8));
+
+        assertNotNull("the shared config is re-read on every call - a credential written after the " //$NON-NLS-1$
+            + "first one must still be refused", GitTool.storedRemoteRefusal(linked, List.of(PUSH))); //$NON-NLS-1$
+    }
+
+    // ---- what must STAY silent: the places git does NOT read ----
+    //
+    // Every fixture below carries a value that WOULD be refused if it were judged. That is the
+    // whole point: a green result then means "this source was not read", not "there was nothing
+    // there". A clean fixture would go green with or without the fix and prove neither.
+
+    @Test
+    public void testAPoisonedConfigInTheWORKTREEsOwnGitDirIsNotJudged() throws Exception
+    {
+        // git ignores '<git dir>/config' in a linked worktree - it reads the shared one instead.
+        // JGit reads it all the same, so it arrives as the top link of the chain, and the chain does
+        // not merge the way one file does: getSubsections UNIONS every link and getStringList
+        // CONCATENATES them, so an entry here could be neither hidden nor shadowed. Refusing over a
+        // file git never opens is the expensive mistake - it takes a healthy repository off the air.
+        Repository shared = newRepository("git-stored-linked-ignored-config"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), CONFIG_FILE).toPath(),
+            ("[remote \"ignored-by-git\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+        // Positive control: the very same bytes in the SHARED config ARE refused, so a green result
+        // below cannot be the predicate failing to recognise this value.
+        Repository control = newRepository("git-stored-linked-ignored-control"); //$NON-NLS-1$
+        Files.write(new File(control.getDirectory(), CONFIG_FILE).toPath(),
+            ("[remote \"ignored-by-git\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+        assertNotNull("control: this exact entry must be refused when git WOULD read it", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linkedWorktreeOf(control, "wt"), List.of(PUSH))); //$NON-NLS-1$
+
+        assertNull("git does not read '<git dir>/config' in a linked worktree, so refusing over " //$NON-NLS-1$
+            + "it would block a repository git is perfectly happy with", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAPoisonedLegacyFileInTheWORKTREEsOwnGitDirIsNotJudged() throws Exception
+    {
+        // Measured: the same file in the worktree's own git directory answers 'No such remote'.
+        // git's repository-layout says it outright - when a common directory is set, the worktree's
+        // own 'remotes' and 'branches' are ignored and the shared ones used instead.
+        Repository shared = newRepository("git-stored-linked-ignored-legacy"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        File legacy = new File(linked.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", legacy.mkdirs()); //$NON-NLS-1$
+        Files.write(new File(legacy, "ignored-by-git").toPath(), //$NON-NLS-1$
+            ("URL: " + poisonedUrl(SPACE) + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control: the identical file in the SHARED directory IS refused (asserted by
+        // testALegacyFileInTheSHAREDDirectoryIsJudgedFromALinkedWorktree), so this value is one the
+        // predicate does recognise.
+
+        assertNull("git ignores the worktree's own legacy files - judging them would invent a " //$NON-NLS-1$
+            + "refusal over a file no command can reach", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAHealthyLegacyFileInTheSHAREDDirectoryIsNotRefused() throws Exception
+    {
+        // The #358 regression, replayed on the path that can finally reach the file: stripping the
+        // 'URL:' key demanded a ': ' and this perfectly ordinary line kept its key, whose colon then
+        // read as the password marker in front of the '@'. That refused EVERY remote command of a
+        // healthy repository. It could not fire in a linked worktree before, because the file was
+        // invisible there; it can now, so it is pinned here as well.
+        Repository shared = newRepository("git-stored-linked-healthy-legacy"); //$NON-NLS-1$
+        File legacy = new File(shared.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "ssh").toPath(), //$NON-NLS-1$
+            "URL:git@github.com:acme/repo.git\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+        assertNull("an ordinary ssh remote in a legacy file must pass - refusing it would block " //$NON-NLS-1$
+            + "every remote command of a healthy repository", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    @Test
+    public void testAHealthyLinkedWorktreeIsNotRefused() throws Exception
+    {
+        // Green with or without the fix, and recorded as such: this is a regression guard, not
+        // evidence that anything was read.
+        Repository shared = newRepository("git-stored-linked-healthy"); //$NON-NLS-1$
+        storeRemoteUrls(shared, ORIGIN, URL_KEY, "https://" + HOST + "/team/repo.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+
+        assertNull("nothing about a healthy linked worktree may be refused", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+    }
+
+    // ---- what the check may not do to a repository it does not own ----
+
+    @Test
+    public void testTheCheckLeavesTheSharedRepositoryObjectUntouched() throws Exception
+    {
+        // The Repository is EGit's cached, reference-counted instance, handed to list_git_branches
+        // and the branch tools as well - GitRepositoryResolver borrows it and never closes it. A
+        // check has no business changing what they read, so the layers built here are private to the
+        // call: splice the shared config into repo.getConfig() to "save a read" and this goes red.
+        Repository shared = newRepository("git-stored-linked-no-mutation"); //$NON-NLS-1$
+        storeRemoteUrls(shared, ORIGIN, URL_KEY, poisonedUrl(SPACE));
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        StoredConfig before = linked.getConfig();
+        Config beforeBase = before.getBaseConfig();
+        assertTrue("fixture: JGit must see no remote here, or the assertion below is vacuous", //$NON-NLS-1$
+            before.getSubsections(REMOTE_SECTION).isEmpty());
+
+        assertNotNull("fixture: the shared remote must be refused, so the check really ran", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
+
+        assertTrue("the repository's own configuration object must be the same one", //$NON-NLS-1$
+            before == linked.getConfig());
+        assertTrue("...and its base chain must be the same one", //$NON-NLS-1$
+            beforeBase == linked.getConfig().getBaseConfig());
+        assertTrue("...and it must still report exactly what it reported before: the check builds " //$NON-NLS-1$
+            + "a private view, it does not enrich shared state", //$NON-NLS-1$
+            linked.getConfig().getSubsections(REMOTE_SECTION).isEmpty());
+    }
+
+    // ---- the chain the shared layer is built ON ----
+
+    @Test
+    public void testTheInheritedConfigurationSurvivesTheSharedLayer() throws Exception
+    {
+        // Nothing built out of FILES can catch this: a fixture cannot plant a remote in the
+        // machine's ~/.gitconfig, so a mutation that passes 'null' as the shared layer's base -
+        // dropping the user and system configuration, and only inside a linked worktree - stays
+        // green through every test above. Driven through the seam instead, with a chain of its own.
+        Repository shared = newRepository("git-stored-linked-inherited"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Config system = new Config();
+        system.setString(REMOTE_SECTION, "inherited-remote", URL_KEY, //$NON-NLS-1$
+            "https://" + HOST + "/inherited.git"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Stands in for the link JGit puts on top of the inherited chain.
+        Config repositoryLayer = new Config(system);
+
+        Config effective = GitTool.effectiveConfig(linked, repositoryLayer,
+            GitCommonDirectory.of(linked.getDirectory()));
+
+        assertTrue("a remote inherited from the user or system configuration is read by git in a " //$NON-NLS-1$
+            + "linked worktree exactly as anywhere else - adding the shared layer may not cost it", //$NON-NLS-1$
+            effective.getSubsections(REMOTE_SECTION).contains("inherited-remote")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheIgnoredRepositoryLayerIsDroppedOnlyWhenItIsIdentified() throws Exception
+    {
+        // Two branches, and the second is the one that matters. Dropping a link BLINDLY would, on a
+        // repository whose configuration is not shaped the way JGit 6.8 shapes it, throw away the
+        // USER configuration and stop judging remotes inherited from it - the very blindness this
+        // change removes. So the link comes off only when it can be named, by the same expression
+        // FileRepository built it from; anything else keeps the whole chain.
+        Repository shared = newRepository("git-stored-linked-drop"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        GitCommonDirectory common =
+            GitCommonDirectory.of(linked.getDirectory());
+        assertTrue("fixture: this must be recognised as a linked worktree", common.linked()); //$NON-NLS-1$
+        Config inherited = new Config();
+
+        StoredConfig ignoredFile = new FileBasedConfig(inherited,
+            linked.getFS().resolve(linked.getDirectory(), CONFIG_FILE), linked.getFS());
+        assertTrue("the link git ignores here is identified and taken out", //$NON-NLS-1$
+            inherited == GitTool.inheritedChain(linked, ignoredFile, common));
+
+        StoredConfig someOtherFile = new FileBasedConfig(inherited,
+            new File(linked.getDirectory(), "config.worktree"), linked.getFS()); //$NON-NLS-1$
+        assertTrue("an unrecognised shape keeps its whole chain - guessing there would drop the " //$NON-NLS-1$
+            + "inherited configuration instead", //$NON-NLS-1$
+            someOtherFile == GitTool.inheritedChain(linked, someOtherFile, common));
+    }
+
+    @Test
+    public void testAnOrdinaryCloneKeepsItsWholeChain() throws Exception
+    {
+        // The negative control for the branch above: outside a linked worktree the repository's own
+        // config is exactly what git reads, and taking it out would blind the check on every
+        // ordinary clone - which is every repository this tool normally meets.
+        Repository repo = newRepository("git-stored-ordinary-chain"); //$NON-NLS-1$
+        GitCommonDirectory common =
+            GitCommonDirectory.of(repo.getDirectory());
+        assertFalse("fixture: an ordinary clone is not a linked worktree", common.linked()); //$NON-NLS-1$
+
+        StoredConfig config = repo.getConfig();
+
+        assertTrue("an ordinary clone's chain is handed on untouched", //$NON-NLS-1$
+            config == GitTool.inheritedChain(repo, config, common));
+    }
+
+    // ---- a commondir that cannot be resolved ----
+
+    @Test
+    public void testAnUnresolvableCommonDirIsRefusedAndNamesItsOwnRepair() throws Exception
+    {
+        // Fail closed: that one file says where the whole shared repository is, so without it
+        // nothing about the stored remotes can be inspected. This is not a refusal invented for
+        // safety's sake - git dies on the same file ('fatal: not a git repository', measured) - so
+        // it cannot take a working repository off the air.
+        Repository shared = newRepository("git-stored-linked-broken-commondir"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), "commondir").toPath(), //$NON-NLS-1$
+            "../nowhere-at-all\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("a commondir that resolves to nothing must be refused, not run blind", //$NON-NLS-1$
+            refusal);
+        assertTrue("the refusal must name the file at fault: " + refusal, //$NON-NLS-1$
+            refusal.contains("commondir")); //$NON-NLS-1$
+        assertTrue("...and the repair, which is not the config repair: " + refusal, //$NON-NLS-1$
+            refusal.contains("git worktree repair")); //$NON-NLS-1$
+        assertFalse("...and it must not quote what the file said: " + refusal, //$NON-NLS-1$
+            refusal.contains("nowhere-at-all")); //$NON-NLS-1$
+        assertRefusalLeaksNothing(refusal);
+    }
+
     // ==================== the pre-flight execute() actually runs ====================
 
     @Test
@@ -1813,6 +2170,69 @@ public class GitToolStoredRemoteTest
     private static String hex(char c)
     {
         return String.format("U+%04X", (int)c); //$NON-NLS-1$
+    }
+
+    /**
+     * Builds a LINKED worktree of {@code shared} and opens it the way this plug-in opens one, then
+     * PROVES the fixture is what it claims to be.
+     * <p>
+     * Built by hand rather than by shelling out to {@code git worktree add}: no git executable is
+     * needed, so this stays a unit test on every platform, and the four files written below are the
+     * ones a real {@code git worktree add} was measured to produce - {@code commondir} holding
+     * {@code ../..}, {@code gitdir} pointing back at the worktree's {@code .git} file, a private
+     * {@code HEAD}, and the {@code .git} FILE that sends everything to the admin directory.
+     * <p>
+     * Two traps this method exists to close, both of which would leave a green test proving nothing:
+     * <ul>
+     * <li>{@link org.eclipse.jgit.storage.file.FileRepositoryBuilder#findGitDir} SWALLOWS a
+     * {@code .git} pointer it cannot use and keeps walking UP. A worktree placed inside the shared
+     * repository's own tree would therefore quietly open the SHARED repository, and every assertion
+     * about the linked one would be about the wrong object. The directory is created OUTSIDE it, and
+     * the resolved git directory is asserted afterwards;</li>
+     * <li>{@code build()} succeeding proves nothing on its own - {@code mustExist} is false by
+     * default, so it happily returns a repository for a pointer to a directory that does not exist.
+     * The check is on {@code getDirectory()}, not on the absence of an exception.</li>
+     * </ul>
+     * The returned repository is BARE as far as JGit is concerned - it derives a work tree from the
+     * configuration it reads from the wrong place - which is exactly why the tool cannot open one of
+     * these yet, and is beside the point for a check that never asks for a work tree.
+     *
+     * @param shared the repository the worktree is added to
+     * @param name the worktree's name
+     * @return the linked worktree, opened as this plug-in opens a repository
+     * @throws Exception when the fixture cannot be built or does not come out as intended
+     */
+    private Repository linkedWorktreeOf(Repository shared, String name) throws Exception
+    {
+        File adminDir = new File(new File(shared.getDirectory(), "worktrees"), name); //$NON-NLS-1$
+        assertTrue("fixture: the worktree admin directory must be created", adminDir.mkdirs()); //$NON-NLS-1$
+        // OUTSIDE the shared work tree, or findGitDir walks up into the shared repository.
+        File worktreeDir = Files.createTempDirectory("git-linked-" + name).toFile(); //$NON-NLS-1$
+        temporaries.add(worktreeDir);
+        File pointer = new File(worktreeDir, ".git"); //$NON-NLS-1$
+        Files.write(pointer.toPath(),
+            ("gitdir: " + adminDir.getAbsolutePath() + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(new File(adminDir, "commondir").toPath(), //$NON-NLS-1$
+            "../..\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(adminDir, "gitdir").toPath(), //$NON-NLS-1$
+            (pointer.getAbsolutePath() + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(new File(adminDir, "HEAD").toPath(), //$NON-NLS-1$
+            ("ref: refs/heads/" + name + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The same JGit call GitRepositoryResolver's discovery fallback makes, so the object
+        // under test is the one a real request would be handed.
+        FileRepositoryBuilder builder = new FileRepositoryBuilder().findGitDir(worktreeDir);
+        assertNotNull("fixture: the linked worktree must be discoverable", builder.getGitDir()); //$NON-NLS-1$
+        Repository linked = builder.build();
+        linkedRepositories.add(linked);
+        assertEquals("fixture: it must resolve to the WORKTREE's admin directory - findGitDir " //$NON-NLS-1$
+            + "swallows an unusable pointer and keeps walking up, and opening the shared " //$NON-NLS-1$
+            + "repository instead would make every assertion here vacuous", //$NON-NLS-1$
+            adminDir.getCanonicalFile(), linked.getDirectory().getCanonicalFile());
+        assertFalse("fixture: and the two must be different directories, or there is nothing " //$NON-NLS-1$
+            + "'shared' about the one under test", //$NON-NLS-1$
+            adminDir.getCanonicalFile().equals(shared.getDirectory().getCanonicalFile()));
+        return linked;
     }
 
     /** Recursively deletes a temporary directory tree (best-effort test cleanup). */

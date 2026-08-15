@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.git.GitFailureLog;
+import com.ditrix.edt.mcp.server.utils.git.GitCommonDirectory;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
 /**
@@ -317,9 +318,11 @@ public class GitTool implements IMcpTool
     private static final String REMOTE_GROUP_SECTION = "remotes"; //$NON-NLS-1$
 
     /**
-     * git's LEGACY per-remote files, relative to the git directory. Not configuration:
-     * {@code remotes/<name>} carries {@code URL:} lines, {@code branches/<name>} a bare URL, and
-     * {@code git remote get-url} prints either verbatim while JGit's config knows nothing of them.
+     * git's LEGACY per-remote files, relative to the COMMON directory - not to the git directory,
+     * which is a different place in a linked worktree and which git ignores there (see
+     * {@link GitCommonDirectory}). Not configuration: {@code remotes/<name>} carries {@code URL:}
+     * lines, {@code branches/<name>} a bare URL, and {@code git remote get-url} prints either
+     * verbatim while JGit's config knows nothing of them.
      */
     private static final String LEGACY_REMOTES_DIRECTORY = "remotes"; //$NON-NLS-1$
 
@@ -349,7 +352,10 @@ public class GitTool implements IMcpTool
         /** A {@code remotes.<group>} key - a plain config key, not a remote. */
         GROUP,
 
-        /** {@code $GIT_DIR/remotes/<name>} or {@code $GIT_DIR/branches/<name>} - not config at all. */
+        /**
+         * {@code $GIT_COMMON_DIR/remotes/<name>} or {@code $GIT_COMMON_DIR/branches/<name>} - not
+         * config at all, and shared with every worktree of the repository.
+         */
         LEGACY_FILE
     }
 
@@ -408,6 +414,32 @@ public class GitTool implements IMcpTool
         + "them in a terminal, repair the broken one and retry. This tool logs only the failure's " //$NON-NLS-1$
         + "exception types: the message itself is withheld, here and in the log, because it can " //$NON-NLS-1$
         + "quote the offending configuration, credentials included."; //$NON-NLS-1$
+
+    /**
+     * Refusal for a repository whose {@code commondir} pointer cannot be resolved: the check FAILS
+     * CLOSED, because that one file is what says where the whole shared repository lives - its
+     * configuration and its legacy remote files alike - and none of it can be inspected without it.
+     * <p>
+     * Its own text rather than {@link #CONFIG_UNREADABLE_REFUSAL}: the file at fault is not a
+     * configuration file, so pointing the caller at the config chain would send them to repair
+     * something that is not broken. It names no literal path - a {@code commondir} file does not
+     * guarantee the {@code .git/worktrees/<name>} layout that {@code git worktree add} happens to
+     * produce - and quotes no content.
+     * <p>
+     * Every condition behind this refusal is one where native git was measured to die as well
+     * ({@code fatal: failed to read .../commondir}, {@code fatal: not a git repository}), so it
+     * cannot take a working repository off the air: it names the fault the command would have hit
+     * anyway.
+     */
+    private static final String COMMON_DIR_UNREADABLE_REFUSAL =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the pointer " //$NON-NLS-1$
+        + "to the shared repository holding the configuration and the remotes - could not be " //$NON-NLS-1$
+        + "resolved to a directory. Nothing about the stored remotes can be inspected without it, " //$NON-NLS-1$
+        + "so the operation is refused instead of run blind. git itself cannot use this worktree " //$NON-NLS-1$
+        + "either: run any git command in it from a terminal and it will report the same fault. " //$NON-NLS-1$
+        + "'git worktree repair' - run from the main worktree, with the path of this one - rewrites " //$NON-NLS-1$
+        + "the pointer and is the usual fix; a worktree laid out by hand or by another tool may " //$NON-NLS-1$
+        + "need the file corrected directly. This tool logs only the failure's exception types."; //$NON-NLS-1$
 
     /**
      * Subcommands that rewrite the WORKING TREE, after which the Eclipse workspace must be refreshed
@@ -1552,8 +1584,14 @@ public class GitTool implements IMcpTool
      * <ul>
      * <li>READ: {@code remote.<name>.url} and {@code .pushurl} (both multi-valued), the subsection
      * NAME, the members of a remote GROUP ({@code [remotes] <group> = ...}), and git's legacy
-     * {@code $GIT_DIR/remotes/*} / {@code $GIT_DIR/branches/*} files - measured: each of those is
-     * printed verbatim by a command in {@link #REMOTE_SUBCOMMANDS}.</li>
+     * {@code $GIT_COMMON_DIR/remotes/*} / {@code $GIT_COMMON_DIR/branches/*} files - measured: each
+     * of those is printed verbatim by a command in {@link #REMOTE_SUBCOMMANDS}.</li>
+     * <li>READ, and from the place git reads it rather than the place JGit does: inside a LINKED
+     * worktree the configuration and both legacy directories live in the SHARED repository, which
+     * JGit 6.8 cannot even name ({@link GitCommonDirectory}). Every source above is taken from
+     * there, and the {@code <git dir>/config} JGit does read - which git ignores in a linked
+     * worktree - is taken back out ({@link #inheritedChain}), so this check judges neither less nor
+     * more than the command it is guarding.</li>
      * <li>NOT read: {@code remote.pushDefault} and {@code branch.<name>.remote} /
      * {@code .pushRemote}. They can hold a URL, but the only place git puts one is a transport
      * error, and there it strips the userinfo itself ({@code fatal: unable to access
@@ -1572,7 +1610,17 @@ public class GitTool implements IMcpTool
      * output redaction, not by this refusal.
      * <p>
      * Fails CLOSED: when the configuration cannot be read at all the command is refused with
-     * {@link #CONFIG_UNREADABLE_REFUSAL}, whose text embeds no configuration content.
+     * {@link #CONFIG_UNREADABLE_REFUSAL}, and when a linked worktree's {@code commondir} pointer
+     * cannot be resolved with {@link #COMMON_DIR_UNREADABLE_REFUSAL}. Neither text embeds any file
+     * content.
+     * <p>
+     * A limit worth stating, because it is not one this check can close: opening a linked worktree
+     * as a JGit repository yields a BARE one (JGit derives the work tree from a configuration it
+     * reads from the wrong place), and {@link #execute} needs a work tree before it gets here. So
+     * on the versions this plug-in ships against, a linked worktree fails earlier with its own
+     * error rather than reaching this check. The check is written for what git prints, not for what
+     * the current opener happens to reach: the day a repository there opens with a work tree - a
+     * newer JGit knows the common directory - the blindness would otherwise have shipped with it.
      *
      * @param repo the repository the command would run in (may be {@code null})
      * @param argv the command, with or without its leading {@code git} token (may be {@code null})
@@ -1599,11 +1647,26 @@ public class GitTool implements IMcpTool
         {
             return null;
         }
+        GitCommonDirectory common;
+        try
+        {
+            common = GitCommonDirectory.of(repo.getDirectory());
+        }
+        // NOSONAR fail closed: a commondir we cannot resolve hides the whole shared repository
+        catch (IOException | RuntimeException e)
+        {
+            // Its own refusal, not CONFIG_UNREADABLE_REFUSAL: the file at fault is not a
+            // configuration file and the repair is a different one. The message is withheld for the
+            // reason spelled out on configReadFailureLog.
+            Activator.logError(commonDirFailureLog(e), null);
+            return COMMON_DIR_UNREADABLE_REFUSAL;
+        }
         try
         {
             StoredConfig config = repo.getConfig();
-            reloadFromDisk(config);
-            Config effective = withWorktreeConfig(repo, config);
+            Config inherited = inheritedChain(repo, config, common);
+            reloadFromDisk(inherited);
+            Config effective = effectiveConfig(repo, inherited, common);
             for (String remote : effective.getSubsections(REMOTE_SECTION))
             {
                 StoredRemoteFlaw flaw = remoteEntryFlaw(effective, REMOTE_SECTION, remote, remote);
@@ -1647,7 +1710,7 @@ public class GitTool implements IMcpTool
                     }
                 }
             }
-            String legacy = legacyRemoteRefusal(repo);
+            String legacy = legacyRemoteRefusal(common.directory());
             if (legacy != null)
             {
                 return legacy;
@@ -1667,8 +1730,16 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Judges git's LEGACY per-remote files, {@code $GIT_DIR/remotes/*} and
-     * {@code $GIT_DIR/branches/*}, which hold a URL and are not configuration at all.
+     * Judges git's LEGACY per-remote files, {@code $GIT_COMMON_DIR/remotes/*} and
+     * {@code $GIT_COMMON_DIR/branches/*}, which hold a URL and are not configuration at all.
+     * <p>
+     * The COMMON directory, not the git directory, and the distinction is not pedantry: in a linked
+     * worktree those two are different places, and git reads only the first. Measured on git 2.35.1
+     * from inside such a worktree - a legacy file in the SHARED directory is printed by
+     * {@code git remote get-url} verbatim, credential and all, while the same file in the worktree's
+     * own git directory answers {@code No such remote}. Reading both would therefore refuse a
+     * repository over a file git never looks at, which is the more expensive mistake of the two
+     * (see {@link GitCommonDirectory}).
      * <p>
      * They are still live: {@code git remote get-url <name>} and {@code git remote show -n} print
      * what stands in them, verbatim - measured, credential and all - and JGit's configuration never
@@ -1685,20 +1756,20 @@ public class GitTool implements IMcpTool
      * repository that may have been produced by someone else. Anything larger is refused rather
      * than read - it cannot be shown to be safe, and no genuine file of either kind is that big.
      *
-     * @param repo the repository the command would run in
+     * @param commonDirectory where the SHARED part of the repository lives
+     *            ({@link GitCommonDirectory#directory()}); may be {@code null}
      * @return the refusal message, or {@code null} when these files hold nothing un-printable
      * @throws IOException when a file cannot be read
      */
-    private static String legacyRemoteRefusal(Repository repo) throws IOException
+    private static String legacyRemoteRefusal(File commonDirectory) throws IOException
     {
-        File gitDir = repo.getDirectory();
-        if (gitDir == null)
+        if (commonDirectory == null)
         {
             return null;
         }
         for (String directory : LEGACY_REMOTE_DIRECTORIES)
         {
-            File parent = new File(gitDir, directory);
+            File parent = new File(commonDirectory, directory);
             if (!parent.isDirectory())
             {
                 continue;
@@ -1907,8 +1978,66 @@ public class GitTool implements IMcpTool
     }
 
     /**
-     * Adds the PER-WORKTREE configuration on top when the repository has it switched on, because
-     * JGit does not - and a remote can live there and nowhere else.
+     * The inherited configuration to judge ON TOP OF - JGit's chain, minus the ONE link git does not
+     * read in a linked worktree.
+     * <p>
+     * In a linked worktree JGit's top link is {@code <git dir>/config}, which git ignores entirely:
+     * it reads the shared {@code <common dir>/config} instead ({@code rev-parse --git-path config}
+     * resolves there, measured). Leaving that link in the chain would not be harmless-because-empty
+     * - "it is empty" is an observation, not an invariant, and the chain does not merge the way a
+     * single file does: {@link Config#getSubsections} and {@link Config#getSections} UNION every
+     * link, and {@link Config#getStringList} CONCATENATES the base's values with the layer's own
+     * (read from JGit's sources, not assumed). So an entry in a file git never opens would be
+     * enumerated and could not be shadowed by a clean value above it - a refusal on a healthy
+     * repository, the expensive direction.
+     * <p>
+     * The link is dropped ONLY when it can be IDENTIFIED, and identified by the very expression
+     * {@code FileRepository} built it from ({@code getFS().resolve(getDirectory(), "config")}), so
+     * on the shapes this plug-in is given the two {@link File}s are the same path by construction.
+     * Anything else - a repository whose configuration is not a {@link FileBasedConfig}, or whose
+     * top link is some other file - keeps the whole chain, unchanged. That is deliberately not
+     * defensive noise:
+     * <ul>
+     * <li>a blind {@code getBaseConfig()} would, on an unexpected shape, drop the USER configuration
+     * and stop judging remotes inherited from it - the same blindness this whole change removes;</li>
+     * <li>and it is what keeps a future JGit right without a version check. JGit 7.1 gained
+     * {@code Repository.getCommonDirectory()}; there the top link is no longer
+     * {@code <git dir>/config}, the test simply fails, nothing is dropped, and the shared layer
+     * added below becomes a duplicate - which a predicate that unions and concatenates VALUES
+     * cannot be changed by.</li>
+     * </ul>
+     * Nothing here mutates {@code config}: the repository is EGit's, shared with
+     * {@code list_git_branches} and the branch tools, and a check has no business changing what they
+     * read. {@link Config#getBaseConfig()} is a plain accessor, and every layer built on top of it
+     * is a fresh object private to this call.
+     *
+     * @param repo the repository the command would run in
+     * @param config the merged configuration JGit hands out for it
+     * @param common where the shared part of the repository lives
+     * @return the configuration chain to build the judgement on
+     */
+    static Config inheritedChain(Repository repo, StoredConfig config, GitCommonDirectory common)
+    {
+        File gitDir = repo.getDirectory();
+        if (!common.linked() || gitDir == null || !(config instanceof FileBasedConfig))
+        {
+            return config;
+        }
+        Config base = config.getBaseConfig();
+        File ignored = repo.getFS().resolve(gitDir, REPOSITORY_CONFIG_FILE);
+        return base != null && ignored.equals(((FileBasedConfig)config).getFile()) ? base : config;
+    }
+
+    /**
+     * Adds the SHARED configuration of a linked worktree, and the PER-WORKTREE configuration on top
+     * when the repository has it switched on, because JGit does neither - and a remote can live in
+     * either and nowhere else.
+     * <p>
+     * <b>The shared file.</b> In a linked worktree git reads {@code <common dir>/config} as the
+     * repository's configuration and never touches the {@code <git dir>/config} JGit reads
+     * ({@link #inheritedChain} takes that one out). JGit 6.8 knows nothing about any of it, so
+     * without this layer a remote declared in the shared configuration - which is where every remote
+     * of every ordinary clone lives - is invisible here while {@code remote -v} prints it.
      * <p>
      * With {@code extensions.worktreeConfig = true} git reads {@code <git dir>/config.worktree}
      * after {@code config} ({@code git rev-parse --git-path config.worktree} resolves it, and for a
@@ -1923,9 +2052,18 @@ public class GitTool implements IMcpTool
      * fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new object has no
      * cached content to go stale.
      * <p>
-     * The switch is read from the REPOSITORY's own file, never from the merged chain, and NOT
-     * gated on {@code core.repositoryformatversion}. Both halves are what git was measured doing
+     * The switch is read from the SHARED file, never from the merged chain, and NOT gated on
+     * {@code core.repositoryformatversion}. All three halves are what git was measured doing
      * (2.35.1), not what its documentation suggests:
+     * <ul>
+     * <li>the switch and the FILE it switches on live in different places in a linked worktree:
+     * {@code extensions.worktreeConfig} in the SHARED config, {@code config.worktree} in the
+     * worktree's own git directory. Measured - with the switch in the shared config and the remote
+     * in the worktree's {@code config.worktree}, {@code remote -v} prints it from the linked
+     * worktree and NOT from the main one. Reading the switch from {@code <git dir>/config} there
+     * would find nothing and silently disable this whole layer;</li>
+     * </ul>
+     * and, unchanged from before:
      * <ul>
      * <li>with the switch only in a user's {@code ~/.gitconfig} - via {@code GIT_CONFIG_GLOBAL} -
      * {@code git remote -v} prints NOTHING from {@code config.worktree}. So an inherited one must
@@ -1940,37 +2078,48 @@ public class GitTool implements IMcpTool
      * safe direction; narrowing the condition that switches the file on is what keeps a stale
      * entry elsewhere from refusing a healthy repository.
      * <p>
-     * LINKED worktrees are outside this - and outside the whole check - for a reason that is not
-     * ours: JGit 6.8 gives such a repository no repository-level configuration at all. Its
-     * {@code getDirectory()} is the {@code .git/worktrees/<name>} directory, which is the right
-     * place to look for {@code config.worktree} (that is what {@code --git-path} resolves to there),
-     * but the {@code config} JGit reads beside it does not exist, and the common one is never read:
-     * on a linked worktree {@code getConfig()} reports no format version and no remotes whatsoever.
-     * So nothing is judged there, and nothing here can change that.
+     * The order this produces is git's own: {@code config.worktree} over the shared {@code config}
+     * over the user's over the system's. Nothing here writes to the repository - every layer is a
+     * fresh {@link FileBasedConfig} private to this call, so the instance EGit shares with
+     * {@code list_git_branches} and the branch tools is left exactly as it was found.
+     * <p>
+     * Package-visible so a test can drive it with a base chain of its own: what it must NOT do -
+     * lose the inherited configuration while adding the shared one - is invisible to any fixture
+     * built out of files, because a test cannot plant a remote in the machine's {@code ~/.gitconfig}.
      *
      * @param repo the repository the command would run in
-     * @param config the merged configuration already read for it
-     * @return the configuration to judge - {@code config} itself when the extension is off
+     * @param inherited the configuration chain to build on ({@link #inheritedChain})
+     * @param common where the shared part of the repository lives
+     * @return the configuration to judge - {@code inherited} itself for an ordinary clone with the
+     *         extension off
      * @throws IOException when a configuration file cannot be read
      * @throws ConfigInvalidException when one cannot be parsed
      */
-    private static Config withWorktreeConfig(Repository repo, Config config)
+    static Config effectiveConfig(Repository repo, Config inherited, GitCommonDirectory common)
         throws IOException, ConfigInvalidException
     {
         File gitDir = repo.getDirectory();
         if (gitDir == null)
         {
-            return config;
+            return inherited;
         }
-        FileBasedConfig repositoryOnly =
-            new FileBasedConfig(null, new File(gitDir, REPOSITORY_CONFIG_FILE), repo.getFS());
+        File sharedConfigFile = new File(common.directory(), REPOSITORY_CONFIG_FILE);
+        Config effective = inherited;
+        if (common.linked())
+        {
+            FileBasedConfig shared = new FileBasedConfig(inherited, sharedConfigFile, repo.getFS());
+            // A missing file is not an error: load() clears and the layer simply adds nothing.
+            shared.load();
+            effective = shared;
+        }
+        FileBasedConfig repositoryOnly = new FileBasedConfig(null, sharedConfigFile, repo.getFS());
         repositoryOnly.load();
         if (!repositoryOnly.getBoolean(EXTENSIONS_SECTION, WORKTREE_CONFIG_KEY, false))
         {
-            return config;
+            return effective;
         }
         FileBasedConfig worktree =
-            new FileBasedConfig(config, new File(gitDir, WORKTREE_CONFIG_FILE), repo.getFS());
+            new FileBasedConfig(effective, new File(gitDir, WORKTREE_CONFIG_FILE), repo.getFS());
         // A missing file is not an error here: load() clears and the layer simply adds nothing.
         worktree.load();
         return worktree;
@@ -1993,6 +2142,24 @@ public class GitTool implements IMcpTool
     {
         return GitFailureLog.typesOnly(
             "git: reading the repository config to check stored remotes failed", failure); //$NON-NLS-1$
+    }
+
+    /**
+     * The EDT-log line for a {@code commondir} that could not be resolved - types only, for the same
+     * reason as {@link #configReadFailureLog}.
+     * <p>
+     * The reason is narrower here but not absent: the exception's message carries the path this
+     * pointer names, which is repository content and travels into a permanent log. There is no
+     * gain in writing it there when the refusal already tells the caller which file to repair.
+     *
+     * @param failure the exception the resolution threw (may be {@code null})
+     * @return the message to log; it embeds no file content
+     */
+    static String commonDirFailureLog(Throwable failure)
+    {
+        return GitFailureLog.typesOnly(
+            "git: resolving the linked worktree's commondir to check stored remotes failed", //$NON-NLS-1$
+            failure);
     }
 
     /**
@@ -2127,9 +2294,16 @@ public class GitTool implements IMcpTool
         }
         if (source == RemoteSource.LEGACY_FILE)
         {
+            // The path is named INDIRECTLY on purpose: in a linked worktree '.git' is a FILE, and
+            // these two directories live in the SHARED repository, so '.git/remotes/<name>' is a
+            // path that does not exist there. 'rev-parse --git-path' prints the right one in every
+            // layout, main worktree and linked alike.
             return "this one is git's LEGACY per-remote file, not configuration - " //$NON-NLS-1$
-                + "'git remote remove' does not know it. Delete the file itself, " //$NON-NLS-1$
-                + "'.git/remotes/<name>' or '.git/branches/<name>', and declare the remote with " //$NON-NLS-1$
+                + "'git remote remove' does not know it. Delete the file itself: it is " //$NON-NLS-1$
+                + "'<name>' under the directory 'git rev-parse --git-path remotes' prints, or " //$NON-NLS-1$
+                + "under 'git rev-parse --git-path branches' (in a plain clone those are " //$NON-NLS-1$
+                + "'.git/remotes' and '.git/branches'; in a linked worktree they live in the " //$NON-NLS-1$
+                + "SHARED repository, not beside the worktree). Then declare the remote with " //$NON-NLS-1$
                 + "'git remote add' instead, pointing at a URL that embeds no credentials."; //$NON-NLS-1$
         }
         return "'git remote remove <name>', then 'git remote add' with a name and a " //$NON-NLS-1$
