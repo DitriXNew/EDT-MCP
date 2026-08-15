@@ -121,7 +121,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Compile external 1C data processors and reports into deployable files. Parameters and examples: get_tool_guide('build_external_objects').",
+    "description": "Compile external 1C data processors and reports into deployable files. NOT self-contained: the project needs an associated infobase AND a resolvable 1C runtime - without either the call fails with a setup error, not a compile error (see create_infobase / set_infobase_credentials). Parameters and examples: get_tool_guide('build_external_objects').",
     "inputSchema": {
       "properties": {
         "objectName": {
@@ -1560,6 +1560,7 @@
     "inputSchema": {
       "properties": {
         "checkId": {
+          "description": "Check id: the symbolic dash-cased id (e.g. 'begin-transaction', 'ql-temp-table-index') OR the short UID code from get_project_errors (e.g. 'SU23'); a UID is resolved when projectName is also supplied. Precondition: a check-descriptions folder must be configured in MCP preferences, else the tool returns a configuration error.",
           "type": "string"
         },
         "projectName": {
@@ -1700,7 +1701,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Investigate infobase activity and errors through its event log. Returns PII and live infobase data - user names, session data and business-record references. Parameters and examples: get_tool_guide('get_event_log').",
+    "description": "Investigate infobase activity and errors through its event log. Reads the LEGACY text format only (ver 2.0: 1Cv8.lgf + *.lgp); an infobase on the modern SQLite .lgd log is rejected, so switch the log format in 1C or use another source. Returns PII and live infobase data - user names, session data and business-record references. Parameters and examples: get_tool_guide('get_event_log').",
     "inputSchema": {
       "properties": {
         "applicationId": {
@@ -3256,7 +3257,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Stop pausing execution at a BSL source breakpoint. Parameters and examples: get_tool_guide('remove_breakpoint').",
+    "description": "Stop pausing execution at a BSL source breakpoint. Address it EITHER by breakpointId OR by modulePath together with lineNumber - every field is optional on its own, and a call carrying neither pair is rejected. Parameters and examples: get_tool_guide('remove_breakpoint').",
     "inputSchema": {
       "properties": {
         "breakpointId": {

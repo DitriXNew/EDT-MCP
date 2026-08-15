@@ -40,6 +40,11 @@ SELECTORS = {
                           {"projectName": PRESENT, "applicationId": PRESENT}],
     "debug_yaxunit_tests": [{"launchConfigurationName": PRESENT},
                             {"projectName": PRESENT, "applicationId": PRESENT}],
+    # RemoveBreakpointTool: "Provide either breakpointId or modulePath+lineNumber". A call
+    # naming only a project and/or a module path removes nothing - the tool rejects it.
+    "remove_breakpoint": [{"breakpointId": PRESENT},
+                          {"modulePath": PRESENT, "lineNumber": PRESENT},
+                          {"module": PRESENT, "lineNumber": PRESENT}],
 }
 
 

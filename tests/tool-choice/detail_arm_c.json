@@ -2673,7 +2673,10 @@
   ],
   "tool_ok": true,
   "expected": "remove_breakpoint",
-  "chosen": "list_breakpoints"
+  "chosen": "list_breakpoints",
+  "bad_selector": [
+   "remove_breakpoint"
+  ]
  },
  {
   "id": "q294",
@@ -3714,7 +3717,10 @@
   "id": "c057",
   "kind": "chain",
   "guides": [],
-  "coverage": "4/4"
+  "coverage": "4/4",
+  "bad_selector": [
+   "remove_breakpoint"
+  ]
  },
  {
   "id": "c058",

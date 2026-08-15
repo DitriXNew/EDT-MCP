@@ -34,7 +34,9 @@ public class RemoveBreakpointTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Stop pausing execution at a BSL source breakpoint. Parameters and examples: " //$NON-NLS-1$
+        return "Stop pausing execution at a BSL source breakpoint. Address it EITHER by breakpointId OR " //$NON-NLS-1$
+            + "by modulePath together with lineNumber - every field is optional on its own, and a call " //$NON-NLS-1$
+            + "carrying neither pair is rejected. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('remove_breakpoint')."; //$NON-NLS-1$
     }
 

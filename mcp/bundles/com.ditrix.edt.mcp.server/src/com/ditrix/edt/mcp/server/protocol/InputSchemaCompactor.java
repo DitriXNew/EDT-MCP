@@ -183,6 +183,11 @@ public final class InputSchemaCompactor
         // project in the workspace, so a multi-configuration workspace answers about a
         // project the caller never named. Third case of clean_project.projectName's shape.
         keep.put("get_configuration_properties", asSet(McpKeys.PROJECT_NAME)); //$NON-NLS-1$
+        // A PRECONDITION on the environment, not on the value: with no check-descriptions
+        // folder configured in MCP preferences, EVERY call returns a configuration error
+        // before it even looks the check up. This parameter's prose is the only place the
+        // always-loaded contract says the tool must be set up before it can answer at all.
+        keep.put("get_check_description", asSet("checkId")); //$NON-NLS-1$ //$NON-NLS-2$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after
