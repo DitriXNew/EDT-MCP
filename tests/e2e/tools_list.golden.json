@@ -526,6 +526,7 @@
           "type": "boolean"
         },
         "normalizeYo": {
+          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the new node's NAME (the trailing FQN segment) and in any synonym / comment / predefined-item description value (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied.",
           "type": "boolean"
         },
         "objectFields": {
@@ -3070,6 +3071,7 @@
           "type": "string"
         },
         "normalizeYo": {
+          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / title) and in the 'comment' property (default true). Matches the 1C standard mdo-ru-name-unallowed-letter. Other free-text strings can be identifier-like (e.g. XDTOPackage.namespace is a URI) and always keep the supplied value. Set false to keep 'ё' exactly as supplied everywhere.",
           "type": "boolean"
         },
         "projectName": {
@@ -3301,6 +3303,7 @@
           "type": "string"
         },
         "expectedHash": {
+          "description": "Optimistic-lock token from the preview's contentHash; required when confirm=true and disableIndices is non-empty.",
           "type": "string"
         },
         "maxResults": {
@@ -4101,6 +4104,7 @@
           "type": "boolean"
         },
         "force": {
+          "description": "On polite-termination timeout, escalate to an OS-level process kill; may lose unsaved 1C state. Default false. Ignored for Attach.",
           "type": "boolean"
         },
         "includeAttach": {

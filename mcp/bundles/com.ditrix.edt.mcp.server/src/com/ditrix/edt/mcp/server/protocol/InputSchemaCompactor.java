@@ -160,6 +160,19 @@ public final class InputSchemaCompactor
         // warning that those bodies can carry infobase and personal data is the only thing
         // standing between a diagnostic call and handing the model live data.
         keep.put("get_mcp_history", asSet("includeBodies")); //$NON-NLS-1$ //$NON-NLS-2$
+        // force=true escalates a polite stop to an OS-level process kill and can lose
+        // unsaved 1C state - a second, harsher mode the tool description does not cover.
+        keep.put("terminate_launch", asSet("force")); //$NON-NLS-1$ //$NON-NLS-2$
+        // normalizeYo defaults to TRUE and rewrites the caller's own Russian text:
+        // 'Всё' is stored as 'Все' in names, synonyms, comments and predefined-item
+        // descriptions unless normalizeYo=false is passed explicitly. Silently altering
+        // user-supplied content is exactly what a caller must be able to see coming.
+        keep.put("create_metadata", asSet("normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("modify_metadata", asSet("normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$
+        // A CONDITIONAL protocol the schema cannot express: expectedHash carries the
+        // preview's contentHash and becomes REQUIRED once confirm=true is paired with a
+        // non-empty disableIndices. Without it the selective confirm is simply rejected.
+        keep.put("rename_metadata_object", asSet("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
         return Collections.unmodifiableMap(keep);
     }
 

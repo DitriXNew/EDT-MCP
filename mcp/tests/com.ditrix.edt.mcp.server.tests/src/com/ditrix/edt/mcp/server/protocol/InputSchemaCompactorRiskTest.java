@@ -68,7 +68,17 @@ public class InputSchemaCompactorRiskTest
      */
     private static final List<String> RISK_WORDS = Arrays.asList("discard", "overwrit", //$NON-NLS-1$ //$NON-NLS-2$
         "irrevers", "cannot be undone", "personal data", "not redacted", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "dangling", "wipes", "destroys"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "dangling", "wipes", "destroys", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Added after a review round the first vocabulary missed entirely: an OS-level
+        // kill that loses unsaved state, and a default that rewrites the caller's own text.
+        //
+        // What this tripwire deliberately does NOT try to catch is a CONDITIONAL
+        // REQUIREMENT ("required when confirm=true and disableIndices is non-empty").
+        // "required when" appears in a dozen perfectly ordinary parameters - projectName
+        // on the form tools, commandName / formName on write_module_source - and flagging
+        // them would train the next reader to wave the failure through. That class is
+        // handled by naming the parameter in KEEP, with the reason next to it.
+        "process kill", "may lose", "unsaved", "normalize the russian"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /**
      * Parameters that trip the tripwire but are deliberately NOT kept on the wire, each
