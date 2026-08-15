@@ -432,19 +432,32 @@ public class GitTool implements IMcpTool
      * file - and the text therefore does NOT tell the caller that git would fail too. Claiming that
      * would be wrong in exactly the cases where the operator most needs to be told it is our limit
      * they have hit; see {@link GitCommonDirectory#of}.
+     * <p>
+     * The repair it names is the FILE, not a command, and that too is measured rather than assumed:
+     * {@code git worktree repair} does NOT rewrite {@code commondir}. Run against a worktree whose
+     * pointer names a directory that does not exist, it left the file byte for byte as it was and
+     * reported {@code repair: .git file broken} - about a {@code .git} file that was perfectly
+     * intact. Advising it would have sent an operator to fix the wrong thing and back into the
+     * retry loop this refusal exists to prevent, which is the standard {@link #repairClause} holds
+     * every other refusal in this tool to.
      */
     private static final String COMMON_DIR_UNREADABLE_REFUSAL =
         "This is a linked git worktree, and the 'commondir' file in its git directory - the pointer " //$NON-NLS-1$
         + "to the shared repository holding the configuration and the remotes - could not be " //$NON-NLS-1$
-        + "resolved to a directory. Nothing about the stored remotes can be inspected without it, " //$NON-NLS-1$
+        + "resolved to a directory. The remotes this repository actually declares all live behind " //$NON-NLS-1$
+        + "that pointer, so none of them can be inspected without it (what is still readable is the " //$NON-NLS-1$
+        + "user and system configuration, which is not where the fault is), " //$NON-NLS-1$
         + "so the operation is refused instead of run blind. Check the worktree in a terminal " //$NON-NLS-1$
         + "first: most faults of this file stop git as well ('fatal: not a git repository'), but " //$NON-NLS-1$
         + "not all of them - a pointer that is not valid UTF-8, is implausibly large, or is not a " //$NON-NLS-1$
         + "regular file is refused HERE by choice, because following it would mean inspecting some " //$NON-NLS-1$
         + "other directory, reading unbounded untrusted content, or blocking with no deadline. " //$NON-NLS-1$
-        + "'git worktree repair' - run from the main worktree, with the path of this one - rewrites " //$NON-NLS-1$
-        + "the pointer and is the usual fix; a worktree laid out by hand or by another tool may " //$NON-NLS-1$
-        + "need the file corrected directly. This tool logs only the failure's exception types."; //$NON-NLS-1$
+        + "Repair the 'commondir' file itself: it holds one line, the path to the shared " //$NON-NLS-1$
+        + "repository, relative to the directory the file sits in ('../..' for a worktree made by " //$NON-NLS-1$
+        + "'git worktree add'). Do NOT reach for 'git worktree repair' - measured on git 2.35.1, it " //$NON-NLS-1$
+        + "does not touch this file at all, and reports the unrelated '.git file broken' while " //$NON-NLS-1$
+        + "leaving the fault exactly where it was. This tool logs only the failure's exception " //$NON-NLS-1$
+        + "types."; //$NON-NLS-1$
 
     /**
      * Subcommands that rewrite the WORKING TREE, after which the Eclipse workspace must be refreshed
@@ -1906,8 +1919,11 @@ public class GitTool implements IMcpTool
         if (LEGACY_REMOTES_DIRECTORY.equals(directory))
         {
             // Exactly git's own reading, measured rather than guessed: the line has to BEGIN with
-            // one of three keys, case and all, and any run of whitespace after the colon - or none
-            // - is indent, not value. Demanding a single space instead ('URL: ' only) left the key
+            // one of three keys, case and all, and any run of SPACE, TAB or CR after the colon - or
+            // none at all - is indent, not value. Not "whitespace": vertical tab and form feed were
+            // measured NOT to be consumed by git (see isLegacyIndent), and treating them as indent
+            // would delete the very control byte this check refuses on. Demanding a single space
+            // instead ('URL: ' only) left the key
             // on an ordinary 'URL:git@github.com:acme/repo.git', and the colon of that key then
             // read as the password marker in front of the '@' - a REFUSAL on a healthy repository,
             // which is worse than a missed leak: a leak leaves things as they were, a false refusal

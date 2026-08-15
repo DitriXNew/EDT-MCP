@@ -110,9 +110,10 @@ public final class GitCommonDirectory
     }
 
     /**
-     * Resolves the common directory of {@code gitDir}, mirroring git's {@code get_common_dir_noenv}
-     * step for step - each step below was measured against git 2.35.1 rather than read off the
-     * manual.
+     * Resolves the common directory of {@code gitDir}, following git's
+     * {@code get_common_dir_noenv} where the two can agree - each step below was measured against
+     * git 2.35.1 rather than read off the manual - and diverging where it must, deliberately and in
+     * writing (the second list further down).
      * <ul>
      * <li><b>Existence is tested the way git tests it</b>, with an {@code lstat} that does not
      * follow a symbolic link ({@link LinkOption#NOFOLLOW_LINKS}). Opening the file instead would
@@ -144,8 +145,8 @@ public final class GitCommonDirectory
      * <li><b>Not canonicalized.</b> git real-paths the result for its own bookkeeping; nothing here
      * needs that - the files are simply opened underneath it, and {@code ..} is resolved by the
      * operating system - while {@code getCanonicalFile()} would add a whole class of failure (UNC
-     * paths, junctions, an unreachable network component) that git does not have, on a check whose
-     * every refusal is supposed to be one git would make too.</li>
+     * paths, junctions, an unreachable network component) that git does not have, and every failure
+     * this class does not need is one fewer way to refuse a repository git is happy with.</li>
      * <li><b>The target must be a directory.</b> git answers {@code fatal: not a git repository}
      * when it is not.</li>
      * </ul>
@@ -208,6 +209,13 @@ public final class GitCommonDirectory
         // FIFO is not: opening a named pipe with no writer blocks for ever, and this runs before the
         // command that would have had a deadline. git blocks there as well; that is not a licence to,
         // because nothing in this plug-in may make an unattended call wait without a bound.
+        //
+        // What this does NOT close, said plainly rather than left to be discovered: the file is
+        // STATTED here and OPENED below, and Java has no non-blocking open to fuse the two. Swap a
+        // regular file for a FIFO in between and the open still blocks. That closes the accidental
+        // and the stale case, not a racing adversary - and an adversary who can atomically replace
+        // files inside this repository's admin directory can already do far worse to the git command
+        // this check is guarding.
         if (!Files.readAttributes(commonDirFile, BasicFileAttributes.class).isRegularFile())
         {
             throw new IOException("commondir is not a regular file"); //$NON-NLS-1$

@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Test;
 
 /**
@@ -27,12 +28,18 @@ import org.junit.Test;
  * SHARES with the worktree it was added to - the configuration, and git's legacy {@code remotes/}
  * and {@code branches/} files (issue #366).
  *
- * <p>Every expectation below is git's own behaviour, measured on git 2.35.1 against a real linked
- * worktree rather than read off the manual, because two of them are surprising: a trailing SPACE is
- * NOT stripped (it is part of the path, and git answers {@code fatal: not a git repository}), and an
- * EMPTY file is fatal ({@code fatal: failed to read .../commondir}) rather than "no common
- * directory". That is what makes failing closed here safe: every condition this class throws on is
- * one where git itself refuses to run, so a refusal built on it cannot be a false refusal.
+ * <p>Most expectations below are git's own behaviour, measured on git 2.35.1 against a real linked
+ * worktree rather than read off the manual, because several are surprising: a trailing SPACE is NOT
+ * stripped (it is part of the path, and git answers {@code fatal: not a git repository}), an EMPTY
+ * file is fatal ({@code fatal: failed to read .../commondir}) rather than "no common directory",
+ * and so is a file holding nothing but a line terminator - which reading git's source alone
+ * suggests should be accepted. Where a refusal here matches git's, it cannot be a false refusal:
+ * the repository is already unusable.
+ *
+ * <p>The rest are DELIBERATE over-refusals, and they are kept in their own section below rather
+ * than mixed in with the first kind: a pointer this JVM cannot decode, one over the size bound, and
+ * one that is not a regular file are all cases where git might well carry on. Each is a trade made
+ * on purpose, and calling them "what git does" would be the comfortable lie that hides the trade.
  */
 public class GitCommonDirectoryTest
 {
@@ -128,7 +135,7 @@ public class GitCommonDirectoryTest
             linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
     }
 
-    // ==================== fails CLOSED, exactly where git dies ====================
+    // ==================== fails CLOSED where git dies too ====================
 
     @Test
     public void testTrailingWhitespaceIsNotStrippedTheWayTrimWouldStripIt() throws Exception
@@ -256,6 +263,45 @@ public class GitCommonDirectoryTest
         assertEquals("a file exactly at the bound is still read", //$NON-NLS-1$
             linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
     }
+
+    @Test
+    public void testACommonDirFileThatIsASymbolicLinkToARegularFileIsStillRead() throws Exception
+    {
+        // The POSITIVE half of the "must be a regular file" guard, and the only test that can tell
+        // the two stats apart. The first one deliberately does NOT follow links (that is git's
+        // lstat, and following it would make a dangling link read as "absent"); the second one
+        // deliberately DOES, because what must be a regular file is what will be opened - and git
+        // reads through a symbolic link here too.
+        //
+        // Without this test, adding NOFOLLOW_LINKS to the second stat would silently start refusing
+        // a layout git accepts, and every other test in this class would stay green.
+        //
+        // Creating a symbolic link needs a privilege Windows does not grant by default, so this is
+        // SKIPPED there and runs on the Linux CI. A skip is visible in the run's Skipped count; a
+        // test that quietly passed without exercising anything would not be.
+        Linked linked = newLinkedWorktree("common-dir-symlink", "placeholder\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        File real = new File(linked.adminDir, "commondir.real"); //$NON-NLS-1$
+        Files.write(real.toPath(), "../..\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        File link = new File(linked.adminDir, COMMON_DIR);
+        assertTrue("fixture: the placeholder must be removed before the link takes its place", //$NON-NLS-1$
+            link.delete());
+        try
+        {
+            Files.createSymbolicLink(link.toPath(), real.toPath());
+        }
+        catch (IOException | UnsupportedOperationException e) // NOSONAR no privilege: see above
+        {
+            Assume.assumeNoException("symbolic links are not available to this user", e); //$NON-NLS-1$
+        }
+
+        GitCommonDirectory common = GitCommonDirectory.of(linked.adminDir);
+
+        assertTrue("a symlinked commondir is still a linked worktree", common.linked()); //$NON-NLS-1$
+        assertEquals("...and it must be read THROUGH, exactly as git reads it", //$NON-NLS-1$
+            linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
+    }
+
+    // ==================== fails CLOSED where git might not: our trades, on purpose ====================
 
     @Test
     public void testAnOversizePointerIsRefusedRatherThanRead() throws Exception
