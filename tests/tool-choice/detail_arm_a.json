@@ -1692,7 +1692,7 @@
   "tool_ok": true,
   "expected": "delete_project",
   "chosen": "delete_project",
-  "twophase": "strict"
+  "twophase": "confirm"
  },
  {
   "id": "q207",
@@ -3178,7 +3178,7 @@
   "kind": "chain",
   "guides": [],
   "coverage": "3/3",
-  "twophase": "strict"
+  "twophase": "confirm"
  },
  {
   "id": "c039",
@@ -3542,7 +3542,7 @@
   "kind": "chain",
   "guides": [],
   "coverage": "1/1",
-  "twophase": "strict"
+  "twophase": "confirm"
  },
  {
   "id": "c095",
@@ -3569,7 +3569,7 @@
   "kind": "chain",
   "guides": [],
   "coverage": "1/1",
-  "twophase": "strict"
+  "twophase": "confirm"
  },
  {
   "id": "c099",
@@ -3796,7 +3796,7 @@
   "kind": "chain",
   "guides": [],
   "coverage": "4/4",
-  "twophase": "strict"
+  "twophase": "confirm"
  },
  {
   "id": "c133",

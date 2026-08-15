@@ -101,21 +101,60 @@ GUIDE_NOTE = (
 V4 = json.load(open(os.path.join(HERE, "v4_overrides.json"), encoding="utf-8"))
 
 
-def render_guide(tool, desc, body):
-    """Reproduce what get_tool_guide actually RETURNS (GuideRenderer.render).
+def _escape_cell(text):
+    """MarkdownUtils.escapeForTable: a pipe or a newline would break the row."""
+    return (text or "").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
-    Production emits the tool name, the tool's DESCRIPTION, a parameter table built from
-    the RAW (never compacted) inputSchema, and only then the guide body. Staging the bare
-    .md gave the runner a different document from the one a real client reads - and the
-    missing table carries exactly the parameter prose V3/V4 strip from tools/list, so the
-    short arms were measured against an input no client ever sees. The description is
-    arm-specific; the table is not, because compaction happens at tools/list, not here.
+
+def _guide_param_table(tool):
+    """GuideRenderer.appendParameters, reproduced.
+
+    A Markdown table with the columns Parameter / Required / Type / Description, in the
+    schema's own property ORDER (not sorted), "yes" or an em dash for required, and the
+    enum appended to the type cell as " (one of: a, b, c)". No default column, because the
+    renderer emits none - the bullet list this used to stage was a different document from
+    the one production returns.
+    """
+    schema = tool["inputSchema"] or {}
+    props = schema.get("properties") or {}
+    if not props:
+        return ["No parameters."]
+    required = set(schema.get("required") or [])
+    rows = ["| Parameter | Required | Type | Description |", "| --- | --- | --- | --- |"]
+    for name, spec in props.items():
+        spec = spec if isinstance(spec, dict) else {}
+        type_cell = spec.get("type", "") if isinstance(spec.get("type"), str) else ""
+        if isinstance(spec.get("enum"), list) and spec["enum"]:
+            type_cell += " (one of: %s)" % ", ".join(str(v) for v in spec["enum"])
+        rows.append("| %s | %s | %s | %s |" % (
+            _escape_cell(name), "yes" if name in required else "\u2014",
+            _escape_cell(type_cell), _escape_cell(spec.get("description", ""))))
+    return rows
+
+
+def _strip_redundant_h1(body, name):
+    """GuideRenderer.stripRedundantH1: the renderer already emitted the name as H1."""
+    lines = body.split("\n")
+    if lines and lines[0].strip().lower() == ("# %s" % name).lower():
+        return "\n".join(lines[1:]).lstrip("\n")
+    return body
+
+
+def render_guide(tool, desc, body):
+    """Reproduce what get_tool_guide RETURNS, structure for structure.
+
+    GuideRenderer.render emits the name as H1, the tool DESCRIPTION - the arm's active
+    one, since that is what a client of that arm is served - then "## Parameters" with the
+    table above, built from the RAW (never compacted) schema, then "## Guide" with the body
+    minus its own duplicate H1. Staging the bare .md gave the runner a different document
+    from the one a real client reads, and the missing table carries exactly the parameter
+    prose that V3/V4 strip from tools/list.
     """
     out = ["# %s\n" % tool["name"], desc.strip() + "\n", "## Parameters"]
-    out.extend(render_params(tool, keep_prose=True))
+    out.extend(_guide_param_table(tool))
     if body:
         out.append("\n## Guide")
-        out.append(body)
+        out.append(_strip_redundant_h1(body, tool["name"]))
     return "\n".join(out) + "\n"
 
 
@@ -192,12 +231,17 @@ for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c"), ("V4", "ar
             body_path = os.path.join(plugin_guides, "%s.md" % name)
             if not os.path.isfile(body_path):
                 continue
+            # Exactly the description that arm's catalog carries, guide pointer included:
+            # production serves ONE description per tool, not one for the list and a
+            # different one inside the guide.
             if arm == "V4" and name in V4["descriptions"]:
                 desc = V4["descriptions"][name]
             elif arm == "V1":
                 desc = tool["description"]
             else:
                 desc = short[name]
+            if arm != "V1":
+                desc = desc.rstrip() + " Parameters and examples: get_tool_guide('%s')." % name
             open(os.path.join(staged, "%s.md" % name), "w", encoding="utf-8").write(
                 render_guide(tool, desc, open(body_path, encoding="utf-8").read()))
 json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"},
@@ -205,6 +249,10 @@ json.dump({"arm_a": "V1", "arm_b": "V2", "arm_c": "V3", "arm_d": "V4"},
 
 # Batches: the one-step requests go 30 to an agent, the long multi-step scenarios 15,
 # because each of those answers carries a whole plan rather than a single call.
+# Recreate, never reuse: a split with fewer files would leave the previous run's
+# trailing batch_*.json behind, and --stage would then hand the runner questions
+# that no longer exist in questions.json.
+shutil.rmtree(os.path.join(HERE, "batches"), ignore_errors=True)
 os.makedirs(os.path.join(HERE, "batches"), exist_ok=True)
 singles = [q for q in questions if q.get("kind", "single") == "single"]
 chains = [q for q in questions if q.get("kind") == "chain"]

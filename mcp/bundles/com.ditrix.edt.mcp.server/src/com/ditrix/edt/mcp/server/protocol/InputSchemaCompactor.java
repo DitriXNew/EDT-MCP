@@ -123,10 +123,22 @@ public final class InputSchemaCompactor
         keep.put("get_method_call_hierarchy", asSet("direction")); //$NON-NLS-1$ //$NON-NLS-2$
         // A scope limit that makes the tool inapplicable: FILE infobases only.
         keep.put("create_infobase", asSet("infobaseFile")); //$NON-NLS-1$ //$NON-NLS-2$
-        // debug=true changes the return contract and requires a wait_for_break follow-up.
-        keep.put("run_yaxunit_tests", asSet("debug")); //$NON-NLS-1$ //$NON-NLS-2$
         // The lost-update guard: what the hash is and where it comes from.
         keep.put("write_module_source", asSet("expectedHash")); //$NON-NLS-1$ //$NON-NLS-2$
+        // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
+        // the caller never asked for - the build stamps every object's Comment and flushes
+        // the .mdo; the launch tools silently run a configuration->DB update; update_database
+        // kills live clients; delete_infobase also deregisters. None of it is expressible in
+        // the schema (the tools emit no JSON Schema `default` at all), so stripping the prose
+        // leaves a bare {"type":"boolean"} and a client that cannot tell an inert call from a
+        // mutating one. Same class of harm as a false two-phase clause.
+        keep.put("build_external_objects", asSet("recordBuildTime")); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("debug_launch", asSet("updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("debug_yaxunit_tests", asSet("updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("delete_infobase", asSet("deleteRegistration")); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("update_database", asSet("terminateRunningClients")); //$NON-NLS-1$ //$NON-NLS-2$
+        // debug=true also changes the return contract (a wait_for_break follow-up).
+        keep.put("run_yaxunit_tests", asSet("debug", "updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         return Collections.unmodifiableMap(keep);
     }
 

@@ -2110,14 +2110,6 @@
   "chosen": "list_modules"
  },
  {
-  "id": "q248",
-  "kind": "single",
-  "guides": [],
-  "tool_ok": true,
-  "expected": "list_modules",
-  "chosen": "get_metadata_objects"
- },
- {
   "id": "q249",
   "kind": "single",
   "guides": [],
@@ -2345,16 +2337,6 @@
   "tool_ok": true,
   "expected": "find_references",
   "chosen": "find_references"
- },
- {
-  "id": "q273",
-  "kind": "single",
-  "guides": [
-   "search_in_code"
-  ],
-  "tool_ok": true,
-  "expected": "go_to_definition",
-  "chosen": "search_in_code"
  },
  {
   "id": "q274",
