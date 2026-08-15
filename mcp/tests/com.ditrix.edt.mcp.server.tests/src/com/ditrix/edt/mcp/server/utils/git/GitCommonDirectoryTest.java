@@ -181,6 +181,83 @@ public class GitCommonDirectoryTest
     }
 
     @Test
+    public void testAPointerThatIsNothingButALineTerminatorIsRefused() throws Exception
+    {
+        // The case git's SOURCE suggests should be accepted - it reads one byte, strips it, and is
+        // left with an empty relative path that resolves back to the git directory - so it was
+        // measured instead of reasoned about. git answers 'fatal: not a git repository': the
+        // directory it lands on is the worktree's own, which is not a repository.
+        //
+        // Resolving it to the git directory here would be worse than useless: the directory EXISTS,
+        // so the check would sail past its own isDirectory() guard, read a config git refuses to
+        // read, and approve. Fail closed, exactly where git does.
+        for (String terminator : List.of("\n", "\r\n")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Linked linked = newLinkedWorktree("common-dir-eol-only", terminator); //$NON-NLS-1$
+
+            assertRefused(linked.adminDir,
+                "a pointer that is nothing but a line terminator kills git too"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAPointerThatIsNotValidUtf8IsRefusedRatherThanGuessedAt() throws Exception
+    {
+        // The lenient decoding would not FAIL here - it would SUCCEED, on a different path: an
+        // invalid byte becomes U+FFFD, which is an ordinary character that names an ordinary (other)
+        // directory, while git takes the bytes literally. So the fixture makes that substituted
+        // directory EXIST, which is the only shape in which the two decoders disagree observably.
+        //
+        // Without it this test proves nothing: '../..<0xFF>' decodes leniently to a path that does
+        // not exist, isDirectory() refuses it anyway, and the test passes with either decoder. That
+        // is exactly how it was written first, and the mutation run caught it - so the fixture below
+        // is the assertion, not the decoration.
+        File root = newDirectory("common-dir-bad-utf8"); //$NON-NLS-1$
+        File sharedDir = new File(root, ".git"); //$NON-NLS-1$
+        File adminDir = new File(new File(sharedDir, "worktrees"), "wt"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("fixture: the worktree admin directory must be created", adminDir.mkdirs()); //$NON-NLS-1$
+        // What a lenient UTF-8 decode of the bytes below would name - and it is a real directory.
+        // Built numerically, with no escape and no raw byte: this file is compiled by Tycho,
+        // whose source encoding is not guaranteed to be UTF-8.
+        char replacement = (char)0xFFFD;
+        File substituted = new File(sharedDir, "shared" + replacement); //$NON-NLS-1$
+        assertTrue("fixture: the directory a lenient decode would land on must EXIST, or the " //$NON-NLS-1$
+            + "isDirectory() guard refuses this on its own and the decoder is not under test", //$NON-NLS-1$
+            substituted.mkdirs());
+        // '../../shared<0xFF>' - 0xFF is not a legal UTF-8 byte anywhere, in any position.
+        byte[] pointer = new byte[]{'.', '.', '/', '.', '.', '/', 's', 'h', 'a', 'r', 'e', 'd',
+            (byte)0xFF, '\n'};
+        Files.write(new File(adminDir, COMMON_DIR).toPath(), pointer);
+
+        assertRefused(adminDir, "a pointer this JVM cannot decode names a path we do not know - " //$NON-NLS-1$
+            + "substituting U+FFFD for the byte would inspect a DIFFERENT directory and approve " //$NON-NLS-1$
+            + "on the strength of it"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPointerOfExactlyTheMaximumSizeIsStillRead() throws Exception
+    {
+        // The other side of the bound. A bound that is off by one refuses a file it promised to
+        // accept, and "refuses one byte early" is invisible unless both sides are pinned.
+        Linked linked = newLinkedWorktree("common-dir-at-bound", "../..\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Padded to EXACTLY the bound with line terminators, which are stripped back off, so the
+        // path itself stays valid while the file is as large as it is allowed to be.
+        StringBuilder atBound = new StringBuilder("../.."); //$NON-NLS-1$
+        while (atBound.length() < 64 * 1024)
+        {
+            atBound.append('\n');
+        }
+        assertEquals("fixture: the file must be exactly at the bound", 64 * 1024, atBound.length()); //$NON-NLS-1$
+        Files.write(new File(linked.adminDir, COMMON_DIR).toPath(),
+            atBound.toString().getBytes(StandardCharsets.UTF_8));
+
+        GitCommonDirectory common = GitCommonDirectory.of(linked.adminDir);
+
+        assertEquals("a file exactly at the bound is still read", //$NON-NLS-1$
+            linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
+    }
+
+    @Test
     public void testAnOversizePointerIsRefusedRatherThanRead() throws Exception
     {
         // A deliberate, stated bound on untrusted repository content - a genuine commondir holds one

@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.runtime.ILog;
@@ -1739,8 +1741,13 @@ public class GitToolStoredRemoteTest
         Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
         StoredConfig before = linked.getConfig();
         Config beforeBase = before.getBaseConfig();
+        // The identity assertions below are cheap and are NOT what carries this test - JGit keeps
+        // the same config object and the same base reference on its own. What carries it is the
+        // pair of CONTENT assertions: the shared config declares a remote, JGit cannot see it here,
+        // and it must still be unable to see it afterwards.
         assertTrue("fixture: JGit must see no remote here, or the assertion below is vacuous", //$NON-NLS-1$
             before.getSubsections(REMOTE_SECTION).isEmpty());
+        Set<String> beforeSections = new TreeSet<>(before.getSections());
 
         assertNotNull("fixture: the shared remote must be refused, so the check really ran", //$NON-NLS-1$
             GitTool.storedRemoteRefusal(linked, List.of(PUSH)));
@@ -1749,9 +1756,13 @@ public class GitToolStoredRemoteTest
             before == linked.getConfig());
         assertTrue("...and its base chain must be the same one", //$NON-NLS-1$
             beforeBase == linked.getConfig().getBaseConfig());
-        assertTrue("...and it must still report exactly what it reported before: the check builds " //$NON-NLS-1$
-            + "a private view, it does not enrich shared state", //$NON-NLS-1$
+        assertTrue("...and it must still be unable to see the shared remote: the check builds a " //$NON-NLS-1$
+            + "private view, it does not enrich shared state", //$NON-NLS-1$
             linked.getConfig().getSubsections(REMOTE_SECTION).isEmpty());
+        assertEquals("...and no section of any kind may have appeared in it either - 'remote' is " //$NON-NLS-1$
+            + "the one this check reads, but enriching the shared object with ANY of the shared " //$NON-NLS-1$
+            + "file's content is the thing being ruled out", //$NON-NLS-1$
+            beforeSections, new TreeSet<>(linked.getConfig().getSections()));
     }
 
     // ---- the chain the shared layer is built ON ----

@@ -9,6 +9,8 @@ package com.ditrix.edt.mcp.server.utils.git;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -128,7 +130,15 @@ public final class GitCommonDirectory
      * whatever this class does. Harmless in the direction it goes - git refuses to run at all, so
      * there is no output for the check to have missed - and the reason the test for this pins a
      * TAB, which nothing but {@code trim} would remove.)</li>
-     * <li><b>Empty is fatal</b>, as it is to git ({@code fatal: failed to read .../commondir}).</li>
+     * <li><b>Empty is fatal</b>, as it is to git ({@code fatal: failed to read .../commondir}) -
+     * and so is a pointer that is nothing BUT a line terminator, which is the more interesting of
+     * the two. Reading git's source alone suggests the second one should be accepted (it reads a
+     * byte, strips it, and is left with a path that resolves back to the git directory), so it was
+     * measured instead: a {@code commondir} holding a single line feed makes git answer
+     * {@code fatal: not a git repository}, because the directory it then resolves to is the
+     * worktree's own and that is not a repository. Refusing it here therefore agrees with git -
+     * whereas "resolve it to the git directory" would have this check inspect a directory git
+     * refuses to use, and approve on the strength of it.</li>
      * <li><b>A relative path is resolved against the git directory</b>, an absolute one is used as
      * it stands - git's rule.</li>
      * <li><b>Not canonicalized.</b> git real-paths the result for its own bookkeeping; nothing here
@@ -147,11 +157,14 @@ public final class GitCommonDirectory
      * read; git cannot run there at all, so it prints nothing and there is nothing to leak, and
      * inventing a repository-shaped predicate is how a check starts refusing healthy files.
      * <p>
-     * The bytes are decoded as UTF-8, like every other file read on this path. git treats a path as
-     * raw bytes, so a non-UTF-8 path on a non-UTF-8 platform would mis-resolve and be refused;
-     * {@code git worktree add} writes {@code ../..} and nothing else, so no layout git itself
-     * produced can reach that - a hand-built or third-party one can, and the limit is stated rather
-     * than called impossible.
+     * The bytes are decoded as UTF-8 STRICTLY - a malformed byte is an error, not a
+     * {@code U+FFFD}. git takes a path as raw bytes, so a pointer this JVM cannot decode is one
+     * where the two of us would disagree about which directory is meant, and the lenient decoding
+     * would hand back a real, different path: if that one happens to exist and be clean, the check
+     * approves a repository it never opened. So it is refused instead. {@code git worktree add}
+     * writes {@code ../..} and nothing else, so no layout git itself produced can reach this - a
+     * hand-built or third-party one on a non-UTF-8 platform can, and it is written down rather than
+     * called impossible.
      *
      * @param gitDir the repository's git directory ({@code Repository.getDirectory()}); may be
      *            {@code null}, in which case the result is "not linked" with a {@code null}
@@ -217,7 +230,17 @@ public final class GitCommonDirectory
         {
             throw new IOException("commondir is too large to be a path"); //$NON-NLS-1$
         }
-        return new String(buffer, 0, read, StandardCharsets.UTF_8);
+        // STRICT, not new String(bytes, UTF_8): that one replaces a malformed byte with U+FFFD
+        // silently, and the result is a DIFFERENT path. git takes these bytes literally, so a
+        // pointer this JVM cannot decode would send the two of us to two different directories -
+        // and if the substituted one happens to exist and be clean, the check would approve a
+        // repository it never read. Refusing a path we cannot decode is the only honest answer:
+        // guessing at it is not "best effort", it is inspecting somewhere else.
+        return StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(buffer, 0, read))
+            .toString();
     }
 
     /**

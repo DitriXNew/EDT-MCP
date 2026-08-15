@@ -1747,9 +1747,13 @@ public class GitTool implements IMcpTool
      * find the value: a {@code remotes/} file carries {@code URL:} / {@code Push:} / {@code Pull:}
      * lines, a {@code branches/} file a bare URL. The key prefix HAS to come off - it ends in a
      * colon, and a colon in front of an {@code @} is exactly what marks a password, so judging the
-     * raw line would refuse every legacy file ever written. The prefix is only recognised when a
-     * SPACE follows the colon, so a bare {@code https://...} line keeps its scheme and is judged as
-     * the URL it is rather than as plain text.
+     * raw line would refuse every legacy file ever written. The prefix is recognised by the KEY,
+     * anchored at the start of the line and case-sensitively, with any run of indent after the
+     * colon - or none at all: {@code URL:git@github.com:acme/repo.git} is an ordinary, healthy line
+     * and demanding a space after the colon left the key on it, whose colon then read as the
+     * password marker in front of the {@code @} and refused a working repository. A bare
+     * {@code https://...} line matches no key ({@code https:} is not one of the three), so it keeps
+     * its scheme and is judged as the URL it is rather than as plain text.
      * <p>
      * Bounded on both sides: at most {@value #MAX_LEGACY_REMOTE_FILES} files per directory and
      * {@value #MAX_LEGACY_REMOTE_BYTES} bytes each, because both are untrusted content in a
@@ -2048,9 +2052,13 @@ public class GitTool implements IMcpTool
      * {@code .git/config} declares. So {@code remote -v} would print a remote this check never saw.
      * <p>
      * Layered as a BASE-chained {@link FileBasedConfig}, which is how git reads it too: a remote
-     * declared only there is enumerated, and one declared in both takes the worktree value. Built
-     * fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new object has no
-     * cached content to go stale.
+     * declared only there is enumerated. What happens to one declared in BOTH is not the scalar
+     * override it looks like, and the difference matters here: {@link Config#getStringList} - which
+     * is what a multi-valued {@code url} is read through - CONCATENATES the base's values with the
+     * layer's own, so both are judged and a clean worktree value cannot hide an inherited poisoned
+     * one. That is the direction this check wants; it is recorded because the opposite was assumed
+     * once. Built fresh on every call, so it needs no place in {@link #reloadFromDisk} - a new
+     * object has no cached content to go stale.
      * <p>
      * The switch is read from the SHARED file, never from the merged chain, and NOT gated on
      * {@code core.repositoryformatversion}. All three halves are what git was measured doing
