@@ -160,8 +160,12 @@ public final class InputSchemaCompactor
         // the 1Cv8.1CD directory); overwriteDiskEdits is the REQUIRED gate for fullExport,
         // and the only place that says a force-export overwrites on-disk edits. Both were
         // caught by InputSchemaCompactorRiskTest, not by review.
+        // applicationId / infobaseName are the SELECTOR: `required` lists only projectName, but
+        // execute() refuses a call naming neither. The refused call never reaches the preview,
+        // so a client can run the whole advertised two-phase protocol and delete nothing.
         keep.put("delete_infobase", //$NON-NLS-1$
-            asSet("deleteRegistration", "deleteDatabaseFiles")); //$NON-NLS-1$ //$NON-NLS-2$
+            asSet("deleteRegistration", "deleteDatabaseFiles", //$NON-NLS-1$ //$NON-NLS-2$
+                McpKeys.APPLICATION_ID, "infobaseName")); //$NON-NLS-1$
         keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
         // debug=true also changes the return contract (a wait_for_break follow-up).
         // launchConfigurationName OR projectName+applicationId - the same target-selector
@@ -175,12 +179,20 @@ public final class InputSchemaCompactor
         // external work. A launch that looks routine silently overwrites someone's changes.
         // restartIfRunning=true TERMINATES the live session before relaunching, on a tool
         // whose destructiveHint is false - nothing else in the always-loaded contract says so.
+        // The launch family shares ONE target-selector contract - launchConfigurationName OR
+        // projectName+applicationId - that `required` cannot state, because neither field is
+        // required on its own. It was kept for run_yaxunit_tests first; these three refuse the
+        // same project-only shape, and for update_database the refusal also costs the preview.
         keep.put("debug_launch", //$NON-NLS-1$
-            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, "restartIfRunning")); //$NON-NLS-1$ //$NON-NLS-2$
+            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, "restartIfRunning", //$NON-NLS-1$ //$NON-NLS-2$
+                McpKeys.PROJECT_NAME, McpKeys.APPLICATION_ID, "launchConfigurationName")); //$NON-NLS-1$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
         keep.put("update_database", //$NON-NLS-1$
-            asSet("terminateRunningClients", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
+            asSet("terminateRunningClients", KEY_EXTERNAL_CHANGES, //$NON-NLS-1$
+                McpKeys.PROJECT_NAME, McpKeys.APPLICATION_ID, "launchConfigurationName")); //$NON-NLS-1$
+        keep.put("set_infobase_credentials", //$NON-NLS-1$
+            asSet(McpKeys.PROJECT_NAME, McpKeys.APPLICATION_ID, "launchConfigurationName")); //$NON-NLS-1$
         // includeBodies=true returns the recorded request/response JSON VERBATIM, and that
         // path is deliberately not redacted (the redactor only sees the outer tool). The
         // warning that those bodies can carry infobase and personal data is the only thing
@@ -194,7 +206,27 @@ public final class InputSchemaCompactor
         // checkout defaults to FALSE: the branch is created and the working tree stays on the
         // old branch. A caller who reads "start isolated work" and skips this parameter then
         // commits the isolated work to the branch it meant to leave.
-        keep.put("create_git_branch", asSet("checkout")); //$NON-NLS-1$ //$NON-NLS-2$
+        // setDefault=true WITHOUT applicationId is a silent no-op: createBranch skips the whole
+        // binding block, and the result still reports success with no warning. A requested effect
+        // that simply does not happen, reported as done - the worst shape of all.
+        keep.put("create_git_branch", //$NON-NLS-1$
+            asSet("checkout", "setDefault", McpKeys.APPLICATION_ID)); //$NON-NLS-1$ //$NON-NLS-2$
+        // Despite its NAME, fileMask is neither a glob nor a filename mask: SearchCollector does a
+        // case-insensitive `contains` on the module path. '*.bsl' matches nothing, and the tool
+        // then answers "no matches" - a FALSE NEGATIVE indistinguishable from a real empty result.
+        keep.put("search_in_code", asSet("fileMask")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Both selectors are 1-based. An explicit 0 is rejected loudly, but an off-by-one INSIDE
+        // the valid range is not: a client applying the usual zero-based convention picks entry
+        // n+1 from the error listing and silently applies a DIFFERENT fix to the code.
+        keep.put("apply_quick_fix", asSet("index", "variant")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // Omitted applicationId does not fail - it binds the configuration to the project's
+        // DEFAULT application, so in a multi-infobase project the new config silently points at
+        // an infobase the caller never named (and the call is rejected outright when there is none).
+        keep.put("create_launch_config", asSet(McpKeys.APPLICATION_ID)); //$NON-NLS-1$
+        // Third instance of the lossy default already kept for get_platform_documentation and
+        // get_module_structure: 'concise' drops the code text, the method signature and the
+        // dur/pureDur timings - i.e. exactly the columns a caller hunting a hotspot came for.
+        keep.put("get_profiling_results", asSet("responseFormat")); //$NON-NLS-1$ //$NON-NLS-2$
         // Omitting projectName does not fail - it silently targets the FIRST configuration
         // project in the workspace, so a multi-configuration workspace answers about a
         // project the caller never named. Third case of clean_project.projectName's shape.

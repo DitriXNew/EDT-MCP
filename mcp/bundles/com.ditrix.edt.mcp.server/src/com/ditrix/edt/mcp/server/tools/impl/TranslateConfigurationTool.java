@@ -67,7 +67,8 @@ public class TranslateConfigurationTool implements IMcpTool
         return "SYNCHRONIZE a 1C configuration's translated artifacts with the target languages. Does " //$NON-NLS-1$
             + "NOT translate anything itself: it regenerates the artifacts from translations ALREADY " //$NON-NLS-1$
             + "present in the bound dictionary storages, so text absent from the dictionaries stays " //$NON-NLS-1$
-            + "untranslated - fill the dictionaries first (generate_translation_strings). Parameters " //$NON-NLS-1$
+            + "untranslated - fill the dictionaries first (generate_translation_strings). Requires " //$NON-NLS-1$
+            + "LanguageTool installed in EDT. Parameters " //$NON-NLS-1$
             + "and examples: get_tool_guide('translate_configuration')."; //$NON-NLS-1$
     }
 

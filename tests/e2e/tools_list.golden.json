@@ -67,6 +67,7 @@
           "type": "string"
         },
         "index": {
+          "description": "1-based selector when the locator still matches several markers (the error lists them). Omit for a single match. If supplied, it must be >= 1 (0 or negative is rejected, never silently treated as 'omitted') and is validated strictly against the CURRENT match count and rejected when out of range - even against a single match - so a stale index from an earlier response is never silently applied to the wrong marker.",
           "type": "integer"
         },
         "line": {
@@ -80,6 +81,7 @@
           "type": "string"
         },
         "variant": {
+          "description": "1-based fix-variant index, required only when the chosen marker's fix exposes more than one variant (the error then lists them). If supplied, it must be >= 1 (0 or negative is rejected, never silently treated as 'omitted') and is validated strictly against the CURRENT variant count and rejected when out of range - even against a single variant - so a stale selector is never silently applied to the wrong fix.",
           "type": "integer"
         }
       },
@@ -264,6 +266,7 @@
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "description": "Optional: application id from get_applications to attach to the new branch's context (the base is FOR this branch).",
           "type": "string"
         },
         "branch": {
@@ -277,6 +280,7 @@
           "type": "string"
         },
         "setDefault": {
+          "description": "Only with applicationId: also make it the DEFAULT infobase for the new branch's context. Default false.",
           "type": "boolean"
         },
         "startPoint": {
@@ -439,6 +443,7 @@
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "description": "Application (infobase) ID from get_applications. If omitted the project's default application is used. If the project has no applications, the call is rejected with a hint.",
           "type": "string"
         },
         "clientType": {
@@ -501,7 +506,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata').",
+    "description": "Add a new metadata object or member to a configuration. callType applies only to a form EVENT HANDLER fqn, and only in an extension project. Parameters and examples: get_tool_guide('create_metadata').",
     "inputSchema": {
       "properties": {
         "callType": {
@@ -662,7 +667,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Start a new EDT configuration, extension, or external-objects project. Parameters and examples: get_tool_guide('create_project').",
+    "description": "Start a new EDT configuration, extension, or external-objects project. Kind-restricted parameters: prefix, purpose and compatibilityMode are extension-only; synonym and comment are rejected for externalObjects. Parameters and examples: get_tool_guide('create_project').",
     "inputSchema": {
       "properties": {
         "autoSortTopObjects": {
@@ -797,6 +802,7 @@
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "description": "Application ID from get_applications; required in the projectName+applicationId mode.",
           "type": "string"
         },
         "externalInfobaseChanges": {
@@ -804,9 +810,11 @@
           "type": "string"
         },
         "launchConfigurationName": {
+          "description": "Exact name of an EDT debug launch config (runtime client or Attach); skips projectName/applicationId.",
           "type": "string"
         },
         "projectName": {
+          "description": "EDT project name; required unless launchConfigurationName is given.",
           "type": "string"
         },
         "restartIfRunning": {
@@ -990,6 +998,7 @@
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "description": "Application ID from get_applications. Either applicationId or infobaseName is required.",
           "type": "string"
         },
         "confirm": {
@@ -1004,6 +1013,7 @@
           "type": "boolean"
         },
         "infobaseName": {
+          "description": "Display name of the infobase to remove. Either applicationId or infobaseName is required.",
           "type": "string"
         },
         "projectName": {
@@ -2377,6 +2387,7 @@
           "type": "string"
         },
         "responseFormat": {
+          "description": "concise (default) = leaner per-line rows (line, calls, pct only); detailed = full rows incl. code text, method signature and dur/pureDur timing",
           "enum": [
             "concise",
             "detailed"
@@ -2672,7 +2683,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the translation setup of an EDT project. Parameters and examples: get_tool_guide('get_translation_project_info').",
+    "description": "Inspect the translation setup of an EDT project. Requires LanguageTool installed in EDT - without it every call fails. Parameters and examples: get_tool_guide('get_translation_project_info').",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -3629,6 +3640,7 @@
           "type": "integer"
         },
         "fileMask": {
+          "description": "Filter by module path substring (e.g. 'CommonModules' or 'Documents/SalesOrder')",
           "type": "string"
         },
         "isRegex": {
@@ -3808,15 +3820,18 @@
           "type": "string"
         },
         "applicationId": {
+          "description": "Application ID from get_applications; required if launchConfigurationName is omitted.",
           "type": "string"
         },
         "launchConfigurationName": {
+          "description": "Exact runtime-client config name from list_configurations (preferred target: the only shape that also configures the launched 1C client).",
           "type": "string"
         },
         "password": {
           "type": "string"
         },
         "projectName": {
+          "description": "EDT project name; required if launchConfigurationName is omitted. Configures the designer agent only - this call does not touch any launch configuration's own client-user settings.",
           "type": "string"
         },
         "user": {
@@ -4079,7 +4094,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Change the active version of an EDT project through Git branch checkout. Parameters and examples: get_tool_guide('switch_git_branch').",
+    "description": "Change the active version of an EDT project through Git branch checkout. LOCAL branches only - a remote-tracking ref such as 'origin/feature' is rejected. Parameters and examples: get_tool_guide('switch_git_branch').",
     "inputSchema": {
       "properties": {
         "branch": {
@@ -4171,7 +4186,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "SYNCHRONIZE a 1C configuration's translated artifacts with the target languages. Does NOT translate anything itself: it regenerates the artifacts from translations ALREADY present in the bound dictionary storages, so text absent from the dictionaries stays untranslated - fill the dictionaries first (generate_translation_strings). Parameters and examples: get_tool_guide('translate_configuration').",
+    "description": "SYNCHRONIZE a 1C configuration's translated artifacts with the target languages. Does NOT translate anything itself: it regenerates the artifacts from translations ALREADY present in the bound dictionary storages, so text absent from the dictionaries stays untranslated - fill the dictionaries first (generate_translation_strings). Requires LanguageTool installed in EDT. Parameters and examples: get_tool_guide('translate_configuration').",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -4203,6 +4218,7 @@
     "inputSchema": {
       "properties": {
         "applicationId": {
+          "description": "Application ID from get_applications; required if launchConfigurationName is omitted.",
           "type": "string"
         },
         "confirm": {
@@ -4216,9 +4232,11 @@
           "type": "boolean"
         },
         "launchConfigurationName": {
+          "description": "Exact runtime-client config name from list_configurations (preferred target).",
           "type": "string"
         },
         "projectName": {
+          "description": "EDT project name; required if launchConfigurationName is omitted.",
           "type": "string"
         },
         "terminateRunningClients": {

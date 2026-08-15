@@ -101,7 +101,8 @@ public class SwitchGitBranchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Change the active version of an EDT project through Git branch checkout. Parameters and " //$NON-NLS-1$
+        return "Change the active version of an EDT project through Git branch checkout. LOCAL branches " //$NON-NLS-1$
+            + "only - a remote-tracking ref such as 'origin/feature' is rejected. Parameters and " //$NON-NLS-1$
             + "examples: get_tool_guide('switch_git_branch')."; //$NON-NLS-1$
     }
 

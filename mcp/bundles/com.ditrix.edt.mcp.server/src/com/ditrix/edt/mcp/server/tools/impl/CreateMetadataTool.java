@@ -160,7 +160,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Add a new metadata object or member to a configuration. Parameters and examples: " //$NON-NLS-1$
+        return "Add a new metadata object or member to a configuration. callType applies only to a form " //$NON-NLS-1$
+            + "EVENT HANDLER fqn, and only in an extension project. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('create_metadata')."; //$NON-NLS-1$
     }
 

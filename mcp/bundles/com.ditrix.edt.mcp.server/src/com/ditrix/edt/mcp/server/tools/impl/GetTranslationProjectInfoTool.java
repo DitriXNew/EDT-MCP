@@ -49,7 +49,8 @@ public class GetTranslationProjectInfoTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Inspect the translation setup of an EDT project. Parameters and examples: " //$NON-NLS-1$
+        return "Inspect the translation setup of an EDT project. Requires LanguageTool installed in " //$NON-NLS-1$
+            + "EDT - without it every call fails. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('get_translation_project_info')."; //$NON-NLS-1$
     }
 

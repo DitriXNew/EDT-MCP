@@ -178,7 +178,9 @@ public class CreateProjectTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Start a new EDT configuration, extension, or external-objects project. Parameters and " //$NON-NLS-1$
+        return "Start a new EDT configuration, extension, or external-objects project. Kind-restricted " //$NON-NLS-1$
+            + "parameters: prefix, purpose and compatibilityMode are extension-only; synonym and " //$NON-NLS-1$
+            + "comment are rejected for externalObjects. Parameters and " //$NON-NLS-1$
             + "examples: get_tool_guide('create_project')."; //$NON-NLS-1$
     }
 
