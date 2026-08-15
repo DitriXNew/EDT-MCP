@@ -134,8 +134,11 @@ public final class InputSchemaCompactor
         // The lost-update guard: what the hash is and where it comes from.
         // mode defaults to searchReplace, and THAT mode requires oldSource - so a call carrying
         // only the two declared required parameters looks schema-valid and fails at runtime.
-        keep.put("write_module_source", //$NON-NLS-1$
-            asSet("expectedHash", "mode", "oldSource")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // formName / commandName: with objectName on a NON-common object and
+        // moduleType=FormModule / CommandModule, path resolution refuses the write without
+        // them. Same conditional shape as mode->oldSource, one step further out.
+        keep.put("write_module_source", asSet("expectedHash", "mode", "oldSource", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "formName", "commandName")); //$NON-NLS-1$ //$NON-NLS-2$
         // MUTATING DEFAULTS. Each of these defaults to true and, left out, performs a WRITE
         // the caller never asked for - the build stamps every object's Comment and flushes
         // the .mdo; the launch tools silently run a configuration->DB update; update_database
@@ -219,8 +222,12 @@ public final class InputSchemaCompactor
         // version joins scriptVariant: BOTH are rejected outright for an extension, which
         // inherits them from the base configuration. Same shape, same tool, one entry -
         // a second keep.put() for create_project would silently drop the first.
-        keep.put("create_project", //$NON-NLS-1$
-            asSet("autoSortTopObjects", "scriptVariant", "version")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // baseProjectName completes the projectKind story: for an extension it is REQUIRED
+        // (validateExtensionBaseProject rejects a blank one), while `required` lists only
+        // projectKind and name. Fourth parameter of this tool whose contract lives in prose
+        // - one schema serving three project kinds is the worst case for compaction.
+        keep.put("create_project", asSet("autoSortTopObjects", "scriptVariant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "version", "baseProjectName")); //$NON-NLS-1$ //$NON-NLS-2$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after
@@ -230,7 +237,23 @@ public final class InputSchemaCompactor
         // form as it looked BEFORE the caller's edit. Only refresh=true guarantees a real
         // render or an explicit failure. A stale screenshot is indistinguishable from a
         // current one, so validating a UI change against it silently validates the old UI.
-        keep.put("get_form_screenshot", asSet("refresh")); //$NON-NLS-1$ //$NON-NLS-2$
+        // projectName stops being optional the moment formPath names a form - omitting BOTH
+        // is what targets the active editor. Compacted, the two read as independent.
+        keep.put("get_form_screenshot", //$NON-NLS-1$
+            asSet("refresh", McpKeys.PROJECT_NAME)); //$NON-NLS-1$
+        keep.put("get_form_layout_snapshot", asSet(McpKeys.PROJECT_NAME)); //$NON-NLS-1$
+        // templatePath is a metadata FQN ('CommonTemplate.Name'), NOT a filesystem path -
+        // and its NAME says otherwise, so the prose is the only thing preventing a .mxl path.
+        keep.put("get_template_screenshot", asSet("templatePath")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Two similarly named projects with opposite roles: projectName is the BASE
+        // configuration (NOT the extension), extensionProjectName picks the destination and
+        // is mandatory once several extensions exist. Stripped, the natural reading is wrong.
+        keep.put("adopt_metadata_object", //$NON-NLS-1$
+            asSet(McpKeys.PROJECT_NAME, "extensionProjectName")); //$NON-NLS-1$
+        // fillUpType is a bare string whose legal values live only here, and FROM_PROVIDER
+        // makes providerId mandatory - a conditional the schema states nowhere.
+        keep.put("generate_translation_strings", //$NON-NLS-1$
+            asSet("fillUpType", "providerId")); //$NON-NLS-1$ //$NON-NLS-2$
         // force=true escalates a polite stop to an OS-level process kill and can lose
         // unsaved 1C state - a second, harsher mode the tool description does not cover.
         // includeAttach defaults to TRUE, and an Attach target is only DISCONNECTED - the

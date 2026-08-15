@@ -145,6 +145,20 @@ def type_ok(value, declared, tool=None, name=None):
     return BAD
 
 
+def _unfilled(args, name):
+    """True when a required argument is absent, or present with no value in it."""
+    if name not in args:
+        return True
+    value = args[name]
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) == 0
+    return False
+
+
 def grade_arm(arm):
     ans = load(arm)
     guide_chars = GUIDE_CHARS_BY_ARM.get(arm, {})
@@ -225,7 +239,12 @@ def grade_arm(arm):
             if bad:
                 m["invented_param_calls"] += 1
                 row.setdefault("invented_params", []).extend(bad)
-            if [r for r in C[t]["required"] if r not in args]:
+            # A required key that is PRESENT BUT EMPTY is not filled in: the tools reject
+            # checkId="", objectFqn="" and objectFqns=[] outright, and the committed V2
+            # chains contain all three. Counting key presence alone credited calls that
+            # cannot execute. An explicit <placeholder> is different - it stands in for a
+            # value only the previous step can supply, and this benchmark grades plans.
+            if [r for r in C[t]["required"] if _unfilled(args, r)]:
                 m["missing_required_calls"] += 1
             elif not selector_ok(t, args):
                 # Satisfies the schema but not the tool: update_database needs

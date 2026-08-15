@@ -9,12 +9,14 @@
     "inputSchema": {
       "properties": {
         "extensionProjectName": {
+          "description": "Target extension EDT project name; REQUIRED only when more than one extension extends the configuration (otherwise the single extension is used automatically)",
           "type": "string"
         },
         "fqn": {
           "type": "string"
         },
         "projectName": {
+          "description": "The BASE configuration EDT project that owns the object (NOT the extension) (required)",
           "type": "string"
         }
       },
@@ -663,6 +665,7 @@
           "type": "boolean"
         },
         "baseProjectName": {
+          "description": "Name of the BASE configuration EDT project (required for extension; REJECTED for configuration and externalObjects). Must be an existing, open V8 configuration project. Use list_projects to find it.",
           "type": "string"
         },
         "comment": {
@@ -1474,12 +1477,14 @@
           "type": "string"
         },
         "fillUpType": {
+          "description": "Pre-fill source: NOT_FILLUP | FROM_SOURCE_LANGUAGE | FROM_PROVIDER. Default: NOT_FILLUP.",
           "type": "string"
         },
         "projectName": {
           "type": "string"
         },
         "providerId": {
+          "description": "Translation provider ID; required only when fillUpType=FROM_PROVIDER (see get_translation_project_info).",
           "type": "string"
         },
         "storageId": {
@@ -1832,6 +1837,7 @@
           "type": "string"
         },
         "projectName": {
+          "description": "EDT project name. Required when formPath is specified.",
           "type": "string"
         },
         "refresh": {
@@ -1857,6 +1863,7 @@
           "type": "string"
         },
         "projectName": {
+          "description": "EDT project name. Required when formPath is specified.",
           "type": "string"
         },
         "refresh": {
@@ -2619,6 +2626,7 @@
           "type": "string"
         },
         "templatePath": {
+          "description": "Template FQN: a common template 'CommonTemplate.<Name>' or an object-owned template '<Type>.<Owner>.Template.<Name>' (e.g. 'DataProcessor.Invoices.Template.Printout').",
           "type": "string"
         }
       },
@@ -4417,6 +4425,7 @@
     "inputSchema": {
       "properties": {
         "commandName": {
+          "description": "Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate').",
           "type": "string"
         },
         "expectedHash": {
@@ -4427,6 +4436,7 @@
           "type": "string"
         },
         "formName": {
+          "description": "Form name; required when moduleType=FormModule (e.g. 'ItemForm').",
           "type": "string"
         },
         "mode": {
