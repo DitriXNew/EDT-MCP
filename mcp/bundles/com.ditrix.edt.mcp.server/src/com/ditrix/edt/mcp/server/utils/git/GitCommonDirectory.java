@@ -61,11 +61,21 @@ public final class GitCommonDirectory
      * Most bytes read from a {@code commondir} file.
      * <p>
      * A deliberate bound on untrusted repository content, and a deliberate divergence from git,
-     * which reads the file whole: a genuine one holds a single relative path ({@code git worktree
-     * add} writes {@code ../..} and nothing else), so anything of this size is not a path. It is
-     * written down rather than implied, and it is the same convention the legacy remote files are
-     * read under. No claim is made about any operating system's path limit - this is a bound we
-     * choose, not one the platform imposes.
+     * which reads the file whole. It is measured against the file's RAW SIZE, before any stripping,
+     * and that is the whole of the trade: a file of {@code .} followed by 64 KiB of line
+     * terminators strips down to a perfectly valid pointer, and git resolves it and carries on,
+     * while this refuses it. So the bound is NOT "anything this large cannot be a path" - it can be
+     * - it is "content this large will not be read to find out".
+     * <p>
+     * The alternative, streaming to a memory bound while allowing an unbounded removable suffix,
+     * buys the ability to accept a file no tool writes: {@code git worktree add} writes
+     * {@code ../..} and nothing else, and nothing else in git produces this file at all. Paying
+     * complexity for that, in the one place whose job is to be simple enough to be obviously right,
+     * is the worse trade - but it is a trade, and it is recorded here rather than dressed up as a
+     * fact about paths. No claim is made about any operating system's path limit either.
+     * <p>
+     * This is one of the three refusals listed as ours-by-choice on {@link #of}; a reader who finds
+     * only this constant should not be left thinking git would have failed too.
      */
     private static final int MAX_COMMON_DIR_BYTES = 64 * 1024;
 
