@@ -226,6 +226,21 @@ public final class GitCommonDirectory
             throw new IOException("commondir is empty"); //$NON-NLS-1$
         }
         File named = new File(value);
+        if (!named.isAbsolute() && isRooted(value))
+        {
+            // A spelling this JVM and git do not agree on, so it is refused rather than guessed at.
+            // git's is_absolute_path() calls a leading '/' or '\' ABSOLUTE on Windows (rooted on the
+            // current drive); File.isAbsolute() calls it relative, because it names no drive. Take
+            // the second reading and the pointer resolves UNDERNEATH the git directory - a real,
+            // different directory - while git reads the drive-rooted one. If ours happens to exist
+            // and be clean, the check approves a repository it never opened: the same fail-open as
+            // the lenient decoder, reached by a different route.
+            //
+            // On a POSIX filesystem this branch is unreachable: there a leading '/' IS absolute to
+            // both, File.isAbsolute() is already true, and the ordinary absolute path below handles
+            // it. So nothing git itself produces is affected - 'git worktree add' writes '../..'.
+            throw new IOException("commondir is rooted without naming a drive"); //$NON-NLS-1$
+        }
         File resolved = named.isAbsolute() ? named : new File(gitDir, value);
         if (!resolved.isDirectory())
         {
@@ -274,6 +289,22 @@ public final class GitCommonDirectory
             .onUnmappableCharacter(CodingErrorAction.REPORT)
             .decode(ByteBuffer.wrap(buffer, 0, read))
             .toString();
+    }
+
+    /**
+     * Whether {@code value} begins with a path separator, which git's {@code is_absolute_path}
+     * treats as ABSOLUTE (rooted on the current drive) while {@link File#isAbsolute} does not,
+     * because it names no drive.
+     * <p>
+     * Only ever consulted when {@link File#isAbsolute} already said no, so on a POSIX filesystem -
+     * where a leading {@code /} is absolute to both - it never decides anything.
+     *
+     * @param value the pointer's content
+     * @return {@code true} when the two readings of it would disagree
+     */
+    private static boolean isRooted(String value)
+    {
+        return !value.isEmpty() && (value.charAt(0) == '/' || value.charAt(0) == '\\');
     }
 
     /**

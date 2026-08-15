@@ -304,6 +304,37 @@ public class GitCommonDirectoryTest
     // ==================== fails CLOSED where git might not: our trades, on purpose ====================
 
     @Test
+    public void testAPointerRootedWithoutADriveIsRefusedRatherThanResolvedUnderTheGitDir()
+        throws Exception
+    {
+        // Windows only, and unreachable elsewhere by construction: git's is_absolute_path() calls a
+        // leading '/' or '\' absolute (rooted on the current drive), File.isAbsolute() calls it
+        // relative because it names no drive. Taking the second reading resolves the pointer
+        // UNDERNEATH the git directory - and the fixture below makes that directory EXIST, which is
+        // the only shape in which the disagreement is observable: without it, isDirectory() refuses
+        // the pointer anyway and the test would pass with or without the guard.
+        //
+        // On POSIX a leading '/' is absolute to both, File.isAbsolute() is already true, and the
+        // guard is never consulted - so this asserts a refusal only where the ambiguity is real.
+        for (String rooted : List.of("/shared-elsewhere", "\\shared-elsewhere")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            if (new File(rooted).isAbsolute())
+            {
+                continue; // POSIX: no disagreement to guard against
+            }
+            Linked linked = newLinkedWorktree("common-dir-rooted", rooted + "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            File underneath = new File(linked.adminDir, rooted.substring(1));
+            assertTrue("fixture: the directory the WRONG reading lands on must exist, or " //$NON-NLS-1$
+                + "isDirectory() refuses this on its own and the guard is not under test", //$NON-NLS-1$
+                underneath.mkdirs());
+
+            assertRefused(linked.adminDir, "'" + rooted + "' is absolute to git and relative to " //$NON-NLS-1$ //$NON-NLS-2$
+                + "File - inspecting the directory under the git dir would be inspecting somewhere " //$NON-NLS-1$
+                + "other than the repository git reads"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testAnOversizePointerIsRefusedRatherThanRead() throws Exception
     {
         // A deliberate, stated bound on untrusted repository content - a genuine commondir holds one
