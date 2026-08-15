@@ -14,15 +14,25 @@ construction.
 """
 
 # Selector combinations enforced in code but absent from the schema's `required` array.
-# Each entry is a list of ACCEPTABLE key sets: a call must satisfy at least one of them.
+# Each entry is a list of ACCEPTABLE requirements; a call must satisfy at least one of
+# them. A requirement is a dict {parameter: expected}, where PRESENT means "any value".
 # Without this the grader called a rejected update_database preview "schema-valid" and
 # credited it toward the headline two-phase numerator.
+PRESENT = object()
+
 SELECTORS = {
-    "update_database": [{"launchConfigurationName"}, {"projectName", "applicationId"}],
-    "terminate_launch": [{"launchConfigurationName"}, {"projectName", "applicationId"},
-                         {"all"}],
+    "update_database": [{"launchConfigurationName": PRESENT},
+                        {"projectName": PRESENT, "applicationId": PRESENT}],
+    "terminate_launch": [{"launchConfigurationName": PRESENT},
+                         {"projectName": PRESENT, "applicationId": PRESENT},
+                         # VALUE-aware, not key-aware: TerminateLaunchTool.validateSelection
+                         # counts this mode only when the parsed boolean is TRUE, so
+                         # {"all": false} engages no mode and the tool answers
+                         # "Provide exactly one of ...". Testing key containment credited
+                         # a call that never reaches the operation.
+                         {"all": True}],
     # delete_infobase rejects a call that names neither the application nor the infobase.
-    "delete_infobase": [{"applicationId"}, {"infobaseName"}],
+    "delete_infobase": [{"applicationId": PRESENT}, {"infobaseName": PRESENT}],
 }
 
 
@@ -31,7 +41,10 @@ def selector_ok(tool, args):
     combos = SELECTORS.get(tool)
     if not combos:
         return True
-    return any(keys <= set(args) for keys in combos)
+    for combo in combos:
+        if all(k in args and (v is PRESENT or args.get(k) == v) for k, v in combo.items()):
+            return True
+    return False
 
 
 def effect_args(call):

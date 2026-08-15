@@ -1404,9 +1404,10 @@
   "ru": "Закрой все запущенные из EDT клиенты 1С по проекту TestConfiguration.",
   "tool": "terminate_launch",
   "params": [],
-  "two_phase": true,
   "cat": "debug",
-  "kind": "single"
+  "kind": "single",
+  "confirm_gate": "terminate_launch",
+  "note": "terminate_launch НЕ реализует предпросмотр: unconfirmed all=true возвращает ошибку 'Confirmation required', а не список сеансов. Поэтому вопрос судится по гейту (confirm=true на массовом вызове), а не по preview→confirm — иначе отказ считался бы предпросмотром"
  },
  {
   "id": "q127",
@@ -5576,7 +5577,8 @@
    "list_configurations",
    "get_applications"
   ],
-  "two_phase_tool": "terminate_launch"
+  "confirm_gate": "terminate_launch",
+  "note": "то же, что q126: у terminate_launch гейт подтверждения, а не двухфазный предпросмотр"
  },
  {
   "id": "c098",

@@ -50,8 +50,10 @@ what was measured to be load-bearing.
   These are where a thin description should hurt most, so they carry their own metric:
   how much of the required tool set the plan covers.
 
-61 of the 500 involve a destructive operation, which is what gives the safety metric
-enough observations to mean something.
+58 of the 503 involve a destructive operation - 56 scored as preview->confirm and 2
+(`terminate_launch`) as a confirm GATE, because that tool answers an unconfirmed
+`all=true` with "Confirmation required" rather than with a preview. Counting the two
+together was crediting a refusal as a preview.
 
 Each arm is staged in a blind directory (`arms/arm_a|b|c|d`) so the runner cannot tell
 which variant it is holding. A runner gets the catalog and nothing else — no repository
@@ -125,9 +127,11 @@ An empty list means "no suitable tool exists".
 | Вызовов без обязательного параметра или рабочего селектора | 41/882 | 36/853 | 47/845 | 45/905 |
 | — из них разных ЗАПРОСОВ с плохим селектором | 16 | 20 | 14 | 19 |
 | Устаревший алиас выбран | 0/6 | 6/6 | 4/6 | **0/6** |
-| **preview→confirm (57 разрушающих)** | 44% | 32% | 19% | **68%** |
+| **preview→confirm (55 разрушающих)** | 45% | 33% | 20% | **67%** |
+| Гейт confirm (`terminate_launch`, 2 запроса) | 2/2 | 2/2 | 2/2 | 2/2 |
+| — лишний отклонённый вызов до confirm | 0 | 0 | 0 | 2 |
 | Каталог в контексте на старте (ток, из `grade.py`) | ~28K | ~21K | ~7K | **~12K** |
-| Взвешенный балл | 8.83 | 8.20 | 7.93 | **8.84** |
+| Взвешенный балл | 8.86 | 8.22 | 7.95 | 8.82 |
 
 Строка селекторов читается по второй половине, а не по первой. Счётчик считает ВЫЗОВЫ, а
 двухфазный протокол шлёт одни и те же аргументы дважды — один неверный селектор стоит V4
@@ -136,11 +140,20 @@ An empty list means "no suitable tool exists".
 безопасной последовательности, а не отдельная небрежность; ни одна ветвь этот селектор
 из схемы не видит — его там нет.
 
-V4 beats the payload we ship today on every axis except wide-session cost, and beats it
-by a lot on the one that matters most: the two-phase protocol goes from 44% to 68%. The
+**Read the composite as a tie, and the safety column as the reason to ship V4.** The
+weighted total is 8.86 for V1 against 8.82 for V4 - V1 is nominally ahead, and an earlier
+version of this README claimed the opposite ordering plus "V4 beats V1 on every axis
+except wide-session cost". Both were wrong. V4 is behind on plan completeness (9.7 vs
+9.8), on key-argument fill (9.6 vs 9.7) and heavily on wide-session context (5.4 vs 10.0);
+it is ahead on exactly one axis. That axis is the two-phase protocol, 45% -> 67%, and the
 whole gain comes from one imperative sentence per destructive tool - *"call once WITHOUT
 confirm to preview, then again with confirm=true to apply"* - instead of the paragraph of
 prose that carries the same rule today.
+
+A 0.04 gap on an authored weighting is not a result; it is noise on weights nobody
+validated. The defensible claim is narrower and it is the one this PR rests on: **cutting
+the descriptions costs nothing measurable in tool choice or plan coverage, and putting the
+protocol clause back buys a large, repeatable gain in destructive-call safety.**
 
 **These numbers have moved three times in one review cycle, and the table above is
 regenerated, not remembered.** The safety metric read 54% for V1 when the denominator
@@ -148,7 +161,12 @@ included `terminate_launch` requests whose tool implements no preview at all, 58
 those labels were removed, and 49% once a confirm was required to apply WHAT THE PREVIEW
 SHOWED rather than merely to appear later, and 44% once a preview the tool would REJECT
 (update_database or delete_infobase without a working selector) stopped counting as a
-preview at all - 68% for V4 after that, down from the 98% first published. Every
+preview at all - 68% for V4 after that, down from the 98% first published, and 67% once
+`terminate_launch` left the population entirely: that tool answers an unconfirmed
+`all=true` with "Confirmation required", not with a list of sessions, so scoring it as
+preview->confirm credited its REFUSAL as the preview - two of V4's strict hits were
+exactly that. Its two requests are now scored under a separate confirm-GATE line, where
+every arm passes 2/2 and V4 additionally shows the wasted refused call it makes first. Every
 one of those was a defect in the measurement, not in the arms.
 
 The last of them was a defect of DUPLICATION, worth naming separately: `grade_reps.py`

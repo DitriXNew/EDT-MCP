@@ -1222,7 +1222,8 @@
   "tool_ok": true,
   "expected": "terminate_launch",
   "chosen": "terminate_launch",
-  "twophase": "strict"
+  "gate": "ok",
+  "gate_refused": 1
  },
  {
   "id": "q127",
@@ -4156,7 +4157,8 @@
    "terminate_launch"
   ],
   "coverage": "1/1",
-  "twophase": "strict"
+  "gate": "ok",
+  "gate_refused": 1
  },
  {
   "id": "c098",
