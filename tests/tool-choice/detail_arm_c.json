@@ -960,7 +960,10 @@
   ],
   "tool_ok": true,
   "expected": "remove_breakpoint",
-  "chosen": "remove_breakpoint"
+  "chosen": "remove_breakpoint",
+  "bad_type": [
+   "breakpointId='bp-7' (ожидался integer)"
+  ]
  },
  {
   "id": "q108",
@@ -1024,7 +1027,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "step",
-  "chosen": "step"
+  "chosen": "step",
+  "bad_type": [
+   "threadId='thread-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q116",
@@ -1032,7 +1038,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "step",
-  "chosen": "step"
+  "chosen": "step",
+  "bad_type": [
+   "threadId='thread-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q117",
@@ -1064,7 +1073,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "get_variables",
-  "chosen": "get_variables"
+  "chosen": "get_variables",
+  "bad_type": [
+   "frameRef='frame-2' (ожидался integer)"
+  ]
  },
  {
   "id": "q121",
@@ -1080,7 +1092,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "set_variable",
-  "chosen": "set_variable"
+  "chosen": "set_variable",
+  "bad_type": [
+   "frameRef='frame-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q123",
@@ -1088,7 +1103,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "evaluate_expression",
-  "chosen": "evaluate_expression"
+  "chosen": "evaluate_expression",
+  "bad_type": [
+   "frameRef='frame-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q124",
@@ -1096,7 +1114,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "evaluate_expression",
-  "chosen": "evaluate_expression"
+  "chosen": "evaluate_expression",
+  "bad_type": [
+   "frameRef='frame-3' (ожидался integer)"
+  ]
  },
  {
   "id": "q125",
@@ -2673,7 +2694,10 @@
   ],
   "tool_ok": true,
   "expected": "step",
-  "chosen": "step"
+  "chosen": "step",
+  "bad_type": [
+   "threadId='thread-2' (ожидался integer)"
+  ]
  },
  {
   "id": "q299",
@@ -2681,7 +2705,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "resume",
-  "chosen": "resume"
+  "chosen": "resume",
+  "bad_type": [
+   "threadId='thread-2' (ожидался integer)"
+  ]
  },
  {
   "id": "q300",
@@ -2689,7 +2716,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "get_variables",
-  "chosen": "get_variables"
+  "chosen": "get_variables",
+  "bad_type": [
+   "frameRef='frame-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q301",

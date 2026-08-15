@@ -26,6 +26,14 @@ SHORT = os.path.join(HERE, "short_descriptions.json")
 tools = json.load(open(GOLDEN, encoding="utf-8"))
 short = json.load(open(SHORT, encoding="utf-8"))
 
+# V4 is not a hypothesis - it is what the server SHIPS. Rendering it from a hand-kept
+# override file let the two drift: the file restored 7 parameter descriptions while
+# InputSchemaCompactor had grown to keep 47, so the arm stopped measuring the release.
+# Read the arm straight from the compacted golden instead; then the benchmark tracks the
+# compactor by construction, and every future KEEP entry shows up in the arm for free.
+SHIPPED_PATH = os.path.join(ROOT, "tests/e2e/tools_list.golden.json")
+SHIPPED = {t["name"]: t for t in json.load(open(SHIPPED_PATH, encoding="utf-8"))}
+
 names = [t["name"] for t in tools]
 missing = [n for n in names if n not in short]
 if missing:
@@ -47,13 +55,17 @@ def type_of(spec):
     return "object"
 
 
-def render_params(tool, keep_prose, facts=None):
+def render_params(tool, keep_prose, facts=None, from_wire=False):
     schema = tool["inputSchema"]
     props = schema.get("properties", {})
     req = set(schema.get("required", []))
     if not props:
         return ["  (no parameters)"]
     facts = (facts or {}).get(tool["name"], {})
+    wire = {}
+    if from_wire:
+        shipped = SHIPPED.get(tool["name"]) or {}
+        wire = ((shipped.get("inputSchema") or {}).get("properties") or {})
     out = []
     for pname in sorted(props):
         spec = props[pname]
@@ -66,6 +78,11 @@ def render_params(tool, keep_prose, facts=None):
         line = "  - `%s` (%s)" % (pname, ", ".join(bits))
         if keep_prose and spec.get("description"):
             line += " - " + spec["description"].replace("\n", " ")
+        elif from_wire:
+            # Exactly what survives compaction for this parameter - no more, no less.
+            shipped_desc = (wire.get(pname) or {}).get("description")
+            if shipped_desc:
+                line += " - " + shipped_desc.replace("\n", " ")
         elif pname in facts:
             line += " - " + facts[pname]
         out.append(line)
@@ -158,22 +175,25 @@ def render_guide(tool, desc, body):
     return "\n".join(out) + "\n"
 
 
-def build(use_short, keep_prose, pointer, v4=False):
+def build(use_short, keep_prose, pointer, v4=False, from_wire=False):
     # No arm label is rendered: the catalog the runner reads must not name its variant,
     # or the blinding is decorative. The mapping lives in MAPPING.json, outside the arms.
     parts = [HEADER % GUIDE_NOTE]
     facts = V4["params"] if v4 else None
     for t in tools:
         name = t["name"]
-        if v4 and name in V4["descriptions"]:
+        if from_wire and name in SHIPPED:
+            # The shipped description already carries its own guide pointer.
+            desc = SHIPPED[name].get("description") or ""
+        elif v4 and name in V4["descriptions"]:
             desc = V4["descriptions"][name]
         else:
             desc = short[name] if use_short else t["description"]
-        if pointer and use_short:
+        if pointer and use_short and not from_wire:
             desc = desc.rstrip() + " Parameters and examples: get_tool_guide('%s')." % name
         ann = annotations(t)
         parts.append("## %s %s\n%s\n\nParameters:\n%s\n" % (
-            name, ann, desc.strip(), "\n".join(render_params(t, keep_prose, facts))))
+            name, ann, desc.strip(), "\n".join(render_params(t, keep_prose, facts, from_wire))))
     return "\n".join(parts)
 
 
@@ -182,8 +202,8 @@ arms = {
     "V2": build(use_short=True, keep_prose=True, pointer=True),
     "V3": build(use_short=True,
                 keep_prose=False, pointer=True),
-    "V4": build(use_short=True,
-                keep_prose=False, pointer=True, v4=True),
+    # V4 = the shipped contract, read from the compacted golden.
+    "V4": build(use_short=True, keep_prose=False, pointer=True, v4=True, from_wire=True),
 }
 
 for arm, text in arms.items():
@@ -234,13 +254,13 @@ for arm, blind in (("V1", "arm_a"), ("V2", "arm_b"), ("V3", "arm_c"), ("V4", "ar
             # Exactly the description that arm's catalog carries, guide pointer included:
             # production serves ONE description per tool, not one for the list and a
             # different one inside the guide.
-            if arm == "V4" and name in V4["descriptions"]:
-                desc = V4["descriptions"][name]
+            if arm == "V4" and name in SHIPPED:
+                desc = SHIPPED[name].get("description") or ""
             elif arm == "V1":
                 desc = tool["description"]
             else:
                 desc = short[name]
-            if arm != "V1":
+            if arm in ("V2", "V3"):
                 desc = desc.rstrip() + " Parameters and examples: get_tool_guide('%s')." % name
             open(os.path.join(staged, "%s.md" % name), "w", encoding="utf-8").write(
                 render_guide(tool, desc, open(body_path, encoding="utf-8").read()))

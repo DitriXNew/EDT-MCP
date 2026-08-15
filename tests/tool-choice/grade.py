@@ -80,6 +80,18 @@ _JSON_TYPES = {
 }
 
 
+def _is_placeholder(value):
+    """Only an EXPLICIT stand-in counts as a plan placeholder: `<frameRef from wait_for_break>`.
+
+    The first version excused any non-numeric string in a numeric slot, which also excused
+    literal values the server rejects outright - `threadId: "thread-1"` makes
+    JsonUtils.extractLongArgument fall back to -1 and StepTool refuse the call. Those are
+    malformed calls and must score as such.
+    """
+    text = value.strip()
+    return text.startswith("<") and text.endswith(">")
+
+
 def type_ok(value, declared):
     """Classify `value` against `declared`: 'ok', 'bad', or 'runtime'.
 
@@ -103,7 +115,7 @@ def type_ok(value, declared):
         return BAD
     if isinstance(value, expected):
         return OK
-    if base in ("integer", "number") and isinstance(value, str) and not value.strip().isdigit():
+    if base in ("integer", "number") and isinstance(value, str) and _is_placeholder(value):
         return RUNTIME
     return BAD
 

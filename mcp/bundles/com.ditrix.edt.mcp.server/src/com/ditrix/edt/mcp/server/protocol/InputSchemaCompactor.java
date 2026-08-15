@@ -135,7 +135,11 @@ public final class InputSchemaCompactor
         // the schema (the tools emit no JSON Schema `default` at all), so stripping the prose
         // leaves a bare {"type":"boolean"} and a client that cannot tell an inert call from a
         // mutating one. Same class of harm as a false two-phase clause.
-        keep.put("build_external_objects", asSet("recordBuildTime")); //$NON-NLS-1$ //$NON-NLS-2$
+        // objectName omitted = EVERY external object is selected, and recordBuildTime then
+        // rewrites the Comment and .mdo of each one. Second case of the same shape as
+        // clean_project.projectName: an "optional" parameter whose absence widens the blast.
+        keep.put("build_external_objects", //$NON-NLS-1$
+            asSet("recordBuildTime", "objectName")); //$NON-NLS-1$ //$NON-NLS-2$
         // deleteDatabaseFiles is the switch that makes the delete IRREVERSIBLE (it removes
         // the 1Cv8.1CD directory); overwriteDiskEdits is the REQUIRED gate for fullExport,
         // and the only place that says a force-export overwrites on-disk edits. Both were

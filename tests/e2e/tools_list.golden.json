@@ -125,6 +125,7 @@
     "inputSchema": {
       "properties": {
         "objectName": {
+          "description": "Name of a single external data processor/report to build. Omit to build ALL external objects of the project.",
           "type": "string"
         },
         "outputDir": {

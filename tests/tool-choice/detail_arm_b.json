@@ -2544,7 +2544,10 @@
   ],
   "tool_ok": true,
   "expected": "step",
-  "chosen": "step"
+  "chosen": "step",
+  "bad_type": [
+   "threadId='thread-2' (ожидался integer)"
+  ]
  },
  {
   "id": "q299",
@@ -2552,7 +2555,10 @@
   "guides": [],
   "tool_ok": true,
   "expected": "resume",
-  "chosen": "resume"
+  "chosen": "resume",
+  "bad_type": [
+   "threadId='thread-2' (ожидался integer)"
+  ]
  },
  {
   "id": "q300",
@@ -2562,7 +2568,10 @@
   ],
   "tool_ok": true,
   "expected": "get_variables",
-  "chosen": "get_variables"
+  "chosen": "get_variables",
+  "bad_type": [
+   "frameRef='frame-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q301",
@@ -2572,7 +2581,10 @@
   ],
   "tool_ok": true,
   "expected": "set_variable",
-  "chosen": "set_variable"
+  "chosen": "set_variable",
+  "bad_type": [
+   "frameRef='frame-2' (ожидался integer)"
+  ]
  },
  {
   "id": "q302",
@@ -2582,7 +2594,10 @@
   ],
   "tool_ok": true,
   "expected": "evaluate_expression",
-  "chosen": "evaluate_expression"
+  "chosen": "evaluate_expression",
+  "bad_type": [
+   "frameRef='frame-1' (ожидался integer)"
+  ]
  },
  {
   "id": "q303",
@@ -3774,7 +3789,12 @@
   "id": "c102",
   "kind": "chain",
   "guides": [],
-  "coverage": "3/3"
+  "coverage": "3/3",
+  "bad_type": [
+   "frameRef='frame-2' (ожидался integer)",
+   "frameRef='frame-2' (ожидался integer)",
+   "frameRef='frame-2' (ожидался integer)"
+  ]
  },
  {
   "id": "c103",
