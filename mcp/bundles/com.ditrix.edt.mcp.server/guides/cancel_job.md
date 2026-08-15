@@ -58,16 +58,19 @@ If `terminate()` fails, the launch reports that it cannot terminate, or no live
 launch is available, no stop was initiated and the committed job keeps the
 honest `alreadyCommitted` outcome.
 
-The registry gives an owner cancellation handler at most 30 seconds as an outer
-guard. This is longer than YAXUnit's default 10-second termination check so the
-handler can verify the stop and read a partial report. If the whole handler still
-does not return, `cancel_job` reports that the stop was not established and
-releases only the worker outcome that was deferred behind the waiter. Polling can
-therefore publish that worker outcome, but the destructive-handler claim remains
-until the handler thread actually exits. A second `cancel_job` still reports that
-cancellation is already in progress, and an equivalent run is not started while
-the stale handler can still mutate owner state. A late handler result cannot
-replace the worker outcome after its waiter has abandoned the attempt.
+The registry's 30-second outer guard bounds the `cancel_job` call, not the owner
+cancellation handler's lifetime. This is longer than YAXUnit's default 10-second
+termination check so the handler can verify the stop and read a partial report.
+If the whole handler still does not return, `cancel_job` reports that the stop was
+not established and releases the worker outcome deferred behind its waiter. That
+outcome is marked as provisional while the destructive handler remains alive;
+the job stays claimed, a second `cancel_job` cannot start another handler, and an
+equivalent run is not admitted while the stale handler can still mutate owner
+state. A late `notStopped` result leaves the worker outcome unchanged. A late
+`stopped` or `stopInitiated` result is reconciled because it describes a real
+destructive action: it supersedes even an outcome already published and corrects
+the job to `cancelled` with the honest partial result. A poller may therefore see
+`done` corrected to `cancelled` after the handler exits.
 
 A job that was already done, failed, or cancelled is left unchanged and reported
 as already terminal.
