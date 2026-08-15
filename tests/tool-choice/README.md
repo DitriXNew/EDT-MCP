@@ -124,18 +124,30 @@ An empty list means "no suitable tool exists".
 | Покрытие плана (сценарии) | 97.8% | 97.3% | 97.3% | 97.3% |
 | Вызовов без обязательного параметра | 22/882 | 16/853 | 30/845 | **7/905** |
 | Устаревший алиас выбран | 0/6 | 6/6 | 4/6 | **0/6** |
-| **preview→confirm (61 разрушающий)** | 54% | 30% | 23% | **98%** |
+| **preview→confirm (57 разрушающих)** | 49% | 32% | 25% | **93%** |
 | `tools/list` на старте | 37.6K | 30.3K | 15.4K | **15.9K** |
-| Взвешенный балл | 9.06 | 8.22 | 8.07 | **9.50** |
+| Взвешенный балл | 8.97 | 8.23 | 8.07 | **9.38** |
 
 V4 beats the payload we ship today on every axis except wide-session cost, and beats it
-by a lot on the one that matters most: the two-phase protocol goes from 54% to 98%. The
+by a lot on the one that matters most: the two-phase protocol goes from 49% to 93%. The
 whole gain comes from one imperative sentence per destructive tool - *"call once WITHOUT
 confirm to preview, then again with confirm=true to apply"* - instead of the paragraph of
-prose that carries the same rule today. `tools/list` still drops 58%.
+prose that carries the same rule today.
 
-Break-even against V1's total context is 28 distinct tools per session; at 3-4 tools
-(the common profile) V4 costs half of V1.
+**These numbers have moved three times in one review cycle, and the table above is
+regenerated, not remembered.** The safety metric read 54% for V1 when the denominator
+included `terminate_launch` requests whose tool implements no preview at all, 58% once
+those labels were removed, and 49% once a confirm was required to apply WHAT THE PREVIEW
+SHOWED rather than merely to appear later. Every one of those was a defect in the
+measurement, not in the arms. Regenerate before quoting:
+
+```bash
+python3 grade.py | tail -20     # the table below comes from this
+```
+
+Read them as V4 against V1 under identical conditions. As an estimate of how often a real
+client previews they are worthless - see the blinding leaks above, both of which were live
+during the run that produced this table.
 
 ## What it found (Sonnet 5, 2026-08, 500 questions)
 
@@ -147,10 +159,12 @@ right plan whether the catalog is 28K tokens or 7K.
 
 What the cut actually costs:
 
-- **The two-phase `confirm` protocol.** Strict preview→confirm on the 61 destructive
-  requests: V1 33/61 (54%), V2 18/61 (30%), V3 14/61 (23%). Every arm knows the `confirm`
-  parameter exists (57–58/61 pass `confirm: true` somewhere); what the short descriptions
-  lose is *looking before deleting*.
+- **The two-phase `confirm` protocol.** Strict preview→confirm on the 57 destructive
+  requests: V1 28/57 (49%), V2 18/57 (32%), V3 14/57 (25%). Every arm knows the `confirm`
+  parameter exists (56/57 pass `confirm: true` somewhere); what the short descriptions
+  lose is *looking before deleting*. Strict means the confirm applies the same arguments
+  the preview showed - a confirm that adds `deleteContent`, `force` or
+  `deleteDatabaseFiles` destroys more than was ever previewed and is not counted.
 - **The deprecated alias.** `debug_yaxunit_tests` is a deprecated alias of
   `run_yaxunit_tests(debug=true)`, and only the long description says so: V1 0/6 picked
   the deprecated tool, **V2 6/6**, V3 4/6.

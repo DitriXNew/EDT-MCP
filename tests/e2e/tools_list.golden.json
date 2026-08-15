@@ -784,6 +784,7 @@
           "type": "string"
         },
         "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
         },
         "launchConfigurationName": {
@@ -918,6 +919,7 @@
           "type": "array"
         },
         "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
         },
         "launchConfigurationName": {
@@ -977,6 +979,7 @@
           "type": "boolean"
         },
         "deleteDatabaseFiles": {
+          "description": "true = ALSO delete the infobase database files/directory from disk (the 1Cv8.1CD directory) — IRREVERSIBLE. Default false = keep the database files on disk (the registration is removed but the data stays). Works for both a file infobase and a standalone server (deletes the served database directory).",
           "type": "boolean"
         },
         "deleteRegistration": {
@@ -1929,6 +1932,7 @@
     "inputSchema": {
       "properties": {
         "includeBodies": {
+          "description": "Include the raw request/response JSON bodies for each record (default false = metadata only). The bodies can carry infobase / personal data; keep them off unless you need the payloads.",
           "type": "boolean"
         },
         "includeStats": {
@@ -3388,6 +3392,7 @@
           "type": "boolean"
         },
         "overwriteDiskEdits": {
+          "description": "Required confirmation for fullExport=true: force-exporting every .mdo from the in-memory model OVERWRITES any on-disk edits. Default: false - fullExport is rejected unless this is true. Ignored when fullExport=false.",
           "type": "boolean"
         },
         "projectName": {
@@ -3528,6 +3533,7 @@
           "type": "array"
         },
         "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
         },
         "launchConfigurationName": {
@@ -4163,6 +4169,7 @@
           "type": "boolean"
         },
         "externalInfobaseChanges": {
+          "description": "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it.",
           "type": "string"
         },
         "fullUpdate": {

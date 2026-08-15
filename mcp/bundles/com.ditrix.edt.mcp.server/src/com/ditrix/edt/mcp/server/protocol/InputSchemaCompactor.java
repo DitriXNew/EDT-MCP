@@ -95,6 +95,9 @@ public final class InputSchemaCompactor
      */
     private static final Set<String> KEEP_IN_EVERY_TOOL = asSet("modulePath"); //$NON-NLS-1$
 
+    /** The conflict-policy parameter shared by the launch tools and {@code update_database}. */
+    private static final String KEY_EXTERNAL_CHANGES = "externalInfobaseChanges"; //$NON-NLS-1$
+
     /** JSON Schema {@code "type"} keyword, as a VALUE (never as a property name). */
     private static final String KEY_TYPE = "type"; //$NON-NLS-1$
 
@@ -133,12 +136,30 @@ public final class InputSchemaCompactor
         // leaves a bare {"type":"boolean"} and a client that cannot tell an inert call from a
         // mutating one. Same class of harm as a false two-phase clause.
         keep.put("build_external_objects", asSet("recordBuildTime")); //$NON-NLS-1$ //$NON-NLS-2$
-        keep.put("debug_launch", asSet("updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$
-        keep.put("debug_yaxunit_tests", asSet("updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$
-        keep.put("delete_infobase", asSet("deleteRegistration")); //$NON-NLS-1$ //$NON-NLS-2$
-        keep.put("update_database", asSet("terminateRunningClients")); //$NON-NLS-1$ //$NON-NLS-2$
+        // deleteDatabaseFiles is the switch that makes the delete IRREVERSIBLE (it removes
+        // the 1Cv8.1CD directory); overwriteDiskEdits is the REQUIRED gate for fullExport,
+        // and the only place that says a force-export overwrites on-disk edits. Both were
+        // caught by InputSchemaCompactorRiskTest, not by review.
+        keep.put("delete_infobase", //$NON-NLS-1$
+            asSet("deleteRegistration", "deleteDatabaseFiles")); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("resync_to_disk", asSet("overwriteDiskEdits")); //$NON-NLS-1$ //$NON-NLS-2$
         // debug=true also changes the return contract (a wait_for_break follow-up).
-        keep.put("run_yaxunit_tests", asSet("debug", "updateBeforeLaunch")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        keep.put("run_yaxunit_tests", //$NON-NLS-1$
+            asSet("debug", "updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$ //$NON-NLS-2$
+        // The conflict policy for an infobase changed OUTSIDE EDT. The schema declares a
+        // bare string - no enum - so the legal values ('override' / 'import' / 'cancel')
+        // live only here, and so does the fact that the DEFAULT, 'override', DISCARDS the
+        // external work. A launch that looks routine silently overwrites someone's changes.
+        keep.put("debug_launch", asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$ //$NON-NLS-2$
+        keep.put("debug_yaxunit_tests", //$NON-NLS-1$
+            asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
+        keep.put("update_database", //$NON-NLS-1$
+            asSet("terminateRunningClients", KEY_EXTERNAL_CHANGES)); //$NON-NLS-1$
+        // includeBodies=true returns the recorded request/response JSON VERBATIM, and that
+        // path is deliberately not redacted (the redactor only sees the outer tool). The
+        // warning that those bodies can carry infobase and personal data is the only thing
+        // standing between a diagnostic call and handing the model live data.
+        keep.put("get_mcp_history", asSet("includeBodies")); //$NON-NLS-1$ //$NON-NLS-2$
         return Collections.unmodifiableMap(keep);
     }
 
