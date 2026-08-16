@@ -1639,6 +1639,34 @@ public class GitToolStoredRemoteTest
             + "first one must still be refused", GitTool.storedRemoteRefusal(linked, List.of(PUSH))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testATerminatorOnlyPointerStillGetsItsConfigurationJudged() throws Exception
+    {
+        // The finding behind this, stated plainly: refusing a terminator-only commondir looked like
+        // caution and was a blind spot wearing a refusal's clothes. git resolves such a pointer to
+        // the worktree's own git directory and reads the configuration THERE - so a poisoned remote
+        // sitting in it was printed by 'remote -v' while this tool declined every remote command
+        // without ever opening the file.
+        //
+        // Now the pointer resolves the way git resolves it, and the config it lands on is judged.
+        Repository shared = newRepository("git-terminator-only-config"); //$NON-NLS-1$
+        Repository linked = linkedWorktreeOf(shared, "wt"); //$NON-NLS-1$
+        Files.write(new File(linked.getDirectory(), "commondir").toPath(), //$NON-NLS-1$
+            "\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        // The admin directory becomes the shared one, so ITS config is what git reads.
+        Files.write(new File(linked.getDirectory(), CONFIG_FILE).toPath(),
+            ("[remote \"admin-only\"]\n\turl = " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(linked, List.of(PUSH));
+
+        assertNotNull("git reads this configuration - 'remote -v' prints the remote from it - so " //$NON-NLS-1$
+            + "it must be judged, not declined past", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the remote: " + refusal, //$NON-NLS-1$
+            refusal.contains("admin-only")); //$NON-NLS-1$
+        assertRefusalLeaksNothing(refusal);
+    }
+
     // ---- what must STAY silent: the places git does NOT read ----
     //
     // Every fixture below carries a value that WOULD be refused if it were judged. That is the
@@ -2108,18 +2136,17 @@ public class GitToolStoredRemoteTest
             + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
             + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
             + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
-            + "blind. The fault: it is empty, or holds nothing but a line terminator. This tool refused " //$NON-NLS-1$
-            + "rather than run blind; whether native git can use this repository is not something it " //$NON-NLS-1$
-            + "determines - check that in a terminal. If this worktree has a 'commondir' file, repair " //$NON-NLS-1$
-            + "that file itself: it must be a regular file whose contents are the path to the shared " //$NON-NLS-1$
-            + "repository, with any trailing line terminators ignored - not necessarily a single line, " //$NON-NLS-1$
-            + "since a path may legitimately contain one on some filesystems. That path may be " //$NON-NLS-1$
-            + "absolute; when it is relative it is resolved against the directory the file sits in, " //$NON-NLS-1$
-            + "which is what 'git worktree add' writes ('../..'). A working absolute spelling does not " //$NON-NLS-1$
-            + "need to be made relative. Do NOT reach for 'git worktree repair' - measured on git " //$NON-NLS-1$
-            + "2.35.1, it does not touch this file at all, and reports the unrelated '.git file broken' " //$NON-NLS-1$
-            + "while leaving the fault exactly where it was. This tool logs only the failure's " //$NON-NLS-1$
-            + "exception types."; //$NON-NLS-1$
+            + "blind. The fault: it is empty. This tool refused rather than run blind; whether native " //$NON-NLS-1$
+            + "git can use this repository is not something it determines - check that in a terminal. " //$NON-NLS-1$
+            + "If this worktree has a 'commondir' file, repair that file itself: it must be a regular " //$NON-NLS-1$
+            + "file whose contents are the path to the shared repository, with any trailing line " //$NON-NLS-1$
+            + "terminators ignored - not necessarily a single line, since a path may legitimately " //$NON-NLS-1$
+            + "contain one on some filesystems. That path may be absolute; when it is relative it is " //$NON-NLS-1$
+            + "resolved against the directory the file sits in, which is what 'git worktree add' writes " //$NON-NLS-1$
+            + "('../..'). A working absolute spelling does not need to be made relative. Do NOT reach " //$NON-NLS-1$
+            + "for 'git worktree repair' - measured on git 2.35.1, it does not touch this file at all, " //$NON-NLS-1$
+            + "and reports the unrelated '.git file broken' while leaving the fault exactly where it " //$NON-NLS-1$
+            + "was. This tool logs only the failure's exception types."; //$NON-NLS-1$
 
     // ==================== the pre-flight execute() actually runs ====================
 
@@ -2489,6 +2516,13 @@ public class GitToolStoredRemoteTest
             (pointer.getAbsolutePath() + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
         Files.write(new File(adminDir, "HEAD").toPath(), //$NON-NLS-1$
             ("ref: refs/heads/" + name + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+        // objects/ and refs/ make the admin directory REPOSITORY-LIKE, which matters for one case
+        // and was missing for all of them: when the pointer resolves back here (a commondir that is
+        // nothing but a line terminator), native git can only carry on if this looks like a
+        // repository. Without them a fixture cannot produce the outcome it would be cited for -
+        // exactly the false proof that made an earlier measurement wrong.
+        assertTrue("fixture: the admin directory must look like a repository", //$NON-NLS-1$
+            new File(adminDir, "objects").mkdirs() && new File(adminDir, "refs").mkdirs()); //$NON-NLS-1$ //$NON-NLS-2$
 
         // The same JGit call GitRepositoryResolver's discovery fallback makes, so the object
         // under test is the one a real request would be handed.

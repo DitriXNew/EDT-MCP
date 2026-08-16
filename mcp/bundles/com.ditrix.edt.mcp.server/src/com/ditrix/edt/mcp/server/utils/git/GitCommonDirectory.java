@@ -165,10 +165,14 @@ public final class GitCommonDirectory
         AMBIGUOUS_WINDOWS_ROOT("Windows roots it somewhere this tool cannot reproduce", true), //$NON-NLS-1$
 
         /**
-         * Empty, or nothing but a line terminator. git dies on both - measured, because its source
-         * alone suggests the second should resolve back to the git directory.
+         * Zero bytes. Measured: git dies on this
+         * ({@code fatal: failed to read .../commondir}).
+         * <p>
+         * NOT the same as content that strips to nothing - a lone line terminator. That one git
+         * resolves to the git directory itself and carries on, so this code does too; the two were
+         * conflated until a fixture that could actually show the difference was built.
          */
-        EMPTY("it is empty, or holds nothing but a line terminator", true), //$NON-NLS-1$
+        EMPTY("it is empty", true), //$NON-NLS-1$
 
         /** What it names is not a directory. git dies too ({@code fatal: not a git repository}). */
         NOT_A_DIRECTORY("what it names is not a directory", true), //$NON-NLS-1$
@@ -306,9 +310,16 @@ public final class GitCommonDirectory
      * Whether this git directory belongs to a LINKED worktree - that is, whether a
      * {@code commondir} file was found in it.
      * <p>
-     * This is git's own test ({@code get_common_dir_noenv} returns 1 iff the file exists), not a
-     * comparison of paths: a caller may need to know that git reads {@code <git dir>/config} NOT AT
-     * ALL here, which no path comparison can tell it.
+     * This is git's own test ({@code get_common_dir_noenv} returns 1 iff the file exists), and it
+     * is deliberately NOT a comparison of paths - the two are different questions. A pointer whose
+     * content strips to nothing resolves back to the git directory, so {@link #directory()} equals
+     * the git directory while this still answers {@code true}: a {@code commondir} was read, and
+     * that is what a caller needs to know.
+     * <p>
+     * What it does NOT mean, and used to say it did, is that {@code <git dir>/config} goes unread.
+     * In the ordinary linked layout git ignores that file; in the strips-to-nothing case git reads
+     * exactly it. Callers that care must compare {@link #directory()} with the git directory rather
+     * than read that into this flag.
      *
      * @return {@code true} when this is a linked worktree
      */
@@ -339,15 +350,17 @@ public final class GitCommonDirectory
      * whatever this class does. Harmless in the direction it goes - git refuses to run at all, so
      * there is no output for the check to have missed - and the reason the test for this pins a
      * TAB, which nothing but {@code trim} would remove.)</li>
-     * <li><b>Empty is fatal</b>, as it is to git ({@code fatal: failed to read .../commondir}) -
-     * and so is a pointer that is nothing BUT a line terminator, which is the more interesting of
-     * the two. Reading git's source alone suggests the second one should be accepted (it reads a
-     * byte, strips it, and is left with a path that resolves back to the git directory), so it was
-     * measured instead: a {@code commondir} holding a single line feed makes git answer
-     * {@code fatal: not a git repository}, because the directory it then resolves to is the
-     * worktree's own and that is not a repository. Refusing it here therefore agrees with git -
-     * whereas "resolve it to the git directory" would have this check inspect a directory git
-     * refuses to use, and approve on the strength of it.</li>
+     * <li><b>Zero bytes is fatal</b>, as it is to git ({@code fatal: failed to read
+     * .../commondir}). <b>Content that STRIPS to nothing is not</b>: git resolves the empty
+     * remainder against the git directory, lands on the git directory itself, and reads the
+     * configuration there - so this returns that directory rather than refusing.
+     * <p>
+     * The difference took three attempts to establish, and the middle one is worth keeping as a
+     * warning. A probe appeared to show git failing on a lone terminator too - but its worktree's
+     * admin directory was not repository-like, so the resolved directory was unusable for a reason
+     * that had nothing to do with terminators. A fixture that cannot produce the positive outcome
+     * cannot be evidence against it. With {@code objects/}, {@code refs/} and a {@code config} in
+     * place, git answers 0 and prints the remote from that config.</li>
      * <li><b>A relative path is resolved against the git directory</b>, an absolute one is used as
      * it stands - git's rule.</li>
      * <li><b>Not canonicalized.</b> git real-paths the result for its own bookkeeping; nothing here
@@ -451,10 +464,28 @@ public final class GitCommonDirectory
         {
             throw new FaultException(Fault.NOT_A_REGULAR_FILE);
         }
-        String value = stripLineTerminators(readBounded(commonDirFile));
+        String raw = readBounded(commonDirFile);
+        if (raw.isEmpty())
+        {
+            // ZERO BYTES, which is not the same thing as "strips to nothing" - measured, git dies
+            // here (fatal: failed to read .../commondir) and carries on in the other case.
+            throw new FaultException(Fault.EMPTY);
+        }
+        String value = stripLineTerminators(raw);
         if (value.isEmpty())
         {
-            throw new FaultException(Fault.EMPTY);
+            // Non-empty content that strips to nothing - a lone terminator. git resolves the empty
+            // remainder against the git directory and ends up at the git directory ITSELF, then
+            // reads its configuration and its legacy files from there. Measured on git 2.35.1 with
+            // an admin directory made repository-like: rev-parse --git-common-dir returns that
+            // directory and remote -v prints the remote declared in its own config.
+            //
+            // Refusing here would have been the fail-open this class exists to remove, wearing a
+            // refusal's clothes: the tool would decline every remote command WITHOUT ever reading
+            // the configuration git would read. An earlier probe seemed to show git failing on this
+            // too, but that fixture's admin directory was not repository-like, so the pointer had
+            // nowhere to land - the failure was the fixture's, not the terminators'.
+            return new GitCommonDirectory(gitDir, true);
         }
         // BEFORE the ambiguity test, because a pointer can be both and the NUL is the more
         // specific fact about it. Filing it under a Windows-rooting ambiguity would name a fault

@@ -35,11 +35,19 @@ import org.junit.Test;
  *
  * <p>Most expectations below are git's own behaviour, measured on git 2.35.1 against a real linked
  * worktree rather than read off the manual, because several are surprising: a trailing SPACE is NOT
- * stripped (it is part of the path, and git answers {@code fatal: not a git repository}), an EMPTY
- * file is fatal ({@code fatal: failed to read .../commondir}) rather than "no common directory",
- * and so is a file holding nothing but a line terminator - which reading git's source alone
- * suggests should be accepted. Where a refusal here matches git's, it cannot be a false refusal:
- * the repository is already unusable.
+ * stripped (it is part of the path, and git answers {@code fatal: not a git repository}), and a
+ * ZERO-BYTE file is fatal ({@code fatal: failed to read .../commondir}) rather than "no common
+ * directory". Where a refusal here matches git's, it cannot be a false refusal: the repository is
+ * already unusable.
+ *
+ * <p>One expectation in this class was WRONG for two rounds, and the reason is worth more than the
+ * correction. A file holding nothing but a line terminator was recorded as fatal to git, on the
+ * strength of a probe whose worktree admin directory was not repository-like: the pointer resolved
+ * back there, git could not use that directory, and the failure was read as being about the
+ * terminator. With {@code objects/} and {@code refs/} present, git answers 0, resolves the common
+ * directory to the admin directory itself, and reads the configuration in it. <b>A fixture that
+ * cannot produce the positive outcome is not evidence against it</b> - which is why
+ * {@code linkedWorktreeOf} now builds a repository-like admin directory for every test here.
  *
  * <p>The rest are DELIBERATE over-refusals - the {@link GitCommonDirectory.Fault} members whose
  * this code refuses on whatever git would do - and they are kept in their own section below
@@ -217,22 +225,50 @@ public class GitCommonDirectoryTest
     }
 
     @Test
-    public void testAPointerThatIsNothingButALineTerminatorIsRefused() throws Exception
+    public void testAPointerThatIsNothingButALineTerminatorResolvesToTheGitDirectory()
+        throws Exception
     {
-        // The case git's SOURCE suggests should be accepted - it reads one byte, strips it, and is
-        // left with an empty relative path that resolves back to the git directory - so it was
-        // measured instead of reasoned about. git answers 'fatal: not a git repository': the
-        // directory it lands on is the worktree's own, which is not a repository.
+        // git reads the byte, strips it, resolves the empty remainder against the git directory and
+        // lands on the git directory ITSELF - measured on git 2.35.1 with an admin directory made
+        // repository-like: rev-parse --git-common-dir returns that directory, and remote -v prints
+        // the remote from the config sitting in it.
         //
-        // Resolving it to the git directory here would be worse than useless: the directory EXISTS,
-        // so the check would sail past its own isDirectory() guard, read a config git refuses to
-        // read, and approve. Fail closed, exactly where git does.
+        // This test used to assert the opposite, on the strength of a probe whose admin directory
+        // was NOT repository-like. The pointer resolved somewhere git could not use, git failed for
+        // that reason, and the failure was read as being about the terminators. A fixture that
+        // cannot produce the positive outcome is not evidence against it - the same shape of false
+        // proof this class keeps turning up, found this time in our own measurement.
         for (String terminator : List.of("\n", "\r\n")) //$NON-NLS-1$ //$NON-NLS-2$
         {
             Linked linked = newLinkedWorktree("common-dir-eol-only", terminator); //$NON-NLS-1$
 
-            assertRefused(linked.adminDir,
-                "a pointer that is nothing but a line terminator kills git too"); //$NON-NLS-1$
+            GitCommonDirectory common = GitCommonDirectory.of(linked.adminDir);
+
+            assertTrue("a commondir file is present, so this IS a linked worktree", //$NON-NLS-1$
+                common.linked());
+            assertEquals("...and the shared directory is the git directory itself, which is where " //$NON-NLS-1$
+                + "git reads the configuration from in this case", //$NON-NLS-1$
+                linked.adminDir.getCanonicalFile(), common.directory().getCanonicalFile());
+        }
+    }
+
+    @Test
+    public void testAZeroBYTEPointerIsStillRefused() throws Exception
+    {
+        // The other half of the split, and the reason the two may not be conflated: git dies on a
+        // zero-byte commondir (fatal: failed to read .../commondir) and carries on when the file
+        // has content that merely strips away.
+        Linked linked = newLinkedWorktree("common-dir-zero-bytes", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            GitCommonDirectory.of(linked.adminDir);
+            fail("a zero-byte commondir must be refused"); //$NON-NLS-1$
+        }
+        catch (GitCommonDirectory.FaultException e)
+        {
+            assertEquals("...as EMPTY, which is now ONLY the zero-byte case", //$NON-NLS-1$
+                GitCommonDirectory.Fault.EMPTY, e.fault());
         }
     }
 
@@ -596,8 +632,7 @@ public class GitCommonDirectoryTest
         words.put(GitCommonDirectory.Fault.NOT_UTF_8, "it is not valid UTF-8"); //$NON-NLS-1$
         words.put(GitCommonDirectory.Fault.AMBIGUOUS_WINDOWS_ROOT,
             "Windows roots it somewhere this tool cannot reproduce"); //$NON-NLS-1$
-        words.put(GitCommonDirectory.Fault.EMPTY,
-            "it is empty, or holds nothing but a line terminator"); //$NON-NLS-1$
+        words.put(GitCommonDirectory.Fault.EMPTY, "it is empty"); //$NON-NLS-1$
         words.put(GitCommonDirectory.Fault.NOT_A_DIRECTORY, "what it names is not a directory"); //$NON-NLS-1$
         words.put(GitCommonDirectory.Fault.PATH_HOLDS_NUL, "it holds a NUL byte"); //$NON-NLS-1$
         words.put(GitCommonDirectory.Fault.UNSPELLABLE_PATH,

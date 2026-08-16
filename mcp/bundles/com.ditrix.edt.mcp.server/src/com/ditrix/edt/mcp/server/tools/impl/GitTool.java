@@ -2061,9 +2061,12 @@ public class GitTool implements IMcpTool
      * The inherited configuration to judge ON TOP OF - JGit's chain, minus the ONE link git does not
      * read in a linked worktree.
      * <p>
-     * In a linked worktree JGit's top link is {@code <git dir>/config}, which git ignores entirely:
+     * In the ordinary linked layout JGit's top link is {@code <git dir>/config}, which git ignores:
      * it reads the shared {@code <common dir>/config} instead ({@code rev-parse --git-path config}
-     * resolves there, measured). Leaving that link in the chain would not be harmless-because-empty
+     * resolves there, measured). Dropping the link and adding the shared file back is therefore the
+     * same file in the one case where the two are the same directory - a {@code commondir} whose
+     * content strips to nothing resolves back to the git directory - and the right file in every
+     * other case. Either way the layer that ends up in the chain is the one git reads. Leaving that link in the chain would not be harmless-because-empty
      * - "it is empty" is an observation, not an invariant, and the chain does not merge the way a
      * single file does: {@link Config#getSubsections} and {@link Config#getSections} UNION every
      * link, and {@link Config#getStringList} CONCATENATES the base's values with the layer's own
