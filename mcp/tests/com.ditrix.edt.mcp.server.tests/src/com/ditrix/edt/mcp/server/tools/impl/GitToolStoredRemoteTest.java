@@ -1864,7 +1864,12 @@ public class GitToolStoredRemoteTest
             refusal.contains("repair that file itself")); //$NON-NLS-1$
         assertTrue("...stated as what the file MUST be, not as what it currently is - the old " //$NON-NLS-1$
             + "wording claimed it 'holds one line' in the very message saying it is empty: " //$NON-NLS-1$
-            + refusal, refusal.contains("must be a regular file holding exactly one line")); //$NON-NLS-1$
+            + refusal, refusal.contains("must be a regular file whose contents are the path")); //$NON-NLS-1$
+        assertFalse("...and it must not demand ONE LINE, which this code does not require: only " //$NON-NLS-1$
+            + "TRAILING terminators are stripped, so a path with a newline inside it resolves - " //$NON-NLS-1$
+            + "and on POSIX that is a legal filename. Advising 'one line' would have an operator " //$NON-NLS-1$
+            + "replace a merely unreachable pointer with a permanently wrong one: " + refusal, //$NON-NLS-1$
+            refusal.contains("exactly one line")); //$NON-NLS-1$
         assertTrue("...and it must warn AGAINST the command that does not fix this, or an " //$NON-NLS-1$
             + "operator follows the obvious one and gets the same refusal back: " + refusal, //$NON-NLS-1$
             refusal.contains("Do NOT reach for 'git worktree repair'"));
@@ -2065,13 +2070,14 @@ public class GitToolStoredRemoteTest
             + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
             + "blind. Check the repository in a terminal. The failure is of a kind this tool does not " //$NON-NLS-1$
             + "classify. If this worktree has a 'commondir' file, repair that file itself: it must be a " //$NON-NLS-1$
-            + "regular file holding exactly one line, the path to the shared repository. That path may " //$NON-NLS-1$
-            + "be absolute; when it is relative it is resolved against the directory the file sits in, " //$NON-NLS-1$
-            + "which is what 'git worktree add' writes ('../..'). A working absolute spelling does not " //$NON-NLS-1$
-            + "need to be made relative. Do NOT reach for 'git worktree repair' - measured on git " //$NON-NLS-1$
-            + "2.35.1, it does not touch this file at all, and reports the unrelated '.git file broken' " //$NON-NLS-1$
-            + "while leaving the fault exactly where it was. This tool logs only the failure's " //$NON-NLS-1$
-            + "exception types."; //$NON-NLS-1$
+            + "regular file whose contents are the path to the shared repository, with any trailing " //$NON-NLS-1$
+            + "line terminators ignored - not necessarily a single line, since a path may legitimately " //$NON-NLS-1$
+            + "contain one on some filesystems. That path may be absolute; when it is relative it is " //$NON-NLS-1$
+            + "resolved against the directory the file sits in, which is what 'git worktree add' writes " //$NON-NLS-1$
+            + "('../..'). A working absolute spelling does not need to be made relative. Do NOT reach " //$NON-NLS-1$
+            + "for 'git worktree repair' - measured on git 2.35.1, it does not touch this file at all, " //$NON-NLS-1$
+            + "and reports the unrelated '.git file broken' while leaving the fault exactly where it " //$NON-NLS-1$
+            + "was. This tool logs only the failure's exception types."; //$NON-NLS-1$
 
     private static final String PIN_UNCONFIRMED =
         "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
@@ -2105,13 +2111,15 @@ public class GitToolStoredRemoteTest
             + "blind. The fault: it is empty, or holds nothing but a line terminator. This tool refused " //$NON-NLS-1$
             + "rather than run blind; whether native git can use this repository is not something it " //$NON-NLS-1$
             + "determines - check that in a terminal. If this worktree has a 'commondir' file, repair " //$NON-NLS-1$
-            + "that file itself: it must be a regular file holding exactly one line, the path to the " //$NON-NLS-1$
-            + "shared repository. That path may be absolute; when it is relative it is resolved against " //$NON-NLS-1$
-            + "the directory the file sits in, which is what 'git worktree add' writes ('../..'). A " //$NON-NLS-1$
-            + "working absolute spelling does not need to be made relative. Do NOT reach for 'git " //$NON-NLS-1$
-            + "worktree repair' - measured on git 2.35.1, it does not touch this file at all, and " //$NON-NLS-1$
-            + "reports the unrelated '.git file broken' while leaving the fault exactly where it was. " //$NON-NLS-1$
-            + "This tool logs only the failure's exception types."; //$NON-NLS-1$
+            + "that file itself: it must be a regular file whose contents are the path to the shared " //$NON-NLS-1$
+            + "repository, with any trailing line terminators ignored - not necessarily a single line, " //$NON-NLS-1$
+            + "since a path may legitimately contain one on some filesystems. That path may be " //$NON-NLS-1$
+            + "absolute; when it is relative it is resolved against the directory the file sits in, " //$NON-NLS-1$
+            + "which is what 'git worktree add' writes ('../..'). A working absolute spelling does not " //$NON-NLS-1$
+            + "need to be made relative. Do NOT reach for 'git worktree repair' - measured on git " //$NON-NLS-1$
+            + "2.35.1, it does not touch this file at all, and reports the unrelated '.git file broken' " //$NON-NLS-1$
+            + "while leaving the fault exactly where it was. This tool logs only the failure's " //$NON-NLS-1$
+            + "exception types."; //$NON-NLS-1$
 
     // ==================== the pre-flight execute() actually runs ====================
 

@@ -483,11 +483,21 @@ public class GitTool implements IMcpTool
      * NORMATIVE, not descriptive. It used to say the file "holds one line", which the refusal for
      * an EMPTY pointer then contradicted in its own second sentence; what it means is what the
      * repaired file must look like.
+     * <p>
+     * And it must not demand more than this code does. "Exactly one line" was such a demand:
+     * {@link GitCommonDirectory} strips only TRAILING line terminators, so a path with a newline
+     * INSIDE it survives and resolves - and on a POSIX filesystem a newline is a legal character in
+     * a filename, so that is a real path, resolved the same way git resolves it. An operator who
+     * followed the old advice on such a repository would have replaced a pointer that was merely
+     * unreachable with one that was permanently wrong. The advice now describes what is actually
+     * read: the path, with any trailing terminators ignored.
      */
     private static final String COMMON_DIR_UNREADABLE_REFUSAL_TAIL =
         "If this worktree has a 'commondir' file, repair that file itself: it must be a regular " //$NON-NLS-1$
-        + "file holding exactly one line, the path to the shared " //$NON-NLS-1$
-        + "repository. That path may be absolute; when it is relative it is resolved against the " //$NON-NLS-1$
+        + "file whose contents are the path to the shared repository, with any trailing line " //$NON-NLS-1$
+        + "terminators ignored - not necessarily a single line, since a path may legitimately " //$NON-NLS-1$
+        + "contain one on some filesystems. " //$NON-NLS-1$
+        + "That path may be absolute; when it is relative it is resolved against the " //$NON-NLS-1$
         + "directory the file sits in, which is what 'git worktree add' writes ('../..'). A working " //$NON-NLS-1$
         + "absolute spelling does not need to be made relative. " //$NON-NLS-1$
         + "Do NOT reach for 'git worktree repair' - measured on git 2.35.1, it " //$NON-NLS-1$
