@@ -1,0 +1,409 @@
+[
+ {
+  "id": "q301",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "set_variable"}},
+   {"tool": "set_variable", "args": {"frameRef": "frame-2", "variableName": "ТекущаяДата", "value": "20260101"}}
+  ],
+  "expected_result": "Переменной ТекущаяДата в указанном кадре присвоено новое значение.",
+  "confidence": 4
+ },
+ {
+  "id": "q302",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "evaluate_expression"}},
+   {"tool": "evaluate_expression", "args": {"frameRef": "frame-1", "expression": "Товары.Итог(\"Сумма\")"}}
+  ],
+  "expected_result": "Вычислено значение выражения Товары.Итог(\"Сумма\") в указанном кадре отладки.",
+  "confidence": 5
+ },
+ {
+  "id": "q303",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "terminate_launch", "args": {"applicationId": "app-3", "force": true}}
+  ],
+  "expected_result": "Сеанс app-3 принудительно завершён (при недостатке projectName запрос может потребовать уточнения).",
+  "confidence": 3
+ },
+ {
+  "id": "q304",
+  "calls": [
+   {"tool": "start_profiling", "args": {"applicationId": "app-3"}}
+  ],
+  "expected_result": "Профилирование сеанса app-3 запущено.",
+  "confidence": 5
+ },
+ {
+  "id": "q305",
+  "calls": [
+   {"tool": "stop_profiling", "args": {"applicationId": "app-3"}}
+  ],
+  "expected_result": "Профилирование сеанса app-3 остановлено.",
+  "confidence": 5
+ },
+ {
+  "id": "q306",
+  "calls": [
+   {"tool": "get_profiling_results", "args": {"applicationId": "app-3", "minFrequency": 100}}
+  ],
+  "expected_result": "Показаны строки профилирования app-3 с частотой вызовов выше 100.",
+  "confidence": 5
+ },
+ {
+  "id": "q307",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_infobase"}},
+   {"tool": "create_infobase", "args": {"projectName": "УправлениеТорговлей", "infobaseFile": "C:\\bases\\ut", "setDefault": true}}
+  ],
+  "expected_result": "Создана файловая база по пути C:\\bases\\ut для проекта УправлениеТорговлей и назначена основной.",
+  "confidence": 5
+ },
+ {
+  "id": "q308",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: create_infobase работает только с файловыми базами, серверные (клиент-серверные) базы явно не поддерживаются.",
+  "confidence": 4
+ },
+ {
+  "id": "q309",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "ДоработкиУТ"}}
+  ],
+  "expected_result": "Показан список баз проекта ДоработкиУТ с их идентификаторами приложений.",
+  "confidence": 5
+ },
+ {
+  "id": "q310",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "fullUpdate": true, "confirm": true}}
+  ],
+  "expected_result": "База проекта TestConfiguration обновлена с полной реструктуризацией.",
+  "confidence": 5
+ },
+ {
+  "id": "q311",
+  "calls": [
+   {"tool": "update_database", "args": {"applicationId": "app-1", "confirm": true, "terminateRunningClients": true}}
+  ],
+  "expected_result": "Конфигурация накатана на базу app-1, мешающие сеансы принудительно завершены перед обновлением.",
+  "confidence": 5
+ },
+ {
+  "id": "q312",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_infobase"}},
+   {"tool": "get_applications", "args": {"projectName": "ЧерновикСтарый"}},
+   {"tool": "delete_infobase", "args": {"projectName": "ЧерновикСтарый", "confirm": true, "deleteDatabaseFiles": true}}
+  ],
+  "expected_result": "База отвязана от проекта ЧерновикСтарый и её файлы удалены с диска.",
+  "confidence": 3
+ },
+ {
+  "id": "q313",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "confirm": true, "deleteDatabaseFiles": false}}
+  ],
+  "expected_result": "Регистрация базы у проекта TestConfiguration удалена, файлы базы на диске сохранены.",
+  "confidence": 3
+ },
+ {
+  "id": "q314",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "set_infobase_credentials"}},
+   {"tool": "get_applications", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "set_infobase_credentials", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Учётные данные администратора сохранены для базы проекта УправлениеТорговлей (конкретные логин/пароль в запросе не названы).",
+  "confidence": 2
+ },
+ {
+  "id": "q315",
+  "calls": [
+   {"tool": "create_launch_config", "args": {"projectName": "TestConfiguration", "clientType": "thick", "name": "ТолстыйУправляемый"}}
+  ],
+  "expected_result": "Создана конфигурация запуска толстого клиента ТолстыйУправляемый для TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q316",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "ВременныйЗапуск", "confirm": true}}
+  ],
+  "expected_result": "Конфигурация запуска ВременныйЗапуск удалена.",
+  "confidence": 5
+ },
+ {
+  "id": "q317",
+  "calls": [
+   {"tool": "list_configurations", "args": {"type": "attach"}}
+  ],
+  "expected_result": "Показан список конфигураций запуска типа attach.",
+  "confidence": 5
+ },
+ {
+  "id": "q318",
+  "calls": [
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "severity": ["E"], "from": "2026-08-01", "to": "2026-08-10"}}
+  ],
+  "expected_result": "Показаны записи журнала регистрации базы TestConfiguration с ошибками за 1-10 августа.",
+  "confidence": 4
+ },
+ {
+  "id": "q319",
+  "calls": [
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "commentContains": "превышено время"}}
+  ],
+  "expected_result": "Найдены события журнала регистрации TestConfiguration с 'превышено время' в комментарии.",
+  "confidence": 5
+ },
+ {
+  "id": "q320",
+  "calls": [
+   {"tool": "list_git_branches", "args": {"projectName": "ДоработкиУТ"}}
+  ],
+  "expected_result": "Показан список веток репозитория проекта ДоработкиУТ и их привязка к базам.",
+  "confidence": 5
+ },
+ {
+  "id": "q321",
+  "calls": [
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "release/2026.1", "checkout": true}}
+  ],
+  "expected_result": "Создана и выбрана ветка release/2026.1 в проекте TestConfiguration от текущего состояния.",
+  "confidence": 5
+ },
+ {
+  "id": "q322",
+  "calls": [
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "bugfix/проведение", "startPoint": "develop", "checkout": false}}
+  ],
+  "expected_result": "Создана ветка bugfix/проведение от develop в TestConfiguration без переключения на неё.",
+  "confidence": 5
+ },
+ {
+  "id": "q323",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "УправлениеТорговлей", "branch": "master"}}
+  ],
+  "expected_result": "Проект УправлениеТорговлей переключён на ветку master.",
+  "confidence": 5
+ },
+ {
+  "id": "q324",
+  "calls": [
+   {"tool": "set_branch_infobase", "args": {"projectName": "TestConfiguration", "applicationId": "app-5", "branch": "release/2026.1", "action": "attach"}}
+  ],
+  "expected_result": "База app-5 привязана к ветке release/2026.1 проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q325",
+  "calls": [
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "УправлениеТорговлей", "updateBeforeLaunch": true}}
+  ],
+  "expected_result": "Запущены все тесты YAXUnit проекта УправлениеТорговлей с предварительным обновлением базы.",
+  "confidence": 5
+ },
+ {
+  "id": "q326",
+  "calls": [
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tests": ["ОМ_ТестыПроведения.ТестОстатков"]}}
+  ],
+  "expected_result": "Запущен конкретный тест ОМ_ТестыПроведения.ТестОстатков в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q327",
+  "calls": [
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tags": ["smoke", "regression"], "timeout": 600}}
+  ],
+  "expected_result": "Запущены тесты с тегами smoke и regression в TestConfiguration (таймаут будет ограничен максимумом инструмента).",
+  "confidence": 4
+ },
+ {
+  "id": "q328",
+  "calls": [
+   {"tool": "debug_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tests": "ОМ_ТестыПроведения.ТестОстатков"}}
+  ],
+  "expected_result": "Тест ОМ_ТестыПроведения.ТестОстатков в TestConfiguration запущен под отладчиком.",
+  "confidence": 5
+ },
+ {
+  "id": "q329",
+  "calls": [
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "Document.SalesOrder.Form.DocumentForm"}}
+  ],
+  "expected_result": "Получен скриншот формы Document.SalesOrder.Form.DocumentForm.",
+  "confidence": 5
+ },
+ {
+  "id": "q330",
+  "calls": [
+   {"tool": "get_form_layout_snapshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Partners.Form.ItemForm"}}
+  ],
+  "expected_result": "Получены координаты и размеры элементов формы Catalog.Partners.Form.ItemForm без картинки.",
+  "confidence": 5
+ },
+ {
+  "id": "q331",
+  "calls": [
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.СчетНаОплату"}}
+  ],
+  "expected_result": "Показан предпросмотр печати макета Document.SalesOrder.Template.СчетНаОплату.",
+  "confidence": 5
+ },
+ {
+  "id": "q332",
+  "calls": [
+   {"tool": "generate_translation_strings", "args": {"projectName": "TestConfiguration", "targetLanguages": ["en"], "collectInterface": false, "collectModel": true}}
+  ],
+  "expected_result": "Собраны строки модели (без интерфейса) конфигурации TestConfiguration для перевода на английский.",
+  "confidence": 5
+ },
+ {
+  "id": "q333",
+  "calls": [
+   {"tool": "get_translation_project_info", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Показаны настроенные языки перевода проекта УправлениеТорговлей.",
+  "confidence": 5
+ },
+ {
+  "id": "q334",
+  "calls": [
+   {"tool": "translate_configuration", "args": {"projectName": "ДоработкиУТ", "targetLanguages": ["en"]}}
+  ],
+  "expected_result": "Конфигурация ДоработкиУТ переведена на английский язык.",
+  "confidence": 5
+ },
+ {
+  "id": "q335",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"typeName": "СписокЗначений", "memberType": "method"}}
+  ],
+  "expected_result": "Показан список методов типа СписокЗначений.",
+  "confidence": 5
+ },
+ {
+  "id": "q336",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"category": "builtin", "typeName": "ЗначениеЗаполнено", "responseFormat": "detailed"}}
+  ],
+  "expected_result": "Показаны параметры и возвращаемое значение глобальной функции ЗначениеЗаполнено.",
+  "confidence": 5
+ },
+ {
+  "id": "q337",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"typeName": "DocumentObject"}}
+  ],
+  "expected_result": "Показан общий API объектов документов (DocumentObject).",
+  "confidence": 5
+ },
+ {
+  "id": "q338",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"typeName": "РежимДиалогаВопрос"}}
+  ],
+  "expected_result": "Показаны значения системного перечисления РежимДиалогаВопрос.",
+  "confidence": 5
+ },
+ {
+  "id": "q339",
+  "calls": [
+   {"tool": "get_platform_documentation", "args": {"typeName": "ТаблицаЗначений", "memberName": "Найти", "responseFormat": "detailed"}}
+  ],
+  "expected_result": "Показано подробное описание метода Найти типа ТаблицаЗначений.",
+  "confidence": 5
+ },
+ {
+  "id": "q340",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}}
+  ],
+  "expected_result": "Показана полная инструкция по инструменту create_metadata.",
+  "confidence": 5
+ },
+ {
+  "id": "q341",
+  "calls": [
+   {"tool": "list_toolsets", "args": {}}
+  ],
+  "expected_result": "Показан список тулсетов и их текущая видимость.",
+  "confidence": 5
+ },
+ {
+  "id": "q342",
+  "calls": [
+   {"tool": "enable_toolset", "args": {"toolsets": ["git", "debug"]}}
+  ],
+  "expected_result": "Тулсеты git и debug сделаны видимыми.",
+  "confidence": 4
+ },
+ {
+  "id": "q343",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "enable_toolset"}},
+   {"tool": "list_toolsets", "args": {}},
+   {"tool": "enable_toolset", "args": {"toolsets": ["translation"], "disable": true}}
+  ],
+  "expected_result": "Тулсет перевода скрыт из списка доступных инструментов.",
+  "confidence": 3
+ },
+ {
+  "id": "q344",
+  "calls": [
+   {"tool": "get_mcp_history", "args": {"status": "error"}}
+  ],
+  "expected_result": "Показаны вызовы MCP, завершившиеся ошибкой (в пределах доступного окна времени).",
+  "confidence": 3
+ },
+ {
+  "id": "q345",
+  "calls": [
+   {"tool": "get_mcp_history", "args": {"minDurationMs": 5000}}
+  ],
+  "expected_result": "Показаны вызовы MCP длительностью более 5 секунд.",
+  "confidence": 5
+ },
+ {
+  "id": "q346",
+  "calls": [
+   {"tool": "get_markers", "args": {"projectName": "УправлениеТорговлей", "markerKind": "task"}}
+  ],
+  "expected_result": "Собраны задачные маркеры (включая FIXME) проекта УправлениеТорговлей.",
+  "confidence": 4
+ },
+ {
+  "id": "q347",
+  "calls": [
+   {"tool": "get_markers", "args": {"projectName": "TestConfiguration", "markerKind": "task", "priority": "high"}}
+  ],
+  "expected_result": "Показаны задачи высокого приоритета в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q348",
+  "calls": [
+   {"tool": "build_external_objects", "args": {"projectName": "ВнешниеОбработки", "objectName": "ЗагрузкаПрайса", "outputDir": "D:\\epf"}}
+  ],
+  "expected_result": "Собран epf-файл обработки ЗагрузкаПрайса в D:\\epf.",
+  "confidence": 5
+ },
+ {
+  "id": "q349",
+  "calls": [
+   {"tool": "build_external_objects", "args": {"projectName": "ВнешниеОбработки", "outputDir": "build", "recordBuildTime": true}}
+  ],
+  "expected_result": "Скомпилированы все внешние объекты проекта ВнешниеОбработки в папку build с проставлением времени сборки.",
+  "confidence": 5
+ },
+ {
+  "id": "q350",
+  "calls": [],
+  "expected_result": "Подходящего инструмента нет: push в удалённый репозиторий и создание merge request инструментами каталога не поддерживаются.",
+  "confidence": 5
+ }
+]

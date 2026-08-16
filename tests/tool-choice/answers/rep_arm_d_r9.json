@@ -1,0 +1,280 @@
+[
+ {
+  "id": "q006",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_project"}},
+   {"tool": "delete_project", "args": {"projectName": "СтарыйПрототип", "deleteContent": true}},
+   {"tool": "delete_project", "args": {"projectName": "СтарыйПрототип", "deleteContent": true, "confirm": true}}
+  ],
+  "expected_result": "Проект СтарыйПрототип будет удалён из рабочей области вместе с файлами на диске после подтверждения превью.",
+  "confidence": 5
+ },
+ {
+  "id": "q007",
+  "calls": [
+   {"tool": "delete_project", "args": {"projectName": "TestSandbox", "deleteContent": false}},
+   {"tool": "delete_project", "args": {"projectName": "TestSandbox", "deleteContent": false, "confirm": true}}
+  ],
+  "expected_result": "Проект TestSandbox будет убран из рабочей области, а исходники на диске останутся нетронутыми.",
+  "confidence": 5
+ },
+ {
+  "id": "q046",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_metadata"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Catalog.ВременныйСправочник", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Catalog.ВременныйСправочник", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Справочник Catalog.ВременныйСправочник будет удалён из TestConfiguration после показа превью зависимых ссылок.",
+  "confidence": 5
+ },
+ {
+  "id": "q047",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "Document.SalesOrder.Attribute.Устаревший", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Document.SalesOrder.Attribute.Устаревший", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Реквизит Устаревший документа SalesOrder будет удалён из TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q048",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "Report.НеИспользуемый", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Report.НеИспользуемый", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Отчёт Report.НеИспользуемый будет удалён из конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q049",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "rename_metadata_object"}},
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "Catalog.Products", "newName": "Nomenclature", "projectName": "TestConfiguration"}},
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "Catalog.Products", "newName": "Nomenclature", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Справочник Catalog.Products будет переименован в Nomenclature, и все ссылки на него в конфигурации TestConfiguration обновятся.",
+  "confidence": 5
+ },
+ {
+  "id": "q050",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "Document.SalesOrder.Attribute.Сумма", "newName": "СуммаДокумента", "projectName": "TestConfiguration"}},
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "Document.SalesOrder.Attribute.Сумма", "newName": "СуммаДокумента", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Реквизит Сумма документа SalesOrder будет переименован в СуммаДокумента со всеми использованиями в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q125",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "debug_status", "args": {}},
+   {"tool": "terminate_launch", "args": {}},
+   {"tool": "terminate_launch", "args": {"confirm": true}}
+  ],
+  "expected_result": "Единственный запущенный из EDT сеанс 1С будет остановлен после подтверждения превью.",
+  "confidence": 3
+ },
+ {
+  "id": "q126",
+  "calls": [
+   {"tool": "terminate_launch", "args": {"projectName": "TestConfiguration", "all": true}},
+   {"tool": "terminate_launch", "args": {"projectName": "TestConfiguration", "all": true, "confirm": true}}
+  ],
+  "expected_result": "Все запущенные из EDT клиенты 1С по проекту TestConfiguration будут остановлены.",
+  "confidence": 4
+ },
+ {
+  "id": "q137",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Конфигурация базы данных проекта TestConfiguration будет обновлена по текущей конфигурации EDT.",
+  "confidence": 5
+ },
+ {
+  "id": "q138",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "terminateRunningClients": true}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "terminateRunningClients": true, "confirm": true}}
+  ],
+  "expected_result": "Изменения конфигурации будут накачены на базу проекта УправлениеТорговлей, при необходимости мешающие сеансы будут отключены.",
+  "confidence": 4
+ },
+ {
+  "id": "q139",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_infobase"}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "deleteRegistration": true, "deleteDatabaseFiles": true}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "deleteRegistration": true, "deleteDatabaseFiles": true, "confirm": true}}
+  ],
+  "expected_result": "Информационная база проекта TestConfiguration будет отвязана и её файлы на диске будут удалены безвозвратно.",
+  "confidence": 5
+ },
+ {
+  "id": "q140",
+  "calls": [
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "infobaseName": "ТестоваяБаза", "deleteRegistration": true, "deleteDatabaseFiles": false}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "infobaseName": "ТестоваяБаза", "deleteRegistration": true, "deleteDatabaseFiles": false, "confirm": true}}
+  ],
+  "expected_result": "Регистрация базы ТестоваяБаза у проекта TestConfiguration будет снята, а файлы на диске останутся нетронутыми.",
+  "confidence": 5
+ },
+ {
+  "id": "q145",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_launch_config"}},
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйЗапуск"}},
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйЗапуск", "confirm": true}}
+  ],
+  "expected_result": "Конфигурация запуска СтарыйЗапуск будет удалена.",
+  "confidence": 5
+ },
+ {
+  "id": "q146",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "AttachOld"}},
+   {"tool": "delete_launch_config", "args": {"name": "AttachOld", "confirm": true}}
+  ],
+  "expected_result": "Конфигурация подключения AttachOld будет удалена.",
+  "confidence": 5
+ },
+ {
+  "id": "q206",
+  "calls": [
+   {"tool": "delete_project", "args": {"projectName": "ЧерновикСтарый", "deleteContent": true}},
+   {"tool": "delete_project", "args": {"projectName": "ЧерновикСтарый", "deleteContent": true, "confirm": true}}
+  ],
+  "expected_result": "Проект ЧерновикСтарый будет удалён из рабочей области вместе с исходниками на диске.",
+  "confidence": 5
+ },
+ {
+  "id": "q237",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "Перечисление.УстаревшиеВиды", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Перечисление.УстаревшиеВиды", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Перечисление УстаревшиеВиды будет удалено из конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q238",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "Document.SalesOrder.TabularSection.Услуги", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Document.SalesOrder.TabularSection.Услуги", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Табличная часть Услуги документа SalesOrder будет удалена из TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q239",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "CommonModule.СтарыйОбмен", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "CommonModule.СтарыйОбмен", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Общий модуль СтарыйОбмен будет удалён из конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q240",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "Catalog.Products.Form.ФормаВыбораСтарая", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Catalog.Products.Form.ФормаВыбораСтарая", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Форма ФормаВыбораСтарая справочника Products будет удалена из TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q241",
+  "calls": [
+   {"tool": "delete_metadata", "args": {"fqn": "Роль.ВременнаяРоль", "projectName": "TestConfiguration"}},
+   {"tool": "delete_metadata", "args": {"fqn": "Роль.ВременнаяРоль", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Роль ВременнаяРоль будет удалена из конфигурации TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q242",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "CommonModule.Расчеты", "newName": "РасчетыСервер", "projectName": "TestConfiguration"}},
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "CommonModule.Расчеты", "newName": "РасчетыСервер", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Общий модуль Расчеты будет переименован в РасчетыСервер, все использования в TestConfiguration обновятся.",
+  "confidence": 5
+ },
+ {
+  "id": "q243",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "РегистрСведений.Курсы", "newName": "КурсыВалют", "projectName": "TestConfiguration"}},
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "РегистрСведений.Курсы", "newName": "КурсыВалют", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Регистр сведений Курсы будет переименован в КурсыВалют со всеми ссылками в TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q244",
+  "calls": [
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "Документ.Заказ", "newName": "ЗаказКлиента", "projectName": "TestConfiguration"}},
+   {"tool": "rename_metadata_object", "args": {"objectFqn": "Документ.Заказ", "newName": "ЗаказКлиента", "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Документ Заказ будет переименован в ЗаказКлиента, использования в TestConfiguration будут поправлены.",
+  "confidence": 5
+ },
+ {
+  "id": "q303",
+  "calls": [
+   {"tool": "terminate_launch", "args": {"applicationId": "app-3", "force": true}},
+   {"tool": "terminate_launch", "args": {"applicationId": "app-3", "force": true, "confirm": true}}
+  ],
+  "expected_result": "Зависший сеанс app-3 будет принудительно остановлен.",
+  "confidence": 5
+ },
+ {
+  "id": "q310",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "fullUpdate": true}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "fullUpdate": true, "confirm": true}}
+  ],
+  "expected_result": "База проекта TestConfiguration будет обновлена с полной реструктуризацией.",
+  "confidence": 5
+ },
+ {
+  "id": "q311",
+  "calls": [
+   {"tool": "update_database", "args": {"applicationId": "app-1", "terminateRunningClients": true}},
+   {"tool": "update_database", "args": {"applicationId": "app-1", "terminateRunningClients": true, "confirm": true}}
+  ],
+  "expected_result": "Конфигурация будет накачена на базу app-1, мешающие сеансы будут отключены при необходимости.",
+  "confidence": 4
+ },
+ {
+  "id": "q312",
+  "calls": [
+   {"tool": "delete_infobase", "args": {"projectName": "ЧерновикСтарый", "deleteRegistration": true, "deleteDatabaseFiles": true}},
+   {"tool": "delete_infobase", "args": {"projectName": "ЧерновикСтарый", "deleteRegistration": true, "deleteDatabaseFiles": true, "confirm": true}}
+  ],
+  "expected_result": "База будет отцеплена от проекта ЧерновикСтарый и её файлы на диске будут удалены.",
+  "confidence": 5
+ },
+ {
+  "id": "q313",
+  "calls": [
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "deleteRegistration": true, "deleteDatabaseFiles": false}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "deleteRegistration": true, "deleteDatabaseFiles": false, "confirm": true}}
+  ],
+  "expected_result": "Регистрация базы у проекта TestConfiguration будет убрана, файлы на диске останутся нетронутыми.",
+  "confidence": 5
+ },
+ {
+  "id": "q316",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "ВременныйЗапуск"}},
+   {"tool": "delete_launch_config", "args": {"name": "ВременныйЗапуск", "confirm": true}}
+  ],
+  "expected_result": "Конфигурация запуска ВременныйЗапуск будет удалена.",
+  "confidence": 5
+ }
+]

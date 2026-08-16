@@ -65,6 +65,8 @@ that REAL contract (success + the named bad method + the available-methods list)
 flag the inconsistency with an AUDIT note rather than fudging it to is_error.
 """
 
+import time
+
 from harness import (
     call,
     assert_ok,
@@ -74,6 +76,7 @@ from harness import (
     assert_not_contains,
     assert_no_diff,
     e2e_test,
+    wait_for_project_ready,
     _fail,
     PROJECT,
 )
@@ -552,4 +555,392 @@ def test_method_not_found_in_empty_module_lists_zero_methods():
     # The empty Error module has zero methods -> the list count must be (0).
     assert_contains(r.text, "(0)",
                     "an empty module's available-methods list must report a count of 0")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TRANSITIVE CALLERS (depth > 1)
+#
+# The single-hop fixture (Test -> Add) is only two methods deep, so every test below
+# SEEDS the chain it needs with write_module_source and is declared kind="write-metadata"
+# so the runner reverts both the disk fixture and the in-memory model afterwards.
+#
+# Output contract asserted here (from formatTransitiveCallersOutput):
+#   "## Call Hierarchy (transitive): <modulePath> :: <method>"
+#   "**Direction:** Callers (who calls this method), transitive"
+#   "**Depth:** <n>"                       (+ " (requested N, clamped to max 5)" when clamped)
+#   "**Unique callers:** <n>"        (a module BODY is a caller too, hence not "methods")
+#   "**Complete through depth <n>:** yes"  | "no - <reasons>"
+#   "**Left unexpanded at the depth limit:** <n> ..."   (only when > 0)
+#   "**Repeat edges collapsed:** <n> ..."               (only when > 0)
+#   "**Not covered:** static invocations only - ..."
+#   table: "| # | Level | Module | Method | Line | Via # | Flags |"
+# ──────────────────────────────────────────────────────────────────────────────
+
+# The empty fixture module used to seed extra links in the chain.
+OK_MODULE = "CommonModules/OK/Module.bsl"
+CASCADE_EN = "CommonModules/CascadeEn/Module.bsl"
+
+# OK.Level2 -> Calc.Test -> Calc.Add, and OK.Level3 -> OK.Level2 (an UNQUALIFIED local call,
+# which exercises the "caller inside the declaring module" fallback at level 3).
+CHAIN_SOURCE = """
+Процедура Level2() Экспорт
+\tCalc.Test();
+КонецПроцедуры
+
+Процедура Level3() Экспорт
+\tLevel2();
+КонецПроцедуры
+"""
+
+
+def _seed(module_path, source, expect_method):
+    """Write BSL into a fixture module and wait until the MODEL actually shows it.
+
+    wait_for_project_ready() alone is not a sufficient gate here: the call hierarchy reads the
+    shared BSL resource set, and "the project is ready" does not promise that this module's AST
+    has been reparsed with the text we just wrote. So the wait is self-verifying - poll
+    get_module_structure for the seeded method and only then run the assertion under test.
+    Without it a failure would be indistinguishable from a broken walk."""
+    w = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": module_path,
+        "mode": "append", "source": source,
+    })
+    assert_ok(w, "seeding %s" % module_path)
+    wait_for_project_ready()
+
+    deadline = time.time() + 30
+    last = ""
+    while time.time() < deadline:
+        s = call("get_module_structure", {"projectName": PROJECT, "modulePath": module_path})
+        last = s.text or ""
+        if expect_method in last:
+            return
+        time.sleep(0.5)
+    _fail("seeded method %r never appeared in the model for %s; structure was:\n%s"
+          % (expect_method, module_path, last[:800]))
+
+
+def _transitive_rows(text):
+    """Data rows of the transitive table as dicts keyed by column name.
+
+    Parsing the real cells (rather than substring-matching the whole document) is what lets a
+    test say "method X is at level 2 via row 1 with no flag" instead of "the text contains a 2
+    somewhere" - the difference between pinning the contract and pinning a coincidence."""
+    rows = []
+    for line in (text or "").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 7 or cells[0] == "#":
+            continue
+        if set(cells[0]) <= set("-"):
+            continue
+        rows.append({
+            "num": cells[0], "level": cells[1], "module": cells[2],
+            "method": cells[3], "line": cells[4], "via": cells[5], "flags": cells[6],
+        })
+    return rows
+
+
+def _row_for(text, method):
+    """The single transitive row for a method name, failing loudly when absent or duplicated."""
+    hits = [r for r in _transitive_rows(text) if r["method"] == method]
+    if len(hits) != 1:
+        _fail("expected exactly ONE row for method %r, got %d in:\n%s"
+              % (method, len(hits), (text or "")[:1500]))
+    return hits[0]
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_depth_omitted_matches_an_explicit_depth_of_one_byte_for_byte():
+    """The default must not change what this tool has always returned.
+
+    depth omitted and depth=1 must produce the IDENTICAL document - same single-hop table, no
+    transitive header, no new columns. Comparing the two responses (rather than eyeballing one)
+    is what pins "adding the parameter changed nothing for everyone who does not pass it".
+
+    HONEST LIMIT: this test does NOT discriminate against the pre-depth build - measured by
+    pinning the stand to it, where an unknown `depth` argument is simply ignored and both calls
+    return the same document for a different reason. It is a FORWARD regression guard: it fails
+    the day someone lets depth=1 drift away from the single-hop path."""
+    base = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add", "direction": "callers",
+    })
+    assert_ok(base, "callers of Calc.Add without depth")
+    explicit = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add",
+        "direction": "callers", "depth": 1,
+    })
+    assert_ok(explicit, "callers of Calc.Add with depth=1")
+
+    if base.text != explicit.text:
+        _fail("depth=1 must be byte-identical to omitting depth.\n--- omitted ---\n%s\n--- depth=1 ---\n%s"
+              % ((base.text or "")[:900], (explicit.text or "")[:900]))
+    # And it must still be the SINGLE-HOP shape, not the transitive one.
+    assert_contains(base.text, "## Call Hierarchy: " + CALC + " :: Add",
+                    "depth=1 keeps the original heading")
+    assert_not_contains(base.text, "(transitive)",
+                        "depth=1 must not switch to the transitive renderer")
+    assert_not_contains(base.text, "Via #", "depth=1 must not grow the transitive columns")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="write-metadata")
+def test_transitive_walk_climbs_three_levels_and_records_the_witness_chain():
+    """depth=3 over the seeded chain Add <- Calc.Test <- OK.Level2 <- OK.Level3.
+
+    This is the whole point of the issue: ONE call answers "what breaks if I change Add"
+    three levels up. Asserting each method's LEVEL and its Via # (which must point at the row
+    of the method that led there) proves the walk really climbed - a tool that just re-ran the
+    single hop would report only Test, and one that lost the parent links could not produce a
+    Via chain that resolves to the right rows."""
+    _seed(OK_MODULE, CHAIN_SOURCE, "Level3")
+
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add",
+        "direction": "callers", "depth": 3,
+    })
+    assert_ok(r, "transitive callers of Calc.Add at depth 3")
+    assert_contains(r.text, "## Call Hierarchy (transitive): " + CALC + " :: Add",
+                    "the transitive renderer must announce itself")
+    assert_contains(r.text, "**Direction:** Callers (who calls this method), transitive",
+                    "transitive direction banner")
+    assert_contains(r.text, "**Depth:** 3", "the effective depth must be stated")
+    assert_contains(r.text, "**Unique callers:** 3",
+                    "three distinct callers were found, and the header must count them")
+
+    test_row = _row_for(r.text, "Test")
+    level2 = _row_for(r.text, "Level2")
+    level3 = _row_for(r.text, "Level3")
+
+    assert test_row["level"] == "1", \
+        "Calc.Test is a DIRECT caller of Add, got level %s" % test_row["level"]
+    assert level2["level"] == "2", \
+        "OK.Level2 calls Test, so it is level 2, got %s" % level2["level"]
+    assert level3["level"] == "3", \
+        "OK.Level3 calls Level2, so it is level 3, got %s" % level3["level"]
+
+    # The witness chain: Level3 -> Level2 -> Test -> (the analyzed method itself).
+    assert test_row["via"] == "-", "a level-1 row is reached from the analyzed method, so Via is '-'"
+    assert level2["via"] == test_row["num"], \
+        "Level2 must point at Test's row (%s), got %s" % (test_row["num"], level2["via"])
+    assert level3["via"] == level2["num"], \
+        "Level3 must point at Level2's row (%s), got %s" % (level2["num"], level3["via"])
+
+    # Level3 reaches Level2 through an UNQUALIFIED local call inside the SAME module - the
+    # fallback path that only counts a caller when the scanned module IS the declaring one.
+    assert level3["module"] == OK_MODULE, "Level3 lives in the OK module"
+    assert_contains(r.text, "**Complete through depth 3:** yes",
+                    "the whole chain fits in the budget, so the walk is complete")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="write-metadata")
+def test_the_depth_bound_marks_the_boundary_instead_of_hiding_it():
+    """depth=2 over the same chain: Level3 is out of reach, and the row that would have led
+    there says so.
+
+    A walk that simply omitted Level3 would be indistinguishable from a chain that ends at
+    Level2. The depth-limit flag is what tells the agent "there IS more above this - ask for a
+    greater depth". And reaching the requested depth is NOT a truncation, so the result must
+    still report itself complete THROUGH that depth."""
+    _seed(OK_MODULE, CHAIN_SOURCE, "Level3")
+
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add",
+        "direction": "callers", "depth": 2,
+    })
+    assert_ok(r, "transitive callers of Calc.Add at depth 2")
+
+    assert _row_for(r.text, "Test")["level"] == "1", "Test is still the direct caller"
+    level2 = _row_for(r.text, "Level2")
+    assert level2["level"] == "2", "Level2 is the boundary row"
+    assert level2["flags"] == "depth-limit", \
+        "the boundary row must say its own callers were not looked for, got %r" % level2["flags"]
+    assert not [row for row in _transitive_rows(r.text) if row["method"] == "Level3"], \
+        "Level3 is 3 hops away and must NOT appear at depth 2"
+
+    assert_contains(r.text, "**Complete through depth 2:** yes",
+                    "stopping at the REQUESTED depth is the answer, not a truncation")
+    assert_contains(r.text, "**Left unexpanded at the depth limit:** 1",
+                    "the header must count what was left at the boundary")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="write-metadata")
+def test_a_cycle_terminates_and_lists_each_method_once():
+    """Mutual recursion must not loop, and must not repeat rows.
+
+    Ping calls Pong, Pong calls Ping, and Pong also calls Calc.Test. Asking for the callers of
+    Add at depth 5 walks Test -> Pong -> Ping -> (back to Pong). The depth bound is what ends the
+    walk; the report-once rule is what keeps each method to ONE row - without it the same methods
+    come back on every remaining level - and the edge closing the loop is reported as collapsed
+    rather than silently dropped."""
+    _seed(OK_MODULE, """
+Процедура Pong() Экспорт
+\tCalc.Test();
+\tPing();
+КонецПроцедуры
+
+Процедура Ping() Экспорт
+\tPong();
+КонецПроцедуры
+""", "Ping")
+
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add",
+        "direction": "callers", "depth": 5,
+    })
+    assert_ok(r, "transitive callers across a cycle must return, not hang")
+
+    # _row_for fails when a method appears more than once, so these three calls ARE the
+    # "each method exactly once" assertion.
+    assert _row_for(r.text, "Test")["level"] == "1", "Test is the direct caller of Add"
+    assert _row_for(r.text, "Pong")["level"] == "2", "Pong calls Test"
+    assert _row_for(r.text, "Ping")["level"] == "3", "Ping calls Pong"
+
+    assert_contains(r.text, "**Repeat edges collapsed:**",
+                    "the edge closing the cycle must be reported as collapsed, not hidden")
+    assert_contains(r.text, "**Complete through depth 5:** yes",
+                    "collapsing a re-convergence loses nothing")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="write-metadata")
+def test_a_self_recursive_method_is_listed_once_and_flagged_recursive():
+    """A method that calls itself is one of its own callers - a single-hop search shows that row,
+    so the transitive walk must not lose it just because the walk starts there. It is reported
+    once, flagged 'recursive', and never expanded again."""
+    _seed(OK_MODULE, """
+Процедура Loop() Экспорт
+\tLoop();
+КонецПроцедуры
+""", "Loop")
+
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": OK_MODULE, "methodName": "Loop",
+        "direction": "callers", "depth": 4,
+    })
+    assert_ok(r, "transitive callers of a self-recursive method")
+    row = _row_for(r.text, "Loop")
+    assert row["level"] == "1", "the self-call is a level-1 caller"
+    assert row["flags"] == "recursive", \
+        "the analyzed method reached back through the graph must be flagged, got %r" % row["flags"]
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="write-metadata")
+def test_the_node_budget_cuts_the_walk_and_says_the_total_is_unknown():
+    """limit at depth>1 bounds the WALK, not just the rendering - and the header must say which.
+
+    With limit=1 the walk stops after one method, so how many callers exist is not merely
+    unshown, it is UNKNOWN: the methods that were never expanded may have any number behind
+    them. Reporting that as an ordinary "showing 1 of N" would be a claim the tool cannot make."""
+    _seed(OK_MODULE, CHAIN_SOURCE, "Level3")
+
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add",
+        "direction": "callers", "depth": 3, "limit": 1,
+    })
+    assert_ok(r, "transitive callers with a budget of one node")
+
+    rows = _transitive_rows(r.text)
+    assert len(rows) == 1, "a budget of 1 must yield exactly one row, got %d" % len(rows)
+    assert_contains(r.text, "**Complete through depth 3:** no",
+                    "a walk cut by the budget is not complete")
+    assert_contains(r.text, "unknown",
+                    "the header must say the true number of callers is UNKNOWN, not just unshown")
+    assert_contains(r.text, "limit=1", "the header must name the budget that cut the walk")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_depth_above_the_ceiling_is_clamped_and_the_header_admits_it():
+    """A depth beyond the maximum is clamped rather than refused, and the response says so -
+    silently answering a shallower question than the one asked is how an agent concludes
+    "nothing else calls this" from a walk that never went that far."""
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Add",
+        "direction": "callers", "depth": 99,
+    })
+    assert_ok(r, "an over-large depth is clamped, not rejected")
+    assert_contains(r.text, "**Depth:** 5 (requested 99, clamped to max 5)",
+                    "the header must state both the effective and the requested depth")
+    assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="write-metadata")
+def test_same_method_name_in_two_modules_does_not_merge_their_callers():
+    """Two modules may declare the same method name; a batched walk must keep them apart.
+
+    The fixture already has CascadeEn.Marker (called by CascadeUser.Запуск). Seeding a SECOND
+    Marker in the OK module, with its own caller, creates exactly the collision that a walk
+    keyed by method NAME instead of method IDENTITY would merge - it would report OK's caller as
+    a caller of CascadeEn.Marker, which is simply false."""
+    _seed(OK_MODULE, """
+Функция Marker() Экспорт
+\tВозврат 2;
+КонецФункции
+
+Процедура ВызовМаркераOK() Экспорт
+\tX = OK.Marker();
+КонецПроцедуры
+""", "ВызовМаркераOK")
+
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CASCADE_EN, "methodName": "Marker",
+        "direction": "callers", "depth": 3,
+    })
+    assert_ok(r, "transitive callers of CascadeEn.Marker")
+
+    methods = [row["method"] for row in _transitive_rows(r.text)]
+    assert "Запуск" in methods, \
+        "CascadeUser.Запуск calls CascadeEn.Marker and must be found, got %s" % methods
+    assert "ВызовМаркераOK" not in methods, \
+        "the caller of the SAME-NAMED OK.Marker must not be attributed here, got %s" % methods
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NEGATIVE MATRIX for depth
+# ──────────────────────────────────────────────────────────────────────────────
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_depth_above_one_with_callees_is_refused_and_points_at_callers():
+    """depth>1 is callers-only. callees reports the raw invocation names it finds and never
+    resolves them to the modules that DEFINE them, so recursing it would fabricate a dependency
+    graph. Refusing loudly beats answering confidently and wrongly - and the refusal must name
+    the direction that does work."""
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Test",
+        "direction": "callees", "depth": 3,
+    })
+    err = assert_error(r, "depth>1 with callees must be refused")
+    assert_error_quality(err, names=["callees", "depth"], suggests=["callers"],
+                         ctx="the refusal must name the bad combination and the working direction")
+    assert_no_diff("a refused call must not touch the project on disk")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_depth_above_one_with_outgoing_is_refused():
+    """Same rule for the aggregated outgoing view, which also does not resolve its targets."""
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "direction": "outgoing", "depth": 2,
+    })
+    err = assert_error(r, "depth>1 with outgoing must be refused")
+    assert_error_quality(err, names=["outgoing", "depth"], suggests=["callers"],
+                         ctx="the refusal must name the bad combination and the working direction")
+    assert_no_diff("a refused call must not touch the project on disk")
+
+
+@e2e_test(tool="get_method_call_hierarchy", kind="read")
+def test_depth_clamped_back_to_one_is_accepted_for_every_direction():
+    """depth=0 clamps to 1, i.e. it asks for the single hop every direction supports. Refusing it
+    would reject a request identical to omitting the parameter - the guard must fire on the
+    EFFECTIVE depth, not on the presence of the argument.
+
+    HONEST LIMIT: like the byte-identical test above, this one also passes against the pre-depth
+    build (which has no guard at all to fire), so it proves the guard's SHAPE going forward rather
+    than proving this change."""
+    r = call("get_method_call_hierarchy", {
+        "projectName": PROJECT, "modulePath": CALC, "methodName": "Test",
+        "direction": "callees", "depth": 0,
+    })
+    assert_ok(r, "depth=0 with callees is just the single hop")
+    assert_contains(r.text, "**Direction:** Callees (what this method calls)",
+                    "it must run the ordinary single-hop callees path")
     assert_no_diff("a read tool must not touch the project on disk")

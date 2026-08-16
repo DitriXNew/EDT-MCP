@@ -1,0 +1,424 @@
+[
+ {
+  "id": "q101",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "validate_query"}},
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "dcsMode": true}}
+  ],
+  "expected_result": "Инструмент проверит присланный текст запроса СКД (dcsMode=true) в проекте TestConfiguration на синтаксис и ссылки на метаданные, как только текст будет приложен.",
+  "confidence": 3
+ },
+ {
+  "id": "q102",
+  "calls": [
+   {"tool": "validate_xdto_package", "args": {"fqn": "XDTOPackage.ОбменДанными", "projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Инструмент проверит XDTO-пакет XDTOPackage.ОбменДанными в проекте TestConfiguration и вернёт список найденных проблем.",
+  "confidence": 5
+ },
+ {
+  "id": "q103",
+  "calls": [
+   {"tool": "validate_xdto_package", "args": {"fqn": "XDTOPackage.ExchangeMessage", "projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Инструмент проверит XDTO-пакет ExchangeMessage в проекте TestConfiguration на ошибки конфигурации.",
+  "confidence": 3
+ },
+ {
+  "id": "q104",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "set_breakpoint"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModule.Расчеты", "lineNumber": 42}}
+  ],
+  "expected_result": "Инструмент поставит точку останова на 42-й строке модуля CommonModule.Расчеты проекта TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q105",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "set_breakpoint"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "Document.SalesOrder", "lineNumber": 15}}
+  ],
+  "expected_result": "Инструмент поставит точку останова на 15-й строке модуля объекта Document.SalesOrder проекта TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q106",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "remove_breakpoint"}},
+   {"tool": "remove_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModule.Расчеты", "lineNumber": 42}}
+  ],
+  "expected_result": "Инструмент снимет точку останова с 42-й строки модуля CommonModule.Расчеты в проекте TestConfiguration.",
+  "confidence": 4
+ },
+ {
+  "id": "q107",
+  "calls": [
+   {"tool": "remove_breakpoint", "args": {"breakpointId": "bp-7"}}
+  ],
+  "expected_result": "Инструмент снимет точку останова с идентификатором bp-7.",
+  "confidence": 4
+ },
+ {
+  "id": "q108",
+  "calls": [
+   {"tool": "list_breakpoints", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Инструмент вернёт список точек останова, расставленных в проекте TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q109",
+  "calls": [
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Инструмент запустит конфигурацию проекта TestConfiguration под отладкой.",
+  "confidence": 4
+ },
+ {
+  "id": "q110",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "debug_launch"}},
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration", "launchConfigurationName": "ТолстыйКлиент", "updateBeforeLaunch": true}}
+  ],
+  "expected_result": "Инструмент запустит под отладкой клиент по конфигурации запуска ТолстыйКлиент проекта TestConfiguration, предварительно обновив базу.",
+  "confidence": 4
+ },
+ {
+  "id": "q111",
+  "calls": [
+   {"tool": "debug_status", "args": {}}
+  ],
+  "expected_result": "Инструмент покажет, какие сеансы отладки сейчас запущены и на чём они стоят.",
+  "confidence": 5
+ },
+ {
+  "id": "q112",
+  "calls": [
+   {"tool": "debug_status", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент проверит, стоит ли отладчик на паузе в приложении app-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q113",
+  "calls": [
+   {"tool": "wait_for_break", "args": {"timeout": 60}}
+  ],
+  "expected_result": "Инструмент подождёт до 60 секунд, пока отладка не остановится на точке останова.",
+  "confidence": 5
+ },
+ {
+  "id": "q114",
+  "calls": [
+   {"tool": "wait_for_break", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент подождёт события приостановки в отладочном сеансе app-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q115",
+  "calls": [
+   {"tool": "step", "args": {"kind": "into", "threadId": "thread-1"}}
+  ],
+  "expected_result": "Инструмент выполнит шаг с заходом внутрь процедуры в потоке thread-1.",
+  "confidence": 4
+ },
+ {
+  "id": "q116",
+  "calls": [
+   {"tool": "step", "args": {"kind": "over", "threadId": "thread-1"}}
+  ],
+  "expected_result": "Инструмент перешагнёт текущую строку без захода в вызов в потоке thread-1.",
+  "confidence": 4
+ },
+ {
+  "id": "q117",
+  "calls": [
+   {"tool": "resume", "args": {}}
+  ],
+  "expected_result": "Инструмент продолжит выполнение приостановленного сеанса отладки.",
+  "confidence": 5
+ },
+ {
+  "id": "q118",
+  "calls": [
+   {"tool": "resume", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент продолжит выполнение отладки в приложении app-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q119",
+  "calls": [
+   {"tool": "get_variables", "args": {}}
+  ],
+  "expected_result": "Инструмент покажет значения локальных переменных в текущем кадре остановленной отладки.",
+  "confidence": 4
+ },
+ {
+  "id": "q120",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_variables"}},
+   {"tool": "get_variables", "args": {"expandPath": "ПараметрыЗаписи", "frameRef": "frame-2"}}
+  ],
+  "expected_result": "Инструмент развернёт структуру ПараметрыЗаписи в переменных кадра frame-2.",
+  "confidence": 4
+ },
+ {
+  "id": "q121",
+  "calls": [
+   {"tool": "set_variable", "args": {"variableName": "Счетчик", "value": "10"}}
+  ],
+  "expected_result": "Инструмент присвоит переменной Счетчик значение 10 в остановленной отладке.",
+  "confidence": 4
+ },
+ {
+  "id": "q122",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "set_variable"}},
+   {"tool": "set_variable", "args": {"variableName": "ФлагОбработки", "value": "Истина", "frameRef": "frame-1"}}
+  ],
+  "expected_result": "Инструмент изменит значение переменной ФлагОбработки на Истина в кадре frame-1.",
+  "confidence": 4
+ },
+ {
+  "id": "q123",
+  "calls": [
+   {"tool": "evaluate_expression", "args": {"expression": "Товары.Количество()", "frameRef": "frame-1"}}
+  ],
+  "expected_result": "Инструмент вычислит выражение Товары.Количество() в кадре отладки frame-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q124",
+  "calls": [
+   {"tool": "evaluate_expression", "args": {"expression": "ЭтотОбъект.Сумма * 2", "frameRef": "frame-3"}}
+  ],
+  "expected_result": "Инструмент посчитает значение выражения ЭтотОбъект.Сумма * 2 в кадре frame-3.",
+  "confidence": 5
+ },
+ {
+  "id": "q125",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "terminate_launch", "args": {}},
+   {"tool": "terminate_launch", "args": {"confirm": true}}
+  ],
+  "expected_result": "Инструмент завершит запущенный из EDT сеанс 1С, сначала показав предпросмотр, затем применив завершение.",
+  "confidence": 2
+ },
+ {
+  "id": "q126",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "terminate_launch"}},
+   {"tool": "terminate_launch", "args": {"all": true, "projectName": "TestConfiguration"}},
+   {"tool": "terminate_launch", "args": {"all": true, "projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Инструмент завершит все запущенные из EDT клиенты 1С по проекту TestConfiguration после предпросмотра.",
+  "confidence": 4
+ },
+ {
+  "id": "q127",
+  "calls": [
+   {"tool": "start_profiling", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент включит замер производительности кода в отладочном приложении app-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q128",
+  "calls": [
+   {"tool": "start_profiling", "args": {"applicationId": "app-2"}}
+  ],
+  "expected_result": "Инструмент начнёт профилирование BSL в сеансе отладки app-2.",
+  "confidence": 5
+ },
+ {
+  "id": "q129",
+  "calls": [
+   {"tool": "stop_profiling", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент остановит замер производительности в приложении app-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q130",
+  "calls": [
+   {"tool": "stop_profiling", "args": {"applicationId": "app-2"}}
+  ],
+  "expected_result": "Инструмент завершит профилирование сеанса app-2.",
+  "confidence": 5
+ },
+ {
+  "id": "q131",
+  "calls": [
+   {"tool": "get_profiling_results", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент покажет результаты замера производительности по приложению app-1.",
+  "confidence": 5
+ },
+ {
+  "id": "q132",
+  "calls": [
+   {"tool": "get_profiling_results", "args": {"moduleFilter": "Расчеты"}}
+  ],
+  "expected_result": "Инструмент вернёт горячие точки профилирования только по модулям, содержащим Расчеты.",
+  "confidence": 5
+ },
+ {
+  "id": "q133",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_infobase"}},
+   {"tool": "create_infobase", "args": {"projectName": "TestConfiguration", "infobaseFile": "D:\\bases\\test", "mode": "create"}}
+  ],
+  "expected_result": "Инструмент создаст новую файловую информационную базу в D:\\bases\\test и привяжет её к проекту TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q134",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_infobase"}},
+   {"tool": "create_infobase", "args": {"projectName": "УправлениеТорговлей", "infobaseFile": "D:\\bases\\prod", "mode": "register", "setDefault": true}}
+  ],
+  "expected_result": "Инструмент зарегистрирует существующую файловую базу D:\\bases\\prod для проекта УправлениеТорговлей и сделает её базой по умолчанию.",
+  "confidence": 5
+ },
+ {
+  "id": "q135",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Инструмент перечислит информационные базы, подключённые к проекту TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q136",
+  "calls": [
+   {"tool": "get_applications", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Инструмент покажет список приложений и их идентификаторы для проекта УправлениеТорговлей.",
+  "confidence": 5
+ },
+ {
+  "id": "q137",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Инструмент обновит базу данных из текущей конфигурации проекта TestConfiguration после предпросмотра изменений.",
+  "confidence": 4
+ },
+ {
+  "id": "q138",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "terminateRunningClients": true}},
+   {"tool": "update_database", "args": {"projectName": "УправлениеТорговлей", "terminateRunningClients": true, "confirm": true}}
+  ],
+  "expected_result": "Инструмент накатит изменения конфигурации на базу проекта УправлениеТорговлей, при необходимости отключив сеансы.",
+  "confidence": 4
+ },
+ {
+  "id": "q139",
+  "calls": [
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "deleteRegistration": true, "deleteDatabaseFiles": true}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "deleteRegistration": true, "deleteDatabaseFiles": true, "confirm": true}}
+  ],
+  "expected_result": "Инструмент отвяжет и удалит информационную базу проекта TestConfiguration вместе с файлами на диске.",
+  "confidence": 4
+ },
+ {
+  "id": "q140",
+  "calls": [
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "infobaseName": "ТестоваяБаза", "deleteRegistration": true, "deleteDatabaseFiles": false}},
+   {"tool": "delete_infobase", "args": {"projectName": "TestConfiguration", "infobaseName": "ТестоваяБаза", "deleteRegistration": true, "deleteDatabaseFiles": false, "confirm": true}}
+  ],
+  "expected_result": "Инструмент уберёт регистрацию базы ТестоваяБаза у проекта TestConfiguration, не трогая файлы на диске.",
+  "confidence": 4
+ },
+ {
+  "id": "q141",
+  "calls": [
+   {"tool": "set_infobase_credentials", "args": {"projectName": "TestConfiguration", "user": "Администратор"}}
+  ],
+  "expected_result": "Инструмент сохранит логин Администратор для подключения EDT к базе проекта TestConfiguration.",
+  "confidence": 3
+ },
+ {
+  "id": "q142",
+  "calls": [
+   {"tool": "set_infobase_credentials", "args": {"applicationId": "app-1"}}
+  ],
+  "expected_result": "Инструмент сохранит учётные данные пользователя базы для приложения app-1, чтобы EDT мог авторизоваться.",
+  "confidence": 3
+ },
+ {
+  "id": "q143",
+  "calls": [
+   {"tool": "create_launch_config", "args": {"projectName": "TestConfiguration", "clientType": "thin"}}
+  ],
+  "expected_result": "Инструмент создаст конфигурацию запуска тонкого клиента для проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q144",
+  "calls": [
+   {"tool": "create_launch_config", "args": {"projectName": "УправлениеТорговлей", "clientType": "thick", "name": "ТолстыйОтладка"}}
+  ],
+  "expected_result": "Инструмент заведёт конфигурацию запуска толстого клиента с именем ТолстыйОтладка для проекта УправлениеТорговлей.",
+  "confidence": 5
+ },
+ {
+  "id": "q145",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйЗапуск"}},
+   {"tool": "delete_launch_config", "args": {"name": "СтарыйЗапуск", "confirm": true}}
+  ],
+  "expected_result": "Инструмент удалит конфигурацию запуска СтарыйЗапуск после предпросмотра.",
+  "confidence": 4
+ },
+ {
+  "id": "q146",
+  "calls": [
+   {"tool": "delete_launch_config", "args": {"name": "AttachOld"}},
+   {"tool": "delete_launch_config", "args": {"name": "AttachOld", "confirm": true}}
+  ],
+  "expected_result": "Инструмент удалит неиспользуемую конфигурацию подключения AttachOld после предпросмотра.",
+  "confidence": 4
+ },
+ {
+  "id": "q147",
+  "calls": [
+   {"tool": "list_configurations", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Инструмент перечислит конфигурации запуска, настроенные в EDT для проекта TestConfiguration.",
+  "confidence": 5
+ },
+ {
+  "id": "q148",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_configurations"}},
+   {"tool": "list_configurations", "args": {"type": "attach"}}
+  ],
+  "expected_result": "Инструмент покажет все серверные (Attach) конфигурации запуска во всей рабочей области.",
+  "confidence": 3
+ },
+ {
+  "id": "q149",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_event_log"}},
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "from": "2026-08-14", "to": "2026-08-14", "severity": ["Error"]}}
+  ],
+  "expected_result": "Инструмент покажет только записи об ошибках из журнала регистрации базы проекта TestConfiguration за сегодня.",
+  "confidence": 4
+ },
+ {
+  "id": "q150",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_event_log"}},
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "user": ["Иванов"], "from": "2026-08-07", "to": "2026-08-14"}}
+  ],
+  "expected_result": "Инструмент покажет записи журнала регистрации по пользователю Иванов за последнюю неделю в проекте TestConfiguration.",
+  "confidence": 4
+ }
+]

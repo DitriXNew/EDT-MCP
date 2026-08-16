@@ -90,12 +90,11 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
     @Override
     public String getDescription()
     {
-        return "Deprecated alias for run_yaxunit_tests with debug=true. Starts a named DEBUG-mode " //$NON-NLS-1$
-            + "YAXUnit job so breakpoints fire. A short start returns the launch handle; if " //$NON-NLS-1$
-            + "resolution or preparation outlives timeout, Pending returns jobId for " //$NON-NLS-1$
-            + "get_job_status. When the launch handle arrives, call wait_for_break. Prefer " //$NON-NLS-1$
-            + "run_yaxunit_tests(debug=true) — identical shared implementation. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('debug_yaxunit_tests')."; //$NON-NLS-1$
+        return "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; the "  //$NON-NLS-1$
+            + "implementation is shared. DEBUG mode, so breakpoints fire: a short start returns "  //$NON-NLS-1$
+            + "the launch handle and you call wait_for_break next, while Pending returns a jobId "  //$NON-NLS-1$
+            + "to poll with get_job_status. Parameters and examples: "  //$NON-NLS-1$
+            + "get_tool_guide('debug_yaxunit_tests')."; //$NON-NLS-1$
     }
 
     @Override

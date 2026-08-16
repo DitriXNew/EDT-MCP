@@ -313,10 +313,10 @@ public class GetMarkersToolTest
         // The description advertises the recognized task-marker keywords so an agent
         // knows what get_markers surfaces without reading the guide.
         String desc = new GetMarkersTool().getDescription();
-        assertTrue(desc.contains("TODO")); //$NON-NLS-1$
-        assertTrue(desc.contains("FIXME")); //$NON-NLS-1$
-        assertTrue(desc.contains("XXX")); //$NON-NLS-1$
-        assertTrue(desc.contains("HACK")); //$NON-NLS-1$
+        assertTrue(new GetMarkersTool().getGuide().contains("TODO")); //$NON-NLS-1$
+        assertTrue(new GetMarkersTool().getGuide().contains("FIXME")); //$NON-NLS-1$
+        assertTrue(new GetMarkersTool().getGuide().contains("XXX")); //$NON-NLS-1$
+        assertTrue(new GetMarkersTool().getGuide().contains("HACK")); //$NON-NLS-1$
     }
 
     // ==================== Validation branches: case-insensitivity + JSON error shape ====================

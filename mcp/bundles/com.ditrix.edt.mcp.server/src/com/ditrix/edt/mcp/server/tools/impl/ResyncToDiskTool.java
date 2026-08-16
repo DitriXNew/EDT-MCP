@@ -160,19 +160,12 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files " //$NON-NLS-1$
-            + "and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to " //$NON-NLS-1$
-            + "src/); the reverse is clean_project, which rebuilds MODEL <- DISK and DISCARDS " //$NON-NLS-1$
-            + "any unsaved in-memory model edits. Walks EVERY top metadata object of the " //$NON-NLS-1$
-            + "configuration (all kinds), reports the objects whose .mdo is missing on disk, and " //$NON-NLS-1$
-            + "force-exports that missing subset so the files are restored. Fixes 'object file does " //$NON-NLS-1$
-            + "not exist' failures from update_database / XML import caused by an accumulated " //$NON-NLS-1$
-            + "desync. Dangling/orphaned references in Configuration.mdo (the md-reference-intergrity " //$NON-NLS-1$
-            + "'lost reference' warnings get_project_errors shows, which block update_database / XML " //$NON-NLS-1$
-            + "import) are REPORTED by default. Two opt-in modes are destructive: re-exporting EVERY " //$NON-NLS-1$
-            + "object instead of the missing subset overwrites on-disk edits, and REMOVING the " //$NON-NLS-1$
-            + "dangling references rewrites Configuration.mdo. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
+        return "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk " //$NON-NLS-1$
+            + "desync; fixes 'object file does not exist' failures and dangling Configuration.mdo " //$NON-NLS-1$
+            + "references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are " //$NON-NLS-1$
+            + "REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every " //$NON-NLS-1$
+            + "object overwrites on-disk edits, and removing dangling references rewrites " //$NON-NLS-1$
+            + "Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
 
     @Override

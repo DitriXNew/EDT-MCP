@@ -86,12 +86,10 @@ public class DebugLaunchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Start an EDT debug session: either an existing config by launchConfigurationName " //$NON-NLS-1$
-            + "(runtime client OR Attach, the latter needed to debug server-side code), or a " //$NON-NLS-1$
-            + "runtime-client config matched by projectName + applicationId. If that config is " //$NON-NLS-1$
-            + "already running it short-circuits with alreadyRunning:true; pass " //$NON-NLS-1$
-            + "restartIfRunning:true to terminate the existing session and relaunch fresh. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('debug_launch')."; //$NON-NLS-1$
+        return "Run a 1C application under EDT debugging. An already-running session is NOT " //$NON-NLS-1$
+            + "relaunched - the call short-circuits with alreadyRunning:true; restartIfRunning=true " //$NON-NLS-1$
+            + "instead TERMINATES that live session first. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('debug_launch')."; //$NON-NLS-1$
     }
 
     @Override

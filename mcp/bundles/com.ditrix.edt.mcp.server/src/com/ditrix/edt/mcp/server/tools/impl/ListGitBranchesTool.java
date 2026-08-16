@@ -69,10 +69,8 @@ public class ListGitBranchesTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "List a project's git branches: local and remote-tracking, with the CURRENT branch " //$NON-NLS-1$
-            + "marked (detached HEAD flagged), plus the 1C application/infobase each branch context is " //$NON-NLS-1$
-            + "bound to (best-effort). Precedes switch_git_branch. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('list_git_branches')."; //$NON-NLS-1$
+        return "Inspect available Git branches and their EDT infobase bindings. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('list_git_branches')."; //$NON-NLS-1$
     }
 
     @Override

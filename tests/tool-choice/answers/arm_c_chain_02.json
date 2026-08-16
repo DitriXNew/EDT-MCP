@@ -1,0 +1,322 @@
+[
+ {
+  "id": "c026",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "adopt_metadata_object"}},
+   {"tool": "adopt_metadata_object", "args": {"projectName": "УправлениеТорговлей", "fqn": "Catalog.Номенклатура.Form.ФормаЭлемента", "extensionProjectName": "ДоработкиУТ"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_form_screenshot"}},
+   {"tool": "get_form_screenshot", "args": {"projectName": "ДоработкиУТ", "formPath": "Catalog.Номенклатура.Form.ФормаЭлемента"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_form_layout_snapshot"}},
+   {"tool": "get_form_layout_snapshot", "args": {"projectName": "ДоработкиУТ", "formPath": "Catalog.Номенклатура.Form.ФормаЭлемента"}}
+  ],
+  "expected_result": "Форма элемента справочника Номенклатура адоптирована в расширение ДоработкиУТ, показан её скриншот и рассчитанная раскладка элементов.",
+  "confidence": 3
+ },
+ {
+  "id": "c027",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_project"}},
+   {"tool": "create_project", "args": {"projectKind": "extension", "name": "РасширениеПечати", "baseProjectName": "TestConfiguration", "prefix": "рп"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "adopt_metadata_object"}},
+   {"tool": "adopt_metadata_object", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder", "extensionProjectName": "РасширениеПечати"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "РасширениеПечати", "fqn": "Document.SalesOrder.Template.ПечатнаяФорма"}}
+  ],
+  "expected_result": "Создано расширение РасширениеПечати над TestConfiguration с префиксом рп, в него затянут документ SalesOrder и добавлен макет печатной формы.",
+  "confidence": 3
+ },
+ {
+  "id": "c028",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_objects"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "nameFilter": "Номенклатура"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_details"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Номенклатура"], "language": "ru"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Номенклатура"], "language": "en"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "find_references"}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Номенклатура"}}
+  ],
+  "expected_result": "Справочник Номенклатура найден, показаны его синонимы на русском и английском языках и все места использования в конфигурации.",
+  "confidence": 4
+ },
+ {
+  "id": "c029",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_translation_project_info"}},
+   {"tool": "get_translation_project_info", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "generate_translation_strings"}},
+   {"tool": "generate_translation_strings", "args": {"projectName": "УправлениеТорговлей", "targetLanguages": ["en"]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "translate_configuration"}},
+   {"tool": "translate_configuration", "args": {"projectName": "УправлениеТорговлей", "targetLanguages": ["en"]}}
+  ],
+  "expected_result": "Проверена настройка перевода проекта УправлениеТорговлей, собраны строки на английский и запущен перевод конфигурации.",
+  "confidence": 4
+ },
+ {
+  "id": "c030",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "go_to_definition"}},
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "ПолучитьКурс", "includeSource": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_method_call_hierarchy"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "<modulePath из результата go_to_definition>", "methodName": "ПолучитьКурс", "direction": "callers"}}
+  ],
+  "expected_result": "Метод ПолучитьКурс найден по месту определения, а его вызовы обнаружены через AST-построитель иерархии вызовов, устойчивый к ru/en диалекту, в отличие от текстового поиска.",
+  "confidence": 4
+ },
+ {
+  "id": "c031",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Склады"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Склады.Attribute.Адрес"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Catalog.Склады.Attribute.Адрес", "properties": [{"name": "type", "value": {"types": [{"kind": "String"}]}}]}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Subsystem.Справочники", "content": [{"metadata": "Catalog.Склады"}]}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Role.Кладовщик", "rights": [{"object": "Catalog.Склады", "right": "Read", "value": "set"}]}}
+  ],
+  "expected_result": "Создан справочник Склады с реквизитом Адрес строкового типа, он включён в подсистему Справочники, а роли Кладовщик выдано право чтения на него.",
+  "confidence": 4
+ },
+ {
+  "id": "c032",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Report.ОстаткиПоСкладам"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Report.ОстаткиПоСкладам", "dcs": {"dataSets": [{"name": "DataSet1", "query": "<текст запроса схемы компоновки>"}]}}},
+   {"tool": "get_tool_guide", "args": {"toolName": "validate_query"}},
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": "<текст запроса из схемы компоновки>", "dcsMode": true}}
+  ],
+  "expected_result": "Создан отчёт ОстаткиПоСкладам, ему задана схема компоновки данных, и запрос из этой схемы проверен на корректность.",
+  "confidence": 2
+ },
+ {
+  "id": "c033",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ИнтеграцияAPI", "commonModuleKind": "Server", "serverCall": true, "privileged": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "write_module_source"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.ИнтеграцияAPI", "moduleType": "Module", "mode": "replace", "overwrite": true, "source": "Функция ОтправитьЗапрос() Экспорт\n\t\nКонецФункции"}}
+  ],
+  "expected_result": "Создан серверный привилегированный общий модуль ИнтеграцияAPI с вызовом сервера и сразу написана экспортная функция ОтправитьЗапрос.",
+  "confidence": 4
+ },
+ {
+  "id": "c034",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.ИнвентаризацияТоваров"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.ИнвентаризацияТоваров.TabularSection.Товары"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.ИнвентаризацияТоваров.TabularSection.Товары.Attribute.Номенклатура"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.ИнвентаризацияТоваров.TabularSection.Товары.Attribute.Количество"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "revalidate_objects"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration", "objects": ["Document.ИнвентаризацияТоваров"]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_project_errors"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.ИнвентаризацияТоваров"]}}
+  ],
+  "expected_result": "Создан документ ИнвентаризацияТоваров с табличной частью Товары и реквизитами Номенклатура и Количество, объект перевалидирован и проверен на чистоту от ошибок.",
+  "confidence": 4
+ },
+ {
+  "id": "c035",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_objects"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "TestConfiguration", "metadataType": "catalogs"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_metadata"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Role.Аудитор"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Role.Аудитор", "rights": [{"object": "<каждый справочник из списка шага 2>", "right": "Read", "value": "set"}]}}
+  ],
+  "expected_result": "Показан список справочников TestConfiguration, создана роль Аудитор и ей выдано право чтения на все эти справочники.",
+  "confidence": 3
+ },
+ {
+  "id": "c036",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "import_configuration_from_xml"}},
+   {"tool": "import_configuration_from_xml", "args": {"importPath": "D:\\unload", "projectName": "ERP"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_infobase"}},
+   {"tool": "create_infobase", "args": {"projectName": "ERP", "infobaseFile": "D:\\bases\\erp", "mode": "create"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "ERP", "applicationId": "<applicationId из create_infobase>", "confirm": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_launch_config"}},
+   {"tool": "create_launch_config", "args": {"projectName": "ERP", "clientType": "thin"}}
+  ],
+  "expected_result": "Проект ERP поднят из XML-выгрузки, для него развёрнута файловая база, база обновлена конфигурацией и создана конфигурация запуска тонкого клиента.",
+  "confidence": 4
+ },
+ {
+  "id": "c037",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_applications"}},
+   {"tool": "get_applications", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "set_infobase_credentials"}},
+   {"tool": "set_infobase_credentials", "args": {"projectName": "TestConfiguration", "applicationId": "<applicationId из get_applications>"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "update_database"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "applicationId": "<applicationId из get_applications>", "confirm": true}}
+  ],
+  "expected_result": "Показаны подключённые к TestConfiguration базы, прописаны учётные данные для защищённой базы и обновление конфигурации повторено успешно.",
+  "confidence": 3
+ },
+ {
+  "id": "c038",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_applications"}},
+   {"tool": "get_applications", "args": {"projectName": "ЧерновикСтарый"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_infobase"}},
+   {"tool": "delete_infobase", "args": {"projectName": "ЧерновикСтарый", "applicationId": "<applicationId из get_applications>", "deleteDatabaseFiles": true, "deleteRegistration": true, "confirm": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_project"}},
+   {"tool": "delete_project", "args": {"projectName": "ЧерновикСтарый", "deleteContent": true, "confirm": true}}
+  ],
+  "expected_result": "Показаны базы проекта ЧерновикСтарый, база отвязана и удалена вместе с файлами, а сам проект удалён вместе с исходниками.",
+  "confidence": 4
+ },
+ {
+  "id": "c039",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_configurations"}},
+   {"tool": "list_configurations", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "delete_launch_config"}},
+   {"tool": "delete_launch_config", "args": {"name": "ВременныйЗапуск", "confirm": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "create_launch_config"}},
+   {"tool": "create_launch_config", "args": {"projectName": "TestConfiguration", "clientType": "thin"}}
+  ],
+  "expected_result": "Показан список конфигураций запуска TestConfiguration, конфигурация ВременныйЗапуск удалена, а вместо неё создана новая для тонкого клиента.",
+  "confidence": 4
+ },
+ {
+  "id": "c040",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_git_branches"}},
+   {"tool": "list_git_branches", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "switch_git_branch"}},
+   {"tool": "switch_git_branch", "args": {"projectName": "УправлениеТорговлей", "branch": "feature/новыйучет"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "set_branch_infobase"}},
+   {"tool": "set_branch_infobase", "args": {"projectName": "УправлениеТорговлей", "branch": "feature/новыйучет", "applicationId": "app-4", "action": "attach"}}
+  ],
+  "expected_result": "Показаны ветки и их привязки к базам, проект переключён на ветку feature/новыйучет и, поскольку база к ней не была привязана, привязана база app-4.",
+  "confidence": 4
+ },
+ {
+  "id": "c041",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_form_screenshot"}},
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Номенклатура.Form.ФормаЭлемента"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_form_layout_snapshot"}},
+   {"tool": "get_form_layout_snapshot", "args": {"projectName": "TestConfiguration", "formPath": "Catalog.Номенклатура.Form.ФормаЭлемента", "mode": "full"}}
+  ],
+  "expected_result": "Показаны скриншот формы элемента справочника Номенклатура и её рассчитанная раскладка элементов, чтобы найти конфликтующие поля.",
+  "confidence": 3
+ },
+ {
+  "id": "c042",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_details"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder.Form.DocumentForm"]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "modify_metadata"}},
+   {"tool": "modify_metadata", "args": {"projectName": "TestConfiguration", "fqn": "Document.SalesOrder.Form.DocumentForm.Field.СуммаДокумента", "properties": [{"name": "readOnly", "value": true}]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_form_screenshot"}},
+   {"tool": "get_form_screenshot", "args": {"projectName": "TestConfiguration", "formPath": "Document.SalesOrder.Form.DocumentForm", "refresh": true}}
+  ],
+  "expected_result": "Показан состав элементов формы DocumentForm, полю СуммаДокумента установлено свойство только для чтения, и показан обновлённый вид формы.",
+  "confidence": 3
+ },
+ {
+  "id": "c043",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_template_screenshot"}},
+   {"tool": "get_template_screenshot", "args": {"projectName": "TestConfiguration", "templatePath": "Document.SalesOrder.Template.СчетНаОплату"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_details"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Document.SalesOrder"]}}
+  ],
+  "expected_result": "Показан рендер макета печатной формы СчетНаОплату и свойства документа SalesOrder, чтобы понять, откуда берётся макет.",
+  "confidence": 4
+ },
+ {
+  "id": "c044",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "run_yaxunit_tests"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "read_method_source"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "<модуль упавшего теста из отчёта>", "methodName": "<имя упавшего теста из отчёта>"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "set_breakpoint"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "<тот же модуль>", "lineNumber": "<строка падения из отчёта>"}}
+  ],
+  "expected_result": "Тесты YAXUnit прогнаны, найден упавший тест, показан его код и поставлен брейкпоинт на месте падения для дальнейшей отладки.",
+  "confidence": 3
+ },
+ {
+  "id": "c045",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "run_yaxunit_tests"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "modules": ["ОМ_ТестыРасчетов"], "debug": true, "updateBeforeLaunch": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "wait_for_break"}},
+   {"tool": "wait_for_break", "args": {}}
+  ],
+  "expected_result": "Тесты модуля ОМ_ТестыРасчетов запущены под отладчиком с предварительным обновлением базы, и ожидается остановка на брейкпоинте.",
+  "confidence": 4
+ },
+ {
+  "id": "c046",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "revalidate_objects"}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_project_errors"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "run_yaxunit_tests"}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration", "tags": ["smoke"]}}
+  ],
+  "expected_result": "Проект перевалидирован после правки CommonModule.Расчеты, показаны ошибки, и прогнаны тесты с тегом smoke.",
+  "confidence": 4
+ },
+ {
+  "id": "c047",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "list_projects"}},
+   {"tool": "list_projects", "args": {}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_configuration_properties"}},
+   {"tool": "get_configuration_properties", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "list_subsystems"}},
+   {"tool": "list_subsystems", "args": {"projectName": "TestConfiguration", "recursive": true}}
+  ],
+  "expected_result": "Показан список открытых проектов, свойства конфигурации TestConfiguration (версия, режим совместимости, язык) и дерево подсистем для понимания структуры.",
+  "confidence": 5
+ },
+ {
+  "id": "c048",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "get_subsystem_content"}},
+   {"tool": "get_subsystem_content", "args": {"projectName": "TestConfiguration", "subsystemFqn": "Subsystem.Продажи"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_metadata_details"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["<FQN основного документа из содержимого подсистемы>"]}},
+   {"tool": "get_tool_guide", "args": {"toolName": "list_modules"}},
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "objectName": "<имя основного документа>"}}
+  ],
+  "expected_result": "Показано содержимое подсистемы Продажи, реквизиты её основного документа и список модулей этого документа.",
+  "confidence": 3
+ },
+ {
+  "id": "c049",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "search_in_code"}},
+   {"tool": "search_in_code", "args": {"projectName": "TestConfiguration", "query": "Скидка"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_module_structure"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "<самый релевантный модуль из результатов поиска>"}},
+   {"tool": "get_tool_guide", "args": {"toolName": "read_method_source"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "<тот же модуль>", "methodName": "<главный метод из структуры модуля>"}}
+  ],
+  "expected_result": "Найдены упоминания слова Скидка в коде, открыт самый релевантный модуль, показана его структура и код главного метода расчёта скидок.",
+  "confidence": 3
+ },
+ {
+  "id": "c050",
+  "calls": [
+   {"tool": "get_tool_guide", "args": {"toolName": "go_to_definition"}},
+   {"tool": "go_to_definition", "args": {"projectName": "TestConfiguration", "symbol": "ОбщегоНазначения.ЗначениеРеквизита", "includeSource": true}},
+   {"tool": "get_tool_guide", "args": {"toolName": "get_method_call_hierarchy"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "<modulePath из результата go_to_definition>", "methodName": "ЗначениеРеквизита", "direction": "callers"}}
+  ],
+  "expected_result": "Показаны место определения метода ЗначениеРеквизита с его сигнатурой и все места, где он вызывается в конфигурации.",
+  "confidence": 4
+ }
+]

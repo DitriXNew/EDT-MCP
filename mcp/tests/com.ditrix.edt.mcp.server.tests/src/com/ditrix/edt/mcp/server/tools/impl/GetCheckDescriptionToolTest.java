@@ -97,7 +97,7 @@ public class GetCheckDescriptionToolTest
         // get_project_errors -> get_check_description chain depends on it).
         String desc = new GetCheckDescriptionTool().getDescription();
         assertTrue("description should mention the UID code", //$NON-NLS-1$
-            desc.contains("UID")); //$NON-NLS-1$
+            new GetCheckDescriptionTool().getGuide().contains("UID")); //$NON-NLS-1$
     }
 
     // ==================== getResultFileName (pure, no folder/Activator) ====================

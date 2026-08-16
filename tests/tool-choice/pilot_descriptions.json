@@ -1,0 +1,40 @@
+{
+  "_doc": "V4 pilot. V3 (one-line description + bare parameter schema) everywhere, EXCEPT these tools, where the description carries a NAMED OBLIGATION to fetch the guide instead of a polite pointer, and `params` restores the few short phrases that carry a fact nothing else in the schema does. The 500-question run showed the guide already contains the protocol, the sibling discriminators and the deprecation note - what it did not contain was a reason for the model to go and read it.",
+
+  "delete_metadata": {
+    "desc": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: removing an object also removes what references it. The two-phase protocol - a preview call FIRST, then a second call with confirm=true - is MANDATORY. Call get_tool_guide('delete_metadata') BEFORE your first call; the preview semantics and the cascade rules are there and are not derivable from this schema."
+  },
+  "delete_project": {
+    "desc": "Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE and IRREVERSIBLE. The two-phase protocol - a preview call FIRST, then a second call with confirm=true - is MANDATORY. Call get_tool_guide('delete_project') BEFORE your first call."
+  },
+  "rename_metadata_object": {
+    "desc": "Rename a metadata object or member and rewrite every reference to it. DESTRUCTIVE and CASCADING across the WHOLE configuration - BSL, forms, roles, subsystems. The two-phase protocol - a preview call FIRST to see the edit scope, then a second call with confirm=true - is MANDATORY. Call get_tool_guide('rename_metadata_object') BEFORE your first call."
+  },
+  "update_database": {
+    "desc": "Apply the current EDT configuration to an infobase. DESTRUCTIVE: restructures data and can evict live sessions. The two-phase protocol - a preview call FIRST, then a second call with confirm=true - is MANDATORY. Call get_tool_guide('update_database') BEFORE your first call."
+  },
+  "delete_infobase": {
+    "desc": "Remove a project's infobase or its standalone-server registration, optionally deleting the database files. DESTRUCTIVE and IRREVERSIBLE. The two-phase protocol - a preview call FIRST, then a second call with confirm=true - is MANDATORY. Call get_tool_guide('delete_infobase') BEFORE your first call."
+  },
+
+  "clean_project": {
+    "desc": "Rebuild an EDT project from the on-disk src/ files and revalidate everything. Direction DISK -> MODEL; slow, and it DISCARDS unsaved in-memory model edits. Easy to confuse with revalidate_objects (targeted, no rebuild) and resync_to_disk (the opposite direction, MODEL -> DISK). If you are choosing between the three, call get_tool_guide('clean_project') first - it carries the decision table."
+  },
+  "revalidate_objects": {
+    "desc": "Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. The targeted, lightweight alternative to clean_project - no full rebuild, nothing discarded. Easy to confuse with clean_project (full rebuild) and resync_to_disk (writes the model out to disk). If you are choosing between the three, call get_tool_guide('revalidate_objects') first - it carries the decision table."
+  },
+  "resync_to_disk": {
+    "desc": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Two of its modes are DESTRUCTIVE (re-exporting every object overwrites on-disk edits; removing dangling references rewrites Configuration.mdo). Call get_tool_guide('resync_to_disk') BEFORE your first call."
+  },
+
+  "debug_yaxunit_tests": {
+    "desc": "DEPRECATED alias of run_yaxunit_tests(debug=true). Do NOT choose this tool for new work - call run_yaxunit_tests with debug=true instead; behaviour is identical. Kept only for compatibility."
+  },
+
+  "get_markers": {
+    "desc": "Find bookmarks and TODO-style task markers in the workspace. Parameters and examples: get_tool_guide('get_markers').",
+    "params": {
+      "markerKind": "'bookmark' = manual navigation bookmarks; 'task' = TODO/FIXME/XXX/HACK code markers. Omit for both."
+    }
+  }
+}

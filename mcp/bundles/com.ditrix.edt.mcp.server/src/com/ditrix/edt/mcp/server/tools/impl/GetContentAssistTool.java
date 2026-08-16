@@ -107,10 +107,8 @@ public class GetContentAssistTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get code-completion proposals at a 1-based line/column in a BSL module - the members, " //$NON-NLS-1$
-             + "globals and variables valid at that caret (e.g. after a '.'). May return a 'not ready' " //$NON-NLS-1$
-             + "error while the editor loads; just retry. " //$NON-NLS-1$
-             + "Full parameters and examples: call get_tool_guide('get_content_assist')."; //$NON-NLS-1$
+        return "Find valid BSL completion suggestions at a source-code position. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_content_assist')."; //$NON-NLS-1$
     }
 
     @Override

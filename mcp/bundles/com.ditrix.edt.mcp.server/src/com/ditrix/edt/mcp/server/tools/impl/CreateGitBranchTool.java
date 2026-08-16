@@ -109,10 +109,8 @@ public class CreateGitBranchTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Create a new local git branch, optionally check it out, and optionally attach an " //$NON-NLS-1$
-            + "EXISTING infobase (application, from get_applications) to the new branch's context. " //$NON-NLS-1$
-            + "Rejects a name that already exists (use switch_git_branch instead). " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('create_git_branch')."; //$NON-NLS-1$
+        return "Start isolated work on a new Git branch for an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('create_git_branch')."; //$NON-NLS-1$
     }
 
     @Override
@@ -128,7 +126,8 @@ public class CreateGitBranchTool implements IMcpTool
                 + "to the current HEAD.") //$NON-NLS-1$
             .booleanProperty(KEY_CHECKOUT,
                 "Check out the new branch immediately after creating it (bounded background Job, " //$NON-NLS-1$
-                + "up to 120 s). Default false.") //$NON-NLS-1$
+                + "up to 120 s). Default FALSE - the branch is created and the working tree STAYS " //$NON-NLS-1$
+                + "on the current branch, so later edits land there unless you pass true.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Optional: application id from get_applications to attach to the new branch's " //$NON-NLS-1$
                 + "context (the base is FOR this branch).") //$NON-NLS-1$

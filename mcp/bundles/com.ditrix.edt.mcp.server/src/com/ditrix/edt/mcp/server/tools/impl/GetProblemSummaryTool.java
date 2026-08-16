@@ -41,9 +41,8 @@ public class GetProblemSummaryTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get problem summary with counts grouped by project and EDT severity level " + //$NON-NLS-1$
-               "(ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). " + //$NON-NLS-1$
-               "Use this for severity totals only; for the detailed per-marker list call get_project_errors."; //$NON-NLS-1$
+        return "See validation problem counts grouped by project and severity. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_problem_summary')."; //$NON-NLS-1$
     }
     
     @Override

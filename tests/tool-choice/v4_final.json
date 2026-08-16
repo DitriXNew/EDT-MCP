@@ -1,0 +1,807 @@
+{
+ "adopt_metadata_object": {
+  "description": "Add a base-configuration object or member to an extension for customization. Parameters and examples: get_tool_guide('adopt_metadata_object').",
+  "params": {
+   "extensionProjectName": null,
+   "fqn": null,
+   "projectName": null
+  }
+ },
+ "apply_quick_fix": {
+  "description": "Apply an EDT quick fix to a validation problem. Parameters and examples: get_tool_guide('apply_quick_fix').",
+  "params": {
+   "checkId": null,
+   "index": null,
+   "line": null,
+   "modulePath": null,
+   "projectName": null,
+   "variant": null
+  }
+ },
+ "build_external_objects": {
+  "description": "Compile external 1C data processors and reports into deployable files. Parameters and examples: get_tool_guide('build_external_objects').",
+  "params": {
+   "objectName": null,
+   "outputDir": null,
+   "projectName": null,
+   "recordBuildTime": null
+  }
+ },
+ "clean_project": {
+  "description": "Rebuild an EDT project from the on-disk src/ files and revalidate everything. Direction DISK -> MODEL; slow, and it DISCARDS unsaved in-memory model edits - save first. For one externally-edited object prefer revalidate_objects; for the opposite direction see resync_to_disk. Parameters and examples: get_tool_guide('clean_project').",
+  "params": {
+   "projectName": null,
+   "timeout": null
+  }
+ },
+ "create_git_branch": {
+  "description": "Start isolated work on a new Git branch for an EDT project. Parameters and examples: get_tool_guide('create_git_branch').",
+  "params": {
+   "applicationId": null,
+   "branch": null,
+   "checkout": null,
+   "projectName": null,
+   "setDefault": null,
+   "startPoint": null
+  }
+ },
+ "create_infobase": {
+  "description": "Prepare an infobase for an EDT project by creating a database or registering an existing one. Parameters and examples: get_tool_guide('create_infobase').",
+  "params": {
+   "access": null,
+   "applicationKind": null,
+   "infobaseFile": "Absolute path to the infobase directory. FILE infobases only - server/web are rejected.",
+   "infobaseName": null,
+   "mode": null,
+   "password": null,
+   "platform": null,
+   "projectName": null,
+   "setDefault": null,
+   "user": null
+  }
+ },
+ "create_launch_config": {
+  "description": "Configure an EDT runtime client for launching a 1C application. Parameters and examples: get_tool_guide('create_launch_config').",
+  "params": {
+   "applicationId": null,
+   "clientType": null,
+   "name": null,
+   "projectName": null
+  }
+ },
+ "create_metadata": {
+  "description": "Add a new metadata object or member to a configuration. Parameters and examples: get_tool_guide('create_metadata').",
+  "params": {
+   "callType": null,
+   "commonModuleKind": null,
+   "expectedNotExists": null,
+   "fqn": null,
+   "generateContent": null,
+   "normalizeYo": null,
+   "objectFields": null,
+   "privileged": null,
+   "projectName": null,
+   "properties": null,
+   "returnValuesReuse": null,
+   "serverCall": null,
+   "setAsDefault": null,
+   "targetNamespace": null
+  }
+ },
+ "create_project": {
+  "description": "Start a new EDT configuration, extension, or external-objects project. Parameters and examples: get_tool_guide('create_project').",
+  "params": {
+   "autoSortTopObjects": null,
+   "baseProjectName": null,
+   "comment": null,
+   "commonChecks": null,
+   "compatibilityMode": null,
+   "name": null,
+   "prefix": null,
+   "projectKind": null,
+   "projectName": null,
+   "purpose": null,
+   "scriptVariant": null,
+   "standardChecks": null,
+   "synonym": null,
+   "version": null
+  }
+ },
+ "debug_launch": {
+  "description": "Run a 1C application under EDT debugging. Parameters and examples: get_tool_guide('debug_launch').",
+  "params": {
+   "applicationId": null,
+   "externalInfobaseChanges": null,
+   "launchConfigurationName": null,
+   "projectName": null,
+   "restartIfRunning": null,
+   "updateBeforeLaunch": null
+  }
+ },
+ "debug_status": {
+  "description": "Check which EDT debug sessions are running or paused. Parameters and examples: get_tool_guide('debug_status').",
+  "params": {
+   "applicationId": null
+  }
+ },
+ "debug_yaxunit_tests": {
+  "description": "DEPRECATED alias of run_yaxunit_tests(debug=true) - prefer that instead; behaviour is identical. Kept for compatibility. Parameters and examples: get_tool_guide('debug_yaxunit_tests').",
+  "params": {
+   "applicationId": null,
+   "extensions": null,
+   "externalInfobaseChanges": null,
+   "launchConfigurationName": null,
+   "modules": null,
+   "projectName": null,
+   "tags": null,
+   "tests": null,
+   "updateBeforeLaunch": null,
+   "updateScope": null
+  }
+ },
+ "delete_infobase": {
+  "description": "Remove a project's infobase or its standalone-server registration, optionally deleting the database files. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('delete_infobase').",
+  "params": {
+   "applicationId": null,
+   "confirm": null,
+   "deleteDatabaseFiles": null,
+   "deleteRegistration": null,
+   "infobaseName": null,
+   "projectName": null
+  }
+ },
+ "delete_launch_config": {
+  "description": "Remove an unused EDT runtime or attach launch configuration. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('delete_launch_config').",
+  "params": {
+   "confirm": null,
+   "name": null
+  }
+ },
+ "delete_metadata": {
+  "description": "Delete a metadata object or member (FQN-addressed). DESTRUCTIVE and CASCADING: on the md-refactoring path removing an object also removes what references it. Two-phase: call once WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A delete that would break references is blocked; force=true overrides that block and can leave dangling references behind. Parameters and examples: get_tool_guide('delete_metadata').",
+  "params": {
+   "confirm": null,
+   "force": null,
+   "fqn": null,
+   "projectName": null
+  }
+ },
+ "delete_project": {
+  "description": "Remove an EDT project from the workspace, optionally with its sources on disk. DESTRUCTIVE and IRREVERSIBLE. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('delete_project').",
+  "params": {
+   "confirm": null,
+   "deleteContent": null,
+   "projectName": null
+  }
+ },
+ "enable_toolset": {
+  "description": "Make additional MCP tool groups visible or hide them. Parameters and examples: get_tool_guide('enable_toolset').",
+  "params": {
+   "disable": null,
+   "toolsets": null
+  }
+ },
+ "evaluate_expression": {
+  "description": "Evaluate a BSL expression in a paused debug frame and return the value. WARNING: this executes arbitrary code in the running application - it can change state, not just read it. Parameters and examples: get_tool_guide('evaluate_expression').",
+  "params": {
+   "expression": null,
+   "frameRef": null
+  }
+ },
+ "export_common_picture": {
+  "description": "Inspect or extract the image data of a 1C common picture. Parameters and examples: get_tool_guide('export_common_picture').",
+  "params": {
+   "fqn": null,
+   "projectName": null,
+   "variant": null
+  }
+ },
+ "export_configuration_to_xml": {
+  "description": "Export an EDT configuration into 1C XML files. Parameters and examples: get_tool_guide('export_configuration_to_xml').",
+  "params": {
+   "outputPath": null,
+   "projectName": null
+  }
+ },
+ "find_references": {
+  "description": "Discover where a metadata object is used throughout the configuration and BSL code. Parameters and examples: get_tool_guide('find_references').",
+  "params": {
+   "limit": null,
+   "objectFqn": null,
+   "projectName": null
+  }
+ },
+ "generate_translation_strings": {
+  "description": "Collect translatable strings of a configuration for a translation provider. Parameters and examples: get_tool_guide('generate_translation_strings').",
+  "params": {
+   "collectInterface": null,
+   "collectModel": null,
+   "collectModelType": null,
+   "fillUpType": null,
+   "projectName": null,
+   "providerId": null,
+   "storageId": null,
+   "targetLanguages": null
+  }
+ },
+ "get_applications": {
+  "description": "Discover infobases connected to an EDT project. Parameters and examples: get_tool_guide('get_applications').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "get_check_description": {
+  "description": "Understand an EDT validation rule and how to fix its diagnostic. Parameters and examples: get_tool_guide('get_check_description').",
+  "params": {
+   "checkId": null,
+   "projectName": null
+  }
+ },
+ "get_configuration_properties": {
+  "description": "Inspect the identity and compatibility settings of a 1C configuration. Parameters and examples: get_tool_guide('get_configuration_properties').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "get_content_assist": {
+  "description": "Find valid BSL completion suggestions at a source-code position. Parameters and examples: get_tool_guide('get_content_assist').",
+  "params": {
+   "column": null,
+   "contains": null,
+   "extendedDocumentation": null,
+   "filePath": null,
+   "limit": null,
+   "line": null,
+   "modulePath": null,
+   "offset": null,
+   "projectName": null
+  }
+ },
+ "get_edt_version": {
+  "description": "Identify the installed 1C:EDT version. Parameters and examples: get_tool_guide('get_edt_version').",
+  "params": {}
+ },
+ "get_event_log": {
+  "description": "Investigate infobase activity and errors through its event log. Returns PII and live infobase data - user names, session data and business-record references. Parameters and examples: get_tool_guide('get_event_log').",
+  "params": {
+   "applicationId": null,
+   "commentContains": null,
+   "event": null,
+   "eventContains": null,
+   "from": null,
+   "limit": null,
+   "logDir": null,
+   "metadataContains": null,
+   "offset": null,
+   "order": null,
+   "projectName": null,
+   "session": null,
+   "severity": null,
+   "to": null,
+   "user": null
+  }
+ },
+ "get_form_layout_snapshot": {
+  "description": "Inspect the calculated visual layout of an EDT form. Parameters and examples: get_tool_guide('get_form_layout_snapshot').",
+  "params": {
+   "formPath": null,
+   "mode": null,
+   "projectName": null,
+   "refresh": null
+  }
+ },
+ "get_form_screenshot": {
+  "description": "Visually inspect an EDT form as rendered by the designer. Parameters and examples: get_tool_guide('get_form_screenshot').",
+  "params": {
+   "formPath": null,
+   "projectName": null,
+   "refresh": null
+  }
+ },
+ "get_markers": {
+  "description": "Find bookmarks and TODO-style task markers in the workspace. Parameters and examples: get_tool_guide('get_markers').",
+  "params": {
+   "filePath": null,
+   "limit": null,
+   "markerKind": "'bookmark' = manual navigation bookmarks; 'task' = TODO/FIXME/XXX/HACK code markers. Omit for both.",
+   "priority": null,
+   "projectName": null
+  }
+ },
+ "get_mcp_history": {
+  "description": "Diagnose MCP tool calls by reviewing recent requests, failures, timings, and context usage. Parameters and examples: get_tool_guide('get_mcp_history').",
+  "params": {
+   "includeBodies": null,
+   "includeStats": null,
+   "limit": null,
+   "minDurationMs": null,
+   "sinceMs": null,
+   "status": null,
+   "tool": null,
+   "untilMs": null
+  }
+ },
+ "get_metadata_details": {
+  "description": "Inspect the properties and structure of a metadata object or member. Parameters and examples: get_tool_guide('get_metadata_details').",
+  "params": {
+   "assignable": null,
+   "full": null,
+   "language": null,
+   "objectFqns": null,
+   "projectName": null,
+   "roleObjectOffset": null
+  }
+ },
+ "get_metadata_objects": {
+  "description": "Discover metadata objects available in a 1C configuration. Parameters and examples: get_tool_guide('get_metadata_objects').",
+  "params": {
+   "language": null,
+   "limit": null,
+   "metadataType": null,
+   "nameFilter": null,
+   "projectName": null
+  }
+ },
+ "get_method_call_hierarchy": {
+  "description": "Trace which BSL methods call a method or are called by it. Parameters and examples: get_tool_guide('get_method_call_hierarchy').",
+  "params": {
+   "direction": "'callers' = who calls this method, 'callees' = what it calls.",
+   "extApiPrefix": null,
+   "limit": null,
+   "methodName": null,
+   "modulePath": null,
+   "projectName": null
+  }
+ },
+ "get_module_structure": {
+  "description": "Discover procedures, functions, regions, and execution contexts in a BSL module. Parameters and examples: get_tool_guide('get_module_structure').",
+  "params": {
+   "includeComments": null,
+   "includeVariables": null,
+   "modulePath": null,
+   "projectName": null,
+   "responseFormat": null
+  }
+ },
+ "get_objects_by_tags": {
+  "description": "Find metadata objects organized under selected tags. Parameters and examples: get_tool_guide('get_objects_by_tags').",
+  "params": {
+   "limit": null,
+   "projectName": null,
+   "tags": null
+  }
+ },
+ "get_outgoing_structures": {
+  "description": "Discover the fields passed to outgoing or qualified BSL method calls. Parameters and examples: get_tool_guide('get_outgoing_structures').",
+  "params": {
+   "limit": null,
+   "method": null,
+   "modulePath": null,
+   "projectName": null,
+   "qualifier": null
+  }
+ },
+ "get_platform_documentation": {
+  "description": "Find the exact API of a built-in 1C type or global function. Parameters and examples: get_tool_guide('get_platform_documentation').",
+  "params": {
+   "category": null,
+   "language": null,
+   "limit": null,
+   "memberName": null,
+   "memberType": null,
+   "projectName": null,
+   "responseFormat": null,
+   "typeName": null
+  }
+ },
+ "get_problem_summary": {
+  "description": "See validation problem counts grouped by project and severity. Parameters and examples: get_tool_guide('get_problem_summary').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "get_profiling_results": {
+  "description": "Identify performance hotspots in executed BSL code. Parameters and examples: get_tool_guide('get_profiling_results').",
+  "params": {
+   "applicationId": null,
+   "minFrequency": null,
+   "moduleFilter": null,
+   "responseFormat": null
+  }
+ },
+ "get_project_errors": {
+  "description": "Find detailed validation errors and warnings in an EDT project. Parameters and examples: get_tool_guide('get_project_errors').",
+  "params": {
+   "checkId": null,
+   "limit": null,
+   "objectFqns": "EXACT model addresses; mutually exclusive with objects. Returns objectsNotFound / objectsUnsupported.",
+   "objects": "Loose case-insensitive SUBSTRING match against the reported location; mutually exclusive with objectFqns.",
+   "projectName": null,
+   "responseFormat": null,
+   "severity": null
+  }
+ },
+ "get_server_status": {
+  "description": "Diagnose the EDT MCP server and its feature configuration. Parameters and examples: get_tool_guide('get_server_status').",
+  "params": {}
+ },
+ "get_subsystem_content": {
+  "description": "Inspect which metadata objects and child subsystems belong to a 1C subsystem. Parameters and examples: get_tool_guide('get_subsystem_content').",
+  "params": {
+   "language": null,
+   "projectName": null,
+   "recursive": null,
+   "subsystemFqn": null
+  }
+ },
+ "get_symbol_info": {
+  "description": "Inspect the type and documentation of a BSL symbol at its source location. Parameters and examples: get_tool_guide('get_symbol_info').",
+  "params": {
+   "column": null,
+   "filePath": null,
+   "line": null,
+   "modulePath": null,
+   "projectName": null
+  }
+ },
+ "get_tags": {
+  "description": "Discover user-defined tags used to organize project metadata. Parameters and examples: get_tool_guide('get_tags').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "get_template_screenshot": {
+  "description": "Visually inspect how a spreadsheet print template renders. Parameters and examples: get_tool_guide('get_template_screenshot').",
+  "params": {
+   "projectName": null,
+   "templatePath": null
+  }
+ },
+ "get_tool_guide": {
+  "description": "Retrieve detailed instructions for an MCP tool. Parameters and examples: get_tool_guide('get_tool_guide').",
+  "params": {
+   "toolName": null
+  }
+ },
+ "get_translation_project_info": {
+  "description": "Inspect the translation setup of an EDT project. Parameters and examples: get_tool_guide('get_translation_project_info').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "get_variables": {
+  "description": "Inspect runtime variables in a paused debug frame. Parameters and examples: get_tool_guide('get_variables').",
+  "params": {
+   "expandPath": null,
+   "frameIndex": null,
+   "frameRef": null,
+   "threadId": null
+  }
+ },
+ "go_to_definition": {
+  "description": "Locate the source definition of a BSL symbol or metadata object. Parameters and examples: get_tool_guide('go_to_definition').",
+  "params": {
+   "includeSource": null,
+   "modulePath": null,
+   "projectName": null,
+   "symbol": null
+  }
+ },
+ "import_configuration_from_xml": {
+  "description": "Create an EDT project from exported 1C configuration XML files. Parameters and examples: get_tool_guide('import_configuration_from_xml').",
+  "params": {
+   "importPath": null,
+   "projectName": null,
+   "projectNature": null,
+   "xmlVersion": null
+  }
+ },
+ "list_breakpoints": {
+  "description": "Review breakpoints currently set in BSL source code. Parameters and examples: get_tool_guide('list_breakpoints').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "list_common_pictures": {
+  "description": "Inventory common pictures available in a 1C configuration. Parameters and examples: get_tool_guide('list_common_pictures').",
+  "params": {
+   "language": null,
+   "limit": null,
+   "projectName": null
+  }
+ },
+ "list_configurations": {
+  "description": "Discover EDT runtime and server-side launch configurations. Parameters and examples: get_tool_guide('list_configurations').",
+  "params": {
+   "projectName": null,
+   "type": null
+  }
+ },
+ "list_git_branches": {
+  "description": "Inspect available Git branches and their EDT infobase bindings. Parameters and examples: get_tool_guide('list_git_branches').",
+  "params": {
+   "projectName": null
+  }
+ },
+ "list_modules": {
+  "description": "Discover BSL modules available in an EDT project. Parameters and examples: get_tool_guide('list_modules').",
+  "params": {
+   "limit": null,
+   "metadataType": null,
+   "nameFilter": null,
+   "objectName": null,
+   "projectName": null
+  }
+ },
+ "list_projects": {
+  "description": "Discover projects available in the EDT workspace. Parameters and examples: get_tool_guide('list_projects').",
+  "params": {
+   "format": null
+  }
+ },
+ "list_subsystems": {
+  "description": "Discover the subsystem hierarchy of a 1C configuration. Parameters and examples: get_tool_guide('list_subsystems').",
+  "params": {
+   "language": null,
+   "limit": null,
+   "nameFilter": null,
+   "projectName": null,
+   "recursive": null
+  }
+ },
+ "list_toolsets": {
+  "description": "Discover available groups of MCP tools and their visibility. Parameters and examples: get_tool_guide('list_toolsets').",
+  "params": {}
+ },
+ "modify_metadata": {
+  "description": "Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata').",
+  "params": {
+   "content": null,
+   "dcs": null,
+   "fqn": null,
+   "normalizeYo": null,
+   "projectName": null,
+   "properties": null,
+   "rights": null,
+   "roleProperties": null,
+   "template": null,
+   "templates": null
+  }
+ },
+ "read_method_source": {
+  "description": "Inspect the source of one BSL procedure or function. Parameters and examples: get_tool_guide('read_method_source').",
+  "params": {
+   "methodName": null,
+   "modulePath": null,
+   "projectName": null
+  }
+ },
+ "read_module_source": {
+  "description": "Inspect the source of a complete BSL module. Parameters and examples: get_tool_guide('read_module_source').",
+  "params": {
+   "endLine": null,
+   "modulePath": null,
+   "projectName": null,
+   "startLine": null
+  }
+ },
+ "remove_breakpoint": {
+  "description": "Stop pausing execution at a BSL source breakpoint. Parameters and examples: get_tool_guide('remove_breakpoint').",
+  "params": {
+   "breakpointId": null,
+   "lineNumber": null,
+   "module": null,
+   "modulePath": null,
+   "projectName": null
+  }
+ },
+ "rename_metadata_object": {
+  "description": "Rename a metadata object or member and rewrite every reference to it. CASCADES ACROSS THE WHOLE CONFIGURATION - BSL, forms, roles, subsystems. Two-phase: call once WITHOUT confirm to see the edit scope, then again with confirm=true to apply. Parameters and examples: get_tool_guide('rename_metadata_object').",
+  "params": {
+   "confirm": null,
+   "disableIndices": null,
+   "maxResults": null,
+   "newName": null,
+   "objectFqn": null,
+   "projectName": null,
+   "timeout": null
+  }
+ },
+ "resume": {
+  "description": "Continue a paused 1C debug session. Parameters and examples: get_tool_guide('resume').",
+  "params": {
+   "applicationId": null,
+   "threadId": null
+  }
+ },
+ "resync_to_disk": {
+  "description": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk').",
+  "params": {
+   "cleanDanglingReferences": null,
+   "fullExport": null,
+   "overwriteDiskEdits": null,
+   "projectName": null,
+   "revalidate": null
+  }
+ },
+ "revalidate_objects": {
+  "description": "Revalidate a project or a named list of objects, picking up .mdo edits made outside EDT. Targeted, lightweight alternative to clean_project - no full rebuild, nothing discarded. Parameters and examples: get_tool_guide('revalidate_objects').",
+  "params": {
+   "objects": null,
+   "projectName": null
+  }
+ },
+ "run_yaxunit_tests": {
+  "description": "Run YAXUnit tests for a 1C configuration. Parameters and examples: get_tool_guide('run_yaxunit_tests').",
+  "params": {
+   "applicationId": null,
+   "debug": "true launches in DEBUG mode so breakpoints fire and returns a launch handle immediately - call wait_for_break next. Default false polls and returns the report.",
+   "extensions": null,
+   "externalInfobaseChanges": null,
+   "launchConfigurationName": null,
+   "modules": null,
+   "projectName": null,
+   "tags": null,
+   "tests": null,
+   "timeout": null,
+   "updateBeforeLaunch": null,
+   "updateScope": null
+  }
+ },
+ "search_in_code": {
+  "description": "Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en dialect-aware, so a query in one BSL language will not find the other spelling - for a symbol's usages use find_references, for where it is defined use go_to_definition. Parameters and examples: get_tool_guide('search_in_code').",
+  "params": {
+   "caseSensitive": null,
+   "contextLines": null,
+   "fileMask": null,
+   "isRegex": null,
+   "limit": null,
+   "maxResults": null,
+   "metadataType": null,
+   "outputMode": null,
+   "projectName": null,
+   "query": null
+  }
+ },
+ "set_branch_infobase": {
+  "description": "Associate an existing infobase with a Git branch of an EDT project. Parameters and examples: get_tool_guide('set_branch_infobase').",
+  "params": {
+   "action": null,
+   "applicationId": null,
+   "branch": null,
+   "projectName": null,
+   "setDefault": null
+  }
+ },
+ "set_breakpoint": {
+  "description": "Pause BSL execution at a selected source line during debugging. Parameters and examples: get_tool_guide('set_breakpoint').",
+  "params": {
+   "lineNumber": null,
+   "module": null,
+   "modulePath": null,
+   "projectName": null
+  }
+ },
+ "set_infobase_credentials": {
+  "description": "Enable EDT to connect to a protected infobase for updates or debugging. Parameters and examples: get_tool_guide('set_infobase_credentials').",
+  "params": {
+   "access": null,
+   "applicationId": null,
+   "launchConfigurationName": null,
+   "password": null,
+   "projectName": null,
+   "user": null
+  }
+ },
+ "set_variable": {
+  "description": "Change a variable while execution is paused in the debugger. Parameters and examples: get_tool_guide('set_variable').",
+  "params": {
+   "frameIndex": null,
+   "frameRef": null,
+   "threadId": null,
+   "value": null,
+   "variableName": null
+  }
+ },
+ "start_profiling": {
+  "description": "Measure execution time and coverage of BSL code in a debug session. Parameters and examples: get_tool_guide('start_profiling').",
+  "params": {
+   "applicationId": null
+  }
+ },
+ "step": {
+  "description": "Advance paused debug execution one step. Parameters and examples: get_tool_guide('step').",
+  "params": {
+   "kind": null,
+   "threadId": null,
+   "timeout": null
+  }
+ },
+ "stop_profiling": {
+  "description": "Finish measuring BSL performance in a debug session. Parameters and examples: get_tool_guide('stop_profiling').",
+  "params": {
+   "applicationId": null
+  }
+ },
+ "switch_git_branch": {
+  "description": "Change the active version of an EDT project through Git branch checkout. Parameters and examples: get_tool_guide('switch_git_branch').",
+  "params": {
+   "branch": null,
+   "projectName": null
+  }
+ },
+ "terminate_launch": {
+  "description": "Stop 1C sessions started by EDT. Two-phase: call once WITHOUT confirm to see what would be stopped, then again with confirm=true to apply. Parameters and examples: get_tool_guide('terminate_launch').",
+  "params": {
+   "all": null,
+   "applicationId": null,
+   "confirm": null,
+   "force": null,
+   "includeAttach": null,
+   "launchConfigurationName": null,
+   "projectName": null,
+   "timeout": null,
+   "timeoutSeconds": null
+  }
+ },
+ "translate_configuration": {
+  "description": "Translate a 1C configuration into target languages. Parameters and examples: get_tool_guide('translate_configuration').",
+  "params": {
+   "projectName": null,
+   "targetLanguages": null
+  }
+ },
+ "update_database": {
+  "description": "Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('update_database').",
+  "params": {
+   "applicationId": null,
+   "confirm": null,
+   "externalInfobaseChanges": null,
+   "fullUpdate": null,
+   "launchConfigurationName": null,
+   "projectName": null,
+   "terminateRunningClients": null
+  }
+ },
+ "validate_query": {
+  "description": "Check a 1C query for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query').",
+  "params": {
+   "dcsMode": null,
+   "projectName": null,
+   "queryText": null
+  }
+ },
+ "validate_xdto_package": {
+  "description": "Check an XDTO package for configuration validation problems. Parameters and examples: get_tool_guide('validate_xdto_package').",
+  "params": {
+   "fqn": null,
+   "limit": null,
+   "projectName": null
+  }
+ },
+ "wait_for_break": {
+  "description": "Wait until a running 1C debug session reaches a breakpoint or other suspend event. Parameters and examples: get_tool_guide('wait_for_break').",
+  "params": {
+   "applicationId": null,
+   "timeout": null
+  }
+ },
+ "write_module_source": {
+  "description": "Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source').",
+  "params": {
+   "commandName": null,
+   "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since.",
+   "expectedSource": null,
+   "formName": null,
+   "mode": null,
+   "modulePath": null,
+   "moduleType": null,
+   "objectName": null,
+   "oldSource": null,
+   "overwrite": null,
+   "projectName": null,
+   "skipSyntaxCheck": null,
+   "source": null
+  }
+ }
+}

@@ -38,11 +38,8 @@ public class GetTemplateScreenshotTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Capture a PNG screenshot of a 1C template (a SpreadsheetDocument print form) as EDT " + //$NON-NLS-1$
-            "renders it, so its layout and text are visible to an AI. Works for a common template " + //$NON-NLS-1$
-            "'CommonTemplate.<Name>' OR an object-owned template '<Type>.<Owner>.Template.<Name>' " + //$NON-NLS-1$
-            "(e.g. 'DataProcessor.Invoices.Template.Printout'). Renders off-screen (no JVM flag " + //$NON-NLS-1$
-            "needed). Full parameters and examples: call get_tool_guide('get_template_screenshot')."; //$NON-NLS-1$
+        return "Visually inspect how a spreadsheet print template renders. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_template_screenshot')."; //$NON-NLS-1$
     }
 
     @Override

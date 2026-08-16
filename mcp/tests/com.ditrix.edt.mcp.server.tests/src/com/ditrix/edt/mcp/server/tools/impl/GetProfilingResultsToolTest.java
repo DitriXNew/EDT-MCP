@@ -126,7 +126,7 @@ public class GetProfilingResultsToolTest
     {
         // The tool surfaces whether profiling is currently active so a client can
         // tell a stop is pending; the description must advertise it.
-        assertTrue(new GetProfilingResultsTool().getDescription().contains("active")); //$NON-NLS-1$
+        assertTrue(new GetProfilingResultsTool().getGuide().contains("active")); //$NON-NLS-1$
     }
 
     @Test

@@ -56,7 +56,7 @@ public class GetEdtVersionToolTest
     {
         String desc = new GetEdtVersionTool().getDescription().toLowerCase();
         assertTrue(desc.contains("version")); //$NON-NLS-1$
-        assertTrue(desc.contains("unknown")); //$NON-NLS-1$
+        assertTrue(new GetEdtVersionTool().getGuide().contains("unknown")); //$NON-NLS-1$
     }
 
     @Test

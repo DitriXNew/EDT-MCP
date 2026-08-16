@@ -111,11 +111,8 @@ public class StartProfilingTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Start performance measurement on the active debug target. " //$NON-NLS-1$
-            + "Enables line-level profiling: call counts and timing for every executed BSL line. " //$NON-NLS-1$
-            + "Start-only and idempotent: if profiling is already active for this applicationId it stays on. " //$NON-NLS-1$
-            + "Call stop_profiling to stop, then get_profiling_results to see which code was covered. " //$NON-NLS-1$
-            + "Requires an active debug session (debug_launch or debug_yaxunit_tests)."; //$NON-NLS-1$
+        return "Measure execution time and coverage of BSL code in a debug session. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('start_profiling')."; //$NON-NLS-1$
     }
 
     @Override

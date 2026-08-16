@@ -40,8 +40,8 @@ public class GetSymbolInfoTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get type/hover info about a symbol at a position in a BSL module. " + //$NON-NLS-1$
-               "Returns inferred types, signatures, and documentation."; //$NON-NLS-1$
+        return "Inspect the type and documentation of a BSL symbol at its source location. Parameters and " //$NON-NLS-1$
+            + "examples: get_tool_guide('get_symbol_info')."; //$NON-NLS-1$
     }
 
     @Override

@@ -540,12 +540,10 @@ public class GitTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run a git command in a project's repository - the non-UI equivalent of typing it in a " //$NON-NLS-1$
-            + "terminal. Send it as a shell-style string (e.g. 'status', 'diff HEAD~1', 'commit -m " //$NON-NLS-1$
-            + "\"message\"', 'push origin main', 'pull origin main'); it is parsed and only a safe whitelist " //$NON-NLS-1$
-            + "of subcommands is executed via the real git CLI (auth/config are the machine's - ssh-agent / " //$NON-NLS-1$
-            + "credential helper / ~/.gitconfig - exactly like your terminal). DISABLED by default: enable it " //$NON-NLS-1$
-            + "in Preferences -> MCP Server -> Tools first. Full parameters, the whitelist and examples: " //$NON-NLS-1$
+        return "Run a git command in a project's repository through the real git CLI, sent as a shell-style " //$NON-NLS-1$
+            + "string. Only a whitelisted set of subcommands runs, and the write-capable ones (commit, push, " //$NON-NLS-1$
+            + "checkout, stash) change the repository. DISABLED by default: enable it in Preferences -> MCP " //$NON-NLS-1$
+            + "Server -> Tools; enable_toolset does not turn it on. Parameters, the whitelist and examples: " //$NON-NLS-1$
             + "get_tool_guide('git')."; //$NON-NLS-1$
     }
 

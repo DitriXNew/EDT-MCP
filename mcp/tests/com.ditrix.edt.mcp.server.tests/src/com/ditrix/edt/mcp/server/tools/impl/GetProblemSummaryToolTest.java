@@ -63,11 +63,11 @@ public class GetProblemSummaryToolTest
         // The description advertises the severity vocabulary it groups by, and steers callers
         // wanting per-marker detail to get_project_errors (this tool is totals-only).
         String desc = new GetProblemSummaryTool().getDescription();
-        assertTrue("description must mention ERRORS", desc.contains("ERRORS")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("description must mention BLOCKER", desc.contains("BLOCKER")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("description must mention TRIVIAL", desc.contains("TRIVIAL")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must mention ERRORS", new GetProblemSummaryTool().getGuide().contains("ERRORS")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must mention BLOCKER", new GetProblemSummaryTool().getGuide().contains("BLOCKER")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description must mention TRIVIAL", new GetProblemSummaryTool().getGuide().contains("TRIVIAL")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("description must steer to get_project_errors for detail", //$NON-NLS-1$
-            desc.contains("get_project_errors")); //$NON-NLS-1$
+            new GetProblemSummaryTool().getGuide().contains("get_project_errors")); //$NON-NLS-1$
     }
 
     @Test

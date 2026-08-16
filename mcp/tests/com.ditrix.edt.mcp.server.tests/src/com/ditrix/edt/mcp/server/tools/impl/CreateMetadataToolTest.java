@@ -96,7 +96,7 @@ public class CreateMetadataToolTest
         // reads in tools/list, the fqn schema is what a schema-driven client builds its input from.
         String desc = new CreateMetadataTool().getDescription();
         assertTrue("the description must advertise the nested-subsystem address", //$NON-NLS-1$
-            desc.contains("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$
+            new CreateMetadataTool().getGuide().contains("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$
         String schema = new CreateMetadataTool().getInputSchema();
         assertTrue("the fqn schema must document the nested-subsystem shape", //$NON-NLS-1$
             schema.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
@@ -416,9 +416,9 @@ public class CreateMetadataToolTest
     {
         String desc = new CreateMetadataTool().getDescription();
         assertTrue("description should mention the ObjectType member FQN shape", //$NON-NLS-1$
-            desc.contains("ObjectType")); //$NON-NLS-1$
+            new CreateMetadataTool().getGuide().contains("ObjectType")); //$NON-NLS-1$
         assertTrue("description should mention a nested Property member FQN shape", //$NON-NLS-1$
-            desc.contains("XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>")); //$NON-NLS-1$
+            new CreateMetadataTool().getGuide().contains("XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>")); //$NON-NLS-1$
     }
 
     @Test
@@ -498,7 +498,7 @@ public class CreateMetadataToolTest
     public void testDescriptionMentionsPredefinedItems()
     {
         String desc = new CreateMetadataTool().getDescription();
-        assertTrue("description should mention predefined items", desc.contains("Predefined")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("description should mention predefined items", new CreateMetadataTool().getGuide().contains("Predefined")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

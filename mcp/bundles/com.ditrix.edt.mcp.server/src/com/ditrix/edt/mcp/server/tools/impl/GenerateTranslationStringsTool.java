@@ -74,12 +74,12 @@ public class GenerateTranslationStringsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Generate translation strings (.lstr/.trans/.dict) for a configuration " //$NON-NLS-1$
-             + "project: scans translatable features and writes the resulting keys into " //$NON-NLS-1$
-             + "the project's storages (EDT menu Translation -> Generate translation " //$NON-NLS-1$
-             + "strings). Run on the configuration project (V8ConfigurationNature), not " //$NON-NLS-1$
-             + "a dictionary storage project; requires LanguageTool installed in EDT. " //$NON-NLS-1$
-             + "Full parameters and examples: call get_tool_guide('generate_translation_strings')."; //$NON-NLS-1$
+        return "Collect translatable strings of a configuration and WRITE the generated keys into the " //$NON-NLS-1$
+            + "project's translation storage (.lstr/.trans/.dict; storageId, default 'edit:default'). " //$NON-NLS-1$
+            + "This changes project files - it is not a read-only scan. Run it on the configuration " //$NON-NLS-1$
+            + "project (V8ConfigurationNature), not a dictionary storage project; requires LanguageTool " //$NON-NLS-1$
+            + "installed in EDT. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('generate_translation_strings')."; //$NON-NLS-1$
     }
 
     @Override

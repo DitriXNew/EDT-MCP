@@ -50,9 +50,8 @@ public class GetApplicationsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Get list of applications (infobases) for a project. " + //$NON-NLS-1$
-               "Returns application ID, name, type, and update state. " + //$NON-NLS-1$
-               "Application ID is required for update_database and debug_launch tools."; //$NON-NLS-1$
+        return "Discover infobases connected to an EDT project. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_applications')."; //$NON-NLS-1$
     }
     
     @Override

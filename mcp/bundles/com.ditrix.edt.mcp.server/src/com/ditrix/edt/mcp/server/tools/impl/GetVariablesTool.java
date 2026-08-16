@@ -44,9 +44,8 @@ public class GetVariablesTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Read variables from a stack frame of a suspended debug thread. " //$NON-NLS-1$
-            + "Pass frameRef from wait_for_break (preferred) or threadId+frameIndex. " //$NON-NLS-1$
-            + "Use expandPath to drill into nested structures (dot-separated)."; //$NON-NLS-1$
+        return "Inspect runtime variables in a paused debug frame. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_variables')."; //$NON-NLS-1$
     }
 
     @Override

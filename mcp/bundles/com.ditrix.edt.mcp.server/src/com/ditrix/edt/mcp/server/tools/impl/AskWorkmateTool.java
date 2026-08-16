@@ -108,6 +108,9 @@ public class AskWorkmateTool implements IMcpTool
     public String getDescription()
     {
         return "Start a background question to the 1C:Workmate plugin and return its jobId. " //$NON-NLS-1$
+            + "Hands the question to an EXTERNAL agent: by default (shareMcpTools) Workmate may call " //$NON-NLS-1$
+            + "EDT-MCP's own tools through this plugin, so it can READ the project and CHANGE code and " //$NON-NLS-1$
+            + "metadata; workmateTool mode runs a named Workmate tool directly (JShell included). " //$NON-NLS-1$
             + "Poll the job with get_job_status instead of calling ask_workmate again. Requires " //$NON-NLS-1$
             + "a compatible Workmate installation in the same EDT JVM. Full parameters and examples: call " //$NON-NLS-1$
             + "get_tool_guide('ask_workmate')."; //$NON-NLS-1$

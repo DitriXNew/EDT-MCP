@@ -57,9 +57,10 @@ The `edt-mcp-*` skills carry the "how to do it right"; each one's description sa
 
 1. **Is there already a shared helper?** `grep` under `utils/` (`MetadataTypeUtils`, `MetadataNodeResolver`, `ProjectContext`, `BmTransactions`, `JsonUtils`, `Pagination`, `MarkdownUtils`). Don't write the 47th copy.
 2. **What's the canonical parameter/error/output?** → `edt-mcp-tool-conventions`.
-3. **Is this bilingual?** → `edt-mcp-bilingual`.
-4. **God-class / cascade / mirror feature?** → the "think twice" section above.
-5. **A new tool?** → `edt-mcp-new-tool`.
+3. **Writing or cutting a tool's description / parameter prose?** → `edt-mcp-tool-descriptions`. Every sentence in `tools/list` is paid on every request; the capability index can go, the protocol clause cannot, and "move it to the guide" deletes the behaviour rather than relocating it. A/B it through `tests/tool-choice/` before shipping.
+4. **Is this bilingual?** → `edt-mcp-bilingual`.
+5. **God-class / cascade / mirror feature?** → the "think twice" section above.
+6. **A new tool?** → `edt-mcp-new-tool`.
 
 ---
 

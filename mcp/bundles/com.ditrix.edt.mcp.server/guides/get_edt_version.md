@@ -12,3 +12,7 @@ A short text line such as `2025.2.0 (2025.2.0.v202506...)` - the marketing versi
 
 ## Notes & gotchas
 - For the broader picture (port, protocol version, plugin version, enabled tool counts, render flags) use `get_server_status`, which includes this same EDT version.
+
+## When the version cannot be read
+
+If the EDT version cannot be determined the tool reports it as unknown rather than failing.

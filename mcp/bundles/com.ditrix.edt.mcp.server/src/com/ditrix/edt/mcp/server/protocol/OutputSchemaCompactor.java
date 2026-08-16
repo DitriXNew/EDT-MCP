@@ -30,9 +30,9 @@ import com.google.gson.JsonObject;
  * calls) — they document the response envelope for maintainers; this class is the wire
  * boundary where they stop.
  * <p>
- * {@code inputSchema} is NOT compacted: a parameter's description (its allowed values,
- * its format and its example) is what the model uses to build a correct call, and
- * removing it produces malformed calls.
+ * {@code inputSchema} is compacted separately by {@link InputSchemaCompactor}, which
+ * keeps a short allowlist of parameter descriptions. That reverses what this javadoc
+ * used to state — see that class for the re-measurement that changed the decision.
  * <p>
  * <b>The walk is structural, not textual.</b> A schema keyword and a PROPERTY NAME
  * share one namespace in JSON, and this plugin really does declare properties called

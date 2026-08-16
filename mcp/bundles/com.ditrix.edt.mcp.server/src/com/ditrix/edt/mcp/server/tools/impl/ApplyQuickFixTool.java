@@ -74,14 +74,8 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Apply EDT's official quick-fix (auto-fix) to one validation marker — the headless " //$NON-NLS-1$
-            + "counterpart of the 'Quick Fix' action in the problems view. Address the marker by the " //$NON-NLS-1$
-            + "locator get_project_errors prints: its Check code (+ Module path + Line to narrow); its " //$NON-NLS-1$
-            + "'Fix registered' column flags rows whose CHECK TYPE has one (not a guarantee for that " //$NON-NLS-1$
-            + "exact marker - this tool reports when none is applicable). When the locator matches " //$NON-NLS-1$
-            + "several markers (or the fix has several variants) the error lists them, each with its " //$NON-NLS-1$
-            + "location, and you re-call with index / variant. " //$NON-NLS-1$
-            + "Full parameters and examples: call get_tool_guide('apply_quick_fix')."; //$NON-NLS-1$
+        return "Apply an EDT quick fix to a validation problem. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('apply_quick_fix')."; //$NON-NLS-1$
     }
 
     @Override

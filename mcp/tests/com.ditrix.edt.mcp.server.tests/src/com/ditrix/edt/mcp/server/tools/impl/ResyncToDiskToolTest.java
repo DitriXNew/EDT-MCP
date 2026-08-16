@@ -103,7 +103,7 @@ public class ResyncToDiskToolTest
         assertTrue("description must state the report-only default", //$NON-NLS-1$
             desc.contains("REPORTED by default")); //$NON-NLS-1$
         assertTrue("description must call the opt-in removal destructive", //$NON-NLS-1$
-            desc.contains("destructive")); //$NON-NLS-1$
+            new ResyncToDiskTool().getGuide().contains("destructive")); //$NON-NLS-1$
     }
 
     @Test

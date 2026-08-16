@@ -46,9 +46,8 @@ public class GetJobStatusTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Poll any background job by the jobId returned from its owning tool. Returns the " //$NON-NLS-1$
-            + "current state, progress journal, and terminal result; optionally waits for a " //$NON-NLS-1$
-            + "transport-safe interval. Full parameters and examples: call " //$NON-NLS-1$
+        return "Poll any background job by the jobId its owning tool returned: state, progress " //$NON-NLS-1$
+            + "journal and terminal result. Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('get_job_status')."; //$NON-NLS-1$
     }
 

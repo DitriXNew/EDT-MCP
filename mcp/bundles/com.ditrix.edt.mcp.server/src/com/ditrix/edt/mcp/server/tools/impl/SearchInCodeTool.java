@@ -76,13 +76,10 @@ public class SearchInCodeTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Literal/regex full-text search across all BSL modules in a project. " + //$NON-NLS-1$
-               "Matching is purely textual and NOT ru/en dialect-aware, so a query in one " + //$NON-NLS-1$
-               "BSL language won't find the other spelling; for identifier lookup use " + //$NON-NLS-1$
-               "get_symbol_info, find_references or get_method_call_hierarchy instead. " + //$NON-NLS-1$
-               "Use this for a literal text scan; for a symbol's USAGES use find_references, " + //$NON-NLS-1$
-               "for where it is DEFINED use go_to_definition. " + //$NON-NLS-1$
-               "Full parameters and examples: call get_tool_guide('search_in_code')."; //$NON-NLS-1$
+        return "Literal/regex full-text search across BSL modules. Matching is textual and NOT ru/en " //$NON-NLS-1$
+            + "dialect-aware, so a query in one BSL language will not find the other spelling - for a " //$NON-NLS-1$
+            + "symbol's usages use find_references, for where it is defined use go_to_definition. " //$NON-NLS-1$
+            + "Parameters and examples: get_tool_guide('search_in_code')."; //$NON-NLS-1$
     }
 
     @Override

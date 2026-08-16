@@ -200,27 +200,13 @@ public class RunYaxunitTestsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Run YAXUnit tests as a named background job and return a JUnit Markdown report. " //$NON-NLS-1$
-               + "The start call waits up to `timeout` (default and maximum " + MAX_TIMEOUT_SECONDS //$NON-NLS-1$
-               + "s, larger values are clamped): a short run returns the report unchanged in " //$NON-NLS-1$
-               + "that call; otherwise **Pending** returns the jobId to poll with get_job_status. " //$NON-NLS-1$
-               + "The job owns resolution, preparation, launch and report collection, and its " //$NON-NLS-1$
-               + "progress names the current phase (resolve / prep:terminate / prep:recompute / " //$NON-NLS-1$
-               + "prep:db-update / spawn / run). A repeated start with the same execution " //$NON-NLS-1$
-               + "parameters attaches only while that job is running, preventing a duplicate " //$NON-NLS-1$
-               + "launch; use jobId, not repeated arguments, to address a known run. " //$NON-NLS-1$
-               + "A phase that stops changing is the server's only signal — it means either a " //$NON-NLS-1$
-               + "legitimately long stage or one blocked on a modal dialog in EDT, and the tool " //$NON-NLS-1$
-               + "cannot tell them apart: look at EDT before waiting indefinitely. " //$NON-NLS-1$
-               + "Pass `debug=true` to use the same named-job path for a DEBUG launch: a short " //$NON-NLS-1$
-               + "start returns the launch handle, while Pending returns jobId for " //$NON-NLS-1$
-               + "get_job_status; call wait_for_break after the handle arrives. " //$NON-NLS-1$
-               + "The pre-launch auto-chain (updateBeforeLaunch=true, default) recomputes only projects " //$NON-NLS-1$
-               + "whose sources changed since their last prepared run; that mark survives an EDT " //$NON-NLS-1$
-               + "restart, so an unchanged project is not recomputed at all. " //$NON-NLS-1$
-               + "Requires an existing runtime-client launch configuration " //$NON-NLS-1$
-               + "and the YAXUnit extension installed in the infobase. " //$NON-NLS-1$
-               + "Full parameters and examples: call get_tool_guide('run_yaxunit_tests')."; //$NON-NLS-1$
+        return "Run YAXUnit tests as a named background job and return a JUnit Markdown report. "  //$NON-NLS-1$
+            + "The start call waits up to `timeout` (default and maximum " + MAX_TIMEOUT_SECONDS  //$NON-NLS-1$
+            + "s): a short run returns the report in that call, otherwise Pending returns a jobId "  //$NON-NLS-1$
+            + "to poll with get_job_status. Address a known run by jobId, NOT by repeating the "  //$NON-NLS-1$
+            + "arguments - a repeated start attaches only while that job is still running, and "  //$NON-NLS-1$
+            + "otherwise launches a second run. Parameters and examples: "  //$NON-NLS-1$
+            + "get_tool_guide('run_yaxunit_tests')."; //$NON-NLS-1$
     }
 
     @Override
@@ -257,10 +243,9 @@ public class RunYaxunitTestsTool implements IMcpTool
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
                 EXTERNAL_INFOBASE_CHANGES_DESCRIPTION) //$NON-NLS-1$
             .booleanProperty("debug", //$NON-NLS-1$
-                "Default false: poll and return the report. true: use the same named-job path to " //$NON-NLS-1$
-                    + "launch in DEBUG mode so breakpoints fire. A short start returns the launch " //$NON-NLS-1$
-                    + "handle and you call wait_for_break next; if resolution or preparation " //$NON-NLS-1$
-                    + "outlives timeout, Pending returns jobId for get_job_status.") //$NON-NLS-1$
+                "true launches in DEBUG mode so breakpoints fire: a short start returns the "  //$NON-NLS-1$
+                    + "launch handle and you call wait_for_break next, while Pending returns a "  //$NON-NLS-1$
+                    + "jobId for get_job_status. Default false polls and returns the report.")  //$NON-NLS-1$
             .build();
     }
 

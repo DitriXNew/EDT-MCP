@@ -1,0 +1,259 @@
+[
+ {
+  "id": "c051",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "УправлениеТорговлей", "objectName": "Контрагенты", "metadataType": "catalogs"}},
+   {"tool": "read_module_source", "args": {"projectName": "УправлениеТорговлей", "modulePath": "Catalogs/Контрагенты/Ext/ObjectModule.bsl"}},
+   {"tool": "get_symbol_info", "args": {"projectName": "УправлениеТорговлей", "modulePath": "Catalogs/Контрагенты/Ext/ObjectModule.bsl"}}
+  ],
+  "expected_result": "Найден модуль объекта справочника Контрагенты, в нём обнаружено подозрительное присваивание, и по его позиции получен выведенный тип, объясняющий ошибку преобразования при записи.",
+  "confidence": 4
+ },
+ {
+  "id": "c052",
+  "calls": [
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration", "launchConfigurationName": "ТонкийКлиент"}},
+   {"tool": "wait_for_break", "args": {}},
+   {"tool": "get_variables", "args": {}},
+   {"tool": "resume", "args": {}}
+  ],
+  "expected_result": "Конфигурация запущена под отладкой по конфигурации запуска ТонкийКлиент, дождались первой остановки, показаны переменные и выполнение продолжено.",
+  "confidence": 5
+ },
+ {
+  "id": "c053",
+  "calls": [
+   {"tool": "set_variable", "args": {"variableName": "ФлагПроверки", "value": "Ложь"}},
+   {"tool": "step", "args": {"kind": "into"}},
+   {"tool": "get_variables", "args": {}}
+  ],
+  "expected_result": "Переменная ФлагПроверки установлена в Ложь, выполнен шаг с заходом внутрь вызова, и показаны переменные нового кадра стека.",
+  "confidence": 5
+ },
+ {
+  "id": "c054",
+  "calls": [
+   {"tool": "stop_profiling", "args": {"applicationId": "app-1"}},
+   {"tool": "get_profiling_results", "args": {"applicationId": "app-1"}},
+   {"tool": "read_method_source", "args": {}}
+  ],
+  "expected_result": "Профилирование в app-1 остановлено, показаны горячие точки, и открыт исходный код самого затратного метода из результата профилирования.",
+  "confidence": 4
+ },
+ {
+  "id": "c055",
+  "calls": [
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "start_profiling", "args": {}},
+   {"tool": "stop_profiling", "args": {}},
+   {"tool": "get_profiling_results", "args": {}}
+  ],
+  "expected_result": "Отладка проекта TestConfiguration запущена, профайлер включён и по сигналу пользователя выполняется, после команды остановки показаны затратные места.",
+  "confidence": 4
+ },
+ {
+  "id": "c056",
+  "calls": [
+   {"tool": "debug_status", "args": {}},
+   {"tool": "get_variables", "args": {}},
+   {"tool": "evaluate_expression", "args": {"expression": "ЭтотОбъект.Ссылка"}}
+  ],
+  "expected_result": "Показан список живых сеансов отладки, для приостановленного сеанса показаны переменные и вычислено выражение ЭтотОбъект.Ссылка.",
+  "confidence": 4
+ },
+ {
+  "id": "c057",
+  "calls": [
+   {"tool": "list_breakpoints", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "remove_breakpoint", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "set_breakpoint", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Проведение/Module.bsl", "lineNumber": 200}},
+   {"tool": "debug_launch", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Все точки останова в проекте сняты, поставлена новая точка на строке 200 модуля CommonModule.Проведение, и запущена отладка.",
+  "confidence": 4
+ },
+ {
+  "id": "c058",
+  "calls": [
+   {"tool": "list_modules", "args": {"projectName": "TestConfiguration", "objectName": "ЗаказПоставщику", "metadataType": "documents"}},
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ЗаказПоставщику/Ext/ObjectModule.bsl"}},
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ЗаказПоставщику/Ext/ObjectModule.bsl", "methodName": "ЗаполнитьПоОстаткам"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ЗакупкиСервер"}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.ЗакупкиСервер", "moduleType": "Module", "mode": "append", "source": ""}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "Documents/ЗаказПоставщику/Ext/ObjectModule.bsl", "mode": "searchReplace", "oldSource": "", "source": ""}}
+  ],
+  "expected_result": "Показана структура модуля объекта, извлечён код процедуры ЗаполнитьПоОстаткам, создан общий модуль ЗакупкиСервер и логика перенесена в него из модуля документа.",
+  "confidence": 3
+ },
+ {
+  "id": "c059",
+  "calls": [
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": ["Catalog.Контрагенты", "Catalog.Партнёры"]}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Контрагенты"}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "Catalog.Партнёры"}}
+  ],
+  "expected_result": "Показана структура обоих справочников и их использования в конфигурации, на основании чего можно оценить, какой из них можно исключить, без фактического удаления.",
+  "confidence": 5
+ },
+ {
+  "id": "c060",
+  "calls": [
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Обмен"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Обмен", "newName": "ОбменДанными"}},
+   {"tool": "rename_metadata_object", "args": {"projectName": "TestConfiguration", "objectFqn": "CommonModule.Обмен", "newName": "ОбменДанными", "confirm": true}},
+   {"tool": "revalidate_objects", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Показаны использования модуля, модуль переименован в ОбменДанными с каскадным обновлением ссылок, проект перевалидирован и подтверждено отсутствие новых ошибок.",
+  "confidence": 5
+ },
+ {
+  "id": "c061",
+  "calls": [
+   {"tool": "list_subsystems", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_subsystem_content", "args": {"projectName": "УправлениеТорговлей", "subsystemFqn": "Subsystem.Продажи"}},
+   {"tool": "modify_metadata", "args": {"projectName": "УправлениеТорговлей", "fqn": "Subsystem.Справочники", "content": [{"metadata": "Catalog.Products"}]}}
+  ],
+  "expected_result": "Показано дерево подсистем и содержимое подсистемы Продажи, после чего справочник Catalog.Products добавлен в состав подсистемы Справочники.",
+  "confidence": 4
+ },
+ {
+  "id": "c062",
+  "calls": [
+   {"tool": "read_method_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "methodName": "ПолучитьКурс"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "methodName": "ПолучитьКурс", "direction": "callees"}},
+   {"tool": "get_outgoing_structures", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/РаботаСВалютами/Module.bsl", "method": "ПолучитьКурс"}}
+  ],
+  "expected_result": "Показан код функции ПолучитьКурс, построено дерево её вызовов вниз, и показаны структуры полей, которые она собирает для своих вызовов.",
+  "confidence": 5
+ },
+ {
+  "id": "c063",
+  "calls": [
+   {"tool": "get_module_structure", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl"}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl"}},
+   {"tool": "get_method_call_hierarchy", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Печать/Module.bsl", "direction": "outgoing"}}
+  ],
+  "expected_result": "Зафиксировано текущее состояние модуля Печать: его структура, полный исходный код и то, какие методы модуля откуда вызываются.",
+  "confidence": 3
+ },
+ {
+  "id": "c064",
+  "calls": [
+   {"tool": "get_objects_by_tags", "args": {"projectName": "TestConfiguration", "tags": ["deprecated"]}},
+   {"tool": "find_references", "args": {"projectName": "TestConfiguration", "objectFqn": ""}}
+  ],
+  "expected_result": "Показан список объектов с тегом deprecated, по каждому из них проверены использования в конфигурации, и составлен отчёт о возможности удаления без фактического сноса.",
+  "confidence": 3
+ },
+ {
+  "id": "c065",
+  "calls": [
+   {"tool": "create_git_branch", "args": {"projectName": "TestConfiguration", "branch": "hotfix/проведение", "startPoint": "master", "checkout": true}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}}
+  ],
+  "expected_result": "Создана и открыта ветка hotfix/проведение от master, проверено отсутствие ошибок в проекте, и при чистом результате база обновлена.",
+  "confidence": 4
+ },
+ {
+  "id": "c066",
+  "calls": [
+   {"tool": "revalidate_objects", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "export_configuration_to_xml", "args": {"projectName": "УправлениеТорговлей", "outputPath": "D:\\ship"}}
+  ],
+  "expected_result": "Проект провалидирован, показана сводка проблем по серьёзности, и при отсутствии блокеров конфигурация выгружена в XML в D:\\ship.",
+  "confidence": 4
+ },
+ {
+  "id": "c067",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "ВнешниеОбработки", "branch": "release"}},
+   {"tool": "get_metadata_objects", "args": {"projectName": "ВнешниеОбработки"}},
+   {"tool": "build_external_objects", "args": {"projectName": "ВнешниеОбработки", "outputDir": "D:\\dist"}}
+  ],
+  "expected_result": "Проект внешних обработок переключён на ветку release, показан состав входящих в него объектов, и все они собраны в D:\\dist.",
+  "confidence": 4
+ },
+ {
+  "id": "c068",
+  "calls": [
+   {"tool": "update_database", "args": {"projectName": "TestConfiguration", "confirm": true}},
+   {"tool": "run_yaxunit_tests", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_event_log", "args": {"projectName": "TestConfiguration", "severity": ["E"]}}
+  ],
+  "expected_result": "База обновлена, прогнаны тесты YAXUnit, и просмотрен журнал регистрации на предмет ошибок за последний час.",
+  "confidence": 3
+ },
+ {
+  "id": "c069",
+  "calls": [
+   {"tool": "switch_git_branch", "args": {"projectName": "TestConfiguration", "branch": "develop"}},
+   {"tool": "clean_project", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Проект переключён на ветку develop, полностью пересобран с диска, и показано текущее состояние ошибок после пересборки.",
+  "confidence": 5
+ },
+ {
+  "id": "c070",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_check_description", "args": {"projectName": "TestConfiguration", "checkId": ""}},
+   {"tool": "apply_quick_fix", "args": {"projectName": "TestConfiguration", "checkId": ""}}
+  ],
+  "expected_result": "Показаны ошибки проекта, отобрана самая частая проверка и объяснена, затем к её маркерам применено автоисправление там, где оно зарегистрировано.",
+  "confidence": 3
+ },
+ {
+  "id": "c071",
+  "calls": [
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration", "objectFqns": ["CommonModule.Расчеты"]}},
+   {"tool": "read_module_source", "args": {"projectName": "TestConfiguration", "modulePath": "CommonModules/Расчеты/Module.bsl"}},
+   {"tool": "get_check_description", "args": {"projectName": "TestConfiguration", "checkId": ""}}
+  ],
+  "expected_result": "Показаны замечания валидации по модулю CommonModule.Расчеты, открыт код на проблемных строках, и объяснена сработавшая проверка.",
+  "confidence": 4
+ },
+ {
+  "id": "c072",
+  "calls": [
+   {"tool": "validate_query", "args": {"projectName": "TestConfiguration", "queryText": ""}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "get_metadata_details", "args": {"projectName": "TestConfiguration", "objectFqns": []}}
+  ],
+  "expected_result": "Текст запроса отчёта проверен валидатором, показаны замечания валидации на отчёте, и показаны поля используемого регистра.",
+  "confidence": 2
+ },
+ {
+  "id": "c073",
+  "calls": [
+   {"tool": "clean_project", "args": {"projectName": "УправлениеТорговлей"}},
+   {"tool": "get_problem_summary", "args": {"projectName": "УправлениеТорговлей"}}
+  ],
+  "expected_result": "Проект полностью пересобран с диска, дождались окончания пересборки, и показана свежая сводка проблем.",
+  "confidence": 5
+ },
+ {
+  "id": "c074",
+  "calls": [
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration"}},
+   {"tool": "resync_to_disk", "args": {"projectName": "TestConfiguration", "cleanDanglingReferences": true}},
+   {"tool": "get_project_errors", "args": {"projectName": "TestConfiguration"}}
+  ],
+  "expected_result": "Обнаружены потерянные ссылки на диске, рассинхрон устранён очисткой висячих ссылок в Configuration.mdo, и повторной проверкой подтверждено исчезновение предупреждений.",
+  "confidence": 4
+ },
+ {
+  "id": "c075",
+  "calls": [
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком"}},
+   {"tool": "validate_xdto_package", "args": {"projectName": "TestConfiguration", "fqn": "XDTOPackage.ОбменСБанком"}},
+   {"tool": "create_metadata", "args": {"projectName": "TestConfiguration", "fqn": "CommonModule.ОбменСБанкомСервер", "commonModuleKind": "Server", "serverCall": true}},
+   {"tool": "write_module_source", "args": {"projectName": "TestConfiguration", "objectName": "CommonModule.ОбменСБанкомСервер", "moduleType": "Module", "mode": "append", "source": ""}}
+  ],
+  "expected_result": "Создан XDTO-пакет ОбменСБанком и проверен валидатором, затем создан общий модуль ОбменСБанкомСервер с заготовкой экспортной функции.",
+  "confidence": 4
+ }
+]

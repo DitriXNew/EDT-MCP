@@ -699,7 +699,9 @@ public class GetProjectErrorsToolTest
         String schema = tool.getInputSchema();
         String guide = tool.getGuide();
 
-        for (String text : new String[] {description, schema, guide})
+        // The one-line description no longer lists parameters (issue #363); the exact-filter
+// guarantee is carried by the schema (objectFqns keeps its prose on the wire) and the guide.
+        for (String text : new String[] {schema, guide})
         {
             assertTrue("every text must name the exact filter: " + text, //$NON-NLS-1$
                 text.contains(GetProjectErrorsTool.PARAM_OBJECT_FQNS));
