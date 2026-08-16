@@ -150,6 +150,35 @@ public class GitCommonDirectoryTest
             linked.sharedDir.getCanonicalFile(), common.directory().getCanonicalFile());
     }
 
+    @Test
+    public void testTheResolvedDirectoryIsCanonicalSoIncludesResolveWhereGitResolvesThem()
+        throws Exception
+    {
+        // git canonicalizes the common directory (get_common_dir_noenv ends in
+        // strbuf_add_real_path), and a relative [include] in the configuration under it resolves
+        // from that config file's directory. JGit resolves a relative include from the LEXICAL
+        // parent of the file it opened - so if this handed back an uncanonical spelling, the
+        // pre-flight and the git process it guards would read DIFFERENT include files.
+        //
+        // What this pins is the property that removes the divergence: the directory handed back is
+        // the physical one. The divergence itself needs a symbolic link to observe, and native
+        // symbolic links cannot be created on the machine this was written on - stated in the
+        // javadoc of GitCommonDirectory#canonical rather than faked with a fixture that would
+        // "confirm" whatever it was asked.
+        Linked linked = newLinkedWorktree("common-dir-canonical", "../..\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        GitCommonDirectory common = GitCommonDirectory.of(linked.adminDir);
+
+        String path = common.directory().getPath();
+        assertFalse("the resolved directory must carry no '..' segments - an uncanonical spelling " //$NON-NLS-1$
+            + "is exactly what makes a relative include resolve somewhere git does not look: " //$NON-NLS-1$
+            + path, path.contains("..")); //$NON-NLS-1$
+        assertEquals("...and it must equal the physical path", //$NON-NLS-1$
+            common.directory().getCanonicalFile(), common.directory());
+        assertEquals("...which is still the shared repository", //$NON-NLS-1$
+            linked.sharedDir.getCanonicalFile(), common.directory());
+    }
+
     // ==================== fails CLOSED: the pointer is unusable ====================
 
     @Test

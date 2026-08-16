@@ -472,6 +472,22 @@ public class GitTool implements IMcpTool
         + "read it - before editing the pointer, which may need no change at all. This tool logs " //$NON-NLS-1$
         + "only the failure's exception types."; //$NON-NLS-1$
 
+    /**
+     * The repair when what the pointer NAMES is not there. Two causes, and this text names both
+     * because the fault cannot tell them apart: the pointer may be wrong, or the pointer may be
+     * right and its target gone - a dangling symbolic link, an unmounted share. Advising only the
+     * first would send an operator to edit a file that is correct.
+     */
+    private static final String MISSING_TARGET_REPAIR_TAIL =
+        "Two things can put you here and this tool cannot tell them apart, so check both: the " //$NON-NLS-1$
+        + "'commondir' file may name the wrong place - it holds the path to the shared repository, " //$NON-NLS-1$
+        + "absolute or relative to the directory the file sits in ('../..' is what " //$NON-NLS-1$
+        + "'git worktree add' writes) - or it may be right and what it names may be gone, which a " //$NON-NLS-1$
+        + "dangling link or an unmounted share will do. Look at the target first; it needs no edit " //$NON-NLS-1$
+        + "if it is simply missing. Do NOT reach for 'git worktree repair' - measured on git " //$NON-NLS-1$
+        + "2.35.1, it does not touch this file at all. This tool logs only the failure's exception " //$NON-NLS-1$
+        + "types."; //$NON-NLS-1$
+
     private static final String UNEXAMINED_REPOSITORY_REFUSAL_HEAD =
         "The git repository for this project could not be examined for stored remotes: reading " //$NON-NLS-1$
         + "the layout of its git directory failed, so the operation is refused instead of run " //$NON-NLS-1$
@@ -1813,8 +1829,10 @@ public class GitTool implements IMcpTool
      * <p>
      * They are still live: {@code git remote get-url <name>} and {@code git remote show -n} print
      * what stands in them, verbatim - measured, credential and all - and JGit's configuration never
-     * mentions them. Judged line by line, and only as much of the format is honoured as it takes to
-     * find the value: a {@code remotes/} file carries {@code URL:} / {@code Push:} / {@code Pull:}
+     * mentions them. A {@code remotes/} file is judged line by line; a {@code branches/} file holds
+     * ONE record and only that one is judged, trimmed at both ends, because that is all git reads
+     * from it (measured - a credential on a second line is printed by nothing). Only as much of
+     * each format is honoured as it takes to find the value: a {@code remotes/} file carries {@code URL:} / {@code Push:} / {@code Pull:}
      * lines, a {@code branches/} file a bare URL. The key prefix HAS to come off - it ends in a
      * colon, and a colon in front of an {@code @} is exactly what marks a password, so judging the
      * raw line would refuse every legacy file ever written. The prefix is recognised by the KEY,
@@ -1897,8 +1915,18 @@ public class GitTool implements IMcpTool
                 StoredRemoteFlaw.UNMASKABLE_CREDENTIAL, RemoteSource.LEGACY_FILE);
         }
         String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-        for (String line : content.split("\n")) //$NON-NLS-1$
+        // A branches/ file holds ONE record, and git reads only that one - measured: with a second
+        // line carrying a credential, 'git remote get-url' and 'git remote show -n' both print the
+        // first URL and the second appears nowhere. Judging the tail would refuse every remote
+        // command of a repository over text no command can reach, which is the more expensive
+        // mistake. A remotes/ file is different: its URL:/Push:/Pull: lines are all live, so it is
+        // read whole.
+        String[] lines = content.split("\n"); //$NON-NLS-1$
+        int judged = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? Math.min(1, lines.length)
+            : lines.length;
+        for (int at = 0; at < judged; at++)
         {
+            String line = lines[at];
             for (String value : legacyValuesOf(line, directory))
             {
                 StoredRemoteFlaw flaw = storedTextFlaw(value);
@@ -1909,6 +1937,39 @@ public class GitTool implements IMcpTool
             }
         }
         return null;
+    }
+
+    /**
+     * Trims a {@code branches/} record the way git trims it - both ends, over git's own whitespace
+     * set.
+     * <p>
+     * Deliberately not {@link String#trim}: that removes every character up to {@code U+0020}, and
+     * the vertical tab and form feed were measured NOT to be whitespace to git here (see
+     * {@link #isLegacyIndent}). Removing them would delete exactly the control bytes this check
+     * refuses on.
+     *
+     * @param value the record, without its line terminator
+     * @return it with git's whitespace removed from both ends
+     */
+    private static String trimLegacyRecord(String value)
+    {
+        int from = 0;
+        int to = value.length();
+        while (from < to && isLegacyWhitespace(value.charAt(from)))
+        {
+            from++;
+        }
+        while (to > from && isLegacyWhitespace(value.charAt(to - 1)))
+        {
+            to--;
+        }
+        return value.substring(from, to);
+    }
+
+    /** The characters git strips around a legacy record - measured, one byte at a time. */
+    private static boolean isLegacyWhitespace(char c)
+    {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
     }
 
     /**
@@ -1951,10 +2012,15 @@ public class GitTool implements IMcpTool
      * never sees a URL there at all. This is not the query/fragment boundary of a URL - that one is
      * about a fragment the redaction DOES mask, and it stays where it is.
      * <p>
-     * Nothing is trimmed beyond the line terminator. {@link String#trim} removes every character up
-     * to {@code U+0020}, so it would eat exactly the control bytes this check exists to catch,
-     * before {@link #storedTextFlaw} ever saw them; a lone trailing {@code \r} is dropped because
-     * that is a line ending, not content.
+     * Nothing is trimmed beyond the line terminator IN A {@code remotes/} FILE. {@link String#trim}
+     * removes every character up to {@code U+0020}, so it would eat exactly the control bytes this
+     * check exists to catch, before {@link #storedTextFlaw} ever saw them; a lone trailing
+     * {@code \r} is dropped because that is a line ending, not content.
+     * <p>
+     * A {@code branches/} record IS trimmed at both ends, over git's own set and not
+     * {@link String#trim}'s - see {@link #trimLegacyRecord}. Measured: git ignores a file whose
+     * record trims to nothing, and strips spaces, tabs and CRs around a healthy URL, so judging
+     * that padding refused a repository over bytes no command prints.
      *
      * @param line one line of the file, terminator included
      * @param directory which legacy directory the file came from
@@ -2001,6 +2067,16 @@ public class GitTool implements IMcpTool
                 after++;
             }
             value = value.substring(after);
+        }
+        if (LEGACY_BRANCHES_DIRECTORY.equals(directory))
+        {
+            // git TRIMS this record, both ends - measured: a file holding one TAB gives
+            // 'No such remote' (trimmed to nothing, the file ignored), and spaces, tabs or CRs
+            // around a healthy URL come back off it. Judging the untrimmed text refused a working
+            // repository over padding git never looks at. The set is git's own - space, tab, CR,
+            // LF - and NOT String.trim(), which would also eat the vertical tab and form feed that
+            // isLegacyIndent was measured to leave in place.
+            value = trimLegacyRecord(value);
         }
         int head = LEGACY_BRANCHES_DIRECTORY.equals(directory) ? value.indexOf('#') : -1;
         return head < 0 ? List.of(value)
@@ -2274,6 +2350,13 @@ public class GitTool implements IMcpTool
         {
             // Nothing established: not that this is a linked worktree, not that it has a commondir.
             return UNEXAMINED_REPOSITORY_REFUSAL_HEAD + what + LAYOUT_REPAIR_TAIL;
+        }
+        if (fault == GitCommonDirectory.Fault.NOT_A_DIRECTORY)
+        {
+            // The pointer may be right and the target gone - a dangling link resolves to nothing
+            // here just as a wrong path does. Telling the operator to repair the file would send
+            // them to edit something that may be perfectly correct.
+            return COMMON_DIR_UNREADABLE_REFUSAL_HEAD + what + MISSING_TARGET_REPAIR_TAIL;
         }
         if (fault == GitCommonDirectory.Fault.TARGET_UNREADABLE)
         {

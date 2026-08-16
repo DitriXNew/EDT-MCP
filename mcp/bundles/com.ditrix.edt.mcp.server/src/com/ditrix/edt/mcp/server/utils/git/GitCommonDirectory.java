@@ -350,8 +350,9 @@ public final class GitCommonDirectory
      * whatever this class does. Harmless in the direction it goes - git refuses to run at all, so
      * there is no output for the check to have missed - and the reason the test for this pins a
      * TAB, which nothing but {@code trim} would remove.)</li>
-     * <li><b>Zero bytes is fatal</b>, as it is to git ({@code fatal: failed to read
-     * .../commondir}). <b>Content that STRIPS to nothing is not</b>: git resolves the empty
+     * <li><b>Zero bytes is fatal</b>, and it is the ONLY empty-ish shape that is - content that
+     * STRIPS to nothing is explicitly accepted below and must not be read back into this list.
+     * ({@code fatal: failed to read .../commondir}.) git resolves the empty
      * remainder against the git directory, lands on the git directory itself, and reads the
      * configuration there - so this returns that directory rather than refusing.
      * <p>
@@ -363,19 +364,25 @@ public final class GitCommonDirectory
      * place, git answers 0 and prints the remote from that config.</li>
      * <li><b>A relative path is resolved against the git directory</b>, an absolute one is used as
      * it stands - git's rule.</li>
-     * <li><b>Not canonicalized.</b> git real-paths the result for its own bookkeeping; nothing here
-     * needs that - the files are simply opened underneath it, and {@code ..} is resolved by the
-     * operating system - while {@code getCanonicalFile()} would add a whole class of failure (UNC
-     * paths, junctions, an unreachable network component) that git does not have, and every failure
-     * this class does not need is one fewer way to refuse a repository git is happy with.</li>
+     * <li><b>Canonicalized</b>, as git canonicalizes it - {@code get_common_dir_noenv} ends in
+     * {@code strbuf_add_real_path}. This was NOT done at first, on the reasoning that files are
+     * only opened underneath the directory and the operating system resolves {@code ..} anyway.
+     * That reasoning missed relative {@code [include]} directives: JGit resolves one against the
+     * LEXICAL parent of the config file it came from, so handing back an uncanonical spelling makes
+     * the pre-flight read a different file than the git process it guards - and the whole point of
+     * this check is that those two read the same thing. Canonicalizing costs a failure mode
+     * ({@link Fault#NOT_A_DIRECTORY} when the target is not there, {@link Fault#TARGET_UNREADABLE}
+     * when it cannot be examined) and buys agreement with git.</li>
      * <li><b>The target must be a directory.</b> git answers {@code fatal: not a git repository}
      * when it is not.</li>
      * </ul>
      * <b>Fails CLOSED past the existence test</b>, in two kinds of case that are worth keeping
      * apart rather than blurring into one comfortable claim:
      * <ul>
-     * <li><b>the pointer is unusable as a pointer</b> - empty, nothing but a line terminator,
-     * naming something that is not a directory, or not readable at all;</li>
+     * <li><b>the pointer is unusable as a pointer</b> - ZERO BYTES, naming something that is
+     * not a directory, or unreadable. NOT content that merely strips to nothing: that is accepted
+     * and resolves to the git directory, and reading it back into this list would restore the false
+     * refusal it took three measurements to remove;</li>
      * <li><b>this code will not follow it</b> - it cannot be decoded, it is larger than this code
      * reads, it is not a regular file, or it is a Windows spelling whose root this code cannot
      * reproduce. Each buys something the alternative cannot: inspecting a DIFFERENT directory,
@@ -406,7 +413,9 @@ public final class GitCommonDirectory
      * @return where the shared part of the repository lives, and whether this is a linked worktree
      * @throws FaultException when a {@code commondir} file is there but cannot be turned into a
      *             usable directory. The ways that can happen are {@link Fault}, which is the single
-     *             list of them - deliberately not repeated here, because a copy is what drifts
+     *             list of them - deliberately not repeated here, because a copy is what drifts.
+     *             Note that content which STRIPS to nothing is not among them: it resolves to the
+     *             git directory, as it does for git
      */
     public static GitCommonDirectory of(File gitDir) throws FaultException
     {
@@ -485,7 +494,9 @@ public final class GitCommonDirectory
             // the configuration git would read. An earlier probe seemed to show git failing on this
             // too, but that fixture's admin directory was not repository-like, so the pointer had
             // nowhere to land - the failure was the fixture's, not the terminators'.
-            return new GitCommonDirectory(gitDir, true);
+            // Canonicalised like every other outcome: git real-paths '<gitDir>/' here too, and a
+            // relative [include] under it must resolve from the same base for both of us.
+            return new GitCommonDirectory(canonical(gitDir), true);
         }
         // BEFORE the ambiguity test, because a pointer can be both and the NUL is the more
         // specific fact about it. Filing it under a Windows-rooting ambiguity would name a fault
@@ -522,7 +533,7 @@ public final class GitCommonDirectory
             // it. So nothing git itself produces is affected - 'git worktree add' writes '../..'.
             throw new FaultException(Fault.AMBIGUOUS_WINDOWS_ROOT);
         }
-        File resolved = named.isAbsolute() ? named : new File(gitDir, value);
+        File resolved = canonical(named.isAbsolute() ? named : new File(gitDir, value));
         // Not File.isDirectory(), which answers false for "it is not one" AND for "I could not
         // find out" alike - so a directory that exists and cannot be statted would be reported as
         // one that is missing, and an operator sent to look for it. Both still refuse; what changes
@@ -671,6 +682,46 @@ public final class GitCommonDirectory
     private static Fault unspellableFault(String value)
     {
         return value.indexOf('\0') >= 0 ? Fault.PATH_HOLDS_NUL : Fault.UNSPELLABLE_PATH;
+    }
+
+    /**
+     * The physical path of a resolved directory - what git uses, and what a relative
+     * {@code [include]} in the configuration under it must therefore resolve against.
+     * <p>
+     * <b>Stated limit.</b> The divergence this exists to prevent is only observable through a
+     * symbolic link, and native symbolic links could not be created on the machine this was written
+     * on - the shell's {@code ln -s} silently deep-copies there instead, which would have produced a
+     * fixture that "confirmed" whatever was asked of it. So the DIVERGENCE is argued from git's
+     * source ({@code get_common_dir_noenv} ends in {@code strbuf_add_real_path}) and from JGit's
+     * include resolution (relative paths are taken from the config file's lexical parent), not
+     * measured end to end. What IS pinned by test is the property that follows: the directory
+     * handed back is the physical one, so both sides start from the same base.
+     *
+     * {@link Path#toRealPath} rather than {@link File#getCanonicalFile}: only the first is the
+     * documented real-path operation. The second collapses {@code .} and {@code ..} and normalises
+     * case, and is not specified to resolve a symbolic link - so on the very platform this exists
+     * for it could have left the symlink spelling in place and the fix would have been a comment.
+     *
+     * @param resolved where the pointer resolved to
+     * @return its physical form
+     * @throws FaultException when the target cannot be resolved
+     */
+    private static File canonical(File resolved) throws FaultException
+    {
+        try
+        {
+            return resolved.toPath().toRealPath().toFile();
+        }
+        catch (NoSuchFileException e) // NOSONAR nothing there: not a directory, plainly
+        {
+            throw new FaultException(Fault.NOT_A_DIRECTORY, e);
+        }
+        catch (IOException | InvalidPathException e)
+        {
+            // The POINTER read fine; what it names could not be resolved. UNREADABLE would send the
+            // operator to repair a file that is not at fault.
+            throw new FaultException(Fault.TARGET_UNREADABLE, e);
+        }
     }
 
     /**

@@ -1667,6 +1667,99 @@ public class GitToolStoredRemoteTest
         assertRefusalLeaksNothing(refusal);
     }
 
+    @Test
+    public void testOnlyTheFirstRecordOfABranchesFileIsJudged() throws Exception
+    {
+        // MEASURED on git 2.35.1: a branches/ file holds ONE record, and git reads only that one.
+        // With a second line carrying a credential, 'git remote get-url' printed
+        // 'https://example.com/first.git' and 'git remote show -n' the same - the second line
+        // appeared nowhere in either.
+        //
+        // So judging the tail refuses every remote, push, fetch and pull of a repository over text
+        // no command can reach. Stale junk after the record is exactly the sort of thing an old
+        // repository carries, and a false refusal breaks what worked while a miss leaves it as it
+        // was - the asymmetry this whole check is built on.
+        Repository shared = newRepository("git-branches-first-record"); //$NON-NLS-1$
+        File legacy = new File(shared.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "two").toPath(), //$NON-NLS-1$
+            ("https://" + HOST + "/first.git#main\n" + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+        // Positive control: that same poisoned value on the FIRST line IS refused, so a green
+        // result below cannot be the predicate failing to recognise it.
+        Repository control = newRepository("git-branches-first-record-control"); //$NON-NLS-1$
+        File controlLegacy = new File(control.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the control legacy directory must exist", //$NON-NLS-1$
+            controlLegacy.mkdirs() || controlLegacy.isDirectory());
+        Files.write(new File(controlLegacy, "two").toPath(), //$NON-NLS-1$
+            (poisonedUrl(SPACE) + "\n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        assertNotNull("control: on the FIRST line this value is refused", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(control, List.of(PUSH)));
+
+        assertNull("git reads only the first record of a branches/ file, so a credential in the " //$NON-NLS-1$
+            + "tail is text no command can print - refusing over it would break a working " //$NON-NLS-1$
+            + "repository", GitTool.storedRemoteRefusal(shared, List.of(PUSH))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABranchesRecordIsTRIMMEDBeforeItIsJudged() throws Exception
+    {
+        // MEASURED on git 2.35.1, one shape at a time:
+        //   branches/b holding a single TAB   -> 'No such remote' (trimmed to nothing, ignored)
+        //   '   <url>' / '<url>   ' / '<url>\t' / '<url>\r\r' -> the URL, clean
+        // So padding around the record is not content, and judging it refused a repository over
+        // bytes no command prints. A lone tab was the sharpest case: git ignores the file entirely
+        // and we called the tab an unmaskable control character.
+        Repository repo = newRepository("git-branches-trimmed"); //$NON-NLS-1$
+        File legacy = new File(repo.getDirectory(), "branches"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "padded").toPath(), //$NON-NLS-1$
+            "\t\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        assertNull("a record that trims to nothing is a file git ignores - refusing over its " //$NON-NLS-1$
+            + "padding breaks a working repository", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // And padding around a HEALTHY url must not turn it into a refusal either.
+        Files.write(new File(legacy, "padded").toPath(), //$NON-NLS-1$
+            ("  https://" + HOST + "/team/repo.git  \n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("nor may padding around a healthy URL", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+
+        // Positive control: the trimming must not swallow the thing this check exists for.
+        Files.write(new File(legacy, "padded").toPath(), //$NON-NLS-1$
+            ("  " + poisonedUrl(SPACE) + "  \n").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("a poisoned URL is still refused with padding around it - otherwise this " //$NON-NLS-1$
+            + "trimming would be a way past the check", //$NON-NLS-1$
+            GitTool.storedRemoteRefusal(repo, List.of(PUSH)));
+    }
+
+    @Test
+    public void testEveryLineOfARemotesFileIsStillJudged() throws Exception
+    {
+        // The other half of the branches/ change, and nothing pinned it: a remotes/ file's
+        // URL:/Push:/Pull: lines are ALL live, so limiting that format to one record the way
+        // branches/ is limited would be a real miss. An accidental single limit for both
+        // directories would otherwise have passed every existing test.
+        Repository repo = newRepository("git-remotes-all-lines"); //$NON-NLS-1$
+        File legacy = new File(repo.getDirectory(), "remotes"); //$NON-NLS-1$
+        assertTrue("fixture: the legacy directory must exist", //$NON-NLS-1$
+            legacy.mkdirs() || legacy.isDirectory());
+        Files.write(new File(legacy, "multi").toPath(), //$NON-NLS-1$
+            ("URL: https://" + HOST + "/clean.git\nPush: " + poisonedUrl(SPACE) + "\n") //$NON-NLS-1$ //$NON-NLS-2$
+                .getBytes(StandardCharsets.UTF_8));
+
+        String refusal = GitTool.storedRemoteRefusal(repo, List.of(PUSH));
+
+        assertNotNull("a remotes/ file's later lines are live - 'git remote get-url' prints what " //$NON-NLS-1$
+            + "stands on them - so a credential on the SECOND line must still be judged", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the file: " + refusal, refusal.contains("multi")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ---- what must STAY silent: the places git does NOT read ----
     //
     // Every fixture below carries a value that WOULD be refused if it were judged. That is the
@@ -1888,15 +1981,19 @@ public class GitToolStoredRemoteTest
             refusal);
         assertTrue("the refusal must name the file at fault: " + refusal, //$NON-NLS-1$
             refusal.contains("commondir")); //$NON-NLS-1$
-        assertTrue("...and the repair, which is the FILE and not the config repair: " + refusal, //$NON-NLS-1$
-            refusal.contains("repair that file itself")); //$NON-NLS-1$
-        assertTrue("...stated as what the file MUST be, not as what it currently is - the old " //$NON-NLS-1$
-            + "wording claimed it 'holds one line' in the very message saying it is empty: " //$NON-NLS-1$
-            + refusal, refusal.contains("must be a regular file whose contents are the path")); //$NON-NLS-1$
+        // The fixture points at nothing, and this tool cannot tell "the pointer is wrong" from
+        // "the pointer is right and the target is gone" - a dangling link resolves to nothing just
+        // as a wrong path does. So the repair must name BOTH, or an operator with a vanished share
+        // is sent to edit a file that is correct.
+        assertTrue("the repair must offer the pointer as one possibility: " + refusal, //$NON-NLS-1$
+            refusal.contains("may name the wrong place")); //$NON-NLS-1$
+        assertTrue("...and the missing target as the other: " + refusal, //$NON-NLS-1$
+            refusal.contains("what it names may be gone")); //$NON-NLS-1$
+        assertTrue("...telling them to look at the target FIRST, since it needs no edit: " //$NON-NLS-1$
+            + refusal, refusal.contains("Look at the target first")); //$NON-NLS-1$
         assertFalse("...and it must not demand ONE LINE, which this code does not require: only " //$NON-NLS-1$
             + "TRAILING terminators are stripped, so a path with a newline inside it resolves - " //$NON-NLS-1$
-            + "and on POSIX that is a legal filename. Advising 'one line' would have an operator " //$NON-NLS-1$
-            + "replace a merely unreachable pointer with a permanently wrong one: " + refusal, //$NON-NLS-1$
+            + "and on POSIX that is a legal filename: " + refusal, //$NON-NLS-1$
             refusal.contains("exactly one line")); //$NON-NLS-1$
         assertTrue("...and it must warn AGAINST the command that does not fix this, or an " //$NON-NLS-1$
             + "operator follows the obvious one and gets the same refusal back: " + refusal, //$NON-NLS-1$
@@ -2058,6 +2155,13 @@ public class GitToolStoredRemoteTest
     }
 
     @Test
+    public void testTheMissingTargetRefusalIsPinnedLiterally()
+    {
+        assertEquals(PIN_MISSING_TARGET,
+            GitTool.commonDirRefusal(GitCommonDirectory.Fault.NOT_A_DIRECTORY));
+    }
+
+    @Test
     public void testTheOrdinaryRefusalIsPinnedLiterally()
     {
         assertEquals(PIN_ORDINARY, GitTool.commonDirRefusal(GitCommonDirectory.Fault.EMPTY));
@@ -2083,9 +2187,10 @@ public class GitToolStoredRemoteTest
         for (GitCommonDirectory.Fault fault : GitCommonDirectory.Fault.values())
         {
             if (fault == GitCommonDirectory.Fault.LAYOUT_UNREADABLE
-                || fault == GitCommonDirectory.Fault.TARGET_UNREADABLE)
+                || fault == GitCommonDirectory.Fault.TARGET_UNREADABLE
+                || fault == GitCommonDirectory.Fault.NOT_A_DIRECTORY)
             {
-                continue;
+                continue; // each of these has a repair of its own, pinned separately
             }
             assertEquals(fault + " must take the ordinary shape, differing only in its reason", //$NON-NLS-1$
                 PIN_ORDINARY.replace(GitCommonDirectory.Fault.EMPTY.reason(), fault.reason()),
@@ -2129,6 +2234,23 @@ public class GitToolStoredRemoteTest
             + "POINTS AT is what could not be examined. Check that directory in a terminal - that it " //$NON-NLS-1$
             + "exists, and that this user may read it - before editing the pointer, which may need no " //$NON-NLS-1$
             + "change at all. This tool logs only the failure's exception types."; //$NON-NLS-1$
+
+    private static final String PIN_MISSING_TARGET =
+        "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
+            + "pointer to the shared repository holding the configuration and the remotes - could not " //$NON-NLS-1$
+            + "be resolved to a directory. Without it this tool cannot read the shared configuration, " //$NON-NLS-1$
+            + "and cannot even tell whether the per-worktree one is switched on, so the effective set " //$NON-NLS-1$
+            + "of remotes cannot be established at all and the operation is refused instead of run " //$NON-NLS-1$
+            + "blind. The fault: what it names is not a directory. This tool refused rather than run " //$NON-NLS-1$
+            + "blind; whether native git can use this repository is not something it determines - check " //$NON-NLS-1$
+            + "that in a terminal. Two things can put you here and this tool cannot tell them apart, so " //$NON-NLS-1$
+            + "check both: the 'commondir' file may name the wrong place - it holds the path to the " //$NON-NLS-1$
+            + "shared repository, absolute or relative to the directory the file sits in ('../..' is " //$NON-NLS-1$
+            + "what 'git worktree add' writes) - or it may be right and what it names may be gone, " //$NON-NLS-1$
+            + "which a dangling link or an unmounted share will do. Look at the target first; it needs " //$NON-NLS-1$
+            + "no edit if it is simply missing. Do NOT reach for 'git worktree repair' - measured on " //$NON-NLS-1$
+            + "git 2.35.1, it does not touch this file at all. This tool logs only the failure's " //$NON-NLS-1$
+            + "exception types."; //$NON-NLS-1$
 
     private static final String PIN_ORDINARY =
         "This is a linked git worktree, and the 'commondir' file in its git directory - the " //$NON-NLS-1$
