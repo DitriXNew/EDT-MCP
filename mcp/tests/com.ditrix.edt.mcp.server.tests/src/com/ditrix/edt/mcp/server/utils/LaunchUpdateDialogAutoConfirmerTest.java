@@ -858,6 +858,38 @@ public class LaunchUpdateDialogAutoConfirmerTest
     }
 
     @Test
+    public void testButtonNotFoundRefusalDoesNotAdviseRetryingTheSameCall()
+    {
+        // A caller that already passed reassign and hit an unreadable button bar must not be sent
+        // back to the same parameter — that loops forever (review of #435).
+        String policy = LaunchUpdateDialogAutoConfirmer.portConflictError(null,
+            LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
+        assertTrue("a policy refusal offers the knob",
+            policy.contains("standaloneServerPortConflict='reassign'"));
+
+        String miss = LaunchUpdateDialogAutoConfirmer.portConflictError(null,
+            LaunchUpdateDialogAutoConfirmer.PORT_REASON_BUTTON_NOT_FOUND);
+        assertFalse("a button-miss refusal must NOT tell the caller to repeat the same call",
+            miss.contains("re-call with"));
+        assertTrue("it must say the button could not be located",
+            miss.contains("could not be located"));
+        assertTrue("and that repeating will not help", miss.contains("will not help"));
+    }
+
+    @Test
+    public void testWatchKeepsWhyThePortConflictWasRefused()
+    {
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordPortButtonMissForTest("8429 - HTTP gate port");
+            assertTrue(watch.portConflicted());
+            assertEquals(LaunchUpdateDialogAutoConfirmer.PORT_REASON_BUTTON_NOT_FOUND,
+                watch.portConflictReason());
+        }
+    }
+
+    @Test
     public void testPortConflictIsNotRecordedIntoAClosedWindow()
     {
         LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =

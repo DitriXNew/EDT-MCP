@@ -1576,7 +1576,7 @@ public final class LaunchLifecycleUtils
                 {
                     return Optional.of("Pre-launch database update failed: " //$NON-NLS-1$
                         + LaunchUpdateDialogAutoConfirmer.portConflictError(
-                            watch.portConflictDetail()));
+                            watch.portConflictDetail(), watch.portConflictReason()));
                 }
                 // The cancel can ABORT the update instead of letting it return a state. The reason
                 // is in the window, and it beats the generic "Database update failed" the outer
@@ -1597,7 +1597,8 @@ public final class LaunchLifecycleUtils
             if (watch.portConflicted())
             {
                 return Optional.of("Pre-launch database update failed: " //$NON-NLS-1$
-                    + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail()));
+                    + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
+                        watch.portConflictReason()));
             }
             Optional<String> declined = declinedByCancelledConflict(policy, watch);
             if (declined.isPresent())

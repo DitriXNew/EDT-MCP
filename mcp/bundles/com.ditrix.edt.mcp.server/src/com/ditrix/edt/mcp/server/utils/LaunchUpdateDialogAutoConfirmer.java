@@ -458,6 +458,20 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static final List<ConflictArm> CONFLICT_ARMS = new ArrayList<>();
 
+    /**
+     * {@link ConflictWatch#portConflictReason()} value: the call's own policy asked to refuse the
+     * port conflict (the default), so retrying with {@code reassign} is a meaningful next step.
+     */
+    public static final String PORT_REASON_POLICY = "policy"; //$NON-NLS-1$
+
+    /**
+     * {@link ConflictWatch#portConflictReason()} value: {@code reassign} WAS asked for, but the
+     * "Find free port" button could not be located by label, so the dialog was cancelled rather
+     * than pressed blind. Retrying the same call cannot help — the caller must be told that,
+     * instead of being pointed back at the parameter it already used.
+     */
+    public static final String PORT_REASON_BUTTON_NOT_FOUND = "port-button-not-found"; //$NON-NLS-1$
+
     /** {@link #lastConflictCancelReason()} value: the call's own policy asked to cancel. */
     public static final String CANCEL_REASON_POLICY = "policy"; //$NON-NLS-1$
 
@@ -2194,7 +2208,8 @@ public final class LaunchUpdateDialogAutoConfirmer
                     return;
                 }
             }
-            notePortConflict(detail);
+            notePortConflict(detail, reassignAskedFor()
+                ? PORT_REASON_BUTTON_NOT_FOUND : PORT_REASON_POLICY);
             Button cancel = findButtonByLabel(shell, 0, PORT_CONFLICT_CANCEL_BUTTONS);
             Activator.logError("Standalone server port conflict during an unattended MCP call: " //$NON-NLS-1$
                 + (detail == null ? "<the dialog carried no readable detail>" : detail) //$NON-NLS-1$
@@ -2211,6 +2226,35 @@ public final class LaunchUpdateDialogAutoConfirmer
         catch (RuntimeException e)
         {
             Activator.logError("Failed to answer the standalone-server port-conflict dialog", e); //$NON-NLS-1$
+            // Our own failure must not become the hang this matcher exists to prevent: the modal is
+            // application-modal, so leaving it open blocks this call AND every later one. Closing it
+            // is the same non-writing answer the normal path gives (JFace maps a close to Cancel).
+            closeQuietly(shell);
+        }
+    }
+
+    /** Whether any outstanding arm asked for {@code reassign} — picks the refusal REASON. */
+    private static boolean reassignAskedFor()
+    {
+        synchronized (LOCK)
+        {
+            return PORT_CONFLICT_ARMS.contains(StandaloneServerPortConflictPolicy.REASSIGN);
+        }
+    }
+
+    /** Best-effort close of a still-open dialog shell; never throws. */
+    private static void closeQuietly(Shell shell)
+    {
+        try
+        {
+            if (shell != null && !shell.isDisposed())
+            {
+                shell.close();
+            }
+        }
+        catch (RuntimeException ignored)
+        {
+            // nothing left to do - the dialog is either gone or unreachable
         }
     }
 
@@ -2389,14 +2433,18 @@ public final class LaunchUpdateDialogAutoConfirmer
         return named.isEmpty() ? new ArrayList<>(CONFLICT_WATCHES) : named;
     }
 
-    /** Records an auto-cancelled port conflict into the windows it belongs to. */
-    private static void notePortConflict(String detail)
+    /**
+     * Records an auto-cancelled port conflict into the windows it belongs to, with WHY it was
+     * cancelled — the caller turns that into advice, and "retry with reassign" is wrong advice for
+     * a call that already asked for reassign and hit an unreadable button bar.
+     */
+    private static void notePortConflict(String detail, String reason)
     {
         synchronized (LOCK)
         {
             for (ConflictWatch watch : portConflictTargets(detail))
             {
-                watch.recordPortConflict(detail);
+                watch.recordPortConflict(detail, reason);
             }
         }
     }
@@ -2415,15 +2463,35 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static String portConflictError(String detail)
     {
+        return portConflictError(detail, PORT_REASON_POLICY);
+    }
+
+    /**
+     * Same message, told apart by WHY the conflict was refused. A refusal that happened because
+     * the "Find free port" button could not be located must NOT advise re-calling with
+     * {@code reassign}: that call already did, and repeating it reproduces the same refusal.
+     *
+     * @param detail the busy-port summary from the dialog (may be {@code null})
+     * @param reason {@link #PORT_REASON_POLICY} or {@link #PORT_REASON_BUTTON_NOT_FOUND}
+     * @return the message, never {@code null}
+     */
+    public static String portConflictError(String detail, String reason)
+    {
+        String tail = PORT_REASON_BUTTON_NOT_FOUND.equals(reason)
+            ? " standaloneServerPortConflict=reassign was requested, but EDT's 'Find free port' " //$NON-NLS-1$
+                + "button could not be located by label (an EDT build or locale this plugin does " //$NON-NLS-1$
+                + "not know), so the dialog was cancelled rather than pressed blind. Repeating the " //$NON-NLS-1$
+                + "call will not help: free those ports, or move the server once from the EDT UI." //$NON-NLS-1$
+            : " EDT offered to move the server to free ports; this call declined, because that " //$NON-NLS-1$
+                + "rewrites the server configuration and changes the address its clients connect " //$NON-NLS-1$
+                + "to. Free those ports and retry — most often the holder is an ibsrv process left " //$NON-NLS-1$
+                + "over from an earlier EDT session (stop it, or stop the server in EDT's Servers " //$NON-NLS-1$
+                + "view). To let EDT move the server instead, re-call with " //$NON-NLS-1$
+                + "standaloneServerPortConflict='reassign'."; //$NON-NLS-1$
         return "the standalone server could not start because its network ports are already " //$NON-NLS-1$
             + "in use" //$NON-NLS-1$
             + (detail == null ? "." : ": " + detail) //$NON-NLS-1$ //$NON-NLS-2$
-            + " EDT offered to move the server to free ports; this call declined, because that " //$NON-NLS-1$
-            + "rewrites the server configuration and changes the address its clients connect " //$NON-NLS-1$
-            + "to. Free those ports and retry — most often the holder is an ibsrv process left " //$NON-NLS-1$
-            + "over from an earlier EDT session (stop it, or stop the server in EDT's Servers " //$NON-NLS-1$
-            + "view). To let EDT move the server instead, re-call with " //$NON-NLS-1$
-            + "standaloneServerPortConflict='reassign'."; //$NON-NLS-1$
+            + tail;
     }
 
     /**
@@ -2434,7 +2502,13 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     static void recordPortConflictForTest(String detail)
     {
-        notePortConflict(detail);
+        notePortConflict(detail, PORT_REASON_POLICY);
+    }
+
+    /** Test seam: records a port conflict cancelled because the reassign button was not found. */
+    static void recordPortButtonMissForTest(String detail)
+    {
+        notePortConflict(detail, PORT_REASON_BUTTON_NOT_FOUND);
     }
 
     /**
@@ -2560,6 +2634,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         private String reason;
         private boolean portConflict;
         private String portConflictDetail;
+        private String portConflictReason;
         private boolean portsReassigned;
         private String portReassignDetail;
 
@@ -2580,12 +2655,28 @@ public final class LaunchUpdateDialogAutoConfirmer
          * caller's own data question was declined", this one means "the server never started",
          * and only the second explains a cancellation nobody asked for.
          */
-        void recordPortConflict(String detail)
+        void recordPortConflict(String detail, String reason)
         {
             portConflict = true;
             if (detail != null && portConflictDetail == null)
             {
                 portConflictDetail = detail;
+            }
+            portConflictReason = reason;
+        }
+
+        /**
+         * Why the port conflict was refused: {@link #PORT_REASON_POLICY} (the call asked to) or
+         * {@link #PORT_REASON_BUTTON_NOT_FOUND} (it asked to move the server, but the button could
+         * not be located). Only meaningful when {@link #portConflicted()} is {@code true}.
+         *
+         * @return the reason token, or {@code null} when nothing was refused
+         */
+        public String portConflictReason()
+        {
+            synchronized (LOCK)
+            {
+                return portConflictReason;
             }
         }
 

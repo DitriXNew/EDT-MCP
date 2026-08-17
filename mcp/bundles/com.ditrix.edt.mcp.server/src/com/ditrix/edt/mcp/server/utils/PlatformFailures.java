@@ -66,12 +66,25 @@ public final class PlatformFailures
         Throwable current = failure;
         for (int depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++)
         {
+            // The status tree is consulted BEFORE the throwable's own message whenever that status
+            // HAS children: ApplicationException(IStatus) copies the root message into
+            // getMessage(), so trusting the exception first would again return the headline and
+            // never the child that names the cause.
+            IStatus status = statusOf(current);
+            if (hasChildren(status))
+            {
+                String fromChildren = statusMessage(status, 0);
+                if (fromChildren != null)
+                {
+                    return fromChildren;
+                }
+            }
             String own = trimToNull(current.getMessage());
             if (own != null)
             {
                 return own;
             }
-            String fromStatus = statusMessage(statusOf(current), 0);
+            String fromStatus = statusMessage(status, 0);
             if (fromStatus != null)
             {
                 return fromStatus;
@@ -97,8 +110,15 @@ public final class PlatformFailures
             + (severity == null ? "" : "; status severity: " + severity) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
+    /** Whether the status carries child statuses worth searching before its own headline. */
+    private static boolean hasChildren(IStatus status)
+    {
+        return status != null && status.getChildren() != null && status.getChildren().length > 0;
+    }
+
     /**
-     * First non-blank message in a status tree: the status's own message, then its children
+     * First non-blank message in a status tree: its children (depth-first, bounded), then the
+     * status's own message
      * (depth-first, bounded), then the message of the exception the status carries.
      *
      * @param status the status to search (may be {@code null})
@@ -111,11 +131,10 @@ public final class PlatformFailures
         {
             return null;
         }
-        String own = trimToNull(status.getMessage());
-        if (own != null)
-        {
-            return own;
-        }
+        // CHILDREN FIRST when there are any. EDT wraps its results in a MultiStatus whose own
+        // message is the generic headline ("Database update failed") while the reason — the busy
+        // port, the rejected object — sits in a child. Returning the root first made this helper
+        // hand back exactly the uninformative text it exists to replace.
         IStatus[] children = status.getChildren();
         if (children != null)
         {
@@ -127,6 +146,11 @@ public final class PlatformFailures
                     return fromChild;
                 }
             }
+        }
+        String own = trimToNull(status.getMessage());
+        if (own != null)
+        {
+            return own;
         }
         Throwable carried = status.getException();
         // Only the carried exception's OWN message: recursing into describe() here could bounce

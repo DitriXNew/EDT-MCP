@@ -52,6 +52,27 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testSpecificChildBeatsTheGenericWrapperHeadline()
+    {
+        // The shape EDT actually produces: a MultiStatus whose own message is the headline the tool
+        // already prints, with the reason in a child. Returning the headline would make this helper
+        // hand back exactly the text it exists to replace.
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "Database update failed", null);
+        status.add(new Status(IStatus.ERROR, PLUGIN, "port 8429 is already in use"));
+        assertEquals("the child names the cause and must win", "port 8429 is already in use",
+            PlatformFailures.describe(new ApplicationException(status)));
+    }
+
+    @Test
+    public void testWrapperHeadlineIsStillUsedWhenNoChildCarriesText()
+    {
+        MultiStatus status = new MultiStatus(PLUGIN, 0, "Database update failed", null);
+        status.add(new Status(IStatus.ERROR, PLUGIN, ""));
+        assertEquals("with nothing better available the headline is the answer",
+            "Database update failed", PlatformFailures.describe(new ApplicationException(status)));
+    }
+
+    @Test
     public void testStatusExceptionMessageIsUsedWhenTheStatusItselfIsBlank()
     {
         IStatus status = new Status(IStatus.ERROR, PLUGIN, "", new IllegalStateException("no shell"));

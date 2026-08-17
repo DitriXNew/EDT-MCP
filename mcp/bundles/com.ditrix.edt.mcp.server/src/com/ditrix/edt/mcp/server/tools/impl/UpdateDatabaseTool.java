@@ -561,6 +561,26 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     /**
+     * The extra sentence a preview and a consent prompt need when the call may ALSO re-address the
+     * standalone server. Approving "an irreversible infobase update" must not silently cover a
+     * rewrite of the server configuration: that outlives this call and changes the address every
+     * client of that server uses.
+     *
+     * @param portPolicy the policy this call runs with (may be {@code null})
+     * @return a sentence to append, or an empty string when nothing extra can happen
+     */
+    private static String portConflictConsentNote(StandaloneServerPortConflictPolicy portPolicy)
+    {
+        if (portPolicy != StandaloneServerPortConflictPolicy.REASSIGN)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return " If this is a standalone-server application and its ports are busy, " //$NON-NLS-1$
+            + "standaloneServerPortConflict=reassign additionally lets EDT move the server to free " //$NON-NLS-1$
+            + "ports and REWRITE its configuration - the address its clients connect to then changes."; //$NON-NLS-1$
+    }
+
+    /**
      * Validates the directly supplied target arguments used when no launch
      * configuration name is given. Returns a ready {@link ToolResult#error} JSON
      * payload describing the first missing argument, or {@code null} when the
@@ -651,7 +671,7 @@ public class UpdateDatabaseTool implements IMcpTool
             if (!confirm)
             {
                 return buildPreviewResult(projectName, applicationId, application, updateType,
-                    stateBefore, terminateRunningClients, externalChanges);
+                    stateBefore, terminateRunningClients, externalChanges, portPolicy);
             }
 
             // Destructive-operation consent gate: the LAST check before the (irreversible) infobase
@@ -663,7 +683,8 @@ public class UpdateDatabaseTool implements IMcpTool
                 "This applies a " + updateType.name() //$NON-NLS-1$
                     + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
                     + "' (project " + projectName + "). This mutates the infobase and is irreversible." //$NON-NLS-1$ //$NON-NLS-2$
-                    + externalChangesConsentNote(externalChanges),
+                    + externalChangesConsentNote(externalChanges)
+                    + portConflictConsentNote(portPolicy),
                 1, java.util.Collections.singletonList(application.getName()));
             DestructiveConsentGate.ConsentDecision consentDecision =
                 DestructiveConsentGate.getInstance().requireConsent(NAME, consentPreview);
@@ -788,7 +809,8 @@ public class UpdateDatabaseTool implements IMcpTool
         catch (ApplicationException e)
         {
             Activator.logError("Error updating database for application: " + applicationId, e); //$NON-NLS-1$
-            return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient);
+            return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient,
+                portsReassigned);
         }
         catch (Exception e)
         {
@@ -885,7 +907,8 @@ public class UpdateDatabaseTool implements IMcpTool
         String projectName, String applicationId)
     {
         return ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail())
+            + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
+                watch.portConflictReason())
             + " The infobase was NOT changed.") //$NON-NLS-1$
             .put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId)
@@ -899,7 +922,8 @@ public class UpdateDatabaseTool implements IMcpTool
     private static String buildPreviewResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller; a parameter object would only move the list
             IApplication application, ApplicationUpdateType updateType,
             ApplicationUpdateState stateBefore, boolean terminateRunningClients,
-            ExternalInfobaseChangesPolicy externalChanges)
+            ExternalInfobaseChangesPolicy externalChanges,
+            StandaloneServerPortConflictPolicy portPolicy)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
@@ -918,6 +942,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     ? " It will first terminate any 1C client this EDT launched on the infobase." //$NON-NLS-1$
                     : "") //$NON-NLS-1$
                 + externalChangesConsentNote(externalChanges)
+                + portConflictConsentNote(portPolicy)
                 + " Re-call with confirm=true to apply it.") //$NON-NLS-1$
             .toJson();
     }
@@ -1003,6 +1028,19 @@ public class UpdateDatabaseTool implements IMcpTool
     static String buildApplicationErrorResult(ApplicationException e, String projectName,
             String applicationId, boolean terminatedClient)
     {
+        return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient, false);
+    }
+
+    /**
+     * Same failure payload, additionally stating that EDT had ALREADY moved the standalone server
+     * to free ports before the update failed for another reason. That re-address outlives this
+     * call, so it is reported on the failure path too — not only when everything worked.
+     *
+     * @param portsReassigned whether the server was re-addressed during this call
+     */
+    static String buildApplicationErrorResult(ApplicationException e, String projectName,
+            String applicationId, boolean terminatedClient, boolean portsReassigned)
+    {
         String internalInfoHint = describeInternalInfoHint(e);
         String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
         // PlatformFailures, not getMessage(): EDT reports failures as IStatus and only wraps them,
@@ -1010,12 +1048,21 @@ public class UpdateDatabaseTool implements IMcpTool
         // generic while the reason sits in the status tree - and "Database update failed: " with
         // nothing after it tells the caller nothing at all.
         ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + PlatformFailures.describe(e) + describeInfobaseHolder(applicationId) + hint);
+            + PlatformFailures.describe(e) + describeInfobaseHolder(applicationId) + hint
+            + (portsReassigned
+                ? " NOTE: before this failure EDT had already moved the standalone server to free " //$NON-NLS-1$
+                    + "ports and rewritten its configuration " //$NON-NLS-1$
+                    + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
+                : "")); //$NON-NLS-1$
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)
         {
             errorResult.put(KEY_TERMINATED_CLIENT, true);
+        }
+        if (portsReassigned)
+        {
+            errorResult.put(KEY_PORTS_REASSIGNED, true);
         }
 
         // Try to get additional error details

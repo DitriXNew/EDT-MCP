@@ -340,7 +340,8 @@ public class RunYaxunitTestsTool implements IMcpTool
         // data was declined.
         if (conflicts.portConflicted())
         {
-            return LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail());
+            return LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
+                conflicts.portConflictReason());
         }
         if (!conflicts.cancelled())
         {

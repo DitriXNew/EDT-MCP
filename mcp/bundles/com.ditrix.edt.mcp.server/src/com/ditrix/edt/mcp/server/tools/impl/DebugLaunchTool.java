@@ -937,7 +937,8 @@ public class DebugLaunchTool implements IMcpTool
         if (conflicts.portConflicted())
         {
             String message =
-                LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail());
+                LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
+                    conflicts.portConflictReason());
             recordAsyncFailure(config, message);
             Activator.logError(ERR_ASYNC_PREFIX + message, null);
             return message;
