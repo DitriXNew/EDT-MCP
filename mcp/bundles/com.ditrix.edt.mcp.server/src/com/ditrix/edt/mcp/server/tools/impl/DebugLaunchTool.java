@@ -891,8 +891,10 @@ public class DebugLaunchTool implements IMcpTool
     }
 
     /**
-     * The actionable message for a launch whose external-changes dialog was cancelled while the
-     * launch delegate performed the DB update, or {@code null} when nothing was cancelled.
+     * The actionable message for a launch that was stopped by a modal this plugin auto-answered —
+     * a standalone-server port conflict (the server never started) or an external-changes dialog
+     * cancelled while the launch delegate performed the DB update — or {@code null} when neither
+     * happened.
      *
      * <p>Also RECORDS it, so {@code debug_status} can report an outcome that happened long after
      * this Job's caller received its "launching" answer.
@@ -905,7 +907,23 @@ public class DebugLaunchTool implements IMcpTool
     private static String declinedConflictMessage(ILaunchConfiguration config,
         ExternalInfobaseChangesPolicy policy, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts)
     {
-        if (conflicts == null || !conflicts.cancelled())
+        if (conflicts == null)
+        {
+            return null;
+        }
+        // A standalone-server launch STARTS its server first, so a busy port stops it before the
+        // DB update is even reached. That modal is auto-cancelled (it would otherwise hang the
+        // launch Job forever), and EDT then reports a bare cancellation — checked first because it
+        // is the earlier, more specific cause: nothing about the caller's data was declined.
+        if (conflicts.portConflicted())
+        {
+            String message =
+                LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail());
+            recordAsyncFailure(config, message);
+            Activator.logError(ERR_ASYNC_PREFIX + message, null);
+            return message;
+        }
+        if (!conflicts.cancelled())
         {
             return null;
         }

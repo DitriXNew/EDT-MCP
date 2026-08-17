@@ -308,9 +308,10 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
-     * The actionable message for a launch window whose external-changes dialog was cancelled, or
-     * {@code null} when nothing was cancelled (or no window was opened because the caller armed no
-     * policy).
+     * The actionable message for a launch window in which this plugin auto-answered a blocking
+     * modal that stopped the run — a standalone-server port conflict (the server never started) or
+     * a cancelled external-changes dialog — or {@code null} when neither happened (or no window
+     * was opened because the caller armed no policy).
      *
      * <p>This is the standalone-server case: {@code prepareForFreshLaunch} defers that
      * application's DB update to EDT's launch delegate, so the launch window is the only place the
@@ -326,7 +327,19 @@ public class RunYaxunitTestsTool implements IMcpTool
     private static String declinedConflict(LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
         ExternalInfobaseChangesPolicy policy)
     {
-        if (conflicts == null || !conflicts.cancelled())
+        if (conflicts == null)
+        {
+            return null;
+        }
+        // The same launch window is where a standalone-server START fails on a busy port: that
+        // modal is auto-cancelled (it would hang the run), and EDT then reports only a bare
+        // cancellation. Checked first - it is the earlier cause, and nothing about the caller's
+        // data was declined.
+        if (conflicts.portConflicted())
+        {
+            return LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail());
+        }
+        if (!conflicts.cancelled())
         {
             return null;
         }

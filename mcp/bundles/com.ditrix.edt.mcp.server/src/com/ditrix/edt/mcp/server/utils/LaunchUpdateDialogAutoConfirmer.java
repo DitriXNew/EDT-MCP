@@ -258,6 +258,50 @@ public final class LaunchUpdateDialogAutoConfirmer
             "\u0418\u043C\u043F\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C"))); //$NON-NLS-1$
 
     /**
+     * English title of EDT's standalone-server port-conflict modal
+     * ({@code StandaloneServerUiDialogPortConflictDecisionPrompter_Title}). It pops from
+     * {@code StandaloneServerBehaviourDelegate.verifyServerPorts} whenever the standalone
+     * server is about to START and one of its configured ports (HTTP gate / debug server /
+     * SSH gate) is already bound — most often by an ibsrv left over from a previous EDT
+     * session. EVERY MCP operation that starts a standalone server reaches it: the launch
+     * tools, and {@code update_database} on a {@code ServerApplication.*} target (its
+     * publish starts the server first).
+     */
+    static final String PORT_CONFLICT_TITLE = "Standalone server port conflict"; //$NON-NLS-1$
+
+    /**
+     * Russian title of the same port-conflict modal ({@code messages_ru.properties}:
+     * "Конфликт портов автономного сервера"), copied verbatim from EDT's own
+     * {@code com.e1c.g5.v8.dt.platform.standaloneserver.wst.ui} bundle and kept
+     * unicode-escaped (no raw Cyrillic in source) so it compiles identically whatever
+     * encoding Tycho picks.
+     */
+    static final String PORT_CONFLICT_TITLE_RU =
+        "\u041A\u043E\u043D\u0444\u043B\u0438\u043A\u0442 \u043F\u043E\u0440\u0442\u043E\u0432 " //$NON-NLS-1$
+            + "\u0430\u0432\u0442\u043E\u043D\u043E\u043C\u043D\u043E\u0433\u043E " //$NON-NLS-1$
+            + "\u0441\u0435\u0440\u0432\u0435\u0440\u0430"; //$NON-NLS-1$
+
+    /**
+     * Every shipped localized title of the standalone-server port-conflict modal (English /
+     * Russian — the only NL variants EDT ships). Exact whole-title compare.
+     */
+    static final Set<String> PORT_CONFLICT_TITLES = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList(PORT_CONFLICT_TITLE, PORT_CONFLICT_TITLE_RU)));
+
+    /**
+     * Localized labels of the port-conflict modal's "Cancel" button
+     * ({@code StandaloneServerUiDialogPortConflictDecisionPrompter_Button_cancel},
+     * "Отменить") — the answer this filter presses. The OTHER button ("Find free port" /
+     * "Найти свободный порт") is the dialog's DEFAULT, and it is never pressed blind: it
+     * makes EDT pick new ports and REWRITE the server's {@code config.yaml}, changing the
+     * address every existing client of that server is bookmarked against. Cancelling writes
+     * nothing and turns the hang into a failure the caller can act on.
+     */
+    static final Set<String> PORT_CONFLICT_CANCEL_BUTTONS = Collections.unmodifiableSet(
+        new LinkedHashSet<>(Arrays.asList("Cancel", //$NON-NLS-1$
+            "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C"))); //$NON-NLS-1$
+
+    /**
      * English message-body prefix of EDT's "Debug session already exists" launch
      * modal (status code {@code 1003}, handler {@code DebugSessionCheckStatusHandler}).
      * The full text is "Debug session for project \"{0}\" and application \"{1}\" has
@@ -328,6 +372,13 @@ public final class LaunchUpdateDialogAutoConfirmer
     /** Cap on the widget-tree walk depth when reading a dialog's message body. */
     private static final int MAX_BODY_SCAN_DEPTH = 6;
 
+    /**
+     * Cap on the port-conflict detail carried into an error message
+     * ({@link #summarizePortConflictText}) — it is quoted inside a single tool error, so a
+     * pathological dialog must not turn one failure into a wall of text.
+     */
+    private static final int MAX_PORT_CONFLICT_DETAIL_CHARS = 400;
+
     private static final Object LOCK = new Object();
 
     /**
@@ -357,6 +408,21 @@ public final class LaunchUpdateDialogAutoConfirmer
      * {@link #arm(boolean, boolean, boolean)}.
      */
     private static int restructureArmCount;
+
+    /**
+     * Reentrant arm count for the standalone-server port-conflict TITLE matcher
+     * ({@link #PORT_CONFLICT_TITLES}).
+     *
+     * <p><b>Not independently gated, on purpose.</b> Every other matcher answers a question
+     * about the caller's DATA, so each has an opt-out; this one answers a question about the
+     * MACHINE ("port 8429 is taken — shall I move the server?"), and its only auto-answer is
+     * the one that writes nothing (Cancel). There is therefore no window in which an armed
+     * caller would rather hang on it, so it is armed by every {@code arm} that arms anything
+     * — including the launch paths, which reach this modal through the very same
+     * standalone-server start. Left unarmed it is a guaranteed hang: the modal is
+     * application-modal, no MCP call can clear it, and every later call queues behind it.
+     */
+    private static int portConflictArmCount;
 
     /**
      * Outstanding arms of the external-changes conflict matcher — one entry per {@code arm}
@@ -421,6 +487,18 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean isRestructureTitle(String shellTitle)
     {
         return shellTitle != null && RESTRUCTURE_TITLES.contains(shellTitle);
+    }
+
+    /**
+     * Pure decision (and test seam): is the given shell title EDT's standalone-server
+     * port-conflict modal ({@link #PORT_CONFLICT_TITLES}, "Standalone server port conflict" /
+     * "Конфликт портов автономного сервера")? Raised while the standalone server is being
+     * STARTED — which every launch of, and every {@code update_database} against, a
+     * {@code ServerApplication.*} target does — and completed here by its Cancel button.
+     */
+    static boolean isPortConflictTitle(String shellTitle)
+    {
+        return shellTitle != null && PORT_CONFLICT_TITLES.contains(shellTitle);
     }
 
     /**
@@ -918,6 +996,11 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount++;
             }
+            // Armed by EVERY arm (the early return above already proved this call arms
+            // something): the port-conflict modal blocks the standalone-server START that
+            // the launch paths and update_database alike depend on, and its auto-answer
+            // writes nothing — see portConflictArmCount.
+            portConflictArmCount++;
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName),
@@ -1009,6 +1092,12 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount--;
             }
+            // Mirrors the unconditional increment in arm(...) — same early return above, so
+            // every arm has exactly one matching disarm here.
+            if (portConflictArmCount > 0)
+            {
+                portConflictArmCount--;
+            }
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.remove(new ConflictArm(trimToNull(infobaseName),
@@ -1075,7 +1164,7 @@ public final class LaunchUpdateDialogAutoConfirmer
                 filterDisplay = null;
             }
             boolean anyArmed = updateArmCount > 0 || sessionArmCount > 0 || restructureArmCount > 0
-                || !CONFLICT_ARMS.isEmpty();
+                || portConflictArmCount > 0 || !CONFLICT_ARMS.isEmpty();
             if (anyArmed && filter == null)
             {
                 toInstall = createFilterListener();
@@ -1229,13 +1318,21 @@ public final class LaunchUpdateDialogAutoConfirmer
         final boolean session;
         final boolean restructure;
         final boolean conflict;
+        final boolean portConflict;
 
         ArmState(boolean update, boolean session, boolean restructure, boolean conflict)
+        {
+            this(update, session, restructure, conflict, false);
+        }
+
+        ArmState(boolean update, boolean session, boolean restructure, boolean conflict,
+            boolean portConflict)
         {
             this.update = update;
             this.session = session;
             this.restructure = restructure;
             this.conflict = conflict;
+            this.portConflict = portConflict;
         }
     }
 
@@ -1254,7 +1351,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             // The conflict matcher is armed per policy; an empty arm list means "not armed".
             return new ArmState(updateArmCount > 0, sessionArmCount > 0, restructureArmCount > 0,
-                conflictMatcherArmed());
+                conflictMatcherArmed(), portConflictArmCount > 0);
         }
     }
 
@@ -1278,10 +1375,11 @@ public final class LaunchUpdateDialogAutoConfirmer
         // session matcher is armed — otherwise it is needless work.
         boolean titleMatched = (armed.update && isTargetTitle(title))
             || (armed.restructure && isRestructureTitle(title))
-            || (armed.conflict && isConflictTitle(title));
+            || (armed.conflict && isConflictTitle(title))
+            || (armed.portConflict && isPortConflictTitle(title));
         boolean needBody = armed.session && !titleMatched;
         return shouldAutoConfirm(armed.update, armed.session, armed.restructure, armed.conflict,
-            title, needBody ? body.get() : null);
+            armed.portConflict, title, needBody ? body.get() : null);
     }
 
     /**
@@ -1399,6 +1497,29 @@ public final class LaunchUpdateDialogAutoConfirmer
     static boolean shouldAutoConfirm(boolean updateArmed, boolean sessionArmed, boolean restructureArmed,
         boolean conflictArmed, String title, String body)
     {
+        return shouldAutoConfirm(updateArmed, sessionArmed, restructureArmed, conflictArmed, false,
+            title, body);
+    }
+
+    /**
+     * Pure gating decision including the standalone-server port-conflict matcher. That branch
+     * fires only when {@code portConflictArmed} — which every {@code arm} sets, because the modal
+     * blocks the server START both the launch tools and {@code update_database} depend on and its
+     * auto-answer (Cancel) writes nothing. Its title is disjoint from the other three.
+     *
+     * @param updateArmed is the "Application update" TITLE matcher armed
+     * @param sessionArmed is the 1003 "Debug session already exists" BODY matcher armed
+     * @param restructureArmed is the DB-restructure TITLE matcher armed
+     * @param conflictArmed is the external-changes conflict TITLE matcher armed
+     * @param portConflictArmed is the standalone-server port-conflict TITLE matcher armed
+     * @param title the dialog shell title (may be {@code null})
+     * @param body the dialog message body (may be {@code null}; only consulted when
+     *            {@code sessionArmed})
+     * @return {@code true} when an armed matcher claims this dialog
+     */
+    static boolean shouldAutoConfirm(boolean updateArmed, boolean sessionArmed, boolean restructureArmed,
+        boolean conflictArmed, boolean portConflictArmed, String title, String body)
+    {
         if (updateArmed && isTargetTitle(title))
         {
             return true;
@@ -1408,6 +1529,10 @@ public final class LaunchUpdateDialogAutoConfirmer
             return true;
         }
         if (conflictArmed && isConflictTitle(title))
+        {
+            return true;
+        }
+        if (portConflictArmed && isPortConflictTitle(title))
         {
             return true;
         }
@@ -1683,6 +1808,15 @@ public final class LaunchUpdateDialogAutoConfirmer
                 shell.getDisplay().asyncExec(() -> pressConflictButton(shell));
                 return;
             }
+            // The standalone-server port-conflict modal is keyed on its own TITLE and completed
+            // by its LABELLED Cancel button — its DEFAULT button rewrites the server's port
+            // configuration, so it is never pressed blind. Deferred for the same reason as the
+            // conflict modal: the busy-port list is read from the dialog BODY.
+            if (isPortConflictTitle(safeShellText(shell)))
+            {
+                shell.getDisplay().asyncExec(() -> cancelPortConflictDialog(shell));
+                return;
+            }
             // Distinguish the two modals (the body walk is cheap and also drives the
             // per-dialog button choice + the log trail an unattended run leaves).
             boolean debugSessionDialog = isDebugSessionExistsBody(readDialogBody(shell));
@@ -1939,6 +2073,165 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
+     * Completes EDT's standalone-server port-conflict modal by CANCELLING it, and records the
+     * busy-port detail it carried so the failing call can explain itself.
+     *
+     * <p>The dialog offers exactly two answers, and only one of them is safe unattended:
+     * <ul>
+     *   <li><b>"Find free port"</b> (the DEFAULT button) makes EDT choose other ports and
+     *       REWRITE the server's {@code config.yaml}. That silently moves the server's address
+     *       — every client, published URL and bookmark against it then points at nothing — so
+     *       a call that was asked to update a database must not do it behind the caller's
+     *       back;</li>
+     *   <li><b>"Cancel"</b> writes nothing. EDT then fails the server start with its
+     *       "User has cancelled operation." status, which reaches the tool as a bare
+     *       cancellation — hence the detail recorded here, without which the caller would be
+     *       told only that something was cancelled.</li>
+     * </ul>
+     * Pressing the Cancel button BY LABEL rather than closing the shell keeps the answer
+     * correct if EDT reorders the button bar (the prompter maps a closed shell to whatever
+     * sits at index 1); {@link Shell#close()} stays the fallback when no labelled Cancel is
+     * found, so the call still cannot hang.
+     *
+     * <p>Runs on the UI thread; never throws onto it.
+     */
+    private static void cancelPortConflictDialog(Shell shell)
+    {
+        try
+        {
+            if (shell == null || shell.isDisposed())
+            {
+                return;
+            }
+            String detail = summarizePortConflictText(collectDialogText(shell));
+            notePortConflict(detail);
+            Button cancel = findButtonByLabel(shell, 0, PORT_CONFLICT_CANCEL_BUTTONS);
+            Activator.logError("Standalone server port conflict during an unattended MCP call: " //$NON-NLS-1$
+                + (detail == null ? "<the dialog carried no readable detail>" : detail) //$NON-NLS-1$
+                + " — cancelling EDT's port-conflict dialog (its default 'Find free port' " //$NON-NLS-1$
+                + "would rewrite the server configuration)", null); //$NON-NLS-1$
+            if (cancel != null)
+            {
+                pressButton(cancel);
+                return;
+            }
+            shell.close();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Failed to cancel the standalone-server port-conflict dialog", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Reduces the port-conflict dialog's collected text to one bounded line — EDT renders the
+     * header and one "- &lt;port&gt; - &lt;role&gt;" line per busy port, and the caller puts the
+     * result inside a single error message.
+     *
+     * <p>Pure (test seam) and deliberately NOT a parser: the port lines are localized and
+     * formatted by EDT, so the text is normalized, not interpreted — nothing here can claim a
+     * port number the dialog did not state.
+     *
+     * @param dialogText the collected dialog text (may be {@code null})
+     * @return the one-line summary, or {@code null} when there was nothing readable
+     */
+    static String summarizePortConflictText(String dialogText)
+    {
+        if (dialogText == null)
+        {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        boolean previousWasBullet = false;
+        for (String rawLine : dialogText.split("\n")) //$NON-NLS-1$
+        {
+            String line = rawLine.trim();
+            if (line.isEmpty() || isPortConflictTitle(line))
+            {
+                continue;
+            }
+            // EDT renders one "- <port> - <role>" bullet per busy port. Flattened to a single
+            // line the bullet dashes read as sentence dashes, so the leading marker is dropped
+            // and consecutive bullets are separated by "; " — the ports stay countable inside
+            // one line of an error message.
+            boolean bullet = line.startsWith("-"); //$NON-NLS-1$
+            if (bullet)
+            {
+                line = line.substring(1).trim();
+                if (line.isEmpty())
+                {
+                    continue;
+                }
+            }
+            if (sb.length() > 0)
+            {
+                sb.append(previousWasBullet && bullet ? "; " : " "); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            previousWasBullet = bullet;
+            sb.append(line);
+            if (sb.length() >= MAX_PORT_CONFLICT_DETAIL_CHARS)
+            {
+                sb.setLength(MAX_PORT_CONFLICT_DETAIL_CHARS);
+                break;
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /** Records an auto-cancelled port conflict into every open window (see {@link ConflictWatch}). */
+    private static void notePortConflict(String detail)
+    {
+        synchronized (LOCK)
+        {
+            for (ConflictWatch watch : CONFLICT_WATCHES)
+            {
+                // Recorded into EVERY open window, unlike the infobase-attributed conflict cancel:
+                // this modal names the SERVER, not the infobase, so it cannot be attributed to one
+                // caller — and a busy port is a machine-wide condition that fails every operation
+                // starting that server anyway. The detail is only ever consumed by a call that
+                // ALSO failed, and it names the server, so a report stays self-describing.
+                watch.recordPortConflict(detail);
+            }
+        }
+    }
+
+    /**
+     * The actionable failure message for an operation that could not proceed because EDT's
+     * standalone-server port-conflict dialog was auto-cancelled. Shared by {@code update_database}
+     * and the pre-launch DB update so both explain the same condition in the same words.
+     *
+     * <p>Without it the caller sees only what EDT reports for a cancelled server start —
+     * "User has cancelled operation." — which names neither the port conflict nor anything the
+     * caller could do about it.
+     *
+     * @param detail the busy-port summary from the dialog (may be {@code null})
+     * @return the message, never {@code null}
+     */
+    public static String portConflictError(String detail)
+    {
+        return "the standalone server could not start because its network ports are already " //$NON-NLS-1$
+            + "in use" //$NON-NLS-1$
+            + (detail == null ? "." : ": " + detail) //$NON-NLS-1$ //$NON-NLS-2$
+            + " EDT offered to move the server to free ports; this call declined, because that " //$NON-NLS-1$
+            + "rewrites the server configuration and changes the address its clients connect " //$NON-NLS-1$
+            + "to. Free those ports and retry — most often the holder is an ibsrv process left " //$NON-NLS-1$
+            + "over from an earlier EDT session (stop it, or stop the server in EDT's Servers " //$NON-NLS-1$
+            + "view). To move the server instead, start it once from the EDT UI and answer " //$NON-NLS-1$
+            + "'Find free port' there."; //$NON-NLS-1$
+    }
+
+    /**
+     * Test seam: records an auto-cancelled port conflict exactly as the UI-thread press path
+     * does, so the resulting contract can be asserted headlessly (no SWT shell required).
+     *
+     * @param detail the busy-port summary (may be {@code null})
+     */
+    static void recordPortConflictForTest(String detail)
+    {
+        notePortConflict(detail);
+    }
+
+    /**
      * Opens a window that records the conflict modals CANCELLED while a single update runs.
      * Pair it with {@link ConflictWatch#close()} (try-with-resources) around the update AND the
      * check that consumes it.
@@ -2003,6 +2296,8 @@ public final class LaunchUpdateDialogAutoConfirmer
         private final String infobaseName;
         private int cancels;
         private String reason;
+        private boolean portConflict;
+        private String portConflictDetail;
 
         ConflictWatch(String infobaseName)
         {
@@ -2013,6 +2308,49 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             cancels++;
             reason = cancelReason;
+        }
+
+        /**
+         * Records that a standalone-server port-conflict modal was auto-cancelled while this
+         * window was open. The flag is kept separate from {@link #record}: that one means "the
+         * caller's own data question was declined", this one means "the server never started",
+         * and only the second explains a cancellation nobody asked for.
+         */
+        void recordPortConflict(String detail)
+        {
+            portConflict = true;
+            if (detail != null && portConflictDetail == null)
+            {
+                portConflictDetail = detail;
+            }
+        }
+
+        /**
+         * Was EDT's standalone-server port-conflict modal auto-cancelled while this window was
+         * open — i.e. did the operation fail because the server could not start?
+         *
+         * @return {@code true} when at least one port conflict was recorded
+         */
+        public boolean portConflicted()
+        {
+            synchronized (LOCK)
+            {
+                return portConflict;
+            }
+        }
+
+        /**
+         * The busy-port summary read from that modal, for the caller's error message.
+         *
+         * @return the detail, or {@code null} when none was recorded or it was unreadable
+         *         (check {@link #portConflicted()} for the fact itself)
+         */
+        public String portConflictDetail()
+        {
+            synchronized (LOCK)
+            {
+                return portConflictDetail;
+            }
         }
 
         /**

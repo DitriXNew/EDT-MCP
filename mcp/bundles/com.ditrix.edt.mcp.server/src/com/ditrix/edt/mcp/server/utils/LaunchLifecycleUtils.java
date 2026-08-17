@@ -1482,7 +1482,9 @@ public final class LaunchLifecycleUtils
         catch (ApplicationException e)
         {
             Activator.logError("Error during pre-launch DB update", e); //$NON-NLS-1$
-            return Optional.of("Database update failed: " + e.getMessage()); //$NON-NLS-1$
+            // PlatformFailures, not getMessage(): EDT wraps IStatus failures, so the exception's
+            // own message is routinely empty or generic while the reason sits in the status tree.
+            return Optional.of("Database update failed: " + PlatformFailures.describe(e)); //$NON-NLS-1$
         }
     }
 
@@ -1567,6 +1569,15 @@ public final class LaunchLifecycleUtils
             }
             catch (ApplicationException ex)
             {
+                // A standalone-server target starts its server as part of the publish; when its
+                // ports are taken the auto-confirmer cancels EDT's port-conflict modal and the
+                // platform reports only a bare cancellation. Report what the dialog said instead.
+                if (watch.portConflicted())
+                {
+                    return Optional.of("Pre-launch database update failed: " //$NON-NLS-1$
+                        + LaunchUpdateDialogAutoConfirmer.portConflictError(
+                            watch.portConflictDetail()));
+                }
                 // The cancel can ABORT the update instead of letting it return a state. The reason
                 // is in the window, and it beats the generic "Database update failed" the outer
                 // handler would produce - it names the knob that would have let it through.
@@ -1580,6 +1591,13 @@ public final class LaunchLifecycleUtils
             finally
             {
                 LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+            }
+            // Same as the catch above, for the path where the cancelled server start lets update()
+            // return a (cached, therefore meaningless) state rather than throwing.
+            if (watch.portConflicted())
+            {
+                return Optional.of("Pre-launch database update failed: " //$NON-NLS-1$
+                    + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail()));
             }
             Optional<String> declined = declinedByCancelledConflict(policy, watch);
             if (declined.isPresent())

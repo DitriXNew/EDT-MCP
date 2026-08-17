@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -710,6 +711,16 @@ public class UpdateDatabaseTool implements IMcpTool
                     }
                     catch (ApplicationException ex)
                     {
+                        // A standalone-server target publishes THROUGH its server, so the update
+                        // starts it first; when its ports are busy EDT raises the port-conflict
+                        // modal, the auto-confirmer cancels it (see LaunchUpdateDialogAutoConfirmer)
+                        // and the platform reports only "User has cancelled operation." - a
+                        // cancellation the caller never asked for and cannot act on. The window
+                        // carries what the dialog actually said, so report THAT instead.
+                        if (watch.portConflicted())
+                        {
+                            return portConflictError(watch, projectName, applicationId);
+                        }
                         // The cancel can ABORT the update instead of letting it return a state: the
                         // reason is still in the window, and it explains the failure far better than
                         // EDT's own message - it names the knob that would have let it through.
@@ -724,6 +735,13 @@ public class UpdateDatabaseTool implements IMcpTool
                     {
                         LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
                             infobaseName);
+                    }
+                    // Same reasoning as the catch above, for the path where the cancelled server
+                    // start lets update() return a (cached, therefore meaningless) state instead
+                    // of throwing: nothing was published, so this is a failure whatever it says.
+                    if (watch.portConflicted())
+                    {
+                        return portConflictError(watch, projectName, applicationId);
                     }
                     // A cancelled external-changes modal means the update wrote NOTHING. Reporting
                     // "updated" here would be a false success — and the returned state cannot be
@@ -827,6 +845,29 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     /**
+     * Builds the failure JSON for an update whose standalone server could not start because its
+     * network ports were taken (EDT's port-conflict modal, auto-cancelled by
+     * {@link LaunchUpdateDialogAutoConfirmer}). Nothing was published, so this is an error, not a
+     * partial success — and it names the real condition instead of the platform's bare
+     * "User has cancelled operation.".
+     *
+     * @param watch the window that recorded the cancelled dialog
+     * @param projectName the target project (echoed for the caller's context)
+     * @param applicationId the target application (echoed for the caller's context)
+     * @return the error payload
+     */
+    private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
+        String projectName, String applicationId)
+    {
+        return ToolResult.error("Database update failed: " //$NON-NLS-1$
+            + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail())
+            + " The infobase was NOT changed.") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .toJson();
+    }
+
+    /**
      * Builds the confirm-preview JSON (no infobase change): resolves and reports the exact
      * IRREVERSIBLE action that confirm=true would apply. Side-effect-free.
      */
@@ -873,7 +914,12 @@ public class UpdateDatabaseTool implements IMcpTool
             .put(KEY_APPLICATION_NAME, application.getName())
             .put(KEY_UPDATE_TYPE, updateType.name())
             .put(KEY_STATE_BEFORE, stateBefore.name())
-            .put("stateAfter", stateAfter.name()); //$NON-NLS-1$
+            // A delegate can hand back NO state at all (EDT's standalone-server delegate returns
+            // whatever its server operation produced), and reading .name() off that turned a
+            // platform outcome into a raw NullPointerException from this tool. Report the absence
+            // as UNKNOWN — the same token the platform uses for "cannot tell".
+            .put("stateAfter", stateAfter == null //$NON-NLS-1$
+                ? ApplicationUpdateState.UNKNOWN.name() : stateAfter.name());
         if (terminatedClient)
         {
             result.put(KEY_TERMINATED_CLIENT, true);
@@ -887,6 +933,15 @@ public class UpdateDatabaseTool implements IMcpTool
         else if (stateAfter == ApplicationUpdateState.BEING_UPDATED)
         {
             result.put(McpKeys.MESSAGE, "Update in progress"); //$NON-NLS-1$
+        }
+        else if (stateAfter == null)
+        {
+            // Honest about what is and is not known: the call returned without an error, but the
+            // platform reported no resulting state, so "updated successfully" would be a claim
+            // nothing backs. get_applications re-reads the state authoritatively.
+            result.put(McpKeys.MESSAGE, "The update call returned without an error but EDT " //$NON-NLS-1$
+                + "reported no resulting state; verify with get_applications (updateState) " //$NON-NLS-1$
+                + "before relying on the infobase being up to date."); //$NON-NLS-1$
         }
         else
         {
@@ -912,8 +967,12 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         String internalInfoHint = describeInternalInfoHint(e);
         String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
+        // PlatformFailures, not getMessage(): EDT reports failures as IStatus and only wraps them,
+        // so the exception's own message is routinely empty (a cancelled server operation) or
+        // generic while the reason sits in the status tree - and "Database update failed: " with
+        // nothing after it tells the caller nothing at all.
         ToolResult errorResult = ToolResult.error("Database update failed: " //$NON-NLS-1$
-            + e.getMessage() + describeInfobaseHolder(applicationId) + hint);
+            + PlatformFailures.describe(e) + describeInfobaseHolder(applicationId) + hint);
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)

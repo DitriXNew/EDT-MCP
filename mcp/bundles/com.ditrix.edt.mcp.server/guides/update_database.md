@@ -108,3 +108,21 @@ The modal's own default button is **Import**, which would rewrite the project so
 plugin never presses it blind: if the labelled button for the selected policy cannot be found (an
 unshipped locale, a reworded button) the dialog is cancelled and the update reports the failure
 instead of writing anything.
+
+## Standalone server: busy ports
+
+Updating a standalone-server application (`applicationId` starting with `ServerApplication.`)
+STARTS the server first. If one of its configured ports (HTTP gate / debug server / SSH gate) is
+already bound, EDT raises a modal titled **"Standalone server port conflict"** /
+**"Конфликт портов автономного сервера"** offering *Find free port* or *Cancel*. Nobody presses it
+in an unattended run, so the call would block until the client times out.
+
+This plugin answers it with **Cancel** and fails the call with the busy ports named. *Find free
+port* is deliberately not pressed: it makes EDT rewrite the server's `config.yaml`, which moves the
+address every client of that server connects to — not something a database update may do behind
+your back. The usual holder is an `ibsrv` process left over from an earlier EDT session; stop it
+(or stop the server in EDT's *Servers* view) and retry. To move the server instead, start it once
+from the EDT UI and answer *Find free port* there.
+
+The same applies to `debug_launch` / `run_yaxunit_tests` against a standalone server: the launch is
+fire-and-forget, so the reason is reported by `debug_status` under `recentLaunchFailures`.

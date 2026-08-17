@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -564,6 +565,158 @@ public class LaunchUpdateDialogAutoConfirmerTest
         // other two matchers are armed.
         assertFalse("an un-armed restructure matcher must leave the restructure title alone",
             LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(true, true, false, "Restructure data", null));
+    }
+
+    // ============ standalone-server port conflict ============
+
+    /**
+     * Russian title of EDT's port-conflict modal ("Конфликт портов автономного сервера"),
+     * unicode-escaped like the production constant so this test compiles identically whatever
+     * source encoding Tycho picks for the test bundle.
+     */
+    private static final String RUSSIAN_PORT_CONFLICT_TITLE = "\u041A\u043E\u043D\u0444\u043B\u0438\u043A\u0442 \u043F\u043E\u0440\u0442\u043E\u0432 \u0430\u0432\u0442\u043E\u043D\u043E\u043C\u043D\u043E\u0433\u043E \u0441\u0435\u0440\u0432\u0435\u0440\u0430";
+
+    /** EDT's own rendering of the modal body: header line plus one line per busy port. */
+    private static final String PORT_CONFLICT_BODY = "Standalone server \"TestConfiguration #1\""
+        + " conflicts with another application using the same network port:\n"
+        + "- 8429 - HTTP gate port\n"
+        + "- 8483 - Debug server port\n";
+
+    @Test
+    public void testPortConflictTitleMatchesBothLocales()
+    {
+        // A miss here is a guaranteed hang: the modal is application-modal, so an unattended
+        // call waits on it forever and every later call queues behind it.
+        assertTrue("the English port-conflict title must match",
+            LaunchUpdateDialogAutoConfirmer.isPortConflictTitle("Standalone server port conflict"));
+        assertTrue("the Russian port-conflict title must match",
+            LaunchUpdateDialogAutoConfirmer.isPortConflictTitle(RUSSIAN_PORT_CONFLICT_TITLE));
+    }
+
+    @Test
+    public void testPortConflictTitleDoesNotMatchOtherDialogs()
+    {
+        assertFalse("an unrelated title must not match",
+            LaunchUpdateDialogAutoConfirmer.isPortConflictTitle("Standalone server"));
+        assertFalse("a null title must not match",
+            LaunchUpdateDialogAutoConfirmer.isPortConflictTitle(null));
+        assertFalse("the port-conflict title must not match the update matcher",
+            LaunchUpdateDialogAutoConfirmer.isTargetTitle("Standalone server port conflict"));
+        assertFalse("the port-conflict title must not match the restructure matcher",
+            LaunchUpdateDialogAutoConfirmer.isRestructureTitle("Standalone server port conflict"));
+    }
+
+    @Test
+    public void testPortConflictClaimedOnlyWhenArmed()
+    {
+        assertTrue("an armed port-conflict matcher must claim the modal",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(false, false, false, false, true,
+                "Standalone server port conflict", null));
+        assertTrue("the Russian title must be claimed too",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(false, false, false, false, true,
+                RUSSIAN_PORT_CONFLICT_TITLE, null));
+        assertFalse("an un-armed port-conflict matcher must leave the modal alone",
+            LaunchUpdateDialogAutoConfirmer.shouldAutoConfirm(true, true, true, true, false,
+                "Standalone server port conflict", null));
+    }
+
+    @Test
+    public void testPortConflictSweepAgreesWithTheFilter()
+    {
+        // The already-open sweep and the Display filter must claim exactly the same dialogs —
+        // this modal is the one most likely to be up BEFORE the arm (the server start races the
+        // tool call), so a divergence here is the hang the matcher exists to prevent.
+        FakeDialog dialog = new FakeDialog("Standalone server port conflict", PORT_CONFLICT_BODY);
+        int pressed = LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+            new LaunchUpdateDialogAutoConfirmer.ArmState(false, false, false, false, true),
+            java.util.Arrays.asList(dialog));
+        assertEquals("the sweep must press the already-open port-conflict modal", 1, pressed);
+
+        FakeDialog unarmed = new FakeDialog("Standalone server port conflict", PORT_CONFLICT_BODY);
+        assertEquals("an un-armed sweep must leave it for a human", 0,
+            LaunchUpdateDialogAutoConfirmer.sweepOpenDialogs(
+                new LaunchUpdateDialogAutoConfirmer.ArmState(true, true, true, false, false),
+                java.util.Arrays.asList(unarmed)));
+    }
+
+    @Test
+    public void testSummarizePortConflictTextKeepsTheBusyPorts()
+    {
+        String summary =
+            LaunchUpdateDialogAutoConfirmer.summarizePortConflictText(PORT_CONFLICT_BODY);
+        assertNotNull("a readable dialog must produce a summary", summary);
+        assertTrue("the summary must name the busy ports", summary.contains("8429"));
+        assertTrue("the summary must name every busy port", summary.contains("8483"));
+        assertTrue("the summary must name the server", summary.contains("TestConfiguration #1"));
+        assertFalse("the summary must be a single line", summary.contains("\n"));
+        // Flattened bullets must stay countable: the marker goes, the list separator stays, and
+        // the header keeps a plain space after its colon.
+        assertEquals("the ports must read as a list, not as one dash-joined sentence",
+            "Standalone server \"TestConfiguration #1\" conflicts with another application using"
+                + " the same network port: 8429 - HTTP gate port; 8483 - Debug server port",
+            summary);
+    }
+
+    @Test
+    public void testSummarizePortConflictTextHandlesNothingReadable()
+    {
+        assertNull("no text means no summary",
+            LaunchUpdateDialogAutoConfirmer.summarizePortConflictText(null));
+        assertNull("blank text means no summary",
+            LaunchUpdateDialogAutoConfirmer.summarizePortConflictText("   \n \n"));
+        assertNull("a dialog that carried only its own title has nothing to add",
+            LaunchUpdateDialogAutoConfirmer.summarizePortConflictText(
+                "Standalone server port conflict\n"));
+    }
+
+    @Test
+    public void testPortConflictErrorIsActionable()
+    {
+        String withDetail = LaunchUpdateDialogAutoConfirmer.portConflictError(
+            "- 8429 - HTTP gate port");
+        assertTrue("the error must state the condition",
+            withDetail.contains("network ports are already in use"));
+        assertTrue("the error must carry the dialog's own detail", withDetail.contains("8429"));
+        assertTrue("the error must name the usual holder", withDetail.contains("ibsrv"));
+        assertTrue("the error must say what this call declined and why",
+            withDetail.contains("rewrites the server configuration"));
+
+        String noDetail = LaunchUpdateDialogAutoConfirmer.portConflictError(null);
+        assertTrue("an unreadable dialog must still produce the condition",
+            noDetail.contains("network ports are already in use"));
+        assertFalse("nothing may be invented when the dialog carried no detail",
+            noDetail.contains("null"));
+    }
+
+    @Test
+    public void testWatchRecordsThePortConflictSeparatelyFromAPolicyCancel()
+    {
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch("TestConfiguration #1"))
+        {
+            assertFalse("a fresh window has seen nothing", watch.portConflicted());
+            assertNull("and carries no detail", watch.portConflictDetail());
+
+            LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest("- 8429 - HTTP gate port");
+
+            assertTrue("the window must see the auto-cancelled port conflict",
+                watch.portConflicted());
+            assertEquals("and keep its detail for the error message", "- 8429 - HTTP gate port",
+                watch.portConflictDetail());
+            // The two are different failures: a port conflict is not the caller's data question
+            // being declined, so it must not masquerade as one.
+            assertFalse("a port conflict is not an external-changes cancel", watch.cancelled());
+        }
+    }
+
+    @Test
+    public void testPortConflictIsNotRecordedIntoAClosedWindow()
+    {
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null);
+        watch.close();
+        LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest("- 8429 - HTTP gate port");
+        assertFalse("a closed window must not keep collecting", watch.portConflicted());
     }
 
     // ============ #357 — dialogs already on screen when the arm happens ============
