@@ -317,8 +317,12 @@ public class DebugLaunchTool implements IMcpTool
             // An Attach configuration performs no DB update at all (the preflight above is
             // skipped for it), so the conflict matcher must stay unarmed: an "Infobase
             // configuration changes" dialog appearing during an Attach is somebody else's.
-            String launchError =
-                performLaunch(config, updateBeforeLaunch, isAttach ? null : policy, portPolicy);
+            // An Attach neither updates the DB nor STARTS a server, so it must leave BOTH modals
+            // to their owners: a port policy forwarded here would arm the matcher for the whole
+            // Attach window and could cancel — or, with reassign, re-address — a server some other
+            // launch or a human is starting (review of #435).
+            String launchError = performLaunch(config, updateBeforeLaunch,
+                isAttach ? null : policy, isAttach ? null : portPolicy);
             if (launchError != null)
             {
                 return ToolResult.error("Failed to launch debug session: " + launchError).toJson(); //$NON-NLS-1$

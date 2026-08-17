@@ -1063,9 +1063,13 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount++;
             }
-            // Armed by EVERY arm — see PORT_CONFLICT_ARMS.
-            PORT_CONFLICT_ARMS.add(portPolicy == null
-                ? StandaloneServerPortConflictPolicy.DEFAULT : portPolicy);
+            // Armed by every arm that CAN meet the modal — see PORT_CONFLICT_ARMS. A null policy
+            // means the caller cannot raise it at all (an Attach starts no server), and arming it
+            // anyway would let that window answer another operation's dialog.
+            if (portPolicy != null)
+            {
+                PORT_CONFLICT_ARMS.add(portPolicy);
+            }
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.add(new ConflictArm(trimToNull(infobaseName),
@@ -1184,9 +1188,11 @@ public final class LaunchUpdateDialogAutoConfirmer
             {
                 restructureArmCount--;
             }
-            // Mirrors the add in arm(...) — same early return above, so every arm has exactly
-            // one matching release here.
-            releasePortConflictArm(portPolicy);
+            // Mirrors the add in arm(...): only an arm that took a port policy releases one.
+            if (portPolicy != null)
+            {
+                releasePortConflictArm(portPolicy);
+            }
             if (conflictPolicy != null)
             {
                 CONFLICT_ARMS.remove(new ConflictArm(trimToNull(infobaseName),

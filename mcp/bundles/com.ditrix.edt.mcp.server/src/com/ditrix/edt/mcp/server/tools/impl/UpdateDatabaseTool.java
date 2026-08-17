@@ -761,7 +761,8 @@ public class UpdateDatabaseTool implements IMcpTool
                         // carries what the dialog actually said, so report THAT instead.
                         if (watch.portConflicted())
                         {
-                            return portConflictError(watch, projectName, applicationId);
+                            return portConflictError(watch, projectName, applicationId,
+                                terminatedClient);
                         }
                         // The cancel can ABORT the update instead of letting it return a state: the
                         // reason is still in the window, and it explains the failure far better than
@@ -783,7 +784,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     // of throwing: nothing was published, so this is a failure whatever it says.
                     if (watch.portConflicted())
                     {
-                        return portConflictError(watch, projectName, applicationId);
+                        return portConflictError(watch, projectName, applicationId,
+                            terminatedClient);
                     }
                     // A cancelled external-changes modal means the update wrote NOTHING. Reporting
                     // "updated" here would be a false success — and the returned state cannot be
@@ -904,15 +906,22 @@ public class UpdateDatabaseTool implements IMcpTool
      * @return the error payload
      */
     private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
-        String projectName, String applicationId)
+        String projectName, String applicationId, boolean terminatedClient)
     {
-        return ToolResult.error("Database update failed: " //$NON-NLS-1$
+        ToolResult result = ToolResult.error("Database update failed: " //$NON-NLS-1$
             + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                 watch.portConflictReason())
             + " The infobase was NOT changed.") //$NON-NLS-1$
             .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, applicationId)
-            .toJson();
+            .put(McpKeys.APPLICATION_ID, applicationId);
+        if (terminatedClient)
+        {
+            // The sweep runs BEFORE the server start, so a client can already be gone when the
+            // ports turn out to be busy. Silence here would leave the caller believing its session
+            // survived a failed update (review of #435).
+            result.put(KEY_TERMINATED_CLIENT, true);
+        }
+        return result.toJson();
     }
 
     /**

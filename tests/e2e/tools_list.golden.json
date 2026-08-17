@@ -966,6 +966,9 @@
         "projectName": {
           "type": "string"
         },
+        "standaloneServerPortConflict": {
+          "type": "string"
+        },
         "tags": {
           "items": {
             "type": "string"

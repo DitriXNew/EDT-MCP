@@ -12,6 +12,7 @@ import java.util.Map;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 
 /**
  * Deprecated alias for {@code run_yaxunit_tests} with {@code debug=true}.
@@ -35,6 +36,16 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
     private static final String KEY_UPDATE_SCOPE = "updateScope"; //$NON-NLS-1$
 
     private static final String KEY_EXTERNAL_INFOBASE_CHANGES = "externalInfobaseChanges"; //$NON-NLS-1$
+
+    /**
+     * Input param: how EDT's standalone-server port-conflict modal is answered.
+     *
+     * <p>Carried by the alias for the same reason as the filters: an argument this shim does not
+     * list is dropped silently, and dropping THIS one makes the refusal's own advice impossible to
+     * follow — the error tells the caller to re-call with {@code reassign}, and the alias would
+     * throw that value away again.
+     */
+    private static final String KEY_PORT_CONFLICT = "standaloneServerPortConflict"; //$NON-NLS-1$
 
     /** Input param: exact runtime-client launch configuration name. */
     private static final String KEY_LAUNCH_CONFIGURATION_NAME = "launchConfigurationName"; //$NON-NLS-1$
@@ -125,6 +136,8 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
             .stringProperty(KEY_UPDATE_SCOPE, RunYaxunitTestsTool.UPDATE_SCOPE_DESCRIPTION)
             .stringProperty(KEY_EXTERNAL_INFOBASE_CHANGES,
                 RunYaxunitTestsTool.EXTERNAL_INFOBASE_CHANGES_DESCRIPTION)
+            .stringProperty(KEY_PORT_CONFLICT,
+                StandaloneServerPortConflictPolicy.PARAMETER_DESCRIPTION)
             .build();
     }
 
@@ -148,6 +161,7 @@ public class DebugYaxunitTestsTool implements IMcpTool // NOSONAR intentional re
         putIfPresent(forwarded, KEY_UPDATE_SCOPE, params.get(KEY_UPDATE_SCOPE));
         putIfPresent(forwarded, KEY_EXTERNAL_INFOBASE_CHANGES,
             params.get(KEY_EXTERNAL_INFOBASE_CHANGES));
+        putIfPresent(forwarded, KEY_PORT_CONFLICT, params.get(KEY_PORT_CONFLICT));
         forwarded.put("debug", "true"); //$NON-NLS-1$ //$NON-NLS-2$
         return delegate.executeAs(forwarded, NAME);
     }

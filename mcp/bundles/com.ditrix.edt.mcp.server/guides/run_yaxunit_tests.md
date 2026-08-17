@@ -210,7 +210,9 @@ ports (HTTP gate / debug server / SSH gate) is already bound — most often by a
 from an earlier EDT session — EDT raises the modal **"Standalone server port conflict"** /
 **"Конфликт портов автономного сервера"** and waits for a human.
 
-`standaloneServerPortConflict` answers it: `cancel` (default) refuses, so the launch fails and the
-reason — with the busy ports named — appears in `debug_status` under `recentLaunchFailures`;
+`standaloneServerPortConflict` answers it: `cancel` (default) refuses, so the run fails and the
+reason - with the busy ports named - comes back through THIS tool's own result: either in the
+initial response, or, when the run was accepted as a background job, from `get_job_status(jobId)`.
+It does NOT appear in `debug_status.recentLaunchFailures` - that channel belongs to `debug_launch`.
 `reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
 changes the address its clients connect to. See the `update_database` guide for the full table.

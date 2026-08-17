@@ -764,7 +764,11 @@ def wait_for_server(timeout=60):
 def _all_edt_projects_ready(list_projects_markdown):
     """True when every EDT project in the list_projects table reads 'ready'.
 
-    Only EDT projects are considered. A workspace that hosts a 1C STANDALONE SERVER also
+    Only rows KNOWN to be non-EDT (`EDT Project` = No) are skipped; "-" (a closed project, or one
+    whose natures could not be read) keeps blocking, because a real project that is genuinely
+    building must never be mistaken for one that cannot become ready.
+
+    A workspace that hosts a 1C STANDALONE SERVER
     contains the WST container project ("Servers", `EDT Project` = No, no natures), which is
     permanently 'not_available' because it is not an EDT project at all and can never become
     ready. A plain substring scan for 'not_available' over the whole table therefore never
@@ -788,8 +792,11 @@ def _all_edt_projects_ready(list_projects_markdown):
         return "building" not in low and "not_available" not in low
     for cells in rows:
         state, edt_project = cells[1].strip().lower(), cells[4].strip().lower()
-        if edt_project != "yes":
-            continue  # not an EDT project (e.g. the standalone server's "Servers" container)
+        if edt_project == "no":
+            continue  # a KNOWN non-EDT project (the standalone server's "Servers" container)
+        # Anything else - "-" for a closed project, or one whose natures could not be read - still
+        # blocks: treating unknown as non-EDT would let a real project that is genuinely building
+        # be ignored, and the suite would start mutating the model during a reload.
         if state in ("building", "not_available"):
             return False
     return True
